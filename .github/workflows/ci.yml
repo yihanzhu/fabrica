@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          set -e
+          required="README.md manager/CLAUDE.md routines/coder.md routines/coder-revision.md routines/brief.md reviewer/codex-review.md templates/target-CLAUDE.md templates/repo-setup.md"
+          for f in $required; do
+            if [ ! -f "$f" ]; then echo "missing required file: $f"; exit 1; fi
+          done
+          echo "structure ok"
+
+      - name: Shellcheck (if any shell scripts)
+        run: |
+          scripts=$(find . -name '*.sh' -not -path './.git/*')
+          if [ -n "$scripts" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+            echo "$scripts" | xargs shellcheck
+          else
+            echo "no shell scripts yet"
+          fi

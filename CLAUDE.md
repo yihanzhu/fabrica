@@ -1,0 +1,36 @@
+# Fabrica — conventions for the coding agents
+
+This is the **control-plane repo for an autonomous coding team, and it is its own
+target repo** — agents working here are improving the team itself. Two goals drive
+the backlog:
+1. **Reusable by anyone** — a clean, parameterized, well-documented product others can adopt.
+2. **Full backup** — everything needed to reconstruct the team if the live setup is lost.
+
+## What lives here
+- `manager/CLAUDE.md` — Faber's role (the manager persona).
+- `routines/*.md` — paste-ready instructions + settings for the Claude routines.
+- `reviewer/codex-review.md` — the Codex reviewer prompt.
+- `templates/*` — drop-in files for target repos.
+- *(to be built)* scripts/tooling to set up, validate, and restore the team.
+
+## Stack & commands
+- Markdown + shell today; real tooling (setup/restore scripts, validators) will grow here.
+- CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
+  it is the hard merge gate.** Add real tests as code lands.
+
+## PR rules (enforced by coder + reviewer)
+- **One concern per PR.** Soft size budget ~300–400 net lines; split if bigger.
+- Every PR links its issue (`Closes #<n>`) and keeps README/docs in sync with any change.
+
+## CRITICAL — self-modification safety
+- The live routines run from instructions **pasted into the Claude UI, not from these
+  files directly.** Editing a prompt here is a *proposal*; it only takes effect when the
+  human re-pastes it into the routine. Merging a prompt change does NOT change live
+  behavior until synced — call this out in the PR description when a prompt changes.
+- **Never weaken the safety rails without explicit human sign-off:** reviewer stays
+  read-only / comments-only; no auto-merge; the rounds cap and `needs-human` escalation
+  stay intact.
+
+## Reusability goal
+- No hardcoded personal values (usernames, repo names) in shipped templates — keep the
+  reusable path parameterized. Personal config stays out of it.

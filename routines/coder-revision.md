@@ -3,7 +3,7 @@
 **Routine settings**
 - Trigger: **GitHub event** → `pull_request_review.submitted`
   (if your trigger can't filter, also handle `issue_comment.created` on PRs)
-- Repository: `<target-repo>`
+- Repository: `yihanzhu/fabrica`
 - Model: Opus 4.8
 - Permissions: **write**
 - Connectors: **GitHub only**

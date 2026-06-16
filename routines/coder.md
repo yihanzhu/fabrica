@@ -2,7 +2,7 @@
 
 **Routine settings**
 - Trigger: **GitHub event** → `issues.labeled`
-- Repository: `<target-repo>`
+- Repository: `yihanzhu/fabrica`
 - Model: Opus 4.8
 - Permissions: **write** (create branches, push, open PRs)
 - Connectors: **GitHub only** — remove Atlassian / Calendar / Drive / Slack
