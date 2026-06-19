@@ -65,7 +65,7 @@ permissions, connectors).
 | Routine | Source file | Trigger |
 |---------|-------------|---------|
 | Coder | [`routines/coder.md`](routines/coder.md) | GitHub event → `issues.labeled` (acts only on `ready`) |
-| Coder (revisions) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` |
+| Coder (revisions) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` (the file also specifies a conditional `issue_comment.created` fallback if your trigger can't filter — set it per the file's header) |
 | Daily brief | [`routines/brief.md`](routines/brief.md) | Schedule → daily cron (your timezone) |
 
 Notes:
@@ -101,17 +101,27 @@ That checklist covers:
 - **Labels** — the `ready` / `round-0..round-3` / `needs-human` set the stateless
   routines use as their state. (The `gh label create` loop is in that file.)
 - **Branch protection on `main`** — require CI status checks to pass; **no auto-merge in
-  Phase 1**.
+  Phase 1**. Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
+  command** (unlike the labels loop), and **branch protection isn't available on free
+  private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
+  still the hard gate** (see Safety rails); you just lose the server-side enforcement.
 - **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (structure
   check + shellcheck). It is the **hard merge gate**; restore it by having this repo's
   `.github/workflows/` present on `main`. Don't copy its steps here — link to it.
+  - **Out of scope: `claude.yml`.** `.github/workflows/` also contains
+    [`claude.yml`](.github/workflows/claude.yml) — the optional `@claude`-mention helper
+    (`anthropics/claude-code-action@v1`). It is **not part of the team loop** and is not
+    required to restore the coding team, so it is out of scope for this runbook. If you do
+    want it back, note that it needs a `CLAUDE_CODE_OAUTH_TOKEN` repo secret, which lives
+    only in GitHub repo settings (not in any file here) and must be re-created by hand.
 - **Conventions** — drop [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md) into
   the target repo's root, filled in for that repo.
 - **Wiring** — the same routine/reviewer wiring you did in steps 2–3.
 
 If you are restoring **Fabrica itself**, the labels and CI live in this repo already;
 recreate any labels that were lost with the loop in `templates/repo-setup.md` using
-`<owner>/<repo>` = your fork of this repo.
+`<owner>/<repo>` = your clone/copy of this repo (restoring Fabrica is the same repo, not
+a fork).
 
 ---
 
@@ -122,11 +132,13 @@ Run **one trivial issue** through the full loop end to end:
 1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
 2. **You** apply the `ready` label (the front gate). This should wake the **Coder**.
 3. Confirm the Coder opens a PR that says `Closes #<n>` and carries `round-0`.
-4. Confirm **Codex** posts review comments (and nothing else — no approve, no merge).
+4. On PR open, **CI and the Codex reviewer both trigger in parallel** (they are not
+   sequential — don't wait for one before checking the other):
+   - Confirm **Codex** posts review comments (and nothing else — no approve, no merge).
+   - Confirm **CI** runs and goes green on the PR.
 5. If there's feedback, confirm the **coder-revision** routine pushes follow-up commits
    and bumps the `round-N` label.
-6. Confirm **CI** runs and goes green on the PR.
-7. **You** merge once CI is green and you're satisfied.
+6. **You** merge once CI is green and you're satisfied.
 
 If every arrow above fired, the team is back. If one stage is silent, re-check that
 routine's **trigger** and **repository** setting (step 2) and Codex's connection (step 3).
