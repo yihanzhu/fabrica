@@ -75,6 +75,7 @@ routines/brief.md          Faber's daily-brief routine
 reviewer/codex-review.md   Codex reviewer prompt
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
 templates/repo-setup.md    Labels + branch protection checklist
+RESTORE.md                 Disaster-recovery runbook: rebuild the team from this repo
 ```
 
 ## Rollout
