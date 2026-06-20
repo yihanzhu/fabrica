@@ -80,15 +80,23 @@ Notes:
 ## 3. Recreate the Codex reviewer
 
 The reviewer runs on **Codex (OpenAI)**, not as a Claude routine — that cross-vendor split
-is deliberate (decorrelated blind spots).
+is deliberate (decorrelated blind spots). There are two ways to wire it; pick one. Both
+preserve the same invariants and use Codex's **built-in** review (`codex exec review`) —
+see [`reviewer/codex-review.md`](reviewer/codex-review.md) for the mechanism and the
+in-session loop.
 
-1. Connect **Codex's PR review** to each target repo `<owner>/<repo>` so it reviews
-   automatically when a PR is opened or updated.
-2. Use the review prompt in [`reviewer/codex-review.md`](reviewer/codex-review.md) as its
-   instructions.
-3. **Comments only / read-only:** give Codex no write access beyond posting review
-   comments. It never pushes, never approves-to-merge, never merges, and is never the
-   author of the code it reviews. This is non-negotiable (see Safety rails below).
+- **In-session harness (works today).** Make sure the Codex CLI is installed and signed
+  in, then drive review with [`scripts/codex-review.sh`](scripts/codex-review.sh) — Faber
+  runs `scripts/codex-review.sh <owner>/<repo> <PR#>`, which runs `codex exec review` and
+  posts Codex's verdict to the PR **verbatim**. No GitHub-side wiring needed; the script
+  itself only posts a comment.
+- **Codex GitHub integration (autonomous upgrade).** Connect Codex's PR review to each
+  target repo `<owner>/<repo>` so it reviews automatically when a PR is opened or updated,
+  with no Faber session needed. Set it up per Codex's docs (out of scope here).
+
+**Comments only / read-only is non-negotiable** either way: Codex (and the script) get no
+write access beyond posting review comments. It never pushes, never approves-to-merge,
+never merges, and is never the author of the code it reviews (see Safety rails below).
 
 ---
 
