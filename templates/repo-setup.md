@@ -9,10 +9,11 @@ Create these labels (the loop uses them as its state — routines are stateless)
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
 
 ```bash
-for l in ready round-0 round-1 round-2 round-3 needs-human; do
-  gh label create "$l" --repo <owner>/<repo> 2>/dev/null || true
-done
+scripts/setup-target-repo.sh <owner>/<repo>
 ```
+
+This is idempotent — safe to re-run. It only does the labels; the steps below are
+manual (the script prints these reminders too).
 
 ## 2. Branch protection (main)
 - ✅ Require status checks to pass before merging (your CI) — the **hard gate**

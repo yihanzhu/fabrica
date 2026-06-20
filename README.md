@@ -73,6 +73,7 @@ routines/coder.md          Coder routine instructions
 routines/coder-revision.md Coder-handles-review routine
 routines/brief.md          Faber's daily-brief routine
 reviewer/codex-review.md   Codex reviewer prompt
+scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
 templates/repo-setup.md    Labels + branch protection checklist
 RESTORE.md                 Disaster-recovery runbook: rebuild the team from this repo
