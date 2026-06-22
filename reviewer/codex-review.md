@@ -14,11 +14,15 @@ the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote,
 target repo's clone**. The script lives only in *this* control-plane repo, so call it by
 its **absolute path** (or put `<fabrica>/scripts` on your `PATH`); don't copy it into each
 target repo. It first guards that the cwd is a git repo with a gh-recognized remote (else
-it errors out), then:
+it errors out) — and it `unset`s `GH_REPO` then derives the repo from the cwd and passes
+an explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect
+the comment to a *different* repo's PR. Then:
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`), **fetches origin**,
-   and checks the PR out with **`gh pr checkout <PR#> --force`** so a re-run resets the local
-   PR branch to the latest head instead of reviewing a stale leftover branch.
+   **guards that the worktree is clean** (aborts with a clear error if `git status --porcelain`
+   is non-empty — so the force checkout below never discards local-only commits or uncommitted
+   work), and checks the PR out with **`gh pr checkout <PR#> --force`** so a re-run resets the
+   local PR branch to the latest head instead of reviewing a stale leftover branch.
 2. Runs **`codex exec review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
    Codex's built-in review of the PR diff vs. its **current** (qualified, remote) base. The
    `-c sandbox_mode="read-only"` override **forces** the read-only sandbox so the review can't
@@ -52,8 +56,11 @@ the durable reviewer output**.
 - **Read-only.** The script **forces** the read-only sandbox with
   `-c sandbox_mode="read-only"` (so it can't inherit a writable config default) and never
   bypasses the sandbox.
-- **Comments only.** The script's *only* side effect is one `gh pr comment`. It never
-  edits files, pushes, approves-to-merge, or merges, and is never the author.
+- **Comments only.** The script's *only* side effect is one `gh pr comment` (pinned to the
+  cwd's repo via an explicit `--repo`, with `GH_REPO` unset, so it can't post to another
+  repo's PR). It never edits files, pushes, approves-to-merge, or merges, and is never the
+  author. It also never destroys local work: it aborts on a dirty worktree rather than
+  force-checking-out over uncommitted changes.
 - **Verbatim.** Codex's review is posted unedited — no Claude session rewrites, blends,
   or summarizes it. That preserves the independence of the second opinion.
 
