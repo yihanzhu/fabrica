@@ -9,26 +9,34 @@ independent judgment, not Claude's rubric echoed back.
 ## How the reviewer actually runs
 
 [`scripts/codex-review.sh`](../scripts/codex-review.sh) is the harness. It operates on
-the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote, and
-`codex exec review` runs against this same checkout — so **invoke it from within the
-target repo's clone**. The script lives only in *this* control-plane repo, so call it by
-its **absolute path** (or put `<fabrica>/scripts` on your `PATH`); don't copy it into each
-target repo. It first guards that the cwd is a git repo with a gh-recognized remote (else
-it errors out) — and it `unset`s `GH_REPO` then derives the repo from the cwd and passes
-an explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect
-the comment to a *different* repo's PR. Then:
+the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote, and the
+review runs against that repo's PR — so **invoke it from within the target repo's clone**.
+The script lives only in *this* control-plane repo, so call it by its **absolute path**
+(or put `<fabrica>/scripts` on your `PATH`); don't copy it into each target repo. It first
+guards that the cwd is a git repo with a gh-recognized remote (else it errors out) — and it
+`unset`s `GH_REPO` then derives the repo from the cwd and passes an explicit `--repo` to
+every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to a
+*different* repo's PR. Then:
 
-1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`), **fetches origin**,
-   **guards that the worktree is clean** (aborts with a clear error if `git status --porcelain`
-   is non-empty — so the force checkout below never discards local-only commits or uncommitted
-   work), and checks the PR out with **`gh pr checkout <PR#> --force`** so a re-run resets the
-   local PR branch to the latest head instead of reviewing a stale leftover branch.
-2. Runs **`codex exec review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
-   Codex's built-in review of the PR diff vs. its **current** (qualified, remote) base. The
-   `-c sandbox_mode="read-only"` override **forces** the read-only sandbox so the review can't
-   inherit a writable default from the operator's Codex config (approval is already `never` for
-   review); the script deliberately does **not** pass `--dangerously-bypass-approvals-and-sandbox`,
-   and avoids `--ignore-user-config` so the operator's model/effort defaults still apply.
+1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and **fetches the PR
+   head fork-safely** — `git fetch origin pull/<PR#>/head <base>` brings the PR head commit
+   into the object store even for **fork** PRs (a plain `git fetch origin` would not) and
+   refreshes `origin/<base>`. It then adds a **detached, throwaway git worktree** at that
+   fetched head (`git worktree add --detach <tmpdir> <head>`), **isolated from the operator's
+   checkout**. The review runs in that temp worktree, so the operator's branch, index, working
+   tree, and unpushed commits are never touched — there is no force checkout and no
+   clean-worktree guard, and the reviewer works even when the operator has local uncommitted
+   work. A `trap ... EXIT` removes the temp worktree (`git worktree remove --force`) and temp
+   file even on failure, and `git worktree prune` first clears a stale worktree from a
+   hard-killed previous run, so re-runs are safe and leave nothing behind.
+2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
+   Codex's built-in review of the PR head diff vs. its **current** (qualified, remote) base,
+   inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the
+   `review` subcommand). The `-c sandbox_mode="read-only"` override **forces** the read-only
+   sandbox so the review can't inherit a writable default from the operator's Codex config
+   (approval is already `never` for review); the script deliberately does **not** pass
+   `--dangerously-bypass-approvals-and-sandbox`, and avoids `--ignore-user-config` so the
+   operator's model/effort defaults still apply.
 3. Posts Codex's review to the PR **verbatim**: `gh pr comment <PR#> --body-file <tmpfile>`,
    prefixed only with a short header marking it the Codex cross-vendor reviewer.
 
@@ -44,10 +52,10 @@ the comment to a *different* repo's PR. Then:
 #   codex-review.sh <PR#>
 ```
 
-The `<tmpfile>` is a transient `mktemp` file in the system temp dir (cleaned up via a
-`trap ... EXIT`, removed even on failure) — it exists only to capture Codex's clean
-final review off the noisy exec trace. It is **never** committed; the **PR comment is
-the durable reviewer output**.
+The `<tmpfile>` and the throwaway worktree both live in the system temp dir, never inside
+the repo, and are cleaned up via the `trap ... EXIT` (removed even on failure) — the
+`<tmpfile>` exists only to capture Codex's clean final review off the noisy exec trace.
+Neither is **ever** committed; the **PR comment is the durable reviewer output**.
 
 ## Invariants (non-negotiable)
 
@@ -59,8 +67,9 @@ the durable reviewer output**.
 - **Comments only.** The script's *only* side effect is one `gh pr comment` (pinned to the
   cwd's repo via an explicit `--repo`, with `GH_REPO` unset, so it can't post to another
   repo's PR). It never edits files, pushes, approves-to-merge, or merges, and is never the
-  author. It also never destroys local work: it aborts on a dirty worktree rather than
-  force-checking-out over uncommitted changes.
+  author. It also never touches the operator's working state: the review runs in an isolated,
+  throwaway detached worktree at the PR head, so the operator's branch, index, working tree,
+  and unpushed commits are never modified — read-only is literally true.
 - **Verbatim.** Codex's review is posted unedited — no Claude session rewrites, blends,
   or summarizes it. That preserves the independence of the second opinion.
 
