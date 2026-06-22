@@ -86,10 +86,11 @@ see [`reviewer/codex-review.md`](reviewer/codex-review.md) for the mechanism and
 in-session loop.
 
 - **In-session harness (works today).** Make sure the Codex CLI is installed and signed
-  in, then drive review with [`scripts/codex-review.sh`](scripts/codex-review.sh) — Faber
-  runs `scripts/codex-review.sh <owner>/<repo> <PR#>`, which runs `codex exec review` and
-  posts Codex's verdict to the PR **verbatim**. No GitHub-side wiring needed; the script
-  itself only posts a comment.
+  in, then drive review with [`scripts/codex-review.sh`](scripts/codex-review.sh) — from
+  within the target repo's clone, Faber runs `scripts/codex-review.sh <PR#>` (gh infers
+  `<owner>/<repo>` from the cwd), which runs `codex exec review` and posts Codex's verdict
+  to the PR **verbatim**. No GitHub-side wiring needed; the script itself only posts a
+  comment.
 - **Codex GitHub integration (autonomous upgrade).** Connect Codex's PR review to each
   target repo `<owner>/<repo>` so it reviews automatically when a PR is opened or updated,
   with no Faber session needed. Set it up per Codex's docs (out of scope here).

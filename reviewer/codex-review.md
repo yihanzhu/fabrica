@@ -8,7 +8,11 @@ independent judgment, not Claude's rubric echoed back.
 
 ## How the reviewer actually runs
 
-[`scripts/codex-review.sh`](../scripts/codex-review.sh) is the harness. It:
+[`scripts/codex-review.sh`](../scripts/codex-review.sh) is the harness. It operates on
+the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote, and
+`codex exec review` runs against this same checkout — so **invoke it from within the
+target repo's clone**. It first guards that the cwd is a git repo with a gh-recognized
+remote (else it errors out), then:
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and checks the
    PR out (`gh pr checkout <PR#>`).
@@ -20,8 +24,9 @@ independent judgment, not Claude's rubric echoed back.
    prefixed only with a short header marking it the Codex cross-vendor reviewer.
 
 ```
-scripts/codex-review.sh <owner>/<repo> <PR#>             # e.g. scripts/codex-review.sh yihanzhu/fabrica 7
-scripts/codex-review.sh -m <model> <owner>/<repo> <PR#>  # optional model override
+# run from within the target repo's clone (gh infers <owner>/<repo> from the cwd)
+scripts/codex-review.sh <PR#>             # e.g. scripts/codex-review.sh 7
+scripts/codex-review.sh -m <model> <PR#>  # optional model override
 ```
 
 The `<tmpfile>` is a transient `mktemp` file in the system temp dir (cleaned up via a
@@ -47,7 +52,7 @@ Today the loop is **synchronous** — it runs while a Faber session is driving i
 ```
 Faber spawns coder subagent  →  coder opens PR (label round-0)
         ↓
-Faber runs scripts/codex-review.sh <owner>/<repo> <PR#>
+Faber runs scripts/codex-review.sh <PR#>  (from within the target repo's clone)
    (script posts Codex's verdict to the PR, verbatim)
         ↓
 Faber reads the Codex comment
