@@ -17,7 +17,7 @@ Completes the trio: **Otium** (life) · **Valor** (work) · **Fabrica** (the cra
 | **Faber's brief** | Claude | Schedule routine | daily cron | read-only |
 | **Coder** | Claude | Routine | issue labeled `ready` | yes (branches, PRs) |
 | **Coder (revisions)** | Claude | Routine | review submitted | yes |
-| **Reviewer** | Codex (OpenAI) | Codex PR review | PR opened/updated | **comments only** |
+| **Reviewer** | Codex (OpenAI) | Codex via `scripts/codex-review.sh` (in-session) / GitHub integration (autonomous) | PR opened/updated | **comments only** |
 
 You talk **only** to Faber. The workers have no human channel — only GitHub events
 wake them. Claude and Codex never talk directly; **the PR is the message bus.**
@@ -72,7 +72,8 @@ manager/CLAUDE.md          Faber's persistent role (paste into Claude Code)
 routines/coder.md          Coder routine instructions
 routines/coder-revision.md Coder-handles-review routine
 routines/brief.md          Faber's daily-brief routine
-reviewer/codex-review.md   Codex reviewer prompt
+reviewer/codex-review.md   Codex reviewer mechanism + in-session review loop
+scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a PR, verbatim
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
 templates/repo-setup.md    Labels + branch protection checklist

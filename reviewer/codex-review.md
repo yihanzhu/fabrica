@@ -1,32 +1,100 @@
-# Reviewer — Codex (OpenAI), comments only
+# Reviewer — Codex (OpenAI), via `scripts/codex-review.sh`
 
 The reviewer runs on **Codex**, not as a Claude routine — that's the cross-vendor
-split that decorrelates blind spots. Connect Codex's PR review to `<target-repo>`
-so it reviews automatically when a PR is opened or updated.
+split that decorrelates blind spots (coder = Claude, reviewer = Codex). The reviewer
+uses Codex's **built-in** review (`codex exec review`), not a hand-written rubric: the
+`--base` flag can't take a custom prompt, and the whole point is to get Codex's own
+independent judgment, not Claude's rubric echoed back.
 
-**Hard constraints**
-- **Comments only.** Never push, never approve-to-merge, never merge.
-- Give it **no write access** to the repo beyond posting review comments.
-- It is **never** the author of the code it reviews.
+## How the reviewer actually runs
 
-**Review prompt / instructions**
+[`scripts/codex-review.sh`](../scripts/codex-review.sh) is the harness. It operates on
+the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote, and
+`codex exec review` runs against this same checkout — so **invoke it from within the
+target repo's clone**. The script lives only in *this* control-plane repo, so call it by
+its **absolute path** (or put `<fabrica>/scripts` on your `PATH`); don't copy it into each
+target repo. It first guards that the cwd is a git repo with a gh-recognized remote (else
+it errors out) — and it `unset`s `GH_REPO` then derives the repo from the cwd and passes
+an explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect
+the comment to a *different* repo's PR. Then:
+
+1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`), **fetches origin**,
+   **guards that the worktree is clean** (aborts with a clear error if `git status --porcelain`
+   is non-empty — so the force checkout below never discards local-only commits or uncommitted
+   work), and checks the PR out with **`gh pr checkout <PR#> --force`** so a re-run resets the
+   local PR branch to the latest head instead of reviewing a stale leftover branch.
+2. Runs **`codex exec review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
+   Codex's built-in review of the PR diff vs. its **current** (qualified, remote) base. The
+   `-c sandbox_mode="read-only"` override **forces** the read-only sandbox so the review can't
+   inherit a writable default from the operator's Codex config (approval is already `never` for
+   review); the script deliberately does **not** pass `--dangerously-bypass-approvals-and-sandbox`,
+   and avoids `--ignore-user-config` so the operator's model/effort defaults still apply.
+3. Posts Codex's review to the PR **verbatim**: `gh pr comment <PR#> --body-file <tmpfile>`,
+   prefixed only with a short header marking it the Codex cross-vendor reviewer.
 
 ```
-You are the Reviewer. You review pull requests and leave comments ONLY — never
-push, approve-to-merge, or merge. Be adversarial and specific.
+# run from within the TARGET repo's clone; invoke the script by ABSOLUTE PATH
+# (it lives only in the fabrica control-plane repo — do NOT copy it per repo).
+# Substitute your fabrica clone for "$HOME/git/fabrica".
+"$HOME/git/fabrica/scripts/codex-review.sh" <PR#>             # e.g. ... 7
+"$HOME/git/fabrica/scripts/codex-review.sh" -m <model> <PR#>  # optional model override
 
-For each PR, check:
-- Correctness — bugs, edge cases, error handling, race conditions.
-- Security — input validation, secrets, injection, authn/authz.
-- Regressions — could this break existing behavior not covered by tests?
-- Test coverage — are the changes actually tested? Call out missing cases.
-- Scope / size — if the PR does more than one concern or is oversized, say so and
-  recommend splitting (treat as a blocking comment).
-- Conventions — match the repo's CLAUDE.md.
-
-Default to skepticism: if something might be wrong, raise it. Group comments by
-severity (blocking / suggestion / nit). Do not nitpick formatting a linter catches.
+# Optional: add fabrica/scripts to PATH once, then call it by name from any target repo:
+#   export PATH="$HOME/git/fabrica/scripts:$PATH"   # (add to your shell rc)
+#   codex-review.sh <PR#>
 ```
+
+The `<tmpfile>` is a transient `mktemp` file in the system temp dir (cleaned up via a
+`trap ... EXIT`, removed even on failure) — it exists only to capture Codex's clean
+final review off the noisy exec trace. It is **never** committed; the **PR comment is
+the durable reviewer output**.
+
+## Invariants (non-negotiable)
+
+- **Cross-vendor.** Coder = Claude, reviewer = Codex. The reviewer's value is being a
+  *different* model, not a second copy of the author.
+- **Read-only.** The script **forces** the read-only sandbox with
+  `-c sandbox_mode="read-only"` (so it can't inherit a writable config default) and never
+  bypasses the sandbox.
+- **Comments only.** The script's *only* side effect is one `gh pr comment` (pinned to the
+  cwd's repo via an explicit `--repo`, with `GH_REPO` unset, so it can't post to another
+  repo's PR). It never edits files, pushes, approves-to-merge, or merges, and is never the
+  author. It also never destroys local work: it aborts on a dirty worktree rather than
+  force-checking-out over uncommitted changes.
+- **Verbatim.** Codex's review is posted unedited — no Claude session rewrites, blends,
+  or summarizes it. That preserves the independence of the second opinion.
+
+## The in-session review loop
+
+Today the loop is **synchronous** — it runs while a Faber session is driving it:
+
+```
+Faber spawns coder subagent  →  coder opens PR (label round-0)
+        ↓
+Faber runs codex-review.sh <PR#>  (by absolute path, from the target repo's clone)
+   (script posts Codex's verdict to the PR, verbatim)
+        ↓
+Faber reads the Codex comment
+        ├── pass      →  hand to the human merge gate (no auto-merge in Phase 1)
+        └── not pass  →  Faber spawns coder (fix mode) to address comments
+                              ↓
+                         Faber re-runs codex-review.sh   (bump round-N)
+                              ↺  repeat
+                              └── ~3-round cap → label needs-human → Faber pings you
+```
+
+Faber, not the reviewer, drives each step; Claude and Codex never talk directly — the
+**PR is the message bus**. Rounds + escalation live in the **labels**
+(`round-0..3`, `needs-human`), not in any agent's memory.
+
+## Upgrades / alternatives
+
+- **Codex GitHub integration** — the **autonomous** upgrade. Codex posts its review on
+  PR events itself (PR opened/updated), so the loop no longer needs a Faber session to
+  invoke the script. Same invariants (cross-vendor, read-only, comments-only). Setting
+  it up is out of scope here; this script is the in-session path that works today.
+- **codex-plugin-cc** — an **interactive** alternative: drive Codex review from inside a
+  Claude Code session via the plugin, rather than the standalone CLI script.
 
 > Note: Codex on your ChatGPT plan is fine for personal repos (first-party feature =
 > ordinary use). Apply terms diligence before pointing it at any work/shared repo.
