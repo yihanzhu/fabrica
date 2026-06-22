@@ -10,15 +10,23 @@ set -euo pipefail
 # reviewer/codex-review.md).
 #
 # This script ONLY writes a single PR comment. It never edits files, pushes, or
-# merges. `codex exec review` runs read-only by default (sandbox: read-only,
-# approval: never) — we deliberately do NOT pass --dangerously-bypass-* .
+# merges. Read-only is FORCED via `-c sandbox_mode="read-only"` so the review
+# can't inherit a writable sandbox from the operator's Codex config (approval is
+# already `never` for review); we deliberately do NOT pass --dangerously-bypass-* .
+# We use -c rather than --ignore-user-config on purpose: that flag would also drop
+# the operator's model/effort defaults, which we want to keep.
 #
 # It operates on the CURRENT repo: gh infers <owner>/<repo> from the cwd's git
 # remote, and `codex exec review` runs against this same checkout. Run it from
 # within the target repo's clone — there is deliberately no <owner>/<repo> arg,
 # so the script can't review one repo's diff and post to another's PR.
 #
+# Re-run safe: it fetches origin and checks the PR out with --force, then reviews
+# against the qualified base ref (origin/<base>), so a second pass after a coder
+# pushes fixes always sees the latest head against a current base, never stale refs.
+#
 # Usage: scripts/codex-review.sh [-m <model>] <PR#>
+#   (or, with fabrica/scripts on PATH: codex-review.sh [-m <model>] <PR#>)
 
 usage() {
   echo "usage: $0 [-m <model>] <PR#>" >&2
@@ -56,8 +64,16 @@ fi
 
 # Derive the PR's base branch and check out the PR so codex reviews the right diff.
 # Everything operates on the current repo (gh infers <owner>/<repo> from the cwd).
+#
+# Re-run safety: a previous pass may have left a stale local PR branch behind, so
+# `gh pr checkout` without --force would NOT reset it to the latest PR head. We
+# fetch origin first (refreshing both head and base), check out with --force to
+# reset the PR branch to the current head, and review against the QUALIFIED remote
+# base (origin/<base>) so the base is current too — never a stale local branch.
 base="$(gh pr view "$pr" --json baseRefName -q .baseRefName)"
-gh pr checkout "$pr"
+git fetch origin
+gh pr checkout "$pr" --force
+base_ref="origin/${base}"
 
 # Capture only Codex's final review to a transient temp file (avoids the noisy exec
 # trace on stdout). trap removes it even if codex or gh fails mid-run; it lives in
@@ -65,7 +81,11 @@ gh pr checkout "$pr"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-review_cmd=(codex exec review --base "$base" -o "$tmp")
+# Force read-only via -c so the review cannot inherit a writable sandbox from the
+# operator's Codex config. `codex exec review` has no -s/--sandbox flag (only the
+# parent `codex exec` does), so the config override is the way to pin it; we avoid
+# --ignore-user-config so the operator's model/effort defaults still apply.
+review_cmd=(codex exec review -c sandbox_mode="read-only" --base "$base_ref" -o "$tmp")
 if [ -n "$model" ]; then
   review_cmd+=(-m "$model")
 fi
@@ -75,7 +95,7 @@ fi
 {
   echo "## Codex reviewer (cross-vendor, read-only)"
   echo
-  echo "_Posted verbatim by \`scripts/codex-review.sh\` (\`codex exec review --base ${base}\`). Comments only — Codex never pushes, approves, or merges._"
+  echo "_Posted verbatim by \`codex-review.sh\` (\`codex exec review --base ${base_ref}\`, sandbox forced read-only). Comments only — Codex never pushes, approves, or merges._"
   echo
   cat "$tmp"
 } | gh pr comment "$pr" --body-file -
