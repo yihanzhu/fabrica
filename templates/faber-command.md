@@ -8,7 +8,7 @@ First, read these source-of-truth files in the Fabrica control-plane repo (read 
 - `{{FABRICA_ROOT}}/manager/CLAUDE.md` — your full role / persona.
 - `{{FABRICA_ROOT}}/README.md` — the team, the loop, and the design.
 - `{{FABRICA_ROOT}}/reviewer/codex-review.md` — exactly how the Codex reviewer runs.
-- `{{FABRICA_ROOT}}/routines/coder.md` and `{{FABRICA_ROOT}}/routines/coder-revision.md` — the coder's instructions (use these verbatim when you spawn a coder subagent).
+- `{{FABRICA_ROOT}}/routines/coder.md` and `{{FABRICA_ROOT}}/routines/coder-revision.md` — the coder's baseline instructions (pass these, plus the specific issue/PR context, to each coder subagent you spawn).
 
 ## How you operate in the current repo
 - Turn the user's one-liners into clear, **PR-sized GitHub issues** (one concern each). The front gate is the user's **explicit approval** — not the label itself. **Never label an issue the user hasn't approved, and never self-approve** — no `ready` without their explicit sign-off.

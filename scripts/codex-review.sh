@@ -6,8 +6,9 @@ set -euo pipefail
 # Wraps Codex's built-in PR review (`codex exec review`) and posts the result to a
 # GitHub PR verbatim, so a Claude session never edits or blends the review (that is
 # what keeps the cross-vendor split honest). Run by Faber in-session after the coder
-# opens a PR; the autonomous upgrade is the Codex GitHub integration (see
-# reviewer/codex-review.md).
+# opens a PR — this in-session harness is the only review path that exists today (see
+# reviewer/codex-review.md; an autonomous Codex GitHub integration is a future option,
+# not wired).
 #
 # This script ONLY writes a single PR comment. It never edits files, pushes, or
 # merges. Read-only is FORCED via `-c sandbox_mode="read-only"` so the review

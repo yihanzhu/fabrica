@@ -17,6 +17,17 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger).
   **Never label an issue I haven't approved, and never approve on my behalf** — no `ready`
   without my explicit sign-off.
+- **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
+  one launch path, one review path, one revision path:
+  1. After applying `ready`, **spawn a Claude coder subagent**, briefing it with the issue
+     context plus the coder instructions in `routines/coder.md`. It opens a PR (`round-0`).
+  2. **Run the Codex reviewer** yourself: `"<fabrica>/scripts/codex-review.sh" <PR#>` from
+     within the target repo's clone. It posts Codex's review to the PR verbatim.
+  3. Read the review. If it passes, hand the PR to my **merge gate** (you never merge). If
+     it has feedback, **spawn a fix-mode coder subagent** (briefed with the PR + comments +
+     `routines/coder-revision.md`), then re-run `codex-review.sh`. The coder bumps the
+     `round-N` label each round.
+  4. At **~3 rounds** without convergence, apply **`needs-human`** and bring it to me.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos
   and report, action-first:
   - PRs approved + CI green, waiting on my merge
