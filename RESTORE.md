@@ -20,9 +20,11 @@ it as written.
 
 Accounts and access you need before starting:
 
-- **A Claude plan with Routines** — the coder, coder-revision, and brief all run as
-  first-party Claude Routines on your plan (metered ordinary use, **no API key**). The
-  manager (Faber) runs as an ordinary Claude Code chat session.
+- **A Claude plan** — the manager (Faber) runs as an ordinary Claude Code chat session,
+  and Faber spawns the coder as a subagent in that same session (the **active** path, no
+  routine needed). The daily **brief** runs as a first-party Claude Routine. The coder /
+  coder-revision **routines** are an *optional* autonomous alternative (step 2) — also
+  first-party Routines on your plan (metered ordinary use, **no API key**).
 - **Codex (OpenAI)** with PR review — this is the cross-vendor reviewer. A ChatGPT plan
   that includes Codex PR review is enough for personal repos.
 - **GitHub access** to each target repo, plus the **`gh` CLI authenticated** locally
@@ -59,7 +61,11 @@ human channel.
 Faber **only opens issues** — never writes code, never merges, and never approves on your
 behalf. The front gate is **your explicit approval**: once you approve an issue, Faber
 applies the `ready` label as the record of your go (it never labels an issue you haven't
-approved). That `ready` label is what wakes the coder.
+approved). Applying `ready` is then Faber's own cue to **spawn the coder subagent** — this
+Faber-driven launch is the **active** path, and it is the *only* coder launch per approved
+issue. (Step 2's routines are an optional, mutually-exclusive alternative — if you wire
+them, the `ready` label fires the routine instead and Faber must NOT also spawn the coder.
+**Never both:** exactly one coder launch per approved issue.)
 
 ---
 
@@ -70,18 +76,30 @@ open the file, copy the fenced **Instructions** block into a new Claude Routine,
 the **trigger** + routine settings exactly as the file's header specifies (model,
 permissions, connectors).
 
-| Routine | Source file | Trigger |
-|---------|-------------|---------|
-| Coder | [`routines/coder.md`](routines/coder.md) | GitHub event → `issues.labeled` (acts only on `ready`) |
-| Coder (revisions) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` (the file also specifies a conditional `issue_comment.created` fallback if your trigger can't filter — set it per the file's header) |
-| Daily brief | [`routines/brief.md`](routines/brief.md) | Schedule → daily cron (your timezone) |
+> **Coder routines are OPTIONAL and mutually exclusive with the Faber-driven launch.**
+> The live default is Faber-in-session spawning the coder (step 1) — **no coder routines
+> wired.** The two coder routines below are the *optional autonomous alternative*: wiring
+> them makes the `ready` label fire the coder on its own. **Use either the Faber-driven
+> path or these routines — never both,** or one approval launches the coder twice. If you
+> wire them, Faber must NOT also spawn the coder. **Invariant: exactly one coder launch per
+> approved issue.** The **daily brief** routine is independent of this choice — recreate it
+> either way.
+
+| Routine | Required? | Source file | Trigger |
+|---------|-----------|-------------|---------|
+| Coder | **Optional** (autonomous alternative to Faber spawning) | [`routines/coder.md`](routines/coder.md) | GitHub event → `issues.labeled` (acts only on `ready`) |
+| Coder (revisions) | **Optional** (only if you wired the Coder routine) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` (the file also specifies a conditional `issue_comment.created` fallback if your trigger can't filter — set it per the file's header) |
+| Daily brief | Yes | [`routines/brief.md`](routines/brief.md) | Schedule → daily cron (your timezone) |
 
 Notes:
 - Point each routine's **Repository** setting at your target repo `<owner>/<repo>`.
 - The coder routines need **write** permission and **GitHub-only** connectors; the brief
   is **read-only** and adds one notify channel. The files spell this out — follow them.
-- The coder routine self-guards: if the applied label is not `ready`, it stops. That's
-  why a single `issues.labeled` trigger is safe.
+- **Skip the coder routines** if you're running the Faber-driven launch (the default) — the
+  coder is spawned in-session, so wiring them too would double-launch on one approval.
+- If you *do* wire the coder routine, it self-guards: if the applied label is not `ready`,
+  it stops. That's why a single `issues.labeled` trigger is safe **on its own** — but it is
+  still mutually exclusive with Faber spawning the coder.
 
 ---
 
@@ -151,14 +169,18 @@ Run **one trivial issue** through the full loop end to end:
 
 1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
 2. **You** explicitly approve the issue (the front gate); **Faber** then applies the
-   `ready` label as the record of your approval. This should wake the **Coder**.
-3. Confirm the Coder opens a PR that says `Closes #<n>` and carries `round-0`.
+   `ready` label as the record of your approval and **spawns the Coder** (the active path).
+   (If you instead wired the optional coder routine in step 2, the `ready` label fires that
+   routine — and Faber does NOT also spawn. Exactly one coder launch fires either way.)
+3. Confirm the Coder opens a PR that says `Closes #<n>` and carries `round-0` — and that
+   **only one** branch/PR was created for the single approval.
 4. On PR open, **CI and the Codex reviewer both trigger in parallel** (they are not
    sequential — don't wait for one before checking the other):
    - Confirm **Codex** posts review comments (and nothing else — no approve, no merge).
    - Confirm **CI** runs and goes green on the PR.
-5. If there's feedback, confirm the **coder-revision** routine pushes follow-up commits
-   and bumps the `round-N` label.
+5. If there's feedback, confirm the coder (Faber-spawned in fix mode — or the optional
+   **coder-revision** routine, if you wired that path) pushes follow-up commits and bumps
+   the `round-N` label.
 6. **You** merge once CI is green and you're satisfied.
 
 If every arrow above fired, the team is back. If one stage is silent, re-check that
@@ -206,8 +228,10 @@ Real lessons from setting this up the first time:
   session on your plan (**no API key**, uses your local `gh` auth). A routine run **in the
   cloud (remote)** needs the **web GitHub connection** (the App install above) — local
   `gh` auth won't reach it.
-- **Coder "did nothing" on a labeled issue?** Expected unless the label was exactly
-  `ready` — the coder routine stops on any other label (step 2). Check the label.
+- **Coder "did nothing" on a labeled issue?** On the Faber-driven path (default), the coder
+  only runs when Faber spawns it after applying `ready` — check Faber actually spawned it.
+  If you wired the optional coder routine instead, it's expected to do nothing unless the
+  label was exactly `ready` (the routine stops on any other label, step 2) — check the label.
 - **Reviewer silent?** Re-check Codex is connected to *that* repo and triggers on PR
   open/update (step 3). Claude and Codex never talk directly — the PR is the only message
   bus, so if Codex isn't connected, the loop just stalls with no error.

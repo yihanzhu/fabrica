@@ -3,8 +3,11 @@
 Do this once per target repo before pointing the team at it.
 
 ## 1. Labels
-Create these labels (the loop uses them as its state — routines are stateless):
-- `ready` — your approval; applying it triggers the coder
+Create these labels (the loop uses them as its state — the state lives in labels, not agent
+memory):
+- `ready` — the record of your approval; Faber applies it, then spawns the coder (active
+  path). If you wire the optional coder routine instead, this label fires that routine —
+  never both, so exactly one coder launch per approved issue.
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
 
@@ -29,7 +32,15 @@ manual (the script prints these reminders too).
 - Add `CLAUDE.md` (from `templates/target-CLAUDE.md`), filled in for this repo.
 
 ## 5. Wire the agents
-- Claude **Coder** routine → trigger on this repo's `issues.labeled`
-- Claude **Coder-revision** routine → trigger on this repo's `pull_request_review.submitted`
+Pick **one** coder-launch mechanism — never both, or one approval launches the coder twice
+(invariant: exactly one coder launch per approved issue):
+- **Active (default): Faber-driven** — no coder routine. Faber spawns the coder subagent
+  in-session after applying `ready`. Nothing to wire here beyond the `/faber` command.
+- **Optional alternative: autonomous routines** — only if you are NOT using the Faber-driven
+  path:
+  - Claude **Coder** routine → trigger on this repo's `issues.labeled`
+  - Claude **Coder-revision** routine → trigger on this repo's `pull_request_review.submitted`
+
+Always wire, regardless of which coder mechanism you chose:
 - **Codex** PR review → connected to this repo, comments only
 - Claude **brief** routine → include this repo in the daily scan

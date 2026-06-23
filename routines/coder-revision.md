@@ -1,5 +1,10 @@
 # Coder routine — handle review feedback
 
+> **Optional, mutually-exclusive alternative.** Pairs with `routines/coder.md`: only wire
+> this revision routine if you're running the autonomous routine path. The **active** path
+> is Faber-in-session spawning the coder (fix mode) on Codex's review. Use **either** the
+> Faber-driven path **or** these routines — **never both.**
+
 **Routine settings**
 - Trigger: **GitHub event** → `pull_request_review.submitted`
   (if your trigger can't filter, also handle `issue_comment.created` on PRs)

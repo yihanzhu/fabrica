@@ -15,12 +15,18 @@ Completes the trio: **Otium** (life) · **Valor** (work) · **Fabrica** (the cra
 |-------|--------|---------|---------|---------|
 | **Faber** (manager) | Claude | Claude Code chat + `manager/CLAUDE.md` | you talk to it | issues only, never code/merge |
 | **Faber's brief** | Claude | Schedule routine | daily cron | read-only |
-| **Coder** | Claude | Routine | issue labeled `ready` | yes (branches, PRs) |
-| **Coder (revisions)** | Claude | Routine | review submitted | yes |
+| **Coder** | Claude | Coder subagent Faber spawns (active) / Routine on `issues.labeled` (optional, mutually exclusive) | Faber spawns it after applying `ready` | yes (branches, PRs) |
+| **Coder (revisions)** | Claude | Coder subagent Faber spawns (active) / Routine on review submitted (optional, mutually exclusive) | Faber spawns it on Codex's review | yes |
 | **Reviewer** | Codex (OpenAI) | Codex via `scripts/codex-review.sh` (in-session) / GitHub integration (autonomous) | PR opened/updated | **comments only** |
 
-You talk **only** to Faber. The workers have no human channel — only GitHub events
-wake them. Claude and Codex never talk directly; **the PR is the message bus.**
+You talk **only** to Faber. The reviewer has no human channel — only the PR wakes it.
+Claude and Codex never talk directly; **the PR is the message bus.**
+
+**One active launch path.** The coder is launched **either** by Faber-in-session
+(the active setup: you approve → Faber applies `ready` → Faber spawns the coder) **or**
+by a Claude Coder *routine* wired to `issues.labeled` (the optional autonomous
+alternative below) — **never both.** **Invariant: exactly one coder launch per approved
+issue.** If you connect the routine, Faber must NOT also spawn the coder, and vice-versa.
 
 ## The loop
 
@@ -30,7 +36,9 @@ wake them. Claude and Codex never talk directly; **the PR is the message bus.**
            YOU approve → Faber labels  ┤  (front gate = your approval;
               it `ready` (your go)  ───┤   Faber records it, never self-approves)
                                        ↓
-                                   [Coder]  → opens PR (label round-0)
+                          Faber spawns [Coder]  → opens PR (label round-0)
+                          (one launch per approval; if a routine is wired
+                           instead, it fires here — never both)
                                        ↓
                                   [Reviewer = Codex]  → comments only
                                        ↓
@@ -61,11 +69,15 @@ wake them. Claude and Codex never talk directly; **the PR is the message bus.**
   low-risk + green CI; always back-look high-risk (auth, migrations, shared repos).
 - **One rounds counter (~3).** Comments resolved or disagreement burned both count;
   a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
-- **Routines are stateless** → rounds + escalation live in **labels**
+- **One coder launch per approved issue.** Faber-in-session is the active launch path:
+  you approve → Faber applies `ready` → Faber spawns the coder. A Claude Coder *routine*
+  on `issues.labeled` is an **optional, mutually-exclusive** autonomous alternative — wire
+  *one* mechanism, never both, so a single approval never starts two coder runs.
+- **State lives in labels, not agent memory** → rounds + escalation live in **labels**
   (`round-0..3`, `needs-human`), not agent memory.
-- **Runs on the plan** via first-party Routines (Claude) + Codex's own PR review —
-  compliant ordinary use, metered. Prototype on personal repos; apply terms
-  diligence before any work/shared repo.
+- **Runs on the plan** via Claude (Faber + coder) + Codex's own PR review — compliant
+  ordinary use, metered. The optional routine path also runs as first-party Routines.
+  Prototype on personal repos; apply terms diligence before any work/shared repo.
 
 ## Layout
 

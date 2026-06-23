@@ -1,5 +1,13 @@
 # Coder routine — implement a `ready` issue
 
+> **Optional, mutually-exclusive alternative.** This routine is the *autonomous* way to
+> launch the coder: wiring it to `issues.labeled` makes the `ready` label fire the coder on
+> its own. The **active** launch path is Faber-in-session spawning the coder subagent (see
+> `manager/CLAUDE.md` / `templates/faber-command.md`). Use **either** the Faber-driven path
+> **or** this routine — **never both**, or one approval launches the coder twice. If you
+> connect this routine, Faber must NOT also spawn the coder. **Invariant: exactly one coder
+> launch per approved issue.**
+
 **Routine settings**
 - Trigger: **GitHub event** → `issues.labeled`
 - Repository: `yihanzhu/fabrica`
