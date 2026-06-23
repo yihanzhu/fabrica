@@ -26,7 +26,7 @@ set -euo pipefail
 # Isolated review — the operator's checkout is never touched. Instead of checking the
 # PR out into the operator's own working tree (which, even with a clean guard, risks
 # discarding unpushed commits via a force reset), the script fetches the PR head
-# fork-safely (`git fetch origin pull/<PR#>/head`, which brings the head commit into
+# fork-safely (`git fetch origin refs/pull/<PR#>/head`, which brings the head commit into
 # the object store even for fork PRs) and adds a DETACHED, throwaway git worktree at
 # that exact commit. `codex exec review` runs inside that temp worktree against the
 # qualified, freshly-fetched `origin/<base>`, so it always sees the latest head vs. a
@@ -93,18 +93,21 @@ fi
 base="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 
 # Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store,
-# using EXPLICIT refspecs so both land at a known ref regardless of the clone's
-# configured fetch refspecs. The `pull/<PR#>/head` source brings the PR head commit in
-# even when the PR comes from a fork (a plain `git fetch origin` would not); we write it
-# to a private local ref we control so its resolution can't be ambiguous. The base is
-# fetched straight into its remote-tracking ref (`refs/remotes/origin/<base>`) so that
+# using EXPLICIT, FULLY-QUALIFIED refspecs so both land at a known ref regardless of the
+# clone's configured fetch refspecs. Both sources are qualified (`refs/pull/<PR#>/head`
+# and `refs/heads/<base>`) so a same-named tag on origin (e.g. a release branch and tag
+# both named `v1.2.0`) can't make the fetch source resolve ambiguously or fail before
+# Codex runs. The `refs/pull/<PR#>/head` source brings the PR head commit in even when
+# the PR comes from a fork (a plain `git fetch origin` would not); we write it to a
+# private local ref we control so its resolution can't be ambiguous. The base is fetched
+# straight into its remote-tracking ref (`refs/remotes/origin/<base>`) so that
 # `--base origin/<base>` below is always CURRENT — a bare `git fetch origin <base>`
 # would only set FETCH_HEAD and, in a clone without the default `origin/*` mapping,
 # could leave origin/<base> stale or missing and review against an old base.
 pr_head_ref="refs/codex-review/pr-head"
 git fetch --force origin \
-  "pull/${pr}/head:${pr_head_ref}" \
-  "${base}:refs/remotes/origin/${base}"
+  "refs/pull/${pr}/head:${pr_head_ref}" \
+  "refs/heads/${base}:refs/remotes/origin/${base}"
 pr_head="$(git rev-parse "$pr_head_ref")"
 git update-ref -d "$pr_head_ref"
 base_ref="origin/${base}"
