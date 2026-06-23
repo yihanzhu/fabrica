@@ -19,16 +19,21 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 *different* repo's PR. Then:
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and **fetches the PR
-   head fork-safely** — `git fetch origin pull/<PR#>/head <base>` brings the PR head commit
-   into the object store even for **fork** PRs (a plain `git fetch origin` would not) and
-   refreshes `origin/<base>`. It then adds a **detached, throwaway git worktree** at that
-   fetched head (`git worktree add --detach <tmpdir> <head>`), **isolated from the operator's
-   checkout**. The review runs in that temp worktree, so the operator's branch, index, working
+   head fork-safely** with explicit refspecs — `git fetch --force origin pull/<PR#>/head:<tmpref>
+   <base>:refs/remotes/origin/<base>`. The `pull/<PR#>/head` source brings the PR head commit
+   into the object store even for **fork** PRs (a plain `git fetch origin` would not), and the
+   base is fetched straight into `refs/remotes/origin/<base>` so the `--base origin/<base>`
+   review is always **current** regardless of the clone's configured fetch refspecs (a bare
+   `git fetch origin <base>` would only set `FETCH_HEAD` and could leave `origin/<base>` stale
+   or missing). It then adds a **detached, throwaway git worktree** at that fetched head
+   (`git worktree add --detach <tmpdir> <head>`), **isolated from the operator's checkout**. The review runs in that temp worktree, so the operator's branch, index, working
    tree, and unpushed commits are never touched — there is no force checkout and no
    clean-worktree guard, and the reviewer works even when the operator has local uncommitted
    work. A `trap ... EXIT` removes the temp worktree (`git worktree remove --force`) and temp
-   file even on failure, and `git worktree prune` first clears a stale worktree from a
-   hard-killed previous run, so re-runs are safe and leave nothing behind.
+   file even on failure, so the script never leaves a stale entry behind; and because each run
+   adds its worktree at a fresh `mktemp` path, a stale entry from a hard-killed previous run
+   never blocks a re-run. (It deliberately avoids a global `git worktree prune`, which is
+   repo-wide and would touch unrelated operator worktrees.)
 2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
    Codex's built-in review of the PR head diff vs. its **current** (qualified, remote) base,
    inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the

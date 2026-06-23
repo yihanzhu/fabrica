@@ -35,9 +35,13 @@ set -euo pipefail
 # guard, and the reviewer works even when the operator has local uncommitted work.
 #
 # Re-run safe: a `trap ... EXIT` removes the temp worktree (`git worktree remove
-# --force`) and the temp output file even on failure; `git worktree prune` first
-# clears a stale worktree left by a hard-killed previous run. No leftover worktrees,
-# branches, or temp files.
+# --force`) and the temp output file even on failure, so this script never leaves a
+# stale entry behind. We deliberately do NOT run a global `git worktree prune` (it is
+# repo-wide and would drop metadata for unrelated operator worktrees, e.g. an unmounted
+# one past gc.worktreePruneExpire — an operator-state mutation we must avoid). It is
+# unneeded anyway: each run adds its worktree at a fresh mktemp path, so a stale entry
+# from a hard-killed previous run never blocks `git worktree add`. No leftover
+# worktrees, branches, or temp files.
 #
 # Usage: scripts/codex-review.sh [-m <model>] <PR#>
 #   (or, with fabrica/scripts on PATH: codex-review.sh [-m <model>] <PR#>)
@@ -88,19 +92,28 @@ fi
 # <owner>/<repo> from the cwd).
 base="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 
-# Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store.
-# The `pull/<PR#>/head` refspec brings the PR head commit in even when the PR comes
-# from a fork (a plain `git fetch origin` would not), and refreshing the base keeps
-# origin/<base> current. FETCH_HEAD then points at the PR head commit (the last ref
-# fetched), which we resolve and add the worktree at.
-git fetch origin "pull/${pr}/head" "$base"
-pr_head="$(git rev-parse FETCH_HEAD)"
+# Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store,
+# using EXPLICIT refspecs so both land at a known ref regardless of the clone's
+# configured fetch refspecs. The `pull/<PR#>/head` source brings the PR head commit in
+# even when the PR comes from a fork (a plain `git fetch origin` would not); we write it
+# to a private local ref we control so its resolution can't be ambiguous. The base is
+# fetched straight into its remote-tracking ref (`refs/remotes/origin/<base>`) so that
+# `--base origin/<base>` below is always CURRENT — a bare `git fetch origin <base>`
+# would only set FETCH_HEAD and, in a clone without the default `origin/*` mapping,
+# could leave origin/<base> stale or missing and review against an old base.
+pr_head_ref="refs/codex-review/pr-head"
+git fetch --force origin \
+  "pull/${pr}/head:${pr_head_ref}" \
+  "${base}:refs/remotes/origin/${base}"
+pr_head="$(git rev-parse "$pr_head_ref")"
+git update-ref -d "$pr_head_ref"
 base_ref="origin/${base}"
 
-# Prune any stale worktree a hard-killed previous run may have left, so re-runs are
-# safe, then allocate temp paths in the system temp dir (never inside the repo, so
-# nothing here can be committed): a detached worktree dir and the review output file.
-git worktree prune
+# Allocate temp paths in the system temp dir (never inside the repo, so nothing here
+# can be committed): a detached worktree dir and the review output file. Both get a
+# fresh mktemp path each run, so a stale worktree entry from a hard-killed previous run
+# never collides with — or blocks — the `git worktree add` below; that is why no global
+# `git worktree prune` is needed (and we avoid one to not touch unrelated worktrees).
 worktree="$(mktemp -d)"
 tmp="$(mktemp)"
 
