@@ -7,7 +7,7 @@ separate FE/BE agents).
 ## Stack & commands
 - Language / framework: <fill in>
 - Install: `<cmd>`
-- Test: `<cmd>`  ← must pass before any PR is opened
+- Test: `<cmd>`  ← where applicable (or the repo's CI checks); must pass before any PR is opened
 - Lint / typecheck: `<cmd>`
 - Build / run: `<cmd>`
 
@@ -16,7 +16,8 @@ separate FE/BE agents).
 - Soft size budget **~300–400 net lines**. Past that, split into smaller issues
   rather than one big PR. (Tripwire, not a hard reject — a large mechanical rename
   is fine.)
-- Every PR links its issue (`Closes #<n>`) and adds/updates tests.
+- Every PR links its issue (`Closes #<n>`) and adds/updates tests where the repo
+  has them; CI must stay green.
 - Conventional commit messages: `<convention, e.g. feat:/fix:/chore:>`
 
 ## Conventions

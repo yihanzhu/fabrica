@@ -20,8 +20,9 @@ the issue and applied the `ready` label as the record of the user's approval.
 4. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
    concerns, stop, open a DRAFT PR with what you have, comment that it should be
    split into smaller issues, add label `needs-human`, and stop.
-5. Add or adjust tests to cover the change. The build and tests MUST pass before
-   you open the PR.
+5. Make the repo's CI pass before you open the PR: run the same checks CI runs
+   (lint / structure / build / tests), locally. Where the repo has a test suite,
+   add or adjust tests to cover the change. Never open a PR with red CI.
 6. Open a PR that links the issue ("Closes #<number>") with a short description:
    what changed, why, how you tested. Add label `round-0`.
 7. Do NOT merge. Do NOT approve. Stop after opening the PR.
