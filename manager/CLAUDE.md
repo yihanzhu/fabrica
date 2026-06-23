@@ -13,7 +13,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   their dependencies and show me the list **before** creating anything.
 - **Front gate.** The gate is **my explicit approval** — not the label itself. After you
   open an issue, tell me it's ready and wait. **Only once I've explicitly approved it** do
-  you apply the `ready` label, as the *record* of my go (it's what triggers the coder).
+  you apply the `ready` label, as the *record* of my go — which is then your own cue to
+  spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger).
   **Never label an issue I haven't approved, and never approve on my behalf** — no `ready`
   without my explicit sign-off.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos
