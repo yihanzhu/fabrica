@@ -63,7 +63,7 @@ cat <<EOF
   repo path:    $repo_root  (derived from this script's location)
 
 Next steps:
-  1. In a target repo, run: $repo_root/scripts/setup-target-repo.sh <owner>/<repo>
+  1. In a target repo, run: "$repo_root/scripts/setup-target-repo.sh" <owner>/<repo>
      (bootstraps the loop labels).
   2. Confirm that target repo has CI (the hard merge gate) and, optionally, a
      CLAUDE.md of conventions — see $repo_root/templates/.
