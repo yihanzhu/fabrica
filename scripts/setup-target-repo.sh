@@ -9,10 +9,11 @@ set -euo pipefail
 # manual follow-ups printed at the end and templates/repo-setup.md.
 #
 # Modes: the team runs in ONE of two mutually-exclusive end-to-end modes (pick one;
-# don't mix). IN-SESSION mode (default) needs nothing here beyond `/faber` + the
+# don't mix). IN-SESSION mode (default) needs no coder routines beyond `/faber` + the
 # Codex CLI — Faber drives launch, review, and revisions in-session. AUTONOMOUS mode
 # (optional) additionally needs the Claude GitHub App + the coder routines. These
-# labels are the loop's shared state in BOTH modes.
+# labels are the loop's shared state in BOTH modes. The daily-brief routine
+# (routines/brief.md) is independent of the mode — recommended in both for resurfacing.
 
 usage() {
   echo "usage: $0 <owner>/<repo>" >&2
@@ -57,9 +58,13 @@ Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md
      for AUTONOMOUS mode. Pick the one that matches your mode.
 
 Pick ONE end-to-end mode (don't mix):
-  - IN-SESSION (default): nothing more to wire. Faber drives launch, review, and
-    revisions in-session via /faber + the Codex CLI. No Claude GitHub App or routines.
+  - IN-SESSION (default): no coder routines to wire. Faber drives launch, review, and
+    revisions in-session via /faber + the Codex CLI. No Claude GitHub App, no coder
+    routines.
   - AUTONOMOUS (optional): also install/connect the Claude GitHub App and wire the
     coder + coder-revision routines (and use the Codex GitHub integration as reviewer).
     Faber does not spawn in this mode.
+
+Independent of the mode: the daily-brief routine (routines/brief.md) is recommended in
+BOTH modes for resurfacing — add this repo to that scheduled scan.
 EOF

@@ -23,6 +23,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   - **In-session mode (default):** you drive the whole loop in this session — apply `ready`,
     **spawn the coder subagent** (initial *and* fix mode), run the Codex review via
     `scripts/codex-review.sh`, and on feedback spawn a fix-mode coder + bump the round label.
+    When you spawn a coder subagent, hand it **only the fenced `Instructions` block** from
+    `routines/coder.md` (initial) or `routines/coder-revision.md` (fix mode) — not the top note
+    or `Routine settings` (those wire the file as a routine for autonomous mode only).
     No coder routines, no Claude GitHub App.
   - **Autonomous mode (optional):** a Claude Coder *routine* on `issues.labeled` + a
     coder-revision routine on `pull_request_review.submitted` + the Codex GitHub-integration

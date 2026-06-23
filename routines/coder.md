@@ -1,28 +1,34 @@
-# Coder routine — implement a `ready` issue
+# Coder — implement a `ready` issue
 
-> **Part of AUTONOMOUS mode only (optional).** This routine is the *autonomous* way to
-> launch the coder: wiring it to `issues.labeled` makes the `ready` label fire the coder on
-> its own. It is one of the three pieces of autonomous mode — pair it with
-> `routines/coder-revision.md` **and** the autonomous (Codex GitHub-integration) reviewer.
-> In the default **in-session** mode this routine is **NOT used**: Faber-in-session spawns
-> the coder subagent after applying `ready` (see `manager/CLAUDE.md` /
-> `templates/faber-command.md`). Pick **one** complete mode — **never both**, or one approval
-> launches the coder twice. If you wire this routine, Faber must NOT also spawn the coder.
-> **Invariant: exactly one coder launch per approved issue.**
+> **This file holds the coder's instructions, used in BOTH modes** — passed verbatim to a
+> spawned coder subagent (in-session mode) or pasted into a routine (autonomous mode). The
+> **Instructions** block below is mode-agnostic: it's the coder's actual job either way.
+> The **Routine settings** below apply to **autonomous mode only** (they wire the file as a
+> GitHub-event routine) — they are NOT part of the prompt a subagent receives.
 
-**Routine settings**
+**Routine settings — AUTONOMOUS mode only** (skip when Faber spawns the coder in-session)
+
+This is the *autonomous* way to launch the coder: wiring the Instructions block to
+`issues.labeled` makes the `ready` label fire the coder on its own. It is one of the three
+pieces of autonomous mode — pair it with `routines/coder-revision.md` **and** the autonomous
+(Codex GitHub-integration) reviewer. In **in-session** mode you do NOT create this routine:
+Faber spawns the coder subagent after applying `ready` (see `manager/CLAUDE.md` /
+`templates/faber-command.md`). Pick **one** complete mode — **never both**, or one approval
+launches the coder twice. **Invariant: exactly one coder launch per approved issue.**
+
 - Trigger: **GitHub event** → `issues.labeled`
 - Repository: `yihanzhu/fabrica`
 - Model: Opus 4.8
 - Permissions: **write** (create branches, push, open PRs)
 - Connectors: **GitHub only** — remove Atlassian / Calendar / Drive / Slack
 
-**Instructions** (paste into the routine)
+**Instructions** (mode-agnostic — passed to the subagent in-session, or pasted into the routine for autonomous)
 
 ```
-You are the Coder. You are triggered when an issue is labeled.
+You are the Coder, implementing an approved issue.
 
-0. If the applied label is NOT `ready`, stop immediately — do nothing.
+0. Confirm the issue carries the `ready` label (the record of approval). If the
+   applied/current label is NOT `ready`, stop immediately — do nothing.
 1. Read the issue in full — it is your spec. If it is ambiguous or missing
    acceptance criteria, do NOT guess: comment on the issue with your specific
    questions, add label `needs-human`, and stop.
