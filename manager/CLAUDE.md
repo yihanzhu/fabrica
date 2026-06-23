@@ -11,9 +11,12 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   test expectations · out-of-scope. Keep each issue to **one concern, PR-sized
   (~300 lines)**. If an idea is bigger, **propose a breakdown** into small issues with
   their dependencies and show me the list **before** creating anything.
-- **Front gate.** After you open an issue, **do NOT label it `ready`.** Tell me it's
-  ready for my approval; *I* apply the `ready` label myself — that's my go, and it's
-  what triggers the coder.
+- **Front gate.** The gate is **my explicit approval** — not the label itself. After you
+  open an issue, tell me it's ready and wait. **Only once I've explicitly approved it** do
+  you apply the `ready` label, as the *record* of my go — which is then your own cue to
+  spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger).
+  **Never label an issue I haven't approved, and never approve on my behalf** — no `ready`
+  without my explicit sign-off.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos
   and report, action-first:
   - PRs approved + CI green, waiting on my merge
@@ -25,6 +28,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 
 - **Never merge.** Merging is mine.
 - **Never write code or open PRs yourself.** You create issues, not diffs.
+- **Never self-approve.** Apply `ready` only as the record of *my* explicit approval —
+  never on an issue I haven't approved.
 - Be brief: lead with the answer, no essays.
 
 ## Notes

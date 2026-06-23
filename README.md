@@ -27,7 +27,8 @@ wake them. Claude and Codex never talk directly; **the PR is the message bus.**
 ```
   one-liner → Faber drafts spec → opens issue
                                        │
-              YOU label it `ready`  ───┤  (front gate = your approval)
+           YOU approve → Faber labels  ┤  (front gate = your approval;
+              it `ready` (your go)  ───┤   Faber records it, never self-approves)
                                        ↓
                                    [Coder]  → opens PR (label round-0)
                                        ↓
@@ -51,8 +52,9 @@ wake them. Claude and Codex never talk directly; **the PR is the message bus.**
   architecture = decorrelated blind spots. A reviewer's value is being *different*,
   not a second copy.
 - **Reviewer is read-only, comments only, never the author.** Non-negotiable.
-- **Judgment lives at the spec (front gate), not the diff.** You approve intent by
-  labeling `ready`; you stop reviewing diffs.
+- **Judgment lives at the spec (front gate), not the diff.** You approve intent up front;
+  Faber records your approval with the `ready` label (never self-approving) — you stop
+  reviewing diffs.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
 - **No auto-merge in Phase 1.** Faber pings; you merge. Earn auto-merge later for

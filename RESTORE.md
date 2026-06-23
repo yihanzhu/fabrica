@@ -56,8 +56,10 @@ human channel.
 4. Give that session GitHub access (`gh` CLI or the GitHub connector) so Faber can read
    state and open issues.
 
-Faber **only opens issues** — never writes code, never merges, never applies `ready`
-itself. That front gate (you applying `ready`) is what wakes the coder.
+Faber **only opens issues** — never writes code, never merges, and never approves on your
+behalf. The front gate is **your explicit approval**: once you approve an issue, Faber
+applies the `ready` label as the record of your go (it never labels an issue you haven't
+approved). That `ready` label is what wakes the coder.
 
 ---
 
@@ -148,7 +150,8 @@ a fork).
 Run **one trivial issue** through the full loop end to end:
 
 1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
-2. **You** apply the `ready` label (the front gate). This should wake the **Coder**.
+2. **You** explicitly approve the issue (the front gate); **Faber** then applies the
+   `ready` label as the record of your approval. This should wake the **Coder**.
 3. Confirm the Coder opens a PR that says `Closes #<n>` and carries `round-0`.
 4. On PR open, **CI and the Codex reviewer both trigger in parallel** (they are not
    sequential — don't wait for one before checking the other):
@@ -179,7 +182,9 @@ These are load-bearing — per the self-modification safety section of
   stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in
   agent memory — so the labels (step 4) are part of the safety system, not decoration.
 - **CI is the hard gate.** Merges require green CI; restore CI before trusting the loop.
-- **Front gate by a human.** Only a human applies `ready`; Faber never self-approves.
+- **Front gate is the human's approval.** No coder runs without your explicit approval.
+  Faber applies `ready` only as the record of that approval — never on an issue you haven't
+  approved, and never self-approving.
 
 ---
 
