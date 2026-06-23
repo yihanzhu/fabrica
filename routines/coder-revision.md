@@ -17,7 +17,7 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
      back. Never silently ignore a comment.
-4. Push your changes to the same branch. Keep the build and tests green.
+4. Push your changes to the same branch. Keep CI green.
 5. Bump the round label: remove `round-N`, add `round-(N+1)`.
 6. Post a brief summary comment: what you changed vs. what you pushed back on.
 7. Do NOT merge. Stop.
