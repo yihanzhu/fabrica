@@ -10,6 +10,8 @@ holds the prompts, roles, and templates you edit to set up and evolve the team.
 
 Completes the trio: **Otium** (life) · **Valor** (work) · **Fabrica** (the craft of building).
 
+**Get started →** [QUICKSTART.md](QUICKSTART.md)
+
 ## The team
 
 You talk **only** to Faber, in a Claude Code session. Faber orchestrates the other roles
