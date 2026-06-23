@@ -107,12 +107,15 @@ Faber, not the reviewer, drives each step; Claude and Codex never talk directly 
 **PR is the message bus**. Rounds + escalation live in the **labels**
 (`round-0..3`, `needs-human`), not in any agent's memory.
 
-## Upgrades / alternatives
+## Future / alternatives (not wired)
 
-- **Codex GitHub integration** — the **autonomous** upgrade. Codex posts its review on
-  PR events itself (PR opened/updated), so the loop no longer needs a Faber session to
-  invoke the script. Same invariants (cross-vendor, read-only, comments-only). Setting
-  it up is out of scope here; this script is the in-session path that works today.
+These are possible later changes — **none is set up today.** The in-session harness above
+is the only review path that exists.
+
+- **Codex GitHub integration** — a possible **autonomous** upgrade: Codex would post its
+  review on PR events itself (PR opened/updated), so the loop would no longer need a Faber
+  session to invoke the script. Same invariants (cross-vendor, read-only, comments-only).
+  Not built; wiring it is out of scope here.
 - **codex-plugin-cc** — an **interactive** alternative: drive Codex review from inside a
   Claude Code session via the plugin, rather than the standalone CLI script.
 

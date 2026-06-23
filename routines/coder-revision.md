@@ -1,17 +1,13 @@
-# Coder routine — handle review feedback
+# Coder instructions — handle review feedback
 
-**Routine settings**
-- Trigger: **GitHub event** → `pull_request_review.submitted`
-  (if your trigger can't filter, also handle `issue_comment.created` on PRs)
-- Repository: `yihanzhu/fabrica`
-- Model: Opus 4.8
-- Permissions: **write**
-- Connectors: **GitHub only**
-
-**Instructions** (paste into the routine)
+These are the coder's **fix-mode baseline instructions**. After Codex posts a review,
+Faber spawns a Claude coder subagent and briefs it with the PR and the review comments
+to fold in. They read as the coder's contract for any such fix-mode spawn; the coder runs
+with **write** access on the target repo.
 
 ```
-You are the Coder handling review feedback on a PR you authored.
+You are the Coder, spawned to handle review feedback on a PR you (the coder role) authored.
+Faber has briefed you with the PR, the latest review comments, and the current round.
 
 1. Read the PR, the latest review comments, and the current `round-N` label.
 2. ROUNDS CAP: if the label is `round-3` or higher, make NO further changes —
@@ -27,5 +23,6 @@ You are the Coder handling review feedback on a PR you authored.
 7. Do NOT merge. Stop.
 ```
 
-> The reviewer (Codex) re-reviews automatically when new commits land, so this
-> routine and the reviewer ping-pong via PR state until the round cap or approval.
+> Faber re-runs `scripts/codex-review.sh` after your changes land, so the coder and the
+> reviewer ping-pong via PR state — Faber driving each step — until the round cap or a
+> clean review.

@@ -1,7 +1,7 @@
 # RESTORE.md — rebuild the whole team from this repo
 
 This is the disaster-recovery runbook for Fabrica. If the live setup is lost — the
-Claude Routines deleted, the Codex connection dropped, labels or CI gone — follow this
+`/faber` command gone, the Codex CLI disconnected, labels or CI missing — follow this
 top to bottom to turn **this repo** back into a running coding team.
 
 This repo is the source of truth for *how the team works*. Everything below is
@@ -20,18 +20,17 @@ it as written.
 
 Accounts and access you need before starting:
 
-- **A Claude plan with Routines** — the coder, coder-revision, and brief all run as
-  first-party Claude Routines on your plan (metered ordinary use, **no API key**). The
-  manager (Faber) runs as an ordinary Claude Code chat session.
-- **Codex (OpenAI)** with PR review — this is the cross-vendor reviewer. A ChatGPT plan
-  that includes Codex PR review is enough for personal repos.
+- **A Claude plan that runs Claude Code** — the whole team runs in-session: Faber is an
+  ordinary Claude Code chat, and it spawns the coder (and fix-mode coder) as subagents in
+  that same session (metered ordinary use, **no API key**).
+- **Codex (OpenAI) CLI** — this is the cross-vendor reviewer, driven by
+  `scripts/codex-review.sh`. A ChatGPT plan that includes Codex review is enough for
+  personal repos; the Codex CLI must be installed and signed in.
 - **GitHub access** to each target repo, plus the **`gh` CLI authenticated** locally
-  (`gh auth status` should show you logged in) for labels and one-off commands.
+  (`gh auth status` should show you logged in) for labels and the loop's `gh` calls.
 - **The personal config you must supply** (keep it parameterized — see the note above):
   - the **target repo name(s)**, e.g. `<owner>/<repo>` — the repo(s) the team works in.
     (Fabrica is its own target repo; add others as you adopt the team elsewhere.)
-  - your **timezone / cron time** for the daily brief.
-  - your **notify channel** for the brief (Slack / push / Telegram).
 
 Read [`README.md`](README.md) once for the mental model (the team, the loop, the
 design "why") and [`CLAUDE.md`](CLAUDE.md) for the conventions and safety rails before
@@ -59,56 +58,58 @@ human channel.
 Faber **only opens issues** — never writes code, never merges, and never approves on your
 behalf. The front gate is **your explicit approval**: once you approve an issue, Faber
 applies the `ready` label as the record of your go (it never labels an issue you haven't
-approved). That `ready` label is what wakes the coder.
+approved). That `ready` label is Faber's own cue to spawn the coder subagent — one launch
+per issue, not a separate automated trigger.
 
 ---
 
-## 2. Recreate the routines
+## 2. Recreate the coder + brief instruction sources
 
-Each routine is recreated from its file in [`routines/`](routines/). For each one:
-open the file, copy the fenced **Instructions** block into a new Claude Routine, and set
-the **trigger** + routine settings exactly as the file's header specifies (model,
-permissions, connectors).
+Nothing to "wire" here — the coder and brief are **not standalone services**. They are
+instruction files in [`routines/`](routines/) that Faber reads and passes (with the
+specific task context) to the subagents it spawns in-session. To restore them, just make
+sure the files are present on `main`:
 
-| Routine | Source file | Trigger |
-|---------|-------------|---------|
-| Coder | [`routines/coder.md`](routines/coder.md) | GitHub event → `issues.labeled` (acts only on `ready`) |
-| Coder (revisions) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` (the file also specifies a conditional `issue_comment.created` fallback if your trigger can't filter — set it per the file's header) |
-| Daily brief | [`routines/brief.md`](routines/brief.md) | Schedule → daily cron (your timezone) |
+| File | Role |
+|------|------|
+| [`routines/coder.md`](routines/coder.md) | Coder baseline instructions Faber passes to a spawned coder subagent |
+| [`routines/coder-revision.md`](routines/coder-revision.md) | Coder fix-mode instructions for a spawned revision subagent |
+| [`routines/brief.md`](routines/brief.md) | Brief instructions Faber can run for resurfacing (read-only; not auto-scheduled) |
 
 Notes:
-- Point each routine's **Repository** setting at your target repo `<owner>/<repo>`.
-- The coder routines need **write** permission and **GitHub-only** connectors; the brief
-  is **read-only** and adds one notify channel. The files spell this out — follow them.
-- The coder routine self-guards: if the applied label is not `ready`, it stops. That's
-  why a single `issues.labeled` trigger is safe.
+- The `/faber` command (step 1) already points Faber at these files, so once it is
+  installed Faber will use them when it spawns a coder; there is no separate trigger,
+  repository, or connector setting to configure.
+- The coder instructions self-guard: the coder confirms the issue carries `ready` (Faber's
+  record of your approval) before doing anything. That keeps the front gate intact even
+  inside the spawn.
 
 ---
 
 ## 3. Recreate the Codex reviewer
 
-The reviewer runs on **Codex (OpenAI)**, not as a Claude routine — that cross-vendor split
-is deliberate (decorrelated blind spots). There are two ways to wire it; pick one. Both
-preserve the same invariants and use Codex's **built-in** review (`codex exec review`) —
-see [`reviewer/codex-review.md`](reviewer/codex-review.md) for the mechanism and the
-in-session loop.
+The reviewer runs on **Codex (OpenAI)**, not on Claude — that cross-vendor split is
+deliberate (decorrelated blind spots). It uses Codex's **built-in** review
+(`codex exec review`) driven by the in-session harness — see
+[`reviewer/codex-review.md`](reviewer/codex-review.md) for the mechanism and the loop.
 
-- **In-session harness (works today).** Make sure the Codex CLI is installed and signed
-  in, then drive review with [`scripts/codex-review.sh`](scripts/codex-review.sh). The
-  script lives only in *this* control-plane repo, so from within the target repo's clone
-  Faber invokes it by **absolute path** — `"$HOME/git/fabrica/scripts/codex-review.sh" <PR#>`
-  (substitute your fabrica clone; or put `<fabrica>/scripts` on `PATH` and call
-  `codex-review.sh <PR#>`). Do **not** copy the script into each target repo. `gh` infers
-  `<owner>/<repo>` from the cwd; the script runs `codex exec review` (read-only forced via
-  `-c sandbox_mode="read-only"`) and posts Codex's verdict to the PR **verbatim**. No
-  GitHub-side wiring needed; the script itself only posts a comment.
-- **Codex GitHub integration (autonomous upgrade).** Connect Codex's PR review to each
-  target repo `<owner>/<repo>` so it reviews automatically when a PR is opened or updated,
-  with no Faber session needed. Set it up per Codex's docs (out of scope here).
+Make sure the **Codex CLI is installed and signed in**, then drive review with
+[`scripts/codex-review.sh`](scripts/codex-review.sh). The script lives only in *this*
+control-plane repo, so from within the target repo's clone Faber invokes it by **absolute
+path** — `"$HOME/git/fabrica/scripts/codex-review.sh" <PR#>` (substitute your fabrica
+clone; or put `<fabrica>/scripts` on `PATH` and call `codex-review.sh <PR#>`). Do **not**
+copy the script into each target repo. `gh` infers `<owner>/<repo>` from the cwd; the
+script runs `codex exec review` (read-only forced via `-c sandbox_mode="read-only"`) and
+posts Codex's verdict to the PR **verbatim**. No GitHub-side wiring needed; the script
+itself only posts a comment.
 
-**Comments only / read-only is non-negotiable** either way: Codex (and the script) get no
-write access beyond posting review comments. It never pushes, never approves-to-merge,
-never merges, and is never the author of the code it reviews (see Safety rails below).
+**Comments only / read-only is non-negotiable**: Codex (and the script) get no write
+access beyond posting review comments. It never pushes, never approves-to-merge, never
+merges, and is never the author of the code it reviews (see Safety rails below).
+
+> **Future, not wired.** Codex also offers a GitHub integration that could review PRs
+> automatically on open/update with no Faber session — an autonomous upgrade. It is **not
+> set up here**; the in-session harness above is the only review path today.
 
 ---
 
@@ -118,8 +119,9 @@ Do this **once per target repo**. The full checklist already exists — **reuse 
 not re-derive it: [`templates/repo-setup.md`](templates/repo-setup.md).
 
 That checklist covers:
-- **Labels** — the `ready` / `round-0..round-3` / `needs-human` set the stateless
-  routines use as their state. (The `gh label create` loop is in that file.)
+- **Labels** — the `ready` / `round-0..round-3` / `needs-human` set the loop uses as its
+  state (each coder spawn is stateless, so the round lives in the label). The
+  `gh label create` loop is in that file.
 - **Branch protection on `main`** — require CI status checks to pass; **no auto-merge in
   Phase 1**. Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
   command** (unlike the labels loop), and **branch protection isn't available on free
@@ -136,7 +138,8 @@ That checklist covers:
     only in GitHub repo settings (not in any file here) and must be re-created by hand.
 - **Conventions** — drop [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md) into
   the target repo's root, filled in for that repo.
-- **Wiring** — the same routine/reviewer wiring you did in steps 2–3.
+- **The in-session setup** — install `/faber` (step 1) and connect the Codex CLI for
+  `scripts/codex-review.sh` (step 3); there are no per-repo routine triggers to wire.
 
 If you are restoring **Fabrica itself**, the labels and CI live in this repo already;
 recreate any labels that were lost with the loop in `templates/repo-setup.md` using
@@ -147,25 +150,26 @@ a fork).
 
 ## 5. Smoke test — prove the rebuilt team is alive
 
-Run **one trivial issue** through the full loop end to end:
+Run **one trivial issue** through the full loop end to end, all from your Faber session:
 
 1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
 2. **You** explicitly approve the issue (the front gate); **Faber** then applies the
-   `ready` label as the record of your approval. This should wake the **Coder**.
-3. Confirm the Coder opens a PR that says `Closes #<n>` and carries `round-0`.
-4. On PR open, **CI and the Codex reviewer both trigger in parallel** (they are not
-   sequential — don't wait for one before checking the other):
-   - Confirm **Codex** posts review comments (and nothing else — no approve, no merge).
-   - Confirm **CI** runs and goes green on the PR.
-5. If there's feedback, confirm the **coder-revision** routine pushes follow-up commits
-   and bumps the `round-N` label.
+   `ready` label as the record of your approval, and **spawns a coder subagent**.
+3. Confirm the coder opens a PR that says `Closes #<n>` and carries `round-0`.
+4. Confirm the review path:
+   - **Faber runs** `scripts/codex-review.sh <PR#>` and **Codex** posts review comments
+     to the PR (and nothing else — no approve, no merge).
+   - **CI** runs on the PR and goes green.
+5. If there's feedback, confirm **Faber spawns a fix-mode coder** that pushes follow-up
+   commits and bumps the `round-N` label, then re-runs `codex-review.sh`.
 6. **You** merge once CI is green and you're satisfied.
 
-If every arrow above fired, the team is back. If one stage is silent, re-check that
-routine's **trigger** and **repository** setting (step 2) and Codex's connection (step 3).
+If every step above fired, the team is back. If one stage is silent: re-check `/faber` is
+installed and points at this repo (step 1), the coder instruction files are present (step
+2), and the Codex CLI is signed in so `codex-review.sh` runs (step 3).
 
-> Optional: confirm the **brief** by waiting for its daily run (or temporarily setting the
-> cron a few minutes out), and checking the notify channel gets one action-first message.
+> Optional: confirm the **brief** by asking Faber to run it, and check you get one
+> action-first message back.
 
 ---
 
@@ -178,9 +182,9 @@ These are load-bearing — per the self-modification safety section of
   merges, and is never the author.
 - **No auto-merge in Phase 1.** Faber pings; **you** merge. Auto-merge is earned later,
   low-risk + green CI only.
-- **Rounds cap (~3) + `needs-human` escalation stay intact.** Because routines are
-  stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in
-  agent memory — so the labels (step 4) are part of the safety system, not decoration.
+- **Rounds cap (~3) + `needs-human` escalation stay intact.** Because each coder spawn is
+  stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in agent
+  memory — so the labels (step 4) are part of the safety system, not decoration.
 - **CI is the hard gate.** Merges require green CI; restore CI before trusting the loop.
 - **Front gate is the human's approval.** No coder runs without your explicit approval.
   Faber applies `ready` only as the record of that approval — never on an issue you haven't
@@ -190,24 +194,18 @@ These are load-bearing — per the self-modification safety section of
 
 ## Troubleshooting / gotchas
 
-Real lessons from setting this up the first time:
+Real lessons from setting this up:
 
-- **The GitHub App install is a web flow.** The Claude **desktop app does not surface the
-  GitHub App installation** — do it from **claude.ai/code in a browser** to grant the
-  repo access that remote routines need.
-- **Local `gh` auth is NOT the same connection as the claude.ai web GitHub link.**
-  Authenticating `gh` locally lets your *local* session and one-off commands hit GitHub;
-  it does **not** give a cloud-run routine access. The web GitHub connection is separate —
-  you may need both.
-- **A company-managed (Team / Enterprise) Claude account can have the GitHub connection
-  gated by an admin.** If you can't connect GitHub, that's likely the cause. A **personal
-  Pro / Max account avoids that gate.**
-- **Local vs. remote routines run differently.** A routine run **locally** is just a normal
-  session on your plan (**no API key**, uses your local `gh` auth). A routine run **in the
-  cloud (remote)** needs the **web GitHub connection** (the App install above) — local
-  `gh` auth won't reach it.
-- **Coder "did nothing" on a labeled issue?** Expected unless the label was exactly
-  `ready` — the coder routine stops on any other label (step 2). Check the label.
-- **Reviewer silent?** Re-check Codex is connected to *that* repo and triggers on PR
-  open/update (step 3). Claude and Codex never talk directly — the PR is the only message
-  bus, so if Codex isn't connected, the loop just stalls with no error.
+- **`/faber` not found, or points at the wrong repo?** Re-run
+  [`scripts/install.sh`](scripts/install.sh) (no arguments) from your fabrica clone — it
+  regenerates `~/.claude/commands/faber.md` with this clone's path. Do not hand-edit it.
+- **Local `gh` auth is what the loop uses.** Faber, the spawned coder, and
+  `codex-review.sh` all run in your local Claude Code session and hit GitHub through your
+  local `gh` auth. If GitHub calls fail, check `gh auth status` first.
+- **Coder won't start on an issue?** Expected unless the issue carries exactly `ready`
+  (Faber's record of your approval) — the coder instructions stop on anything else (step
+  2). Confirm you approved it and Faber applied `ready`.
+- **No Codex review on the PR?** The review is not automatic — **Faber must run**
+  `scripts/codex-review.sh <PR#>` from the target repo's clone. Check the Codex CLI is
+  installed and signed in (`codex` runs), and that the script is invoked by absolute path.
+  Claude and Codex never talk directly — the PR is the only message bus.

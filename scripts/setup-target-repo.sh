@@ -3,9 +3,9 @@ set -euo pipefail
 
 # setup-target-repo.sh — bootstrap a target repo's loop labels.
 #
-# Creates the labels the stateless review loop uses as its state. Idempotent:
-# re-running on a repo that already has the labels updates them instead of failing.
-# Branch protection, CI, the Claude GitHub App, and the Codex reviewer are NOT
+# Creates the labels the review loop uses as its state (each coder spawn is stateless).
+# Idempotent: re-running on a repo that already has the labels updates them instead of
+# failing. Branch protection, CI, the /faber command, and the Codex CLI reviewer are NOT
 # scriptable here — see the manual follow-ups printed at the end and
 # templates/repo-setup.md.
 
@@ -23,7 +23,7 @@ repo="$1"
 
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
-  "ready|0e8a16|Your approval; applying it triggers the coder"
+  "ready|0e8a16|Record of your approval; Faber's cue to spawn the coder"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
   "round-2|4a90d9|Review-loop counter: revision 2"
@@ -47,6 +47,6 @@ cat <<EOF
 Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md):
   1. Branch protection on main — UI-only, and unavailable on free private repos.
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
-  3. Install/connect the Claude GitHub App so the coder routines can act on this repo.
-  4. Connect the Codex reviewer (comments-only) to this repo.
+  3. Install the /faber command: run scripts/install.sh from your fabrica clone.
+  4. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
 EOF

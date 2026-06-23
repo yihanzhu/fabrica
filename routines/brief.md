@@ -1,16 +1,11 @@
-# Faber's brief routine — daily resurfacing
+# Brief instructions — daily resurfacing
 
-**Routine settings**
-- Trigger: **Schedule** → daily, your timezone (e.g. `0 8 * * *`)
-- Repository: the repos you want watched (or run with broad GitHub read access)
-- Model: Opus 4.8 (a cheaper model is fine — this is read + summarize)
-- Permissions: **read-only**
-- Connectors: **GitHub** + one notify channel (Slack / push / Telegram)
-
-**Instructions** (paste into the routine)
+These are the **brief instructions** Faber can run on demand to resurface what needs your
+attention. It is **read-only** and **not currently auto-scheduled** — there is no cron
+wired; Faber runs it when you ask (or you can wire a schedule yourself later).
 
 ```
-Once a day, scan my repos and send me ONE short message, action-first:
+Scan my repos and send me ONE short message, action-first:
 
 - PRs approved + CI green, waiting on my merge (with links)
 - Items labeled `needs-human` (round cap hit, ambiguous spec, oversized PR,
