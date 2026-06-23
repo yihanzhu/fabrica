@@ -19,15 +19,19 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 *different* repo's PR. Then:
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and **fetches the PR
-   head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --force origin
-   refs/pull/<PR#>/head:<tmpref> refs/heads/<base>:refs/remotes/origin/<base>`. Both sources are
+   head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --no-tags origin
+   +refs/pull/<PR#>/head:<tmpref> +refs/heads/<base>:refs/remotes/origin/<base>`. Both sources are
    qualified so a same-named tag on origin (e.g. branch and tag both named `v1.2.0`) can't make
    the fetch resolve ambiguously or fail before Codex runs. The `refs/pull/<PR#>/head` source
    brings the PR head commit into the object store even for **fork** PRs (a plain `git fetch
    origin` would not), and the base is fetched straight into `refs/remotes/origin/<base>` so the
    `--base origin/<base>` review is always **current** regardless of the clone's configured fetch
    refspecs (a bare `git fetch origin <base>` would only set `FETCH_HEAD` and could leave
-   `origin/<base>` stale or missing). It then adds a **detached, throwaway git worktree** at that fetched head
+   `origin/<base>` stale or missing). The `+` prefixes force-update **only** these two
+   destination refs we own — never a global `git fetch --force`, which combined with git's tag
+   auto-following could force-update local `refs/tags/*` and mutate operator state; `--no-tags`
+   disables that auto-following so the fetch touches nothing outside the two named refs (the
+   read-only guarantee stays literally true). It then adds a **detached, throwaway git worktree** at that fetched head
    (`git worktree add --detach <tmpdir> <head>`), **isolated from the operator's checkout**. The review runs in that temp worktree, so the operator's branch, index, working
    tree, and unpushed commits are never touched — there is no force checkout and no
    clean-worktree guard, and the reviewer works even when the operator has local uncommitted

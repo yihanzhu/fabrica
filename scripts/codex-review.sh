@@ -104,10 +104,15 @@ base="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 # `--base origin/<base>` below is always CURRENT — a bare `git fetch origin <base>`
 # would only set FETCH_HEAD and, in a clone without the default `origin/*` mapping,
 # could leave origin/<base> stale or missing and review against an old base.
+# Read-only stays literally true: we force-update (the `+` prefix) ONLY these two refs we
+# own, never a global `git fetch --force`. A global `--force` plus git's tag
+# auto-following could force-update local `refs/tags/*` if origin moved a tag reachable
+# from the fetched commits — an operator-state mutation. `--no-tags` disables that
+# auto-following, so this fetch touches nothing outside the two named destination refs.
 pr_head_ref="refs/codex-review/pr-head"
-git fetch --force origin \
-  "refs/pull/${pr}/head:${pr_head_ref}" \
-  "refs/heads/${base}:refs/remotes/origin/${base}"
+git fetch --no-tags origin \
+  "+refs/pull/${pr}/head:${pr_head_ref}" \
+  "+refs/heads/${base}:refs/remotes/origin/${base}"
 pr_head="$(git rev-parse "$pr_head_ref")"
 git update-ref -d "$pr_head_ref"
 base_ref="origin/${base}"
