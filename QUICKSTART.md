@@ -63,9 +63,11 @@ command, point it at a target repo, and watch one loop run. For the mental model
    `ready` label (it never self-approves), which is its cue to spawn the coder.
 
 8. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
-   Faber runs `scripts/codex-review.sh <PR#>` (from inside the target repo's clone) →
-   Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or an ambiguous
-   spec escalates with `needs-human`. **You** merge once CI is green and you're satisfied.
+   Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
+   clone — by absolute path, since the harness lives only in the fabrica clone, not the
+   target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
+   an ambiguous spec escalates with `needs-human`. **You** merge once CI is green and
+   you're satisfied.
 
 That's the loop. To prove a rebuilt or relocated setup end to end — or recover a lost one
 — follow the smoke test and runbook in [`RESTORE.md`](RESTORE.md).
