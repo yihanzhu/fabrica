@@ -47,7 +47,13 @@ human channel.
 1. Create a Claude Code project (a chat you keep).
 2. Paste the full contents of [`manager/CLAUDE.md`](manager/CLAUDE.md) in as the project's
    persistent instructions / persona.
-3. Give that session GitHub access (`gh` CLI or the GitHub connector) so Faber can read
+3. Recreate the `/faber` slash command by running
+   [`scripts/install.sh`](scripts/install.sh) (no arguments). It generates
+   `~/.claude/commands/faber.md` from [`templates/faber-command.md`](templates/faber-command.md),
+   substituting this clone's own path for the placeholder — so the command never hardcodes
+   a repo location. Idempotent: re-running is safe, and an existing differing `faber.md` is
+   backed up to `faber.md.bak` before overwriting. Do **not** recreate this command by hand.
+4. Give that session GitHub access (`gh` CLI or the GitHub connector) so Faber can read
    state and open issues.
 
 Faber **only opens issues** — never writes code, never merges, never applies `ready`
