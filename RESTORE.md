@@ -61,11 +61,12 @@ human channel.
 Faber **only opens issues** — never writes code, never merges, and never approves on your
 behalf. The front gate is **your explicit approval**: once you approve an issue, Faber
 applies the `ready` label as the record of your go (it never labels an issue you haven't
-approved). Applying `ready` is then Faber's own cue to **spawn the coder subagent** — this
-Faber-driven launch is the **active** path, and it is the *only* coder launch per approved
-issue. (Step 2's routines are an optional, mutually-exclusive alternative — if you wire
-them, the `ready` label fires the routine instead and Faber must NOT also spawn the coder.
-**Never both:** exactly one coder launch per approved issue.)
+approved). What `ready` triggers depends on this repo's launch mode: in the **Faber-driven**
+default (no coder routine wired) the label is Faber's own cue to **spawn the coder subagent** —
+the **active** path, and the *only* coder launch per approved issue. If you wire Step 2's
+optional `issues.labeled` coder routine instead, the `ready` label fires *that* routine and
+Faber must **NOT** also spawn the coder. The two are mutually exclusive — **never both:**
+exactly one coder launch per approved issue.
 
 ---
 

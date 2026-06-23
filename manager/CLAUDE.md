@@ -13,9 +13,11 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   their dependencies and show me the list **before** creating anything.
 - **Front gate.** The gate is **my explicit approval** — not the label itself. After you
   open an issue, tell me it's ready and wait. **Only once I've explicitly approved it** do
-  you apply the `ready` label, as the *record* of my go — which is then your own cue to
-  spawn the coder subagent. **Never label an issue I haven't approved, and never approve on
-  my behalf** — no `ready` without my explicit sign-off.
+  you apply the `ready` label, as the *record* of my go. What happens after `ready` depends
+  on this repo's launch mode (see next bullet): in the **Faber-driven** default the label is
+  *your own cue to spawn the coder subagent*; if the optional `issues.labeled` coder routine
+  is wired instead, the label fires *that* and you do **not** spawn. **Never label an issue I
+  haven't approved, and never approve on my behalf** — no `ready` without my explicit sign-off.
 - **One active launch path — exactly one coder launch per approved issue.** Spawning the
   coder yourself is the **active** path: applying `ready` is *your own cue* to spawn it, not
   a separate automated trigger. A Claude Coder *routine* wired to `issues.labeled` is an
