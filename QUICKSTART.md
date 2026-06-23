@@ -25,6 +25,7 @@ command, point it at a target repo, and watch one loop run. For the mental model
    this clone lives):
 
    ```sh
+   mkdir -p "$HOME/git"
    git clone <your-fabrica-remote> "$HOME/git/fabrica" && cd "$HOME/git/fabrica"
    ```
 
