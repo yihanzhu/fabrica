@@ -32,7 +32,11 @@ fi
 
 # Render the template with the resolved repo path. Build the content first so we
 # can compare against any existing file before touching it (idempotency + backup).
-rendered="$(sed "s#{{FABRICA_ROOT}}#${repo_root}#g" "$template")"
+# Use bash literal string replacement (not sed) so paths containing sed
+# metacharacters (&, #, /, spaces) substitute correctly — bash ${var//pat/repl}
+# treats the replacement literally.
+template_contents="$(cat "$template")"
+rendered="${template_contents//'{{FABRICA_ROOT}}'/$repo_root}"
 
 mkdir -p "$commands_dir"
 
