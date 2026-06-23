@@ -1,12 +1,14 @@
 # Coder routine — implement a `ready` issue
 
-> **Optional, mutually-exclusive alternative.** This routine is the *autonomous* way to
+> **Part of AUTONOMOUS mode only (optional).** This routine is the *autonomous* way to
 > launch the coder: wiring it to `issues.labeled` makes the `ready` label fire the coder on
-> its own. The **active** launch path is Faber-in-session spawning the coder subagent (see
-> `manager/CLAUDE.md` / `templates/faber-command.md`). Use **either** the Faber-driven path
-> **or** this routine — **never both**, or one approval launches the coder twice. If you
-> connect this routine, Faber must NOT also spawn the coder. **Invariant: exactly one coder
-> launch per approved issue.**
+> its own. It is one of the three pieces of autonomous mode — pair it with
+> `routines/coder-revision.md` **and** the autonomous (Codex GitHub-integration) reviewer.
+> In the default **in-session** mode this routine is **NOT used**: Faber-in-session spawns
+> the coder subagent after applying `ready` (see `manager/CLAUDE.md` /
+> `templates/faber-command.md`). Pick **one** complete mode — **never both**, or one approval
+> launches the coder twice. If you wire this routine, Faber must NOT also spawn the coder.
+> **Invariant: exactly one coder launch per approved issue.**
 
 **Routine settings**
 - Trigger: **GitHub event** → `issues.labeled`

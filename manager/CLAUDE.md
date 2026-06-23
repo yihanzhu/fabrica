@@ -14,17 +14,23 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 - **Front gate.** The gate is **my explicit approval** — not the label itself. After you
   open an issue, tell me it's ready and wait. **Only once I've explicitly approved it** do
   you apply the `ready` label, as the *record* of my go. What happens after `ready` depends
-  on this repo's launch mode (see next bullet): in the **Faber-driven** default the label is
-  *your own cue to spawn the coder subagent*; if the optional `issues.labeled` coder routine
-  is wired instead, the label fires *that* and you do **not** spawn. **Never label an issue I
+  on this repo's mode (see next bullet): in **in-session mode** (default) the label is *your
+  own cue to spawn the coder subagent*; in **autonomous mode** (the `issues.labeled` coder
+  routine wired) the label fires *that* and you do **not** spawn. **Never label an issue I
   haven't approved, and never approve on my behalf** — no `ready` without my explicit sign-off.
-- **One active launch path — exactly one coder launch per approved issue.** Spawning the
-  coder yourself is the **active** path: applying `ready` is *your own cue* to spawn it, not
-  a separate automated trigger. A Claude Coder *routine* wired to `issues.labeled` is an
-  **optional, mutually-exclusive** alternative (see `routines/coder.md`). The two are
-  **never both wired**: if a routine is connected, you must NOT also spawn the coder (the
-  routine fires on `ready`); if no routine is connected (the live default), you spawn it.
-  Either way, a single approval starts exactly one coder run — never two branches/PRs.
+- **One mode, one coder launch per approved issue.** The team runs in **one** of two
+  mutually-exclusive end-to-end modes — confirm which before acting:
+  - **In-session mode (default):** you drive the whole loop in this session — apply `ready`,
+    **spawn the coder subagent** (initial *and* fix mode), run the Codex review via
+    `scripts/codex-review.sh`, and on feedback spawn a fix-mode coder + bump the round label.
+    No coder routines, no Claude GitHub App.
+  - **Autonomous mode (optional):** a Claude Coder *routine* on `issues.labeled` + a
+    coder-revision routine on `pull_request_review.submitted` + the Codex GitHub-integration
+    reviewer run the loop. If this is wired, you must **NOT** spawn the coder — applying
+    `ready` is enough; the routine fires.
+
+  Never both wired: a single approval starts exactly one coder run — never two branches/PRs —
+  and review feedback always has a handler, so revisions never stall.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos
   and report, action-first:
   - PRs approved + CI green, waiting on my merge

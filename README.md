@@ -15,18 +15,29 @@ Completes the trio: **Otium** (life) · **Valor** (work) · **Fabrica** (the cra
 |-------|--------|---------|---------|---------|
 | **Faber** (manager) | Claude | Claude Code chat + `manager/CLAUDE.md` | you talk to it | issues only, never code/merge |
 | **Faber's brief** | Claude | Schedule routine | daily cron | read-only |
-| **Coder** | Claude | Coder subagent Faber spawns (active) / Routine on `issues.labeled` (optional, mutually exclusive) | Faber spawns it after applying `ready` | yes (branches, PRs) |
-| **Coder (revisions)** | Claude | Coder subagent Faber spawns (active) / Routine on review submitted (optional, mutually exclusive) | Faber spawns it on Codex's review | yes |
-| **Reviewer** | Codex (OpenAI) | Codex via `scripts/codex-review.sh` (in-session) / GitHub integration (autonomous) | PR opened/updated | **comments only** |
+| **Coder** | Claude | Subagent Faber spawns (in-session mode) / Routine on `issues.labeled` (autonomous mode) | in-session: Faber spawns after `ready`; autonomous: the routine fires | yes (branches, PRs) |
+| **Coder (revisions)** | Claude | Subagent Faber spawns (in-session mode) / Routine on review submitted (autonomous mode) | in-session: Faber spawns on review; autonomous: the reviewer fires the routine | yes |
+| **Reviewer** | Codex (OpenAI) | `scripts/codex-review.sh` (in-session mode) / GitHub integration (autonomous mode) | PR opened/updated | **comments only** |
 
 You talk **only** to Faber. The reviewer has no human channel — only the PR wakes it.
 Claude and Codex never talk directly; **the PR is the message bus.**
 
-**One active launch path.** The coder is launched **either** by Faber-in-session
-(the active setup: you approve → Faber applies `ready` → Faber spawns the coder) **or**
-by a Claude Coder *routine* wired to `issues.labeled` (the optional autonomous
-alternative below) — **never both.** **Invariant: exactly one coder launch per approved
-issue.** If you connect the routine, Faber must NOT also spawn the coder, and vice-versa.
+**Two modes, pick one — never mix.** The team runs end-to-end in **one** of two
+mutually-exclusive modes; each keeps launch + review + revision consistent, so nothing
+strands:
+
+- **In-session mode (default).** Faber drives the whole loop in a Claude Code session: you
+  approve → Faber applies `ready` → Faber spawns the coder → Faber runs the Codex review via
+  `scripts/codex-review.sh` → on feedback Faber spawns a fix-mode coder + bumps the round.
+  **No routines, no Claude GitHub App.**
+- **Autonomous mode (optional).** The `issues.labeled` coder routine + the
+  `pull_request_review.submitted` coder-revision routine + the Codex GitHub-integration
+  reviewer run the loop with no Faber session. The reviewer's event fires the revision
+  routine, so these three are wired as a set. **Requires the Claude GitHub App;** Faber does
+  not spawn.
+
+**Invariant: exactly one coder launch per approved issue** — and the reviewer ↔ revision
+pairing is fixed within each mode, so no supported combo strands revisions.
 
 ## The loop
 
@@ -43,6 +54,8 @@ issue.** If you connect the routine, Faber must NOT also spawn the coder, and vi
                                   [Reviewer = Codex]  → comments only
                                        ↓
                           [Coder revisions]  adopt reasonable / push back
+                          (in-session: Faber spawns fix-mode coder;
+                           autonomous: reviewer fires revision routine)
                                        │           (bump round-N)
                           ┌── round < 3 ┘
                           ↺  re-review
@@ -69,10 +82,11 @@ issue.** If you connect the routine, Faber must NOT also spawn the coder, and vi
   low-risk + green CI; always back-look high-risk (auth, migrations, shared repos).
 - **One rounds counter (~3).** Comments resolved or disagreement burned both count;
   a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
-- **One coder launch per approved issue.** Faber-in-session is the active launch path:
-  you approve → Faber applies `ready` → Faber spawns the coder. A Claude Coder *routine*
-  on `issues.labeled` is an **optional, mutually-exclusive** autonomous alternative — wire
-  *one* mechanism, never both, so a single approval never starts two coder runs.
+- **One coder launch per approved issue.** In-session mode is the default: you approve →
+  Faber applies `ready` → Faber spawns the coder. Autonomous mode wires a Claude Coder
+  *routine* on `issues.labeled` instead. Pick **one complete mode** — never both, so a
+  single approval never starts two coder runs and review feedback never strands (the
+  reviewer ↔ revision handler is paired within each mode).
 - **State lives in labels, not agent memory** → rounds + escalation live in **labels**
   (`round-0..3`, `needs-human`), not agent memory.
 - **Runs on the plan** via Claude (Faber + coder) + Codex's own PR review — compliant

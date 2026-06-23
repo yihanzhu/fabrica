@@ -5,9 +5,14 @@ set -euo pipefail
 #
 # Creates the labels the stateless review loop uses as its state. Idempotent:
 # re-running on a repo that already has the labels updates them instead of failing.
-# Branch protection, CI, the Claude GitHub App, and the Codex reviewer are NOT
-# scriptable here — see the manual follow-ups printed at the end and
-# templates/repo-setup.md.
+# Branch protection, CI, and the Codex reviewer are NOT scriptable here — see the
+# manual follow-ups printed at the end and templates/repo-setup.md.
+#
+# Modes: the team runs in ONE of two mutually-exclusive end-to-end modes (pick one;
+# don't mix). IN-SESSION mode (default) needs nothing here beyond `/faber` + the
+# Codex CLI — Faber drives launch, review, and revisions in-session. AUTONOMOUS mode
+# (optional) additionally needs the Claude GitHub App + the coder routines. These
+# labels are the loop's shared state in BOTH modes.
 
 usage() {
   echo "usage: $0 <owner>/<repo>" >&2
@@ -23,7 +28,7 @@ repo="$1"
 
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
-  "ready|0e8a16|Your approval; applying it triggers the coder"
+  "ready|0e8a16|The record of your approval (Faber applies it after you approve)"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
   "round-2|4a90d9|Review-loop counter: revision 2"
@@ -47,6 +52,14 @@ cat <<EOF
 Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md):
   1. Branch protection on main — UI-only, and unavailable on free private repos.
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
-  3. Install/connect the Claude GitHub App so the coder routines can act on this repo.
-  4. Connect the Codex reviewer (comments-only) to this repo.
+  3. Codex reviewer (comments-only) — install/sign in to the Codex CLI for IN-SESSION
+     mode (Faber runs scripts/codex-review.sh), OR connect the Codex GitHub integration
+     for AUTONOMOUS mode. Pick the one that matches your mode.
+
+Pick ONE end-to-end mode (don't mix):
+  - IN-SESSION (default): nothing more to wire. Faber drives launch, review, and
+    revisions in-session via /faber + the Codex CLI. No Claude GitHub App or routines.
+  - AUTONOMOUS (optional): also install/connect the Claude GitHub App and wire the
+    coder + coder-revision routines (and use the Codex GitHub integration as reviewer).
+    Faber does not spawn in this mode.
 EOF

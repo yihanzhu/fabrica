@@ -20,11 +20,18 @@ it as written.
 
 Accounts and access you need before starting:
 
-- **A Claude plan** — the manager (Faber) runs as an ordinary Claude Code chat session,
-  and Faber spawns the coder as a subagent in that same session (the **active** path, no
-  routine needed). The daily **brief** runs as a first-party Claude Routine. The coder /
-  coder-revision **routines** are an *optional* autonomous alternative (step 2) — also
-  first-party Routines on your plan (metered ordinary use, **no API key**).
+- **A Claude plan** — the team runs in one of **two mutually-exclusive end-to-end modes**
+  (pick ONE; the rest of this runbook flags what each needs):
+  - **In-session mode (default).** Faber runs as an ordinary Claude Code chat session and
+    drives the *whole* loop in-session — applies `ready`, spawns the coder subagent, runs
+    the Codex review (`scripts/codex-review.sh`), and on feedback spawns a fix-mode coder +
+    bumps the round label. **No coder routines, no Claude GitHub App needed.**
+  - **Autonomous mode (optional).** The coder / coder-revision **routines** + the Codex
+    GitHub-integration reviewer run the loop without a Faber session — also first-party
+    Routines on your plan (metered ordinary use, **no API key**), but this mode **requires
+    the Claude GitHub App** (step 2/3). Faber does not spawn in this mode.
+
+  The daily **brief** runs as a first-party Claude Routine in **both** modes.
 - **Codex (OpenAI)** with PR review — this is the cross-vendor reviewer. A ChatGPT plan
   that includes Codex PR review is enough for personal repos.
 - **GitHub access** to each target repo, plus the **`gh` CLI authenticated** locally
@@ -61,12 +68,12 @@ human channel.
 Faber **only opens issues** — never writes code, never merges, and never approves on your
 behalf. The front gate is **your explicit approval**: once you approve an issue, Faber
 applies the `ready` label as the record of your go (it never labels an issue you haven't
-approved). What `ready` triggers depends on this repo's launch mode: in the **Faber-driven**
-default (no coder routine wired) the label is Faber's own cue to **spawn the coder subagent** —
-the **active** path, and the *only* coder launch per approved issue. If you wire Step 2's
-optional `issues.labeled` coder routine instead, the `ready` label fires *that* routine and
-Faber must **NOT** also spawn the coder. The two are mutually exclusive — **never both:**
-exactly one coder launch per approved issue.
+approved). What `ready` does next depends on your chosen mode: in **in-session mode**
+(default, no coder routine wired) the label is Faber's own cue to **spawn the coder
+subagent** — the *only* coder launch per approved issue. In **autonomous mode** (Step 2's
+`issues.labeled` coder routine wired) the `ready` label fires *that* routine and Faber must
+**NOT** also spawn the coder. The two modes are mutually exclusive — **never both:** exactly
+one coder launch per approved issue.
 
 ---
 
@@ -77,43 +84,51 @@ open the file, copy the fenced **Instructions** block into a new Claude Routine,
 the **trigger** + routine settings exactly as the file's header specifies (model,
 permissions, connectors).
 
-> **Coder routines are OPTIONAL and mutually exclusive with the Faber-driven launch.**
-> The live default is Faber-in-session spawning the coder (step 1) — **no coder routines
-> wired.** The two coder routines below are the *optional autonomous alternative*: wiring
-> them makes the `ready` label fire the coder on its own. **Use either the Faber-driven
-> path or these routines — never both,** or one approval launches the coder twice. If you
-> wire them, Faber must NOT also spawn the coder. **Invariant: exactly one coder launch per
+> **The two coder routines belong to AUTONOMOUS mode only — skip them for the in-session
+> default.** In-session mode (the default, step 1) has Faber spawn the coder *and* handle
+> revisions in-session — **no coder routines wired.** Autonomous mode wires **both** routines
+> below **together with** the autonomous (Codex GitHub-integration) reviewer (step 3) — the
+> three are a bundle: the reviewer's `pull_request_review.submitted` event is what fires the
+> coder-revision routine, so wiring the routines without the autonomous reviewer (or vice
+> versa) would strand revisions. **Pick one complete mode — never mix,** or one approval
+> launches the coder twice / revisions stall. **Invariant: exactly one coder launch per
 > approved issue.** The **daily brief** routine is independent of this choice — recreate it
 > either way.
 
 | Routine | Required? | Source file | Trigger |
 |---------|-----------|-------------|---------|
-| Coder | **Optional** (autonomous alternative to Faber spawning) | [`routines/coder.md`](routines/coder.md) | GitHub event → `issues.labeled` (acts only on `ready`) |
-| Coder (revisions) | **Optional** (only if you wired the Coder routine) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` (the file also specifies a conditional `issue_comment.created` fallback if your trigger can't filter — set it per the file's header) |
-| Daily brief | Yes | [`routines/brief.md`](routines/brief.md) | Schedule → daily cron (your timezone) |
+| Coder | **Autonomous mode only** | [`routines/coder.md`](routines/coder.md) | GitHub event → `issues.labeled` (acts only on `ready`) |
+| Coder (revisions) | **Autonomous mode only** (wire with the Coder routine + autonomous reviewer) | [`routines/coder-revision.md`](routines/coder-revision.md) | GitHub event → `pull_request_review.submitted` (the file also specifies a conditional `issue_comment.created` fallback if your trigger can't filter — set it per the file's header) |
+| Daily brief | **Both modes** | [`routines/brief.md`](routines/brief.md) | Schedule → daily cron (your timezone) |
 
 Notes:
 - Point each routine's **Repository** setting at your target repo `<owner>/<repo>`.
 - The coder routines need **write** permission and **GitHub-only** connectors; the brief
   is **read-only** and adds one notify channel. The files spell this out — follow them.
-- **Skip the coder routines** if you're running the Faber-driven launch (the default) — the
-  coder is spawned in-session, so wiring them too would double-launch on one approval.
-- If you *do* wire the coder routine, it self-guards: if the applied label is not `ready`,
-  it stops. That's why a single `issues.labeled` trigger is safe **on its own** — but it is
-  still mutually exclusive with Faber spawning the coder.
+- **In-session mode (default): skip both coder routines** — the coder (initial *and* fix
+  mode) is spawned in-session, so wiring them too would double-launch on one approval.
+- **Autonomous mode:** wire **both** coder routines **and** the autonomous reviewer (step 3)
+  as a set — the reviewer fires the coder-revision routine, so a half-wired autonomous setup
+  strands revisions.
+- If you wire the coder routine, it self-guards: if the applied label is not `ready`, it
+  stops. That makes a single `issues.labeled` trigger safe **on its own** — but it is still
+  mutually exclusive with Faber spawning the coder (in-session mode).
 
 ---
 
 ## 3. Recreate the Codex reviewer
 
 The reviewer runs on **Codex (OpenAI)**, not as a Claude routine — that cross-vendor split
-is deliberate (decorrelated blind spots). There are two ways to wire it; pick one. Both
-preserve the same invariants and use Codex's **built-in** review (`codex exec review`) —
-see [`reviewer/codex-review.md`](reviewer/codex-review.md) for the mechanism and the
-in-session loop.
+is deliberate (decorrelated blind spots). The reviewer choice is **part of your mode, not a
+free pick:** in-session mode uses the in-session harness; autonomous mode uses the Codex
+GitHub integration (it fires the coder-revision routine — see step 2). Both preserve the
+same invariants and use Codex's **built-in** review (`codex exec review`) — see
+[`reviewer/codex-review.md`](reviewer/codex-review.md) for the mechanism and the in-session
+loop.
 
-- **In-session harness (works today).** Make sure the Codex CLI is installed and signed
-  in, then drive review with [`scripts/codex-review.sh`](scripts/codex-review.sh). The
+- **In-session harness — for IN-SESSION mode (the default; works today).** Make sure the
+  Codex CLI is installed and signed in, then drive review with
+  [`scripts/codex-review.sh`](scripts/codex-review.sh). The
   script lives only in *this* control-plane repo, so from within the target repo's clone
   Faber invokes it by **absolute path** — `"$HOME/git/fabrica/scripts/codex-review.sh" <PR#>`
   (substitute your fabrica clone; or put `<fabrica>/scripts` on `PATH` and call
@@ -121,9 +136,12 @@ in-session loop.
   `<owner>/<repo>` from the cwd; the script runs `codex exec review` (read-only forced via
   `-c sandbox_mode="read-only"`) and posts Codex's verdict to the PR **verbatim**. No
   GitHub-side wiring needed; the script itself only posts a comment.
-- **Codex GitHub integration (autonomous upgrade).** Connect Codex's PR review to each
+- **Codex GitHub integration — for AUTONOMOUS mode.** Connect Codex's PR review to each
   target repo `<owner>/<repo>` so it reviews automatically when a PR is opened or updated,
-  with no Faber session needed. Set it up per Codex's docs (out of scope here).
+  with no Faber session needed. Its `pull_request_review.submitted` event is what fires the
+  coder-revision routine (step 2), so use this reviewer **only** alongside the autonomous
+  routines — pairing it with in-session launch would leave reviews posted but no fix-mode
+  coder running. Set it up per Codex's docs (out of scope here).
 
 **Comments only / read-only is non-negotiable** either way: Codex (and the script) get no
 write access beyond posting review comments. It never pushes, never approves-to-merge,
@@ -170,18 +188,18 @@ Run **one trivial issue** through the full loop end to end:
 
 1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
 2. **You** explicitly approve the issue (the front gate); **Faber** then applies the
-   `ready` label as the record of your approval and **spawns the Coder** (the active path).
-   (If you instead wired the optional coder routine in step 2, the `ready` label fires that
-   routine — and Faber does NOT also spawn. Exactly one coder launch fires either way.)
+   `ready` label as the record of your approval. In **in-session mode** (default) Faber
+   **spawns the Coder**; in **autonomous mode** the `ready` label fires the coder routine and
+   Faber does NOT spawn. Exactly one coder launch fires either way.
 3. Confirm the Coder opens a PR that says `Closes #<n>` and carries `round-0` — and that
    **only one** branch/PR was created for the single approval.
 4. On PR open, **CI and the Codex reviewer both trigger in parallel** (they are not
    sequential — don't wait for one before checking the other):
    - Confirm **Codex** posts review comments (and nothing else — no approve, no merge).
    - Confirm **CI** runs and goes green on the PR.
-5. If there's feedback, confirm the coder (Faber-spawned in fix mode — or the optional
-   **coder-revision** routine, if you wired that path) pushes follow-up commits and bumps
-   the `round-N` label.
+5. If there's feedback, confirm the coder pushes follow-up commits and bumps the `round-N`
+   label — Faber-spawned in fix mode (**in-session mode**), or the **coder-revision** routine
+   fired by the autonomous reviewer (**autonomous mode**).
 6. **You** merge once CI is green and you're satisfied.
 
 If every arrow above fired, the team is back. If one stage is silent, re-check that
@@ -229,10 +247,15 @@ Real lessons from setting this up the first time:
   session on your plan (**no API key**, uses your local `gh` auth). A routine run **in the
   cloud (remote)** needs the **web GitHub connection** (the App install above) — local
   `gh` auth won't reach it.
-- **Coder "did nothing" on a labeled issue?** On the Faber-driven path (default), the coder
+- **Coder "did nothing" on a labeled issue?** In **in-session mode** (default), the coder
   only runs when Faber spawns it after applying `ready` — check Faber actually spawned it.
-  If you wired the optional coder routine instead, it's expected to do nothing unless the
-  label was exactly `ready` (the routine stops on any other label, step 2) — check the label.
+  In **autonomous mode**, the coder routine is expected to do nothing unless the label was
+  exactly `ready` (the routine stops on any other label, step 2) — check the label.
+- **Reviews posted but no fix-mode coder / no round bump?** You've half-wired a mode. The
+  autonomous reviewer fires the **coder-revision** routine, so an autonomous reviewer with
+  in-session launch (or routines without the autonomous reviewer) strands revisions. Pick
+  one complete mode: in-session reviewer ↔ Faber-driven revisions, or autonomous reviewer ↔
+  coder-revision routine.
 - **Reviewer silent?** Re-check Codex is connected to *that* repo and triggers on PR
   open/update (step 3). Claude and Codex never talk directly — the PR is the only message
   bus, so if Codex isn't connected, the loop just stalls with no error.

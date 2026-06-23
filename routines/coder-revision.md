@@ -1,9 +1,17 @@
 # Coder routine — handle review feedback
 
-> **Optional, mutually-exclusive alternative.** Pairs with `routines/coder.md`: only wire
-> this revision routine if you're running the autonomous routine path. The **active** path
-> is Faber-in-session spawning the coder (fix mode) on Codex's review. Use **either** the
-> Faber-driven path **or** these routines — **never both.**
+> **Part of AUTONOMOUS mode only (optional).** Like `routines/coder.md`, this routine
+> belongs to the optional **autonomous** end-to-end mode and must be wired **together with**
+> the coder routine **and** the autonomous (Codex GitHub-integration) reviewer — the
+> reviewer's `pull_request_review.submitted` event is what fires this routine. Wiring all
+> three keeps revisions flowing without a Faber session.
+>
+> In the **in-session** mode (the default), this routine is **NOT used**: Faber drives the
+> whole loop in-session and spawns a fix-mode coder + bumps the round label on Codex's
+> review (run via `scripts/codex-review.sh`). Pick **one** complete mode — never mix:
+> *autonomous reviewer ↔ this revision routine* **or** *in-session reviewer ↔ Faber-driven
+> revisions*. Don't pair an autonomous reviewer with Faber-driven launch (no live handler
+> for `pull_request_review.submitted` → revisions stall) or vice-versa.
 
 **Routine settings**
 - Trigger: **GitHub event** → `pull_request_review.submitted`
