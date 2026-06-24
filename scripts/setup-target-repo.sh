@@ -95,8 +95,9 @@ if [ "$check_mode" -eq 1 ]; then
 
   # Snapshot live labels as TSV: name<TAB>color<TAB>description. GitHub stores colors
   # without the leading '#'; normalize both sides to lowercase for a case-insensitive
-  # hex compare.
-  live="$(gh label list --repo "$repo" --limit 200 \
+  # hex compare. Use a high --limit so gh paginates the full label set; otherwise a
+  # canonical label past the page limit is falsely reported missing on large repos.
+  live="$(gh label list --repo "$repo" --limit 9999 \
     --json name,color,description \
     --jq '.[] | [.name, (.color // ""), (.description // "")] | @tsv')"
 
