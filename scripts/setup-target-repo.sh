@@ -8,13 +8,36 @@ set -euo pipefail
 # failing. Branch protection, CI, the /faber command, and the Codex CLI reviewer are NOT
 # scriptable here — see the manual follow-ups printed at the end and
 # templates/repo-setup.md.
+#
+# This script is the CANONICAL source of truth for the loop labels. A normal run
+# force-edits each existing label to the definitions below (name/color/description), so
+# re-running RECONCILES any drift live labels have picked up — it normalizes the repo
+# back to what this file says. Use --check (below) for a read-only way to detect that
+# drift without mutating anything.
+#
+# Usage:
+#   setup-target-repo.sh <owner>/<repo>           create/update labels (force-edit; reconciles drift)
+#   setup-target-repo.sh --check <owner>/<repo>   read-only: report drift, mutate nothing
+#
+# --check reports, per label, one of: matches / differs (which of name/color/description)
+# / missing. It exits 0 only if every label is present and matches, non-zero otherwise.
 
 usage() {
-  echo "usage: $0 <owner>/<repo>" >&2
-  echo "  bootstraps the loop labels (ready, round-0..3, needs-human) on the target repo" >&2
+  echo "usage: $0 [--check] <owner>/<repo>" >&2
+  echo "  bootstraps the loop labels (ready, round-0..3, needs-human, merge-ready) on the target repo" >&2
+  echo "  --check  read-only drift report: per label print matches/differs/missing; mutate nothing;" >&2
+  echo "           exit non-zero if anything is missing or differs, zero if all match" >&2
 }
 
-if [ "$#" -lt 1 ] || [ -z "${1:-}" ]; then
+# Arg parsing — accept both `--check <owner>/<repo>` and the plain `<owner>/<repo>`
+# form; reject anything else with usage. Keep --check optional and position it first.
+check_mode=0
+if [ "$#" -ge 1 ] && [ "${1:-}" = "--check" ]; then
+  check_mode=1
+  shift
+fi
+
+if [ "$#" -ne 1 ] || [ -z "${1:-}" ]; then
   usage
   exit 1
 fi
@@ -45,7 +68,8 @@ fi
 # A bare `gh auth status` checks EVERY configured account/host, so an unrelated stale
 # login or enterprise host would abort this run even when the user has valid access to
 # the repo we're about to modify. `gh repo view` verifies authentication AND access to
-# exactly the repo that `gh label create --repo "$repo"` will touch.
+# exactly the repo that `gh label create --repo "$repo"` will touch. --check reads the
+# same repo (it lists labels), so the probe applies to both modes.
 if ! gh repo view "$repo" >/dev/null 2>&1; then
   echo "error: cannot access ${repo} via gh — not authenticated, or no access to that repo" >&2
   echo "       run 'gh auth login' (and confirm you can see ${repo}), then re-run" >&2
@@ -61,7 +85,71 @@ labels=(
   "round-2|4a90d9|Review-loop counter: revision 2"
   "round-3|1f6fc0|Review-loop counter: revision 3 (cap)"
   "needs-human|d93f0b|Escalation: round cap hit, ambiguous spec, oversized PR, or failure"
+  "merge-ready|5319e7|Codex review passed; awaiting your merge"
 )
+
+if [ "$check_mode" -eq 1 ]; then
+  # Read-only drift report. Pull the live labels once (name/color/description) and
+  # compare each script-defined label against the live state. Mutate nothing.
+  echo "Checking loop labels on ${repo} (read-only)..."
+
+  # Snapshot live labels as TSV: name<TAB>color<TAB>description. GitHub stores colors
+  # without the leading '#'; normalize both sides to lowercase for a case-insensitive
+  # hex compare.
+  live="$(gh label list --repo "$repo" --limit 200 \
+    --json name,color,description \
+    --jq '.[] | [.name, (.color // ""), (.description // "")] | @tsv')"
+
+  drift=0
+  for entry in "${labels[@]}"; do
+    IFS='|' read -r name color desc <<<"$entry"
+
+    # Find the live row whose name matches exactly (field 1 == name).
+    row="$(printf '%s\n' "$live" | awk -F'\t' -v n="$name" '$1 == n {print; exit}')"
+
+    if [ -z "$row" ]; then
+      echo "  missing: $name"
+      drift=1
+      continue
+    fi
+
+    live_color="$(printf '%s' "$row" | cut -f2)"
+    live_desc="$(printf '%s' "$row" | cut -f3-)"
+
+    diffs=()
+    # Name already matches (that's how we found the row), so only color/description
+    # can differ. Compare color case-insensitively; description exactly.
+    if [ "$(printf '%s' "$live_color" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$color" | tr '[:upper:]' '[:lower:]')" ]; then
+      diffs+=("color (live='${live_color}' want='${color}')")
+    fi
+    if [ "$live_desc" != "$desc" ]; then
+      diffs+=("description (live='${live_desc}' want='${desc}')")
+    fi
+
+    if [ "${#diffs[@]}" -eq 0 ]; then
+      echo "  matches: $name"
+    else
+      # Join the differing fields with '; ' for a single readable line. Build the join
+      # explicitly: IFS uses only its first char, so it can't produce a two-char
+      # separator on its own.
+      joined="${diffs[0]}"
+      for d in "${diffs[@]:1}"; do
+        joined="${joined}; ${d}"
+      done
+      printf '  differs: %s — %s\n' "$name" "$joined"
+      drift=1
+    fi
+  done
+
+  if [ "$drift" -ne 0 ]; then
+    echo ""
+    echo "drift detected — run '$0 ${repo}' to reconcile (force-edits live labels to this script's definitions)" >&2
+    exit 1
+  fi
+  echo ""
+  echo "all labels present and matching"
+  exit 0
+fi
 
 echo "Bootstrapping loop labels on ${repo}..."
 for entry in "${labels[@]}"; do
@@ -73,7 +161,8 @@ for entry in "${labels[@]}"; do
   if err="$(gh label create "$name" --repo "$repo" --color "$color" --description "$desc" 2>&1 >/dev/null)"; then
     echo "  created: $name"
   elif printf '%s' "$err" | grep -qi 'already exists'; then
-    # Genuine already-exists — update in place to preserve documented idempotency.
+    # Genuine already-exists — force-edit in place. This NORMALIZES the live label to
+    # the definition above (color + description), so re-running reconciles any drift.
     gh label edit "$name" --repo "$repo" --color "$color" --description "$desc" >/dev/null
     echo "  updated: $name"
   else
