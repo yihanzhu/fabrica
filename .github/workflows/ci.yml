@@ -13,11 +13,32 @@ jobs:
 
       - name: Check required files exist
         run: |
-          set -e
-          required="README.md manager/CLAUDE.md routines/coder.md routines/coder-revision.md routines/brief.md reviewer/codex-review.md templates/target-CLAUDE.md templates/repo-setup.md"
-          for f in $required; do
-            if [ ! -f "$f" ]; then echo "missing required file: $f"; exit 1; fi
-          done
+          set -eu
+          manifest="ci/required-files.txt"
+          if [ ! -f "$manifest" ]; then
+            echo "missing manifest: $manifest"; exit 1
+          fi
+          status=0
+          # Read the manifest line by line, skipping blank lines and # comments.
+          while IFS= read -r f || [ -n "$f" ]; do
+            case "$f" in
+              ''|'#'*) continue ;;
+            esac
+            if [ ! -f "$f" ]; then
+              echo "missing required file: $f"; status=1; continue
+            fi
+            # scripts/*.sh must be executable — a non-+x script is a restore footgun.
+            case "$f" in
+              scripts/*.sh)
+                if [ ! -x "$f" ]; then
+                  echo "required script not executable (+x): $f"; status=1
+                fi
+                ;;
+            esac
+          done < "$manifest"
+          if [ "$status" -ne 0 ]; then
+            echo "structure check FAILED"; exit 1
+          fi
           echo "structure ok"
 
       - name: Shellcheck (if any shell scripts)

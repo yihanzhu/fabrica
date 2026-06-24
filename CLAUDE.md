@@ -18,6 +18,11 @@ the backlog:
 - Markdown + shell today; real tooling (setup/restore scripts, validators) will grow here.
 - CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
   it is the hard merge gate.** Add real tests as code lands.
+  - The **structure check** reads `ci/required-files.txt` — the manifest of every
+    restore-critical file — and fails if any listed path is missing (and if a listed
+    `scripts/*.sh` isn't executable). This is what makes the full-backup goal enforceable:
+    delete a load-bearing file and CI goes red. **Add new restore-critical files to the
+    manifest** so the guarantee keeps holding.
 
 ## PR rules (enforced by coder + reviewer)
 - **One concern per PR.** Soft size budget ~300–400 net lines; split if bigger.

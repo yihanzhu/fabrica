@@ -1,0 +1,36 @@
+# Required-files manifest — the source of truth for CI's structure check.
+#
+# Every restore-critical file in the Fabrica backup is listed here, one
+# repo-relative path per line. CI (.github/workflows/ci.yml) fails if any
+# listed path is missing, and fails if a listed scripts/*.sh is not +x.
+#
+# Blank lines and lines starting with `#` are ignored.
+# Keep this list in sync with the full-backup goal: if a file is load-bearing
+# for reconstructing the team, it belongs here.
+
+# Top-level docs
+README.md
+CLAUDE.md
+QUICKSTART.md
+RESTORE.md
+
+# Manager persona
+manager/CLAUDE.md
+
+# Routines (paste-ready Claude instructions)
+routines/coder.md
+routines/coder-revision.md
+routines/brief.md
+
+# Reviewer prompt
+reviewer/codex-review.md
+
+# Templates (drop-in files for target repos)
+templates/target-CLAUDE.md
+templates/repo-setup.md
+templates/faber-command.md
+
+# Scripts (must also be executable — see ci.yml)
+scripts/install.sh
+scripts/codex-review.sh
+scripts/setup-target-repo.sh
