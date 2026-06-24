@@ -130,6 +130,12 @@ That checklist covers:
 - **CI** — comes from [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (structure
   check + shellcheck). It is the **hard merge gate**; restore it by having this repo's
   `.github/workflows/` present on `main`. Don't copy its steps here — link to it.
+  - The structure check enforces the full backup against
+    [`ci/required-files.txt`](ci/required-files.txt) — the **source of truth** for every
+    restore-critical file. It fails the build if any listed path is missing (and if a
+    listed `scripts/*.sh` isn't executable), so a PR can't silently drop `install.sh`,
+    `RESTORE.md`, or any other load-bearing file and stay green. When you add a file the
+    team needs to be reconstructable, add it to that manifest.
   - **Out of scope: `claude.yml`.** `.github/workflows/` also contains
     [`claude.yml`](.github/workflows/claude.yml) — the optional `@claude`-mention helper
     (`anthropics/claude-code-action@v1`). It is **not part of the team loop** and is not
