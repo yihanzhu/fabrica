@@ -30,19 +30,26 @@ if ! command -v gh >/dev/null 2>&1; then
   echo "       see QUICKSTART.md > Prerequisites" >&2
   exit 1
 fi
-if ! gh auth status >/dev/null 2>&1; then
-  echo "error: gh is not authenticated" >&2
-  echo "       run 'gh auth login', then re-run" >&2
-  echo "       see QUICKSTART.md > Prerequisites" >&2
-  exit 1
-fi
 
 # Validate the arg is <owner>/<repo> shape: two non-empty segments, no slashes or
 # whitespace within either, separated by a single '/'. Catches a bare repo name, a
-# full URL, or a stray space before any side-effect.
+# full URL, or a stray space before any side-effect (and before the repo-access probe
+# below, which needs a well-formed repo to query).
 if ! [[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
   echo "error: expected <owner>/<repo>, got: $repo" >&2
   usage
+  exit 1
+fi
+
+# Scope the auth/access check to the target repo, not all of gh's configured state.
+# A bare `gh auth status` checks EVERY configured account/host, so an unrelated stale
+# login or enterprise host would abort this run even when the user has valid access to
+# the repo we're about to modify. `gh repo view` verifies authentication AND access to
+# exactly the repo that `gh label create --repo "$repo"` will touch.
+if ! gh repo view "$repo" >/dev/null 2>&1; then
+  echo "error: cannot access ${repo} via gh — not authenticated, or no access to that repo" >&2
+  echo "       run 'gh auth login' (and confirm you can see ${repo}), then re-run" >&2
+  echo "       see QUICKSTART.md > Prerequisites" >&2
   exit 1
 fi
 
