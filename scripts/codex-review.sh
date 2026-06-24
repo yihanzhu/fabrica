@@ -72,6 +72,30 @@ fi
 
 pr="$1"
 
+# Preflight — fail honestly and early, BEFORE any fetch/worktree side-effect, so a
+# first-time adopter gets an actionable "install X" pointer instead of an opaque
+# mid-run `command not found`. Required tools (see QUICKSTART.md > Prerequisites):
+#   gh    — GitHub CLI (authenticated)
+#   git   — for the fork-safe fetch + temp worktree
+#   codex — the OpenAI Codex CLI (signed in); runs the review
+missing=()
+for tool in gh git codex; do
+  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "error: missing required command(s): ${missing[*]}" >&2
+  echo "       install and configure them, then re-run" >&2
+  echo "       see QUICKSTART.md > Prerequisites (gh authenticated, Codex CLI signed in, git installed)" >&2
+  exit 1
+fi
+
+# Validate the PR argument is a bare positive integer before any gh/git call uses it.
+if ! [[ "$pr" =~ ^[0-9]+$ ]]; then
+  echo "error: PR# must be a number, got: $pr" >&2
+  usage
+  exit 1
+fi
+
 # Pin gh to the cwd's checkout, not whatever GH_REPO points at. If GH_REPO is set
 # in the environment, every `gh repo view` / `gh pr view/comment` would target THAT
 # repo instead of the cwd's git remote — so the script could post a review of the cwd
