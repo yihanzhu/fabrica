@@ -108,8 +108,11 @@ if [ "$check_mode" -eq 1 ]; then
   for entry in "${labels[@]}"; do
     IFS='|' read -r name color desc <<<"$entry"
 
-    # Find the live row whose name matches exactly (field 1 == name).
-    row="$(printf '%s\n' "$live" | awk -F'\t' -v n="$name" '$1 == n {print; exit}')"
+    # Find the live row whose name matches exactly (field 1 == name). Feed $live via a
+    # here-string (no producer process) and read to EOF — no early `exit`. A unique label
+    # name matches at most once, so reading the rest is harmless, and there's no upstream
+    # printf to receive SIGPIPE and abort the run under `set -o pipefail`.
+    row="$(awk -F'\t' -v n="$name" '$1 == n {print}' <<<"$live")"
 
     if [ -z "$row" ]; then
       echo "  missing: $name"
