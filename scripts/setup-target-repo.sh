@@ -21,6 +21,9 @@ set -euo pipefail
 #
 # --check reports, per label, one of: matches / differs (which of name/color/description)
 # / missing. It exits 0 only if every label is present and matches, non-zero otherwise.
+#
+# Note: canonical label names are lowercase; a manually-created case-variant (e.g. 'Ready')
+# is not auto-reconciled — delete it and recreate it lowercase by hand.
 
 usage() {
   echo "usage: $0 [--check] <owner>/<repo>" >&2
@@ -105,14 +108,8 @@ if [ "$check_mode" -eq 1 ]; then
   for entry in "${labels[@]}"; do
     IFS='|' read -r name color desc <<<"$entry"
 
-    # Find the live row by name, case-insensitively (GitHub label names are unique
-    # case-insensitively — it disallows case-only duplicates). Matching exact-case-first
-    # would still land the same single row; lowercasing both sides catches case-only
-    # drift (e.g. live 'Ready' vs canonical 'ready') so we report it as differs, not
-    # missing — 'missing' would be wrong since the label exists and a plain --check
-    # rerun after reconcile must pass.
-    row="$(printf '%s\n' "$live" | awk -F'\t' -v n="$name" \
-      'tolower($1) == tolower(n) {print; exit}')"
+    # Find the live row whose name matches exactly (field 1 == name).
+    row="$(printf '%s\n' "$live" | awk -F'\t' -v n="$name" '$1 == n {print; exit}')"
 
     if [ -z "$row" ]; then
       echo "  missing: $name"
@@ -120,17 +117,12 @@ if [ "$check_mode" -eq 1 ]; then
       continue
     fi
 
-    live_name="$(printf '%s' "$row" | cut -f1)"
     live_color="$(printf '%s' "$row" | cut -f2)"
     live_desc="$(printf '%s' "$row" | cut -f3-)"
 
     diffs=()
-    # We matched case-insensitively, so the live name may differ only in casing.
-    # Flag that as a diff (the normal run renames it to canonical to reconcile).
-    if [ "$live_name" != "$name" ]; then
-      diffs+=("name-casing (live='${live_name}' want='${name}')")
-    fi
-    # Compare color case-insensitively; description exactly.
+    # Name already matches (that's how we found the row), so only color/description
+    # can differ. Compare color case-insensitively; description exactly.
     if [ "$(printf '%s' "$live_color" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$color" | tr '[:upper:]' '[:lower:]')" ]; then
       diffs+=("color (live='${live_color}' want='${color}')")
     fi
@@ -164,26 +156,8 @@ if [ "$check_mode" -eq 1 ]; then
 fi
 
 echo "Bootstrapping loop labels on ${repo}..."
-
-# Snapshot live label names once so we can detect case-only drift (e.g. live 'Ready'
-# vs canonical 'ready'). GitHub disallows case-only duplicates, so when a canonical
-# label exists only under different casing, `gh label create` fails with "already
-# exists" yet `gh label edit "<canonical>"` would also fail (no exact-name match) — we
-# must rename the live label to canonical first. One newline-separated list of names.
-live_names="$(gh label list --repo "$repo" --limit 9999 --json name --jq '.[].name')"
-
 for entry in "${labels[@]}"; do
   IFS='|' read -r name color desc <<<"$entry"
-  # If a label exists under a different casing than canonical, rename it to canonical
-  # first; the subsequent create/edit then reconciles color/description as usual. Only
-  # rename when there's a case-insensitive match but NO exact-case match (an exact match
-  # is handled idempotently by the create/edit path below).
-  live_name="$(printf '%s\n' "$live_names" | awk -v n="$name" \
-    'tolower($0) == tolower(n) {print; exit}')"
-  if [ -n "$live_name" ] && [ "$live_name" != "$name" ]; then
-    gh label edit "$live_name" --repo "$repo" --name "$name" >/dev/null
-    echo "  renamed: $live_name -> $name"
-  fi
   # Try to create; capture stderr so we can tell the genuine "already exists" case
   # (idempotency: fall through to edit) from any OTHER failure (auth, wrong repo,
   # network, permission) — which must NOT be swallowed into edit. `set -e` would abort
