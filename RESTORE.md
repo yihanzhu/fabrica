@@ -119,9 +119,14 @@ Do this **once per target repo**. The full checklist already exists — **reuse 
 not re-derive it: [`templates/repo-setup.md`](templates/repo-setup.md).
 
 That checklist covers:
-- **Labels** — the `ready` / `round-0..round-3` / `needs-human` set the loop uses as its
-  state (each coder spawn is stateless, so the round lives in the label). The
-  `gh label create` loop is in that file.
+- **Labels** — the `ready` / `round-0..round-3` / `needs-human` / `merge-ready` set the
+  loop uses as its state (each coder spawn is stateless, so the round lives in the label).
+  The `gh label create` loop is in that file. `setup-target-repo.sh` is the **canonical
+  source of truth** for these labels: a normal run force-edits each live label to the
+  script's definitions, so **re-running reconciles any drift**. To verify labels after a
+  restore **without mutating anything**, run the read-only dry mode —
+  `scripts/setup-target-repo.sh --check <owner>/<repo>` — which reports per label
+  `matches` / `differs` / `missing` and exits non-zero if anything is missing or differs.
 - **Branch protection on `main`** — require CI status checks to pass; **no auto-merge in
   Phase 1**. Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
   command** (unlike the labels loop), and **branch protection isn't available on free
