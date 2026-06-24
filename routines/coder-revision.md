@@ -12,7 +12,7 @@ Faber has briefed you with the PR, the latest review comments, and the current r
 1. Read the PR, the latest review comments, and the current `round-N` label.
 2. ROUNDS CAP: if the label is `round-3` or higher, make NO further changes —
    post a comment summarizing the unresolved comments / open disagreements,
-   add label `needs-human`, and stop.
+   lead it with the SHORT reason `round-cap`, add label `needs-human`, and stop.
 3. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
