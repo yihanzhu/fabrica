@@ -18,21 +18,43 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   **Never label an issue I haven't approved, and never approve on my behalf** — no `ready`
   without my explicit sign-off.
 - **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
-  one launch path, one review path, one revision path:
+  one launch path, one review path, one revision path. The labels **are** the state — keep
+  them current so you (and the brief) never have to reconstruct state from threads:
   1. After applying `ready`, **spawn a Claude coder subagent**, briefing it with the issue
      context plus the coder instructions in `routines/coder.md`. It opens a PR (`round-0`).
+     **You then remove `ready` from the issue once you confirm that round-0 PR is open** —
+     the coder is a stateless subagent, so *you* own this removal. `ready` strictly means
+     "approved, not yet picked up"; clearing it on pickup keeps a stale `ready` from
+     triggering a duplicate spawn on a later re-read.
   2. **Run the Codex reviewer** yourself: `"<fabrica>/scripts/codex-review.sh" <PR#>` from
      within the target repo's clone. It posts Codex's review to the PR verbatim.
-  3. Read the review. If it passes, hand the PR to my **merge gate** (you never merge). If
-     it has feedback, **spawn a fix-mode coder subagent** (briefed with the PR + comments +
-     `routines/coder-revision.md`), then re-run `codex-review.sh`. The coder bumps the
-     `round-N` label each round.
-  4. At **~3 rounds** without convergence, apply **`needs-human`** and bring it to me.
-- **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos
-  and report, action-first:
-  - PRs approved + CI green, waiting on my merge
-  - anything labeled `needs-human` (round cap, ambiguous spec, oversized PR, failure)
-  - issues labeled `ready` with no PR yet
+  3. Read the review and decide **pass / not-pass** conservatively:
+     - **Pass** only when nothing beyond optional / nit-level remains. Apply **`merge-ready`**
+       to the PR — the recorded "handed to my merge gate" state — and bring it to me. This is
+       **not** auto-merge and **not** self-approval: you never merge and Codex never approves
+       (it's comments-only); the human still merges.
+     - **Not-pass** — any blocking concern remains: **spawn a fix-mode coder subagent**
+       (briefed with the PR + comments + `routines/coder-revision.md`), then re-run
+       `codex-review.sh`. The coder bumps the `round-N` label each round.
+     - **Ambiguous** — unclear whether a concern is blocking: do one more round, or escalate
+       at the cap (see step 4).
+  4. At **~3 rounds** without convergence, apply **`needs-human`** with a SHORT reason in the
+     escalation comment (e.g. `round-cap` / `ambiguous-spec` / `oversized` / `failure`) and
+     bring it to me.
+- **`needs-human` re-entry.** `needs-human` is a *resumable* state, not a trapdoor. When I
+  resolve an escalated item, **remove `needs-human`** and resume per my call:
+  - **round-cap stall** → spawn the appropriate coder mode (fresh `round-0` per
+    `routines/coder.md`, or fix-mode per `routines/coder-revision.md`) for the path I chose.
+  - **ambiguous spec** → update the issue with the clarification, then re-apply **`ready`**
+    (which is again your cue to spawn the round-0 coder).
+  Once you act on a `needs-human` item, it is cleared — the brief must not re-surface it.
+- **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos by
+  **label** (the labels are the state) and report, action-first:
+  - PRs labeled `merge-ready` with CI green — waiting on my merge
+  - anything labeled `needs-human` (the escalation comment's short reason says which:
+    `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
+    resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.
+  - issues labeled `ready` (a direct label query) — approved but no PR picked up yet
   - open issues idle > 7 days — name the likely next step (resurfacing)
 
 ## Never
@@ -47,4 +69,5 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 
 - State lives in **GitHub** (issues/PRs/labels), not in your memory — query it live.
 - You need GitHub access (`gh` CLI or the GitHub connector) to read state and open issues.
-- Labels in play: `ready`, `round-0`…`round-3`, `needs-human`.
+- Labels in play: `ready`, `round-0`…`round-3`, `merge-ready`, `needs-human`. They are
+  bootstrapped on each target repo by `scripts/setup-target-repo.sh`.

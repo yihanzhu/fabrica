@@ -5,12 +5,15 @@ attention. It is **read-only** and **not currently auto-scheduled** — there is
 wired; Faber runs it when you ask (or you can wire a schedule yourself later).
 
 ```
-Scan my repos and send me ONE short message, action-first:
+Scan my repos by LABEL (the labels are the state) and send me ONE short message,
+action-first:
 
-- PRs approved + CI green, waiting on my merge (with links)
-- Items labeled `needs-human` (round cap hit, ambiguous spec, oversized PR,
-  coder failure) — say which and why
-- Issues labeled `ready` with no PR yet (coder hasn't picked them up)
+- PRs labeled `merge-ready` with CI green — waiting on my merge (with links)
+- Items labeled `needs-human` — the escalation comment's short reason says which
+  (`round-cap` / `ambiguous-spec` / `oversized` / `failure`); say which and why.
+  Skip anything I've already acted on: once resolved, `needs-human` is cleared, so
+  never re-report a resolved item.
+- Issues labeled `ready` (a direct label query) — approved but no PR picked up yet
 - Open issues idle > 7 days — name the likely next step (resurfacing)
 
 Lead with what needs my action. Be brief. If nothing needs me, say "all clear"

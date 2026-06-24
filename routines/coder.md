@@ -14,12 +14,14 @@ the issue and applied the `ready` label as the record of the user's approval.
    (Faber's record of the user's approval). If it does not, stop immediately — do nothing.
 1. Read the issue in full — it is your spec. If it is ambiguous or missing
    acceptance criteria, do NOT guess: comment on the issue with your specific
-   questions, add label `needs-human`, and stop.
+   questions, lead the comment with a SHORT reason (`ambiguous-spec`), add label
+   `needs-human`, and stop.
 2. Create a branch `issue-<number>-<slug>`.
 3. Implement ONLY what the issue asks — one concern.
 4. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
    concerns, stop, open a DRAFT PR with what you have, comment that it should be
-   split into smaller issues, add label `needs-human`, and stop.
+   split into smaller issues (lead the comment with the SHORT reason `oversized`),
+   add label `needs-human`, and stop.
 5. Make the repo's CI pass before you open the PR: run the same checks CI runs
    (lint / structure / build / tests), locally. Where the repo has a test suite,
    add or adjust tests to cover the change. Never open a PR with red CI.
@@ -28,5 +30,6 @@ the issue and applied the `ready` label as the record of the user's approval.
 7. Do NOT merge. Do NOT approve. Stop after opening the PR.
 
 On any error you cannot resolve: never fail silently — comment on the issue with
-what you tried and why you stopped, add label `needs-human`, and stop.
+what you tried and why you stopped (lead the comment with the SHORT reason
+`failure`), add label `needs-human`, and stop.
 ```
