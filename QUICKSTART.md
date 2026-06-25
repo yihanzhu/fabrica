@@ -54,15 +54,26 @@ command, point it at a target repo, and watch one loop run. For the mental model
    [`templates/repo-setup.md`](templates/repo-setup.md)); if you can't enable it, CI is
    still the hard gate.
 
-5. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
+5. **Pre-flight check (optional but recommended)** — from your fabrica clone, run the
+   read-only self-check to confirm the basics are in place before you summon Faber:
 
-6. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
+   ```sh
+   scripts/doctor.sh <owner>/<repo>
+   ```
+
+   It verifies `/faber` points at this clone, `gh` is authenticated, the Codex CLI is on
+   `PATH`, every restore-critical file is present, and the target repo's loop labels
+   exist. One pass/fail line per check; non-zero exit if anything's off. Mutates nothing.
+
+6. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
+
+7. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
    opens a GitHub issue. You talk only to Faber.
 
-7. **Approve the issue.** Front gate = *your* approval. Faber records it by applying the
+8. **Approve the issue.** Front gate = *your* approval. Faber records it by applying the
    `ready` label (it never self-approves), which is its cue to spawn the coder.
 
-8. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
+9. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
    Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
    clone — by absolute path, since the harness lives only in the fabrica clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
