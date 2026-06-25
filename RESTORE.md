@@ -166,7 +166,7 @@ from this clone to catch the cheap failures fast — a missing credential, an
 uninstalled `/faber`, a dropped restore-critical file, or absent loop labels:
 
 ```sh
-scripts/doctor.sh                 # checks (a) /faber points here (b) gh auth (c) codex (d) required files
+scripts/doctor.sh                 # checks (a) /faber points here (b) gh auth (c) claude on PATH (d) codex (e) required files
 scripts/doctor.sh <owner>/<repo>  # also verifies that target repo's loop labels (delegates to setup-target-repo.sh --check)
 ```
 

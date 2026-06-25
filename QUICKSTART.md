@@ -61,9 +61,10 @@ command, point it at a target repo, and watch one loop run. For the mental model
    scripts/doctor.sh <owner>/<repo>
    ```
 
-   It verifies `/faber` points at this clone, `gh` is authenticated, the Codex CLI is on
-   `PATH`, every restore-critical file is present, and the target repo's loop labels
-   exist. One pass/fail line per check; non-zero exit if anything's off. Mutates nothing.
+   It verifies `/faber` points at this clone, `gh` is authenticated, the Claude Code and
+   Codex CLIs are on `PATH`, every restore-critical file is present, and the target repo's
+   loop labels exist. One pass/fail line per check; non-zero exit if anything's off.
+   Mutates nothing.
 
 6. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
 

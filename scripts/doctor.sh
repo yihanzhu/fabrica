@@ -18,15 +18,16 @@ set -euo pipefail
 #       control-plane path — i.e. /faber points at this clone (same path
 #       derivation install.sh uses).
 #   (b) gh is present and authenticated.
-#   (c) codex is on PATH.
-#   (d) every file in ci/required-files.txt is present on disk (the manifest is
+#   (c) claude (Claude Code CLI) is on PATH — the team runs in a Claude Code session.
+#   (d) codex is on PATH.
+#   (e) every file in ci/required-files.txt is present on disk (the manifest is
 #       read live — the list is never duplicated here).
-#   (e) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
+#   (f) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #
 # Usage:
-#   scripts/doctor.sh                 run checks (a)-(d) against this clone
-#   scripts/doctor.sh <owner>/<repo>  also run check (e) for that repo's labels
+#   scripts/doctor.sh                 run checks (a)-(e) against this clone
+#   scripts/doctor.sh <owner>/<repo>  also run check (f) for that repo's labels
 
 usage() {
   echo "usage: $0 [<owner>/<repo>]" >&2
@@ -114,20 +115,30 @@ else
   report 1 "(b) gh present but NOT authenticated — run 'gh auth login'"
 fi
 
-# (c) codex on PATH ---------------------------------------------------------------
-if command -v codex >/dev/null 2>&1; then
-  report 0 "(c) codex on PATH"
+# (c) claude (Claude Code CLI) on PATH --------------------------------------------
+# The whole team runs inside a Claude Code session (QUICKSTART step 6 = run /faber),
+# so a green doctor must not imply readiness when claude is unavailable. `command -v
+# claude` is the probe; a hard fail keeps this consistent with the gh/codex checks.
+if command -v claude >/dev/null 2>&1; then
+  report 0 "(c) claude (Claude Code CLI) on PATH"
 else
-  report 1 "(c) codex NOT on PATH — install the Codex CLI and sign in"
+  report 1 "(c) claude NOT on PATH — install Claude Code; the team runs in a Claude Code session"
 fi
 
-# (d) all restore-critical files present -----------------------------------------
+# (d) codex on PATH ---------------------------------------------------------------
+if command -v codex >/dev/null 2>&1; then
+  report 0 "(d) codex on PATH"
+else
+  report 1 "(d) codex NOT on PATH — install the Codex CLI and sign in"
+fi
+
+# (e) all restore-critical files present -----------------------------------------
 # Read the manifest live (don't duplicate the list); skip blank lines and # comments.
 # Resolve paths relative to repo_root so doctor works regardless of the cwd it's run
 # from. Report ONE rolled-up line listing any missing files.
 manifest="$repo_root/ci/required-files.txt"
 if [ ! -f "$manifest" ]; then
-  report 1 "(d) required-files manifest present ($manifest missing)"
+  report 1 "(e) required-files manifest present ($manifest missing)"
 else
   missing_files=()
   while IFS= read -r f || [ -n "$f" ]; do
@@ -139,24 +150,24 @@ else
     fi
   done < "$manifest"
   if [ "${#missing_files[@]}" -eq 0 ]; then
-    report 0 "(d) all files in ci/required-files.txt present"
+    report 0 "(e) all files in ci/required-files.txt present"
   else
-    report 1 "(d) missing restore-critical file(s): ${missing_files[*]}"
+    report 1 "(e) missing restore-critical file(s): ${missing_files[*]}"
   fi
 fi
 
-# (e) optional loop-label check --------------------------------------------------
+# (f) optional loop-label check --------------------------------------------------
 # Delegate to setup-target-repo.sh --check, which is read-only and reports per-label
 # matches/differs/missing. We only surface a single pass/fail line here; its detailed
 # output goes to the user's terminal so they can act on any drift.
 if [ -n "$target_repo" ]; then
   setup_script="$repo_root/scripts/setup-target-repo.sh"
   if [ ! -x "$setup_script" ]; then
-    report 1 "(e) loop labels on $target_repo ($setup_script not executable/found)"
+    report 1 "(f) loop labels on $target_repo ($setup_script not executable/found)"
   elif "$setup_script" --check "$target_repo"; then
-    report 0 "(e) loop labels on $target_repo present and matching"
+    report 0 "(f) loop labels on $target_repo present and matching"
   else
-    report 1 "(e) loop labels on $target_repo missing or drifted (see --check output above)"
+    report 1 "(f) loop labels on $target_repo missing or drifted (see --check output above)"
   fi
 fi
 
