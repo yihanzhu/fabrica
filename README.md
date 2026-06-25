@@ -83,6 +83,8 @@ exactly one coder launch per approved issue, one review path, and one revision p
 ## Layout
 
 ```
+QUICKSTART.md              The ~10-min golden path: stand the team up from scratch
+CLAUDE.md                  Repo conventions + self-modification safety rails (vs manager/CLAUDE.md = Faber's persona)
 manager/CLAUDE.md          Faber's persistent role (paste into Claude Code)
 routines/coder.md          Coder baseline instructions Faber passes to a spawned coder subagent
 routines/coder-revision.md Coder fix-mode instructions (handle review feedback)

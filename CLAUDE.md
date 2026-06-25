@@ -12,10 +12,13 @@ the backlog:
   coder subagent (`coder.md` / `coder-revision.md`) plus the per-task `brief.md`.
 - `reviewer/codex-review.md` — the doc for the Codex reviewer harness (`scripts/codex-review.sh`).
 - `templates/*` — drop-in files for target repos.
-- *(to be built)* scripts/tooling to set up, validate, and restore the team.
+- `scripts/*.sh` — the shipped tooling: `install.sh` (generates the `/faber` command),
+  `setup-target-repo.sh` (bootstraps a target repo's loop labels), and `codex-review.sh`
+  (runs the Codex reviewer against a PR).
 
 ## Stack & commands
-- Markdown + shell today; real tooling (setup/restore scripts, validators) will grow here.
+- Markdown + shell. The setup/reviewer tooling lives in `scripts/*.sh`; validators are
+  still to come.
 - CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
   it is the hard merge gate.** Add real tests as code lands.
   - The **structure check** reads `ci/required-files.txt` — the manifest of every
