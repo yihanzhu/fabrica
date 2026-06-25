@@ -161,6 +161,19 @@ a fork).
 
 ## 5. Smoke test — prove the rebuilt team is alive
 
+**Pre-flight first.** Before running the full live loop, run the read-only self-check
+from this clone to catch the cheap failures fast — a missing credential, an
+uninstalled `/faber`, a dropped restore-critical file, or absent loop labels:
+
+```sh
+scripts/doctor.sh                 # checks (a) /faber points here (b) gh auth (c) codex (d) required files
+scripts/doctor.sh <owner>/<repo>  # also verifies that target repo's loop labels (delegates to setup-target-repo.sh --check)
+```
+
+It prints a pass/fail line per check and exits non-zero if anything fails; it never
+mutates anything. Fix any `fail:` line before the smoke test below — otherwise the
+loop will stall at exactly that gap. Then prove the team end to end:
+
 Run **one trivial issue** through the full loop end to end, all from your Faber session:
 
 1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
