@@ -34,9 +34,24 @@ and exits non-zero if anything is missing or differs (zero if all match).
 - ⛔️ **Phase 1: no auto-merge** — you merge manually after CI is green
 - (Phase 3, once trusted) enable auto-merge for low-risk PRs only
 
-## 3. CI
-- A workflow that runs tests + lint/typecheck on every PR. Without real tests, the
-  hard gate is hollow — invest here first.
+## 3. CI — the loop's hard gate
+CI must run the **exact commands** you put in this repo's `CLAUDE.md` (its tests /
+lint/typecheck / build) on every PR. The contract is simple: what the agents are told to
+run locally is what CI enforces. If the two drift apart, the green check is hollow — it
+proves nothing about the change.
+
+**If this repo has no CI, add repo-specific CI first** — it's the loop's hard gate, and the
+team won't merge against a missing or hollow check. There is no blessed drop-in workflow:
+CI is project-specific, so you wire it to *your* commands.
+
+Illustrative only (not a drop-in — swap in your repo's real commands and runtime):
+
+```yaml
+# on: [pull_request]  — run the SAME commands your CLAUDE.md tells the agents to run
+- run: npm ci
+- run: npm test
+- run: npm run lint
+```
 
 ## 4. Conventions
 - Add `CLAUDE.md` (from `templates/target-CLAUDE.md`), filled in for this repo.
