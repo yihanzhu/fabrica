@@ -43,10 +43,16 @@ jobs:
 
       - name: Shellcheck (if any shell scripts)
         run: |
+          # ubuntu-latest ships shellcheck preinstalled — use it instead of an
+          # apt reinstall on every run (faster, and the version is pinned to the
+          # runner image rather than whatever apt resolves that day).
+          shellcheck --version
           scripts=$(find . -name '*.sh' -not -path './.git/*')
           if [ -n "$scripts" ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-            echo "$scripts" | xargs shellcheck
+            # -S style = shellcheck's default floor; pinned explicitly so the
+            # policy is visible and a future default change can't silently relax
+            # it. No -x: no script sources another today.
+            echo "$scripts" | xargs shellcheck -S style
           else
             echo "no shell scripts yet"
           fi
