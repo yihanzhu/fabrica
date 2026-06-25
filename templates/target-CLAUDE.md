@@ -4,7 +4,15 @@ Drop this file in the root of each target repo. Both the coder and the reviewer
 read it, so it's how you specialize the *one* coder per repo (instead of having
 separate FE/BE agents).
 
+> Fill in the skeleton below with your repo's real values. A complete worked
+> example follows at the bottom — read it for the level of concreteness expected,
+> then **delete it** (it describes a fictional repo, not yours).
+
 ## Stack & commands
+*Why this matters: these are the exact commands the coder runs to satisfy its
+CI-green bar, and the reviewer reruns to confirm a PR is mergeable — vague or
+wrong commands here mean the coder can't tell whether its work passes.*
+
 - Language / framework: <fill in>
 - Install: `<cmd>`
 - Test: `<cmd>`  ← where applicable (or the repo's CI checks); must pass before any PR is opened
@@ -12,6 +20,10 @@ separate FE/BE agents).
 - Build / run: `<cmd>`
 
 ## PR rules (enforced by coder + reviewer)
+*Why this matters: these are the gate the reviewer checks every PR against —
+keep them in sync with your real workflow so the coder doesn't get bounced on
+rules it never saw.*
+
 - **One concern per PR.** A PR does exactly one thing.
 - Soft size budget **~300–400 net lines**. Past that, split into smaller issues
   rather than one big PR. (Tripwire, not a hard reject — a large mechanical rename
@@ -21,7 +33,71 @@ separate FE/BE agents).
 - Conventional commit messages: `<convention, e.g. feat:/fix:/chore:>`
 
 ## Conventions
+*Why this matters: this is what keeps the coder's output looking like the rest of
+your codebase, and gives the reviewer concrete grounds to request changes instead
+of guessing at house style.*
+
 - Code style: <fill in / point at the linter config>
 - Directory layout: <fill in>
 - Patterns to follow / anti-patterns to avoid: <fill in>
 - Anything the agents should NOT touch: <fill in>
+
+---
+
+<!--
+=============================================================================
+ILLUSTRATIVE EXAMPLE — DELETE THIS ENTIRE BLOCK (between the comment markers)
+BEFORE SHIPPING. It describes a *fictional* Node/TypeScript repo to show the
+level of concreteness expected above. Do not ship it verbatim — replace the
+skeleton with your real values and remove this example.
+=============================================================================
+-->
+
+### Example: a fictional Node/TypeScript API service (delete me)
+
+#### Stack & commands
+*Why this matters: these are the exact commands the coder runs to satisfy its
+CI-green bar, and the reviewer reruns to confirm a PR is mergeable.*
+
+- Language / framework: TypeScript on Node 20, Express + Prisma, Postgres
+- Install: `npm ci`
+- Test: `npm test` (Vitest; runs unit + integration — must pass before any PR is opened)
+- Lint / typecheck: `npm run lint && npm run typecheck` (ESLint + `tsc --noEmit`)
+- Build / run: `npm run build` then `npm start` (or `npm run dev` for watch mode)
+
+#### PR rules (enforced by coder + reviewer)
+*Why this matters: these are the gate the reviewer checks every PR against.*
+
+- **One concern per PR.** A PR does exactly one thing.
+- Soft size budget **~300–400 net lines**.
+- Every PR links its issue (`Closes #<n>`) and adds/updates Vitest specs next to
+  the code it changes; CI must stay green.
+- Conventional commit messages: `feat:` / `fix:` / `chore:` / `docs:` / `test:`.
+
+#### Conventions
+*Why this matters: this keeps the coder's output looking like the rest of the
+codebase and gives the reviewer concrete grounds to request changes.*
+
+- Code style: Prettier + ESLint (config in `.eslintrc.cjs`); no manual formatting —
+  run `npm run format`.
+- Directory layout: routes in `src/routes/`, business logic in `src/services/`,
+  DB access only via Prisma in `src/db/`; tests as `*.test.ts` beside the source.
+- Patterns to follow:
+  - All HTTP handlers are thin — validate input, call a service, return; no DB
+    queries in route files.
+  - Use the shared `AppError` type for expected failures; let the error middleware
+    format the response.
+- Anti-patterns to avoid:
+  - No raw SQL strings — go through Prisma so migrations stay the source of truth.
+  - No `any`; if a type is hard, add a narrow interface rather than escaping the
+    type system.
+- Do NOT touch:
+  - `prisma/migrations/**` — migrations are generated and applied via
+    `npx prisma migrate`; hand-editing them corrupts schema history.
+  - `src/generated/**` — committed Prisma client output; regenerate it, never edit.
+
+<!--
+=============================================================================
+END ILLUSTRATIVE EXAMPLE — DELETE EVERYTHING FROM THE MARKER ABOVE TO HERE.
+=============================================================================
+-->
