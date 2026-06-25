@@ -83,17 +83,31 @@ report() {
 
 # (a) /faber points at this clone -------------------------------------------------
 faber_cmd="$HOME/.claude/commands/faber.md"
+# Match a path BOUNDARY ("$repo_root/"), not a bare prefix: the generated command
+# embeds paths like "<root>/manager/CLAUDE.md", so the trailing slash anchors the
+# match to a path component and stops a clone whose path is a prefix of another's
+# (e.g. /work/fabrica vs an installed /work/fabrica-old) from false-passing.
 if [ ! -f "$faber_cmd" ]; then
   report 1 "(a) /faber command installed at $faber_cmd (missing — run scripts/install.sh)"
-elif grep -qF "$repo_root" "$faber_cmd"; then
+elif grep -qF -- "$repo_root/" "$faber_cmd"; then
   report 0 "(a) /faber command points at this clone ($repo_root)"
 else
   report 1 "(a) /faber command does not reference this clone ($repo_root) — run scripts/install.sh from here"
 fi
 
 # (b) gh present and authenticated ------------------------------------------------
+# When a target repo is given, scope the probe to it: `gh repo view "$repo"` verifies
+# auth AND access to exactly that repo (mirroring setup-target-repo.sh), so an unrelated
+# stale host/account in gh's config can't fail the preflight when target access is fine.
+# With no target there's nothing to scope to, so fall back to the general auth status.
 if ! command -v gh >/dev/null 2>&1; then
   report 1 "(b) gh present and authenticated (gh not on PATH — install the GitHub CLI)"
+elif [ -n "$target_repo" ]; then
+  if gh repo view "$target_repo" >/dev/null 2>&1; then
+    report 0 "(b) gh authenticated with access to $target_repo"
+  else
+    report 1 "(b) gh present but cannot access $target_repo — run 'gh auth login' (and confirm you can see it)"
+  fi
 elif gh auth status >/dev/null 2>&1; then
   report 0 "(b) gh present and authenticated"
 else
