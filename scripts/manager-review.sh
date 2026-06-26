@@ -266,11 +266,18 @@ prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_bo
 # trace. `-C "$worktree"` pins Codex to the clean detached worktree at HEAD so it reads the
 # whole repo's tracked content (never the operator's untracked/ignored files or dirty state)
 # read-only to ground its judgment, regardless of which subdirectory the script was run from.
+#
+# The prompt is fed over STDIN (the trailing `-` positional, which `codex exec` reads as
+# "prompt from stdin"), NOT as an argv argument. The prompt embeds the issue body + the full
+# comment thread + the north star, which can be large (GitHub allows a 65k issue body plus
+# many comments) — passing that on the command line risks `E2BIG` once the thread grows, and
+# on a shared machine it would also expose the issue/north-star text in `ps`/process listings
+# while Codex runs. stdin avoids both. All flags stay BEFORE the `-` (flags then positional).
 review_cmd=(codex exec -C "$worktree" -c sandbox_mode="read-only" -o "$tmp")
 if [ -n "$model" ]; then
   review_cmd+=(-m "$model")
 fi
-"${review_cmd[@]}" "$prompt"
+printf '%s' "$prompt" | "${review_cmd[@]}" -
 
 # Compose the issue comment: a short header marking it the cross-vendor manager-reviewer,
 # then Codex's verdict VERBATIM. The header is Faber's prefix — clearly separate from

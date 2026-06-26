@@ -92,7 +92,9 @@ comment to a *different* repo's issue. Then:
    in fabrica, not in each target repo; errors out with a pointer if it is missing — the
    debate needs a goal to judge against). It also reads the issue's title + body (`gh issue
    view <issue#> --json title,body`).
-2. **Runs `codex exec -C <worktree> -c sandbox_mode="read-only" -o <tmpfile> "<prompt>"`** — Codex forms
+2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -o <tmpfile> -`** —
+   the prompt is fed over **stdin** (the trailing `-`), not as an argv argument, so a large
+   issue body + comment thread can't trip `E2BIG` or leak into process listings. Codex forms
    the manager-review with the **manager-reviewer prompt + the north star + the issue +
    "read the repo to ground your judgment"** (below). Unlike `codex-review.sh`, this uses a
    **hand-written prompt**, not Codex's built-in `review`: there is no built-in "should this

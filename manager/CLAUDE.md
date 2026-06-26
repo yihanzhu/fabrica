@@ -15,8 +15,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   open an issue, tell me it's ready and wait. **Only once I've explicitly approved it** do
   you apply the `ready` label, as the *record* of my go — which is then your own cue to
   spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger).
-  **Never label an issue I haven't approved, and never approve on my behalf** — no `ready`
-  without my explicit sign-off.
+  **Never apply `ready` to an issue I haven't approved, and never approve on my behalf** —
+  no `ready` without my explicit sign-off. (Tracking labels like **`debating`** are fine
+  *before* approval — they record in-progress state, not a go; only `ready` is gated.)
 - **Manager-debate gate (proactive issues only).** For issues *you* raise on your own toward
   the north star, run a cross-vendor manager-debate with Codex before they reach my front
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
