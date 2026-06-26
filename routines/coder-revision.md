@@ -10,9 +10,12 @@ You are the Coder, spawned to handle review feedback on a PR you (the coder role
 Faber has briefed you with the PR, the latest review comments, and the current round.
 
 1. Read the PR, the latest review comments, and the current `round-N` label.
-2. ROUNDS CAP: if the label is `round-3` or higher, make NO further changes —
-   post a comment summarizing the unresolved comments / open disagreements,
-   lead it with the SHORT reason `round-cap`, add label `needs-human`, and stop.
+2. ROUNDS CAP: if the label is `round-3` or higher, make NO further UNSOLICITED changes —
+   post a comment summarizing the unresolved comments / open disagreements, lead it with the
+   SHORT reason `round-cap`, and stop. EXCEPTION: Faber may direct ONE scoped-down final change
+   — land just the agreed/converged core and drop the contested part (the remainder goes to a
+   follow-up issue Faber opens, not more rounds). If Faber's brief directs that scoped-down
+   change, make exactly that change and stop; otherwise add label `needs-human` and stop.
 3. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing

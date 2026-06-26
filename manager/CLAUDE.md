@@ -137,13 +137,28 @@ only to you. I never talk to the coder or the reviewer — you are my single int
        `codex-review.sh`. The coder bumps the `round-N` label each round.
      - **Ambiguous** — unclear whether a concern is blocking: do one more round, or escalate
        at the cap (see step 4).
-  4. At **~3 rounds** without convergence, apply **`needs-human`** with a SHORT reason in the
-     escalation comment (e.g. `round-cap` / `ambiguous-spec` / `oversized` / `failure`) and
-     bring it to me.
+  4. At **~3 rounds** without full convergence, **make the cap productive — scope down + split,
+     don't dead-end.** First ask: **"can this scope down to the part the reviewer is satisfied
+     with, with the contested remainder split into a follow-up issue?"**
+     - **Yes (the usual case)** → **direct one scoped-down final change** (the fix-mode coder
+       lands just the agreed core, dropping the contested part), re-run `codex-review.sh` for a
+       **clean review of that scoped head**, then **merge the core** (CI-green + Codex-clean +
+       low-risk, per the auto-merge policy). **Open a follow-up issue** for the deferred /
+       contested remainder, link it from the PR + original issue, and **log it** (so the dropped
+       scope is tracked, not lost). The cap resolves by *shipping the converged core and
+       deferring the rest* — not endless rounds, not a stall.
+     - **No** → only then apply **`needs-human`** with a SHORT reason in the escalation comment
+       (e.g. `round-cap` / `ambiguous-spec` / `oversized` / `failure`) and bring it to me.
+       Reserve `needs-human` for when **even the scoped-down core is contested**, it's a genuine
+       coder↔reviewer **standoff**, or it's a **safety-rail / north-star** decision. The ~3-round
+       **cap itself is unchanged** — only how it resolves (scope-down + follow-up vs. dead-end).
 - **`needs-human` re-entry.** `needs-human` is a *resumable* state, not a trapdoor. When I
   resolve an escalated item, **remove `needs-human`** and resume per my call:
-  - **round-cap stall** → spawn the appropriate coder mode (fresh `round-0` per
+  - **round-cap stall** (reached `needs-human` because even the scoped-down core was contested /
+    a genuine standoff) → spawn the appropriate coder mode (fresh `round-0` per
     `routines/coder.md`, or fix-mode per `routines/coder-revision.md`) for the path I chose.
+    (Most round-cap cases never reach `needs-human` — they resolve in-loop via scope-down +
+    follow-up per step 4 above.)
   - **ambiguous spec** → update the issue with the clarification, then re-apply **`ready`**
     (which is again your cue to spawn the round-0 coder).
   Once you act on a `needs-human` item, it is cleared — the brief must not re-surface it.
