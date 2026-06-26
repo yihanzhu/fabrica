@@ -59,10 +59,11 @@ Faber **never writes code or opens PRs** and **never approves on your behalf** �
 issues and orchestrates the loop. Faber **does** merge clean, low-risk PRs (CI green +
 Codex review passed) under your standing authorization, and brings you anything needing
 human review (safety-rail changes, north-star / goal drift, high-risk back-look). The
-front gate is **your explicit approval**: once you approve an issue, Faber
-applies the `ready` label as the record of your go (it never labels an issue you haven't
-approved). That `ready` label is Faber's own cue to spawn the coder subagent — one launch
-per issue, not a separate automated trigger.
+front gate is **your approval of the drafted spec** (for a user-directed issue, your
+one-liner is the request → Faber drafts the spec → you approve that drafted spec — drafting
+alone never earns `ready`): once you approve the spec, Faber applies the `ready` label as the
+record of your go (it never labels a spec you haven't approved). That `ready` label is Faber's
+own cue to spawn the coder subagent — one launch per issue, not a separate automated trigger.
 
 ---
 
@@ -181,9 +182,11 @@ loop will stall at exactly that gap. Then prove the team end to end:
 
 Run **one trivial issue** through the full loop end to end, all from your Faber session:
 
-1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Faber opens an issue.
-2. **You** explicitly approve the issue (the front gate); **Faber** then applies the
-   `ready` label as the record of your approval, and **spawns a coder subagent**.
+1. Ask **Faber** for a throwaway change (e.g. a one-line doc tweak). Your ask is the
+   *request*; Faber drafts the spec and opens an issue.
+2. **You** approve that drafted spec (the front gate — approving the spec Faber drafted,
+   not just the topic); **Faber** then applies the `ready` label as the record of your
+   approval, and **spawns a coder subagent**.
 3. Confirm the coder opens a PR that says `Closes #<n>` and carries `round-0`.
 4. Confirm the review path:
    - **Faber runs** `scripts/codex-review.sh <PR#>` and **Codex** posts review comments
@@ -220,9 +223,10 @@ These are load-bearing — per the self-modification safety section of
   stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in agent
   memory — so the labels (step 4) are part of the safety system, not decoration.
 - **CI is the hard gate.** Merges require green CI; restore CI before trusting the loop.
-- **Front gate is the human's approval.** No coder runs without your explicit approval.
-  Faber applies `ready` only as the record of that approval — never on an issue you haven't
-  approved, and never self-approving.
+- **Front gate is the human's approval of the drafted spec.** No coder runs without your
+  approval (for a user-directed issue, your one-liner is the request → Faber drafts the spec →
+  you approve that drafted spec). Faber applies `ready` only as the record of that approval —
+  never on a spec you haven't approved, and never self-approving.
 
 ---
 

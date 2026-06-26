@@ -35,7 +35,9 @@ exactly one coder launch per approved issue, one review path, and one revision p
   one-liner → Faber drafts spec → opens issue
                                        │
         gate (front gate = at the north-star altitude):
-          • user-directed issue → YOU ask → Faber labels it `ready`
+          • user-directed issue → your one-liner is the request → Faber drafts
+              the spec → YOU approve that drafted spec → Faber labels it `ready`
+              (drafting alone never earns `ready`)
           • proactive issue → Faber⇄Codex manager-debate CONSENSUS
               → Faber removes `debating`, labels it `ready` (no per-issue ask)
           (Faber alone never self-approves; the consensus IS the gate

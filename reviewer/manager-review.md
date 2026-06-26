@@ -56,7 +56,8 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
   altitude — the user approves the **north star** and is involved at **north-star achieved**,
   **goal drift / transition**, and `needs-human`; *within* an approved north star, the
   cross-vendor consensus gates proactive work. (**User-directed issues keep the direct gate** —
-  the user's explicit request is the judgment; this consensus gate is only for the issues Faber
+  the user's approval of the spec Faber drafts from their one-liner is the judgment (the
+  one-liner is the request, not the go); this consensus gate is only for the issues Faber
   raises on its own.)
 - **The manager-reviewer is VETO-ONLY.** It never merges, approves, labels `ready`, or
   edits the issue — its *only* effect is the verdict comment. It cannot advance an issue;

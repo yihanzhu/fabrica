@@ -67,5 +67,10 @@ Next steps:
      (bootstraps the loop labels).
   2. Confirm that target repo has CI (the hard merge gate) and, optionally, a
      CLAUDE.md of conventions — see $repo_root/templates/.
-  3. Open Claude Code in a target repo and run /faber to summon the manager.
+  3. Set + approve the north star ($repo_root/NORTH_STAR.md) — replace the shipped
+     Fabrica default with your own direction and mark its status line approved-by-user.
+     This is the root authorization that unlocks proactive autonomous mode; until it's
+     set + approved, Faber acts only on issues you direct (your one-liner → Faber drafts
+     the spec → you approve that drafted spec → ready).
+  4. Open Claude Code in a target repo and run /faber to summon the manager.
 EOF

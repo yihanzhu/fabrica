@@ -189,4 +189,9 @@ Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
   3. Install the /faber command: run scripts/install.sh from your fabrica clone.
   4. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
+  5. Set + approve the north star (NORTH_STAR.md in your fabrica clone) to unlock
+     proactive autonomous mode — replace the shipped Fabrica default with your own
+     direction and mark its status line approved-by-user. Until it's set + approved,
+     Faber acts only on issues you direct (your one-liner → Faber drafts the spec →
+     you approve that drafted spec → ready).
 EOF
