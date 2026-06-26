@@ -20,9 +20,10 @@ set -euo pipefail
 #   (b) gh is present and authenticated.
 #   (c) claude (Claude Code CLI) is on PATH — the team runs in a Claude Code session.
 #   (d) codex is on PATH.
-#   (e) every file in ci/required-files.txt is present on disk (the manifest is
+#   (e) jq is on PATH — required by scripts/merge-pr.sh to parse gh's CI-check JSON.
+#   (f) every file in ci/required-files.txt is present on disk (the manifest is
 #       read live — the list is never duplicated here).
-#   (f) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
+#   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #
 # Usage:
@@ -31,8 +32,9 @@ set -euo pipefail
 
 usage() {
   echo "usage: $0 [<owner>/<repo>]" >&2
-  echo "  read-only restore self-check; prints a pass/fail line per check and exits" >&2
-  echo "  non-zero if any fail. Pass <owner>/<repo> to also verify that repo's loop labels." >&2
+  echo "  read-only restore self-check: /faber install, gh auth, claude/codex/jq on PATH," >&2
+  echo "  and restore-critical files. Prints a pass/fail line per check and exits non-zero" >&2
+  echo "  if any fail. Pass <owner>/<repo> to also verify that repo's loop labels." >&2
 }
 
 # Accept at most one positional arg (the optional <owner>/<repo>). Reject -h/--help
@@ -132,13 +134,22 @@ else
   report 1 "(d) codex NOT on PATH — install the Codex CLI and sign in"
 fi
 
-# (e) all restore-critical files present -----------------------------------------
+# (e) jq on PATH ------------------------------------------------------------------
+# scripts/merge-pr.sh parses `gh pr checks --json` with jq; without it a fresh machine
+# passes setup but the merge step fails. A hard fail keeps this consistent with gh/codex.
+if command -v jq >/dev/null 2>&1; then
+  report 0 "(e) jq on PATH"
+else
+  report 1 "(e) jq not on PATH — install jq; required by scripts/merge-pr.sh"
+fi
+
+# (f) all restore-critical files present -----------------------------------------
 # Read the manifest live (don't duplicate the list); skip blank lines and # comments.
 # Resolve paths relative to repo_root so doctor works regardless of the cwd it's run
 # from. Report ONE rolled-up line listing any missing files.
 manifest="$repo_root/ci/required-files.txt"
 if [ ! -f "$manifest" ]; then
-  report 1 "(e) required-files manifest present ($manifest missing)"
+  report 1 "(f) required-files manifest present ($manifest missing)"
 else
   missing_files=()
   while IFS= read -r f || [ -n "$f" ]; do
@@ -150,24 +161,24 @@ else
     fi
   done < "$manifest"
   if [ "${#missing_files[@]}" -eq 0 ]; then
-    report 0 "(e) all files in ci/required-files.txt present"
+    report 0 "(f) all files in ci/required-files.txt present"
   else
-    report 1 "(e) missing restore-critical file(s): ${missing_files[*]}"
+    report 1 "(f) missing restore-critical file(s): ${missing_files[*]}"
   fi
 fi
 
-# (f) optional loop-label check --------------------------------------------------
+# (g) optional loop-label check --------------------------------------------------
 # Delegate to setup-target-repo.sh --check, which is read-only and reports per-label
 # matches/differs/missing. We only surface a single pass/fail line here; its detailed
 # output goes to the user's terminal so they can act on any drift.
 if [ -n "$target_repo" ]; then
   setup_script="$repo_root/scripts/setup-target-repo.sh"
   if [ ! -x "$setup_script" ]; then
-    report 1 "(f) loop labels on $target_repo ($setup_script not executable/found)"
+    report 1 "(g) loop labels on $target_repo ($setup_script not executable/found)"
   elif "$setup_script" --check "$target_repo"; then
-    report 0 "(f) loop labels on $target_repo present and matching"
+    report 0 "(g) loop labels on $target_repo present and matching"
   else
-    report 1 "(f) loop labels on $target_repo missing or drifted (see --check output above)"
+    report 1 "(g) loop labels on $target_repo missing or drifted (see --check output above)"
   fi
 fi
 
