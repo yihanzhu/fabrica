@@ -49,7 +49,14 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    `--dangerously-bypass-approvals-and-sandbox`, and avoids `--ignore-user-config` so the
    operator's model/effort defaults still apply.
 3. Posts Codex's review to the PR **verbatim**: `gh pr comment <PR#> --body-file <tmpfile>`,
-   prefixed only with a short header marking it the Codex cross-vendor reviewer.
+   prefixed only with a short header marking it the Codex cross-vendor reviewer. That header
+   also stamps the exact head SHA Codex reviewed as a parseable marker line —
+   **`Reviewed-head: <full-sha>`** — so a later actor can bind a merge to the precise commit
+   this review covered (and refuse if the head has since moved). The marker is part of
+   Faber's header prefix, clearly separate from Codex's verbatim body, so the review stays
+   read-only / comments-only / verbatim. [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) is
+   the first consumer: it reads this marker, confirms the PR's current head still equals it
+   and that CI is green, then squash-merges pinned to that SHA (`--match-head-commit`).
 
 ```
 # run from within the TARGET repo's clone; invoke the script by ABSOLUTE PATH

@@ -107,7 +107,8 @@ routines/coder-revision.md Coder fix-mode instructions (handle review feedback)
 routines/brief.md          Brief instructions Faber can run (resurfacing; not auto-scheduled)
 reviewer/codex-review.md   Codex reviewer mechanism + in-session review loop
 scripts/install.sh         Generate the /faber command with a repo-derived path (idempotent)
-scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a PR, verbatim
+scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a PR, verbatim (stamps Reviewed-head: marker)
+scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + CI-green, then squash-merge
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 templates/faber-command.md Template for the /faber command (path placeholder)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)

@@ -33,5 +33,6 @@ templates/faber-command.md
 # Scripts (must also be executable — see ci.yml)
 scripts/install.sh
 scripts/codex-review.sh
+scripts/merge-pr.sh
 scripts/setup-target-repo.sh
 scripts/doctor.sh
