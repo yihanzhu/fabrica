@@ -223,10 +223,13 @@ These are load-bearing — per the self-modification safety section of
   stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in agent
   memory — so the labels (step 4) are part of the safety system, not decoration.
 - **CI is the hard gate.** Merges require green CI; restore CI before trusting the loop.
-- **Front gate is the human's approval of the drafted spec.** No coder runs without your
-  approval (for a user-directed issue, your one-liner is the request → Faber drafts the spec →
-  you approve that drafted spec). Faber applies `ready` only as the record of that approval —
-  never on a spec you haven't approved, and never self-approving.
+- **Front gate clears via one of two paths; `ready` records that an issue is cleared.** A
+  **user-directed** issue runs after you approve the spec Faber drafts (your one-liner is the
+  request → Faber drafts the spec → you approve that drafted spec). A **proactive** issue runs
+  after you've approved the active north star **and** Faber⇄Codex manager-debate reaches
+  consensus — no per-issue ask. `ready` means "cleared to run" via *either* path; Faber never
+  self-applies it acting alone (a proactive issue takes the passed consensus, not Faber by
+  itself) and never on a user-directed spec you haven't approved.
 
 ---
 

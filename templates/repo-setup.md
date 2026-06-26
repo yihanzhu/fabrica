@@ -66,10 +66,13 @@ The team runs from a Claude Code session — there are no per-repo routine trigg
   `scripts/codex-review.sh <PR#>` against this repo's PRs — the cross-vendor, comments-only
   reviewer.
 
-## 6. Set + approve your north star (unlocks proactive autonomous mode)
-Edit `NORTH_STAR.md` in your **fabrica control-plane clone** (not this target repo) to your
-own direction and mark its status line `approved-by-user`. **This approval is the root
-authorization for all proactive work** — until it's set, Faber acts only on issues you ask
-for directly and will ask you to set + approve the north star before pursuing anything
-proactively. The shipped entry is *Fabrica's own* goal, so an adopter must replace + approve
-it before proactive consensus-gated work runs in their setup.
+## 6. Set + approve your own north star (unlocks proactive autonomous mode)
+Edit `NORTH_STAR.md` in your **fabrica control-plane clone** (not this target repo) to *your*
+direction and explicitly approve it to Faber. **Your explicit approval of the active north
+star is the root authorization for all proactive work** — and Faber gates on that approval,
+not on any line written in the file. The shipped approval note is the prior owner's history,
+**not** a token that approves the goal for you: a fresh clone inheriting it is not auto-approved.
+Until you set + approve your own, Faber acts only on issues you ask for directly and will ask
+you to set + approve the north star before pursuing anything proactively. The shipped entry is
+*Fabrica's own* goal, so an adopter must replace + approve it before proactive consensus-gated
+work runs in their setup.

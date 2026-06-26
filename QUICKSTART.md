@@ -71,12 +71,14 @@ command, point it at a target repo, and watch one loop run. For the mental model
    target repo's loop labels exist. One pass/fail line per check; non-zero exit if
    anything's off. Mutates nothing.
 
-6. **Set and approve your north star** (this unlocks proactive autonomous mode). Edit
-   [`NORTH_STAR.md`](NORTH_STAR.md) to your own direction and mark its status line
-   `approved-by-user` — the shipped entry is *Fabrica's own* goal, so until you approve your
-   own, Faber will only act on issues you ask for directly and will ask you to set + approve
-   the north star before pursuing anything proactively. **Your approval of the north star is
-   the root authorization for all proactive work** (the front gate sits at this altitude).
+6. **Set and approve your own north star** (this unlocks proactive autonomous mode). Edit
+   [`NORTH_STAR.md`](NORTH_STAR.md) to *your* direction and explicitly tell Faber you approve
+   it — the shipped entry is *Fabrica's own* goal and its approval note is the prior owner's
+   history, **not** a token that approves the goal for you. Until you set + approve your own,
+   Faber will only act on issues you ask for directly and will ask you to set + approve the
+   north star before pursuing anything proactively. **Your explicit approval of the active
+   north star is the root authorization for all proactive work** (the front gate sits at this
+   altitude) — Faber gates on that approval, not on any line written in the file.
 
 7. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
 
