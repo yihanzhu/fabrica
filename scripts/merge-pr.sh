@@ -82,20 +82,42 @@ if ! repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" |
   exit 1
 fi
 
-# Read the reviewed head SHA from the LATEST codex-review.sh comment on the PR. The
-# harness stamps a `Reviewed-head: <full-sha>` marker into its comment header; we pick
-# the most recent such marker across all comments (sorted by createdAt). The
-# `^Reviewed-head: <40-hex>$` anchor matches only the marker line the harness writes, so
-# prose that merely mentions the phrase can't spoof it.
+# Read the reviewed head SHA from the LATEST AUTHENTICATED codex-review.sh comment on the
+# PR. A `Reviewed-head: <sha>` line alone is NOT trusted — any PR author or collaborator
+# could comment that exact line to spoof a review and get an unreviewed head merged. We
+# accept the marker only from a genuine harness comment, which must satisfy BOTH:
+#   (a) AUTHOR — the comment is authored by the gh-authenticated operator (the account
+#       that runs codex-review.sh). A collaborator's comment has a different author login.
+#   (b) SIGNATURE — the comment carries the harness's distinctive header
+#       `## Codex reviewer (cross-vendor, read-only)` (the exact text codex-review.sh
+#       prefixes) TOGETHER WITH the `Reviewed-head: <40-hex>` marker line. A spoof that
+#       copies the marker but not the header fails this; reproducing both still fails (a).
+# We resolve the operator login from the same gh auth this script merges with, filter
+# comments to that author carrying the header, take the most recent (by createdAt), and
+# extract its `Reviewed-head:` SHA. The `^...$` anchors match only the marker line the
+# harness writes, so prose mentioning the phrase can't spoof it.
+operator="$(gh api user -q .login 2>/dev/null || true)"
+if [ -z "$operator" ]; then
+  echo "error: could not resolve the gh-authenticated operator (gh api user)" >&2
+  echo "       ensure gh is authenticated, then re-run" >&2
+  exit 1
+fi
+
 reviewed_sha="$(
   gh pr view "$pr" --repo "$repo" --json comments \
-    -q '.comments | sort_by(.createdAt) | reverse
+    | jq -r --arg operator "$operator" '
+        .comments
+        | sort_by(.createdAt) | reverse
+        | map(select(.author.login == $operator))
+        | map(select(.body | test("(?m)^## Codex reviewer \\(cross-vendor, read-only\\)$")))
         | map(.body | capture("(?m)^Reviewed-head: (?<sha>[0-9a-f]{40})$"; "g").sha)
         | map(select(. != null)) | .[0] // empty'
 )"
 
 if [ -z "$reviewed_sha" ]; then
-  echo "error: no Codex review found on PR #$pr (no 'Reviewed-head:' marker)" >&2
+  echo "error: no authenticated Codex review found on PR #$pr" >&2
+  echo "       need a comment by the gh operator ($operator) carrying the codex-review.sh" >&2
+  echo "       header and a 'Reviewed-head:' marker — a bare marker line is not trusted" >&2
   echo "       run scripts/codex-review.sh $pr first, then re-run this" >&2
   exit 1
 fi
@@ -111,9 +133,13 @@ if [ "$current_head" != "$reviewed_sha" ]; then
 fi
 
 # Confirm CI is green on the current head. `gh pr checks --json` tags each check with a
-# `bucket` (pass / fail / pending / skipping / cancel). We require AT LEAST ONE check and
-# EVERY check to be pass or skipping — refuse if any check is fail/pending/cancel, or if
-# there are no checks at all (CI must be the gate, so "no checks" is not "green").
+# `bucket` (pass / fail / pending / skipping / cancel). Green here means BOTH:
+#   - AT LEAST ONE check is `pass` — something CI actually ran and passed; and
+#   - NO check is fail/pending/cancel (skipping is tolerated alongside the pass).
+# Requiring a real pass closes the all-skipped hole: when every reported check is
+# `skipping` (e.g. jobs gated off by `if:` conditions), there is no fail/pending/cancel
+# but nothing actually passed — that must NOT count as green. We still refuse on zero
+# checks (CI must be the gate, so "no checks" is not "green").
 # `gh pr checks` exits non-zero when checks aren't all passing (e.g. 8 = pending), so we
 # capture its output without letting `set -e` abort, then judge the buckets ourselves.
 checks_json="$(gh pr checks "$pr" --repo "$repo" --json bucket 2>/dev/null || true)"
@@ -127,6 +153,12 @@ if [ "$not_green" -ne 0 ]; then
   echo "error: CI not green on PR #$pr head ($current_head); refusing to merge" >&2
   echo "       not-passing checks:" >&2
   jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "         - \(.name): \(.bucket)"' <<<"$checks_json" >&2
+  exit 1
+fi
+passing="$(jq -r '[.[] | select(.bucket == "pass")] | length' <<<"$checks_json")"
+if [ "$passing" -eq 0 ]; then
+  echo "error: no passing CI check on PR #$pr head ($current_head); refusing to merge" >&2
+  echo "       every check is skipped/optional — CI must actually run and pass to be the gate" >&2
   exit 1
 fi
 
