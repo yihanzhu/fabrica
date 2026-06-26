@@ -141,6 +141,11 @@ git fetch --no-tags origin \
 pr_head="$(git rev-parse "$pr_head_ref")"
 git update-ref -d "$pr_head_ref"
 base_ref="origin/${base}"
+# Record the EXACT base commit Codex reviews against. The review runs `--base
+# origin/<base>`, so the effective diff is `pr_head` vs. THIS commit. Capturing it lets a
+# later actor (scripts/merge-pr.sh) refuse if the base advanced after the review — a moved
+# base changes the merged integration even when the head is unchanged.
+base_head="$(git rev-parse "$base_ref")"
 
 # Allocate temp paths in the system temp dir (never inside the repo, so nothing here
 # can be committed): a detached worktree dir and the review output file. Both get a
@@ -178,15 +183,18 @@ fi
 "${review_cmd[@]}"
 
 # Post the review verbatim, with a short header marking it the cross-vendor reviewer.
-# The header also records the EXACT head SHA Codex reviewed as a parseable marker line
-# (`Reviewed-head: <full-sha>`), so a later actor (e.g. scripts/merge-pr.sh) can bind a
-# merge to the precise commit this review covered, and refuse if the head has since moved.
-# The marker is part of Faber's header prefix — clearly separate from Codex's verbatim
-# body below — so this stays read-only / comments-only / verbatim (no behavior change).
+# The header also records the EXACT commits Codex reviewed as parseable marker lines
+# (`Reviewed-head: <full-sha>` and `Reviewed-base: <full-sha>`), so a later actor (e.g.
+# scripts/merge-pr.sh) can bind a merge to the precise integration this review covered,
+# and refuse if EITHER the head OR the base has since moved (both change the effective
+# diff). The markers are part of Faber's header prefix — clearly separate from Codex's
+# verbatim body below — so this stays read-only / comments-only / verbatim (no behavior
+# change).
 {
   echo "## Codex reviewer (cross-vendor, read-only)"
   echo
   echo "Reviewed-head: ${pr_head}"
+  echo "Reviewed-base: ${base_head}"
   echo
   echo "_Posted verbatim by \`codex-review.sh\` (\`codex exec review --base ${base_ref}\` in an isolated temp worktree, sandbox forced read-only). Comments only — Codex never pushes, approves, or merges._"
   echo

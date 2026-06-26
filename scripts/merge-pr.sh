@@ -82,10 +82,10 @@ if ! repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" |
   exit 1
 fi
 
-# Read the reviewed head SHA from the LATEST AUTHENTICATED codex-review.sh comment on the
-# PR. A `Reviewed-head: <sha>` line alone is NOT trusted — any PR author or collaborator
-# could comment that exact line to spoof a review and get an unreviewed head merged. We
-# accept the marker only from a genuine harness comment, which must satisfy BOTH:
+# Read the reviewed head AND base SHAs from the LATEST AUTHENTICATED codex-review.sh
+# comment on the PR. The marker lines alone are NOT trusted — any PR author or collaborator
+# could comment them to spoof a review and get an unreviewed integration merged. We accept
+# the markers only from a genuine harness comment, which must satisfy BOTH:
 #   (a) AUTHOR — the comment is authored by the gh-authenticated operator (the account
 #       that runs codex-review.sh). A collaborator's comment has a different author login.
 #   (b) SIGNATURE — the comment carries the harness's distinctive header
@@ -94,8 +94,11 @@ fi
 #       copies the marker but not the header fails this; reproducing both still fails (a).
 # We resolve the operator login from the same gh auth this script merges with, filter
 # comments to that author carrying the header, take the most recent (by createdAt), and
-# extract its `Reviewed-head:` SHA. The `^...$` anchors match only the marker line the
-# harness writes, so prose mentioning the phrase can't spoof it.
+# extract BOTH its `Reviewed-head:` and `Reviewed-base:` SHAs FROM THE SAME comment (so
+# head and base are always read from one consistent review, never mixed across comments).
+# The `^...$` anchors match only the marker lines the harness writes, so prose mentioning
+# the phrase can't spoof it. We emit the two SHAs space-separated on one line (both are
+# fixed 40-hex, so a space split is unambiguous) and read them into shell with `read`.
 operator="$(gh api user -q .login 2>/dev/null || true)"
 if [ -z "$operator" ]; then
   echo "error: could not resolve the gh-authenticated operator (gh api user)" >&2
@@ -103,21 +106,27 @@ if [ -z "$operator" ]; then
   exit 1
 fi
 
-reviewed_sha="$(
+marker="$(
   gh pr view "$pr" --repo "$repo" --json comments \
     | jq -r --arg operator "$operator" '
         .comments
         | sort_by(.createdAt) | reverse
         | map(select(.author.login == $operator))
         | map(select(.body | test("(?m)^## Codex reviewer \\(cross-vendor, read-only\\)$")))
-        | map(.body | capture("(?m)^Reviewed-head: (?<sha>[0-9a-f]{40})$"; "g").sha)
-        | map(select(. != null)) | .[0] // empty'
+        | map({
+            head: (.body | capture("(?m)^Reviewed-head: (?<sha>[0-9a-f]{40})$"; "g").sha),
+            base: (.body | capture("(?m)^Reviewed-base: (?<sha>[0-9a-f]{40})$"; "g").sha)
+          })
+        | map(select(.head != null and .base != null))
+        | (.[0] // empty) | "\(.head) \(.base)"'
 )"
+read -r reviewed_sha reviewed_base <<<"$marker"
 
-if [ -z "$reviewed_sha" ]; then
+if [ -z "$reviewed_sha" ] || [ -z "$reviewed_base" ]; then
   echo "error: no authenticated Codex review found on PR #$pr" >&2
   echo "       need a comment by the gh operator ($operator) carrying the codex-review.sh" >&2
-  echo "       header and a 'Reviewed-head:' marker — a bare marker line is not trusted" >&2
+  echo "       header and both 'Reviewed-head:' and 'Reviewed-base:' markers — bare marker" >&2
+  echo "       lines are not trusted" >&2
   echo "       run scripts/codex-review.sh $pr first, then re-run this" >&2
   exit 1
 fi
@@ -132,6 +141,18 @@ if [ "$current_head" != "$reviewed_sha" ]; then
   exit 1
 fi
 
+# Confirm the PR's CURRENT base still equals the reviewed base SHA. `--match-head-commit`
+# and the head check above only pin the PR head; if the base branch advanced after the
+# review (in a repo without an up-to-date-branch merge queue), the merge would integrate
+# the head with a base Codex never saw — a different effective diff — yet the head guard
+# would still pass. Binding the base closes that hole: refuse and ask for a re-review.
+current_base="$(gh pr view "$pr" --repo "$repo" --json baseRefOid -q .baseRefOid)"
+if [ "$current_base" != "$reviewed_base" ]; then
+  echo "error: base advanced since review ($reviewed_base -> $current_base); re-review before merging" >&2
+  echo "       run scripts/codex-review.sh $pr on the current base, then re-run this" >&2
+  exit 1
+fi
+
 # Confirm CI is green on the current head. `gh pr checks --json` tags each check with a
 # `bucket` (pass / fail / pending / skipping / cancel). Green here means BOTH:
 #   - AT LEAST ONE check is `pass` — something CI actually ran and passed; and
@@ -141,8 +162,10 @@ fi
 # but nothing actually passed — that must NOT count as green. We still refuse on zero
 # checks (CI must be the gate, so "no checks" is not "green").
 # `gh pr checks` exits non-zero when checks aren't all passing (e.g. 8 = pending), so we
-# capture its output without letting `set -e` abort, then judge the buckets ourselves.
-checks_json="$(gh pr checks "$pr" --repo "$repo" --json bucket 2>/dev/null || true)"
+# capture its output without letting `set -e` abort, then judge the buckets ourselves. We
+# request `name` alongside `bucket` so the not-green diagnostic below can name the failing
+# checks — `gh --json` returns only requested fields, so omitting `name` would print null.
+checks_json="$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null || true)"
 if [ -z "$checks_json" ] || [ "$(jq 'length' <<<"$checks_json")" -eq 0 ]; then
   echo "error: no CI checks found on PR #$pr head ($current_head); refusing to merge" >&2
   echo "       CI is the hard gate — there must be at least one green check" >&2
