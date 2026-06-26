@@ -15,7 +15,9 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    SHORT reason `round-cap`, and stop. EXCEPTION: Faber may direct ONE scoped-down final change
    — land just the agreed/converged core and drop the contested part (the remainder goes to a
    follow-up issue Faber opens, not more rounds). If Faber's brief directs that scoped-down
-   change, make exactly that change and stop; otherwise add label `needs-human` and stop.
+   change, make exactly that change and then CONTINUE through the normal push/label/comment
+   steps below (4–7) so the scoped core actually lands on the branch for re-review and merge —
+   do NOT stop at this step. Otherwise (no scoped-down direction) add label `needs-human` and stop.
 3. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
