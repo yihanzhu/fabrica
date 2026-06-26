@@ -88,7 +88,7 @@ labels=(
   "round-2|4a90d9|Review-loop counter: revision 2"
   "round-3|1f6fc0|Review-loop counter: revision 3 (cap)"
   "needs-human|d93f0b|Escalation: round cap hit, ambiguous spec, oversized PR, or failure"
-  "merge-ready|5319e7|Current head passed Codex review; auto-merged if low-risk, else awaiting your merge"
+  "merge-ready|5319e7|Current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge"
 )
 
 if [ "$check_mode" -eq 1 ]; then

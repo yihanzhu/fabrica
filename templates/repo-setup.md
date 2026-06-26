@@ -7,7 +7,7 @@ Create these labels (the loop uses them as its state — each coder spawn is sta
 - `ready` — the record of your approval; Faber's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
-- `merge-ready` — current head passed Codex review; auto-merged if low-risk, else awaiting your merge
+- `merge-ready` — current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge
 
 ```bash
 scripts/setup-target-repo.sh <owner>/<repo>

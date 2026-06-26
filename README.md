@@ -47,7 +47,8 @@ exactly one coder launch per approved issue, one review path, and one revision p
                           ↺  Faber re-runs codex-review.sh
                           └── round = 3 → label `needs-human` → Faber pings YOU
                                        ↓
-              CI green + Codex clean (low-risk) → Faber merges
+              CI green + Codex clean (low-risk) → Faber merges in-session
+                 (back-to-back with the review; status scan / brief only report)
                  (high-risk / escalations / rail changes / north-star → YOU)
 ```
 
@@ -65,16 +66,23 @@ exactly one coder launch per approved issue, one review path, and one revision p
   reviewing diffs.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
-- **Faber auto-merges clean, low-risk PRs.** Under your standing authorization, Faber
-  merges a PR once CI is green and Codex is clean — no per-PR confirmation — **unless it is
-  high-risk**. The merge is **pinned to the reviewed head** (`gh pr merge --squash
-  --match-head-commit <reviewed-sha>`), so a commit landing between the head-check and the
-  merge makes it **fail atomically** rather than merge a head Codex never reviewed.
-  High-risk PRs always come to your merge gate even when CI-green + Codex-clean
-  (auth, DB/schema migrations, shared/production repos, security-sensitive or other
-  operator-judgment changes). You're also brought in for `needs-human`/round-cap escalations,
-  safety-rail changes, and **north-star milestones / goal drift**. The high-risk carve-out is
-  the last word on merging — when in doubt about risk, it comes to you.
+- **Faber auto-merges clean, low-risk PRs — in-session only.** Under your standing
+  authorization, Faber merges a PR once CI is green and Codex is clean — no per-PR
+  confirmation — **unless it is high-risk**. The one auto-merge path is **in-session:
+  Faber merges a PR only when it just reviewed that exact head back-to-back** (review→merge,
+  no concurrent pusher, no cross-repo ambiguity). The merge is **pinned to the reviewed head**
+  (`gh pr merge --squash --match-head-commit <reviewed-sha>`), so a commit landing between the
+  head-check and the merge makes it **fail atomically** rather than merge a head Codex never
+  reviewed. A later **status/Tracking scan and the brief only surface `merge-ready` PRs
+  (read-only)** — they never auto-merge; those get merged on a fresh in-session review, or by
+  you. (Unattended status-scan / cross-repo auto-merge — acting on a `merge-ready` label whose
+  review predates the scan — is **deferred to [#46](../../issues/46)**: it needs a durable
+  reviewed-SHA mechanism and is intentionally not enabled yet.) High-risk PRs always come to
+  your merge gate even when CI-green + Codex-clean (auth, DB/schema migrations,
+  shared/production repos, security-sensitive or other operator-judgment changes). You're also
+  brought in for `needs-human`/round-cap escalations, safety-rail changes, and **north-star
+  milestones / goal drift**. The high-risk carve-out is the last word on merging — when in
+  doubt about risk, it comes to you.
 - **One rounds counter (~3).** Comments resolved or disagreement burned both count;
   a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
 - **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
@@ -112,9 +120,13 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 
 - **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
   judgment; merge was manual while the loop earned trust.
-- **Phase 2** — live: the **brief** resurfaces what needs you (read-only — it surfaces
-  state, never merges), and on a **status / Tracking pass** Faber **auto-merges clean,
-  low-risk PRs** (CI green + Codex clean) under standing authorization — escalating only
-  `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal drift.
-- **Phase 3** — widen the auto-merge envelope as the loop proves out; always back-look
-  high-risk work (auth, migrations, shared repos).
+- **Phase 2** — live: Faber **auto-merges clean, low-risk PRs in-session** (CI green +
+  Codex clean, back-to-back with the review it just ran) under standing authorization —
+  escalating only `needs-human`/round-cap, safety-rail changes, and north-star milestones /
+  goal drift. Both the **brief** and a **status / Tracking pass** are **read-only — they
+  surface `merge-ready` PRs, they never merge** (those get merged on a fresh in-session
+  review, or by you).
+- **Phase 3** — widen the auto-merge envelope as the loop proves out, including the
+  **unattended status-scan / cross-repo auto-merge deferred to [#46](../../issues/46)**
+  (needs a durable reviewed-SHA mechanism); always back-look high-risk work
+  (auth, migrations, shared repos).
