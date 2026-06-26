@@ -67,7 +67,10 @@ exactly one coder launch per approved issue, one review path, and one revision p
   reviewer second.
 - **Faber auto-merges clean, low-risk PRs.** Under your standing authorization, Faber
   merges a PR once CI is green and Codex is clean — no per-PR confirmation — **unless it is
-  high-risk**. High-risk PRs always come to your merge gate even when CI-green + Codex-clean
+  high-risk**. The merge is **pinned to the reviewed head** (`gh pr merge --squash
+  --match-head-commit <reviewed-sha>`), so a commit landing between the head-check and the
+  merge makes it **fail atomically** rather than merge a head Codex never reviewed.
+  High-risk PRs always come to your merge gate even when CI-green + Codex-clean
   (auth, DB/schema migrations, shared/production repos, security-sensitive or other
   operator-judgment changes). You're also brought in for `needs-human`/round-cap escalations,
   safety-rail changes, and **north-star milestones / goal drift**. The high-risk carve-out is

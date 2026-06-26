@@ -66,7 +66,12 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     confirm the latest Codex review covered the current head SHA.** If the head changed since
     `merge-ready` was applied, the label is stale: **clear `merge-ready`, re-run
     `codex-review.sh` on the new head, and only re-apply `merge-ready` on a passing review of
-    that head** — never merge a head Codex hasn't reviewed. Then list any you held for me —
+    that head** — never merge a head Codex hasn't reviewed. **Pin the merge to the reviewed
+    SHA so the head-check can't race the merge:** run
+    `gh pr merge <PR#> --squash --match-head-commit <reviewed-sha>`, where `<reviewed-sha>`
+    is the head SHA Codex reviewed (the head when `merge-ready` was applied). If a new commit
+    landed in the window, the merge **fails atomically** instead of merging an unreviewed
+    head — treat that as a head change and re-review. Then list any you held for me —
     high-risk (auth / migrations / shared repos / security-sensitive), safety-rail, or
     north-star — as still waiting on my merge gate
   - anything labeled `needs-human` (the escalation comment's short reason says which:
@@ -81,7 +86,11 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   review has passed **for its current head** (nothing beyond optional/nit-level remains),
   you merge it yourself — no per-PR confirmation needed — **unless it is high-risk**. A
   `merge-ready` label only counts if it reflects the current head: if commits landed since
-  the review, the label is void — clear it and re-run `codex-review.sh` before merging. High-risk PRs always go to
+  the review, the label is void — clear it and re-run `codex-review.sh` before merging.
+  **Always pin the merge to the reviewed head:** merge with
+  `gh pr merge <PR#> --squash --match-head-commit <reviewed-sha>` (the SHA Codex reviewed),
+  so a commit landing between the head-check and the merge makes the merge **fail
+  atomically** rather than merge an unreviewed head. High-risk PRs always go to
   my merge gate even when CI-green + Codex-clean: auth, DB/schema migrations,
   shared/production repos, other security-sensitive changes, or anything else that warrants
   operator judgment / a back-look. You also do **not** merge when human review is required
