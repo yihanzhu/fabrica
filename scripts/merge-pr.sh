@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# merge-pr.sh — the safe in-session merge harness.
+# merge-pr.sh — the safe in-session merge mechanism.
 #
-# Faber invokes this in-session AFTER a clean Codex review on a low-risk PR, to merge
-# that PR with mechanical safety guards. It is READ-ONLY until the final `gh pr merge`:
-# every step before that only reads PR state, and any failed guard refuses (non-zero)
-# without mutating anything.
+# This is the mechanical, safety-guarded way to merge a PR in-session AFTER a clean Codex
+# review on a low-risk PR. It is READ-ONLY until the final `gh pr merge`: every step before
+# that only reads PR state, and any failed guard refuses (non-zero) without mutating anything.
+#
+# WIRING: this is currently a MANUAL / STANDALONE helper. Wiring it into Faber's flow —
+# so Faber invokes it automatically after a clean review instead of stopping at the human
+# merge gate — lands in issue #45 (in progress). The Faber sources (manager/CLAUDE.md,
+# templates/faber-command.md) still hand clean PRs to the human gate; until #45 updates
+# them, run this script yourself.
 #
 # What it enforces (the MECHANICAL safety — not judgment):
 #   1. SHA-pin     — it merges only the exact commit Codex reviewed. It reads the
@@ -19,7 +24,21 @@ set -euo pipefail
 #   2. Repo-scope  — like codex-review.sh, it `unset`s GH_REPO and derives the repo from
 #                    the cwd's remote, passing an explicit `--repo "$repo"` to every gh
 #                    call, so a stray GH_REPO can't merge a PR in a different repo.
+#   2b. Base-pin  — it also reads the reviewed BASE SHA (`Reviewed-base:`) and confirms the
+#                    PR's CURRENT base still equals it immediately before the merge, so a
+#                    base that advanced after the review (a different effective diff) is
+#                    refused.
 #   3. CI-green    — it confirms CI is green on the current head before merging.
+#
+# RESIDUAL LIMITATION (base-race, honest): `--match-head-commit` pins ONLY the head — gh
+# has no `--match-base-commit`, so the merge cannot atomically pin the base server-side the
+# way it pins the head. This script minimizes the window by doing the `baseRefOid ==
+# Reviewed-base` re-check as LATE as possible (immediately before `gh pr merge`, after the
+# CI query), but a PR landing on the base in the gap between that re-check and the merge
+# would still merge into an unreviewed base. That race is fully closed ONLY by a server-side
+# gate — branch protection with "require branches to be up to date before merging" (or a
+# merge queue) on the base branch. That is a per-repo setting and a documented setup step;
+# the script alone cannot eliminate the race.
 #
 # What it deliberately does NOT do: it does NOT judge whether the Codex review passed,
 # nor whether the PR is low/high-risk. That judgment is Faber's (Faber invokes this only
@@ -141,18 +160,6 @@ if [ "$current_head" != "$reviewed_sha" ]; then
   exit 1
 fi
 
-# Confirm the PR's CURRENT base still equals the reviewed base SHA. `--match-head-commit`
-# and the head check above only pin the PR head; if the base branch advanced after the
-# review (in a repo without an up-to-date-branch merge queue), the merge would integrate
-# the head with a base Codex never saw — a different effective diff — yet the head guard
-# would still pass. Binding the base closes that hole: refuse and ask for a re-review.
-current_base="$(gh pr view "$pr" --repo "$repo" --json baseRefOid -q .baseRefOid)"
-if [ "$current_base" != "$reviewed_base" ]; then
-  echo "error: base advanced since review ($reviewed_base -> $current_base); re-review before merging" >&2
-  echo "       run scripts/codex-review.sh $pr on the current base, then re-run this" >&2
-  exit 1
-fi
-
 # Confirm CI is green on the current head. `gh pr checks --json` tags each check with a
 # `bucket` (pass / fail / pending / skipping / cancel). Green here means BOTH:
 #   - AT LEAST ONE check is `pass` — something CI actually ran and passed; and
@@ -185,9 +192,25 @@ if [ "$passing" -eq 0 ]; then
   exit 1
 fi
 
+# Confirm the PR's CURRENT base still equals the reviewed base SHA — done HERE, as the LAST
+# read immediately before the merge, to minimize the base-race window. `--match-head-commit`
+# and the head check above only pin the PR head; gh has no `--match-base-commit`, so the base
+# cannot be pinned server-side and we must verify it as late as possible. If the base branch
+# advanced after the review (in a repo without an up-to-date-branch merge queue), the merge
+# would integrate the head with a base Codex never saw — a different effective diff — yet the
+# head guard would still pass. Binding the base here closes most of that hole: refuse and ask
+# for a re-review. (Residual: a base landing in the gap between this read and the merge below
+# is closed only by server-side branch protection / required-up-to-date — see the header.)
+current_base="$(gh pr view "$pr" --repo "$repo" --json baseRefOid -q .baseRefOid)"
+if [ "$current_base" != "$reviewed_base" ]; then
+  echo "error: base advanced since review ($reviewed_base -> $current_base); re-review before merging" >&2
+  echo "       run scripts/codex-review.sh $pr on the current base, then re-run this" >&2
+  exit 1
+fi
+
 # All guards passed — merge, pinned to the reviewed SHA. `--match-head-commit` is a
 # server-side belt-and-suspenders on top of the head==reviewed check above: GitHub itself
 # refuses the merge if the head isn't exactly this commit, closing the tiny window between
 # our check and the merge call.
-echo "merging PR #$pr (reviewed head $reviewed_sha, CI green) ..."
+echo "merging PR #$pr (reviewed head $reviewed_sha, base $reviewed_base, CI green) ..."
 gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$reviewed_sha"
