@@ -12,6 +12,8 @@ command, point it at a target repo, and watch one loop run. For the mental model
 ## Prerequisites
 
 - **`gh` CLI authenticated** — `gh auth status` shows you logged in.
+- **`jq` on `PATH`** — needed by the merge helper (`scripts/merge-pr.sh`) to parse `gh`'s
+  CI-check JSON. Without it setup passes but the merge step fails.
 - **Codex (OpenAI) CLI signed in** — a ChatGPT plan that includes Codex review is enough
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
 - **Claude Code installed** — the whole team runs in-session (no API key); Faber and the
@@ -65,9 +67,9 @@ command, point it at a target repo, and watch one loop run. For the mental model
    ```
 
    It verifies `/faber` points at this clone, `gh` is authenticated, the Claude Code and
-   Codex CLIs are on `PATH`, every restore-critical file is present, and the target repo's
-   loop labels exist. One pass/fail line per check; non-zero exit if anything's off.
-   Mutates nothing.
+   Codex CLIs and `jq` are on `PATH`, every restore-critical file is present, and the
+   target repo's loop labels exist. One pass/fail line per check; non-zero exit if
+   anything's off. Mutates nothing.
 
 6. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
 
@@ -82,8 +84,10 @@ command, point it at a target repo, and watch one loop run. For the mental model
    clone — by absolute path, since the harness lives only in the fabrica clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
    an ambiguous spec escalates with `needs-human`. After a clean review Faber labels the
-   PR `merge-ready` — the recorded "handed to your merge gate" state (not auto-merge, not
-   self-approval). **You** still merge once CI is green and you're satisfied.
+   PR `merge-ready`; for a clean, low-risk PR Faber **merges** it once CI is green, under
+   your standing authorization (acting on the passed review — not self-approval; Codex is
+   comments-only). A PR needing human review (safety-rail / north-star / high-risk) is
+   brought to **you** to merge instead.
 
 That's the loop. To prove a rebuilt or relocated setup end to end — or recover a lost one
 — follow the smoke test and runbook in [`RESTORE.md`](RESTORE.md).

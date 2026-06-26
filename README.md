@@ -21,7 +21,7 @@ separate human channel to the workers. Claude and Codex never talk directly;
 
 | Agent | Vendor | How it runs | Writes? |
 |-------|--------|-------------|---------|
-| **Faber** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only, never code/merge |
+| **Faber** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs (merges clean low-risk PRs) |
 | **Coder** | Claude | A subagent Faber spawns with the issue/PR context + `routines/coder.md` | yes (branches, PRs) |
 | **Coder (revisions)** | Claude | A fix-mode subagent Faber spawns with `routines/coder-revision.md` | yes |
 | **Reviewer** | Codex (OpenAI) | Faber runs `scripts/codex-review.sh` against the PR | **comments only** |
@@ -47,7 +47,9 @@ exactly one coder launch per approved issue, one review path, and one revision p
                           ↺  Faber re-runs codex-review.sh
                           └── round = 3 → label `needs-human` → Faber pings YOU
                                        ↓
-                       CI green + you're satisfied → YOU merge
+              CI green + Codex clean (low-risk) → Faber runs scripts/merge-pr.sh <PR#>
+                 (in-session, back-to-back; SHA-pinned merge — status scan / brief only report)
+                 (high-risk / escalations / rail changes / north-star → YOU)
 ```
 
 ## Design decisions (the "why")
@@ -64,8 +66,27 @@ exactly one coder launch per approved issue, one review path, and one revision p
   reviewing diffs.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
-- **No auto-merge in Phase 1.** Faber pings; you merge. Earn auto-merge later for
-  low-risk + green CI; always back-look high-risk (auth, migrations, shared repos).
+- **Faber auto-merges clean, low-risk PRs — in-session only.** Under your standing
+  authorization, Faber **may auto-merge a PR it reviewed in-session** when it is CI-green,
+  Codex-clean, and low-risk — no per-PR confirmation — **unless it is high-risk**. Faber does
+  this by running **`scripts/merge-pr.sh <PR#>`** from within the target repo's clone (it does
+  not hand-craft a merge command). `merge-pr.sh` owns the mechanical safety: it reads the
+  reviewed head+base SHAs from the authenticated `codex-review.sh` marker, confirms the PR's
+  current head **and** base still match those (refusing if either moved since the review),
+  requires ≥1 real passing CI check, and merges **pinned via `--match-head-commit`** — refusing
+  otherwise. The merge is **scoped to the target repo** (never another repo) and **bound to the
+  exact head Faber reviewed** — if the head moved, Faber **re-reviews rather than merges** (the
+  script itself refuses a moved head; a head Codex never reviewed is never merged). A later
+  **status/Tracking scan and the brief only surface `merge-ready` PRs (read-only)** — they never
+  auto-merge; those get merged on a fresh in-session review, or by you. High-risk PRs always
+  come to your merge gate even when CI-green + Codex-clean (auth, DB/schema migrations,
+  shared/production repos, security-sensitive or other operator-judgment changes) — Faber does
+  **not** run `merge-pr.sh` for those. You're also brought in for `needs-human`/round-cap
+  escalations, safety-rail changes, and **north-star milestones / goal drift**. The high-risk
+  carve-out is the last word on merging — when in doubt about risk, it comes to you. The
+  **unattended status-scan / cross-repo auto-merge** (a daemon merging without a Faber session)
+  is a **future extension of `merge-pr.sh`, deferred to [#46](../../issues/46)** — not supported
+  yet per the script's header.
 - **One rounds counter (~3).** Comments resolved or disagreement burned both count;
   a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
 - **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
@@ -102,6 +123,15 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 
 ## Rollout
 
-- **Phase 1** — prove the in-session loop on one seeded target repo. Front gate + manual merge.
-- **Phase 2** — live: Faber runs the brief for resurfacing + merge pings.
-- **Phase 3** — auto-merge low-risk after ~10 clean loops.
+- **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
+  judgment; merge was manual while the loop earned trust.
+- **Phase 2** — live: Faber **auto-merges clean, low-risk PRs in-session** (CI green +
+  Codex clean, back-to-back with the review it just ran) under standing authorization —
+  escalating only `needs-human`/round-cap, safety-rail changes, and north-star milestones /
+  goal drift. Both the **brief** and a **status / Tracking pass** are **read-only — they
+  surface `merge-ready` PRs, they never merge** (those get merged on a fresh in-session
+  review, or by you).
+- **Phase 3** — widen the auto-merge envelope as the loop proves out, including the
+  **unattended status-scan / cross-repo auto-merge** — a future extension of `merge-pr.sh`
+  **deferred to [#46](../../issues/46)** (the script's header notes it is not supported yet);
+  always back-look high-risk work (auth, migrations, shared repos).

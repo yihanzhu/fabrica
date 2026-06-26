@@ -7,11 +7,12 @@ set -euo pipefail
 # review on a low-risk PR. It is READ-ONLY until the final `gh pr merge`: every step before
 # that only reads PR state, and any failed guard refuses (non-zero) without mutating anything.
 #
-# WIRING: this is currently a MANUAL / STANDALONE helper. Wiring it into Faber's flow —
-# so Faber invokes it automatically after a clean review instead of stopping at the human
-# merge gate — lands in issue #45 (in progress). The Faber sources (manager/CLAUDE.md,
-# templates/faber-command.md) still hand clean PRs to the human gate; until #45 updates
-# them, run this script yourself.
+# WIRING: this is invoked by Faber's in-session auto-merge flow — for a clean, low-risk,
+# in-session-reviewed PR, Faber runs this script to merge instead of stopping at the human
+# merge gate (the Faber sources manager/CLAUDE.md and templates/faber-command.md encode
+# that). High-risk PRs still go to the human gate; Faber never calls this for them. The
+# unattended status-scan / cross-repo auto-merge path (a daemon merging many repos' PRs
+# without a Faber session) is a FUTURE EXTENSION — see the note below.
 #
 # What it enforces (the MECHANICAL safety — not judgment):
 #   1. SHA-pin     — it merges only the exact commit Codex reviewed. It reads the

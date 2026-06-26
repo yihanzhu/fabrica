@@ -7,7 +7,7 @@ Create these labels (the loop uses them as its state — each coder spawn is sta
 - `ready` — the record of your approval; Faber's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
-- `merge-ready` — Codex review passed; awaiting your merge
+- `merge-ready` — current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge
 
 ```bash
 scripts/setup-target-repo.sh <owner>/<repo>
@@ -31,8 +31,9 @@ and exits non-zero if anything is missing or differs (zero if all match).
 ## 2. Branch protection (main)
 - ✅ Require status checks to pass before merging (your CI) — the **hard gate**
 - ✅ Require branches to be up to date before merging
-- ⛔️ **Phase 1: no auto-merge** — you merge manually after CI is green
-- (Phase 3, once trusted) enable auto-merge for low-risk PRs only
+- ⛔️ **Keep GitHub's native auto-merge button off** — merges run through Faber or the
+  human (both gated on green CI), not a server-side auto-merge trigger. Faber merging a
+  clean, low-risk PR is a deliberate `gh pr merge`, not this checkbox.
 
 ## 3. CI — the loop's hard gate
 CI must run the **exact commands** you put in this repo's `CLAUDE.md` (its tests /
