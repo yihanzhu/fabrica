@@ -16,8 +16,11 @@ command, point it at a target repo, and watch one loop run. For the mental model
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
 - **Claude Code installed** — the whole team runs in-session (no API key); Faber and the
   coder it spawns are an ordinary Claude Code chat.
-- **A target repo with CI** — CI is the **hard merge gate**. The team works in *target*
-  repos, not in this control-plane repo.
+- **A target repo with CI** — CI is the **hard merge gate**, so it must run the **exact
+  commands** you put in the target repo's `CLAUDE.md` (its tests / lint / build); otherwise
+  the gate is hollow. **If your repo has no CI, add repo-specific CI first** — see the CI
+  contract in [`templates/repo-setup.md`](templates/repo-setup.md). The team works in
+  *target* repos, not in this control-plane repo.
 
 ## Steps
 
@@ -45,8 +48,8 @@ command, point it at a target repo, and watch one loop run. For the mental model
    "<fabrica>/scripts/setup-target-repo.sh" <owner>/<repo>
    ```
 
-   Creates the `ready` / `round-0..3` / `needs-human` labels the loop uses as its state.
-   Idempotent. It prints the manual follow-ups it can't script.
+   Creates the `ready` / `round-0..3` / `needs-human` / `merge-ready` labels the loop uses
+   as its state. Idempotent. It prints the manual follow-ups it can't script.
 
 4. **Confirm the target repo has CI** (the hard merge gate) and, optionally, drop a
    `CLAUDE.md` of conventions from [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md)
@@ -78,8 +81,9 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
    clone — by absolute path, since the harness lives only in the fabrica clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
-   an ambiguous spec escalates with `needs-human`. **You** merge once CI is green and
-   you're satisfied.
+   an ambiguous spec escalates with `needs-human`. After a clean review Faber labels the
+   PR `merge-ready` — the recorded "handed to your merge gate" state (not auto-merge, not
+   self-approval). **You** still merge once CI is green and you're satisfied.
 
 That's the loop. To prove a rebuilt or relocated setup end to end — or recover a lost one
 — follow the smoke test and runbook in [`RESTORE.md`](RESTORE.md).
