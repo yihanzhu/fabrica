@@ -108,6 +108,10 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
     resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.
   - issues labeled `ready` (a direct label query) — approved but no PR picked up yet
+  - issues labeled `debating` (a direct label query) — a proactive issue still mid
+    manager-debate; if its session ended before consensus, the issue-as-bus thread holds the
+    last verdict, so flag it as **resumable** — re-run `manager-review.sh` to continue the
+    rounds (or drop it)
   - open issues idle > 7 days — name the likely next step (resurfacing)
 
 ## Merge & never

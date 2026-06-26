@@ -31,15 +31,23 @@ set -euo pipefail
 # `--repo` to every gh call, so a GH_REPO in the environment can't redirect the comment to
 # a different repo's issue.
 #
-# Codex reads the repo read-only to ground its judgment (the operator's own checkout — the
-# manager-review forms a judgment about the issue, it does not touch a diff, so there is no
-# PR head to fetch and no temp worktree as in codex-review.sh). It is pinned to the repo's
-# git top-level via `codex exec -C <repo_root>` so it reviews the WHOLE repo even when
-# invoked from a subdirectory. The read-only sandbox guarantees the checkout is never mutated.
+# Isolated review — the operator's checkout is never touched. The manager-review forms a
+# judgment about the issue grounded in the repo, so Codex needs to READ the code; but the
+# read-only sandbox only blocks WRITES, it does not stop Codex from reading the operator's
+# live worktree — untracked/ignored files (`.env`, secrets, local WIP) or uncommitted state
+# that should not ground the judgment. So, mirroring codex-review.sh, we add a DETACHED,
+# throwaway git worktree at the current HEAD and run `codex exec -C <worktree>` there. Codex
+# then sees exactly the tracked content at HEAD — what should ground the issue review —
+# never untracked/ignored files or dirty state, and the whole repo regardless of the cwd
+# (subdir vs. root). The operator's branch, index, and working tree are provably untouched.
 #
-# Re-run safe: a `trap ... EXIT` removes the temp output file even on failure. No leftover
-# temp files. Re-running posts a fresh verdict comment (each round is its own comment) —
-# the issue thread is the durable record of the debate.
+# Re-run safe: a `trap ... EXIT` removes the temp worktree (`git worktree remove --force`)
+# and the temp output file even on failure, so this script never leaves a stale entry behind.
+# We deliberately do NOT run a global `git worktree prune` (it is repo-wide and would drop
+# metadata for unrelated operator worktrees) — it is unneeded anyway: each run adds its
+# worktree at a fresh mktemp path, so a stale entry from a hard-killed previous run never
+# blocks `git worktree add`. No leftover worktrees or temp files. Re-running posts a fresh
+# verdict comment (each round is its own comment) — the issue thread is the durable record.
 #
 # Usage: scripts/manager-review.sh [-m <model>] <issue#>
 #   (or, with fabrica/scripts on PATH: manager-review.sh [-m <model>] <issue#>)
@@ -70,19 +78,20 @@ fi
 
 issue="$1"
 
-# Preflight — fail honestly and early, BEFORE any gh/codex call, so a first-time adopter
-# gets an actionable "install X" pointer instead of an opaque mid-run `command not found`.
-# Required tools (see QUICKSTART.md > Prerequisites):
+# Preflight — fail honestly and early, BEFORE any gh/git/codex side-effect, so a first-time
+# adopter gets an actionable "install X" pointer instead of an opaque mid-run `command not
+# found`. Required tools (see QUICKSTART.md > Prerequisites):
 #   gh    — GitHub CLI (authenticated); reads the issue and posts the verdict comment
+#   git   — for the detached temp worktree at HEAD
 #   codex — the OpenAI Codex CLI (signed in); forms the manager-review
 missing=()
-for tool in gh codex; do
+for tool in gh git codex; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "error: missing required command(s): ${missing[*]}" >&2
   echo "       install and configure them, then re-run" >&2
-  echo "       see QUICKSTART.md > Prerequisites (gh authenticated, Codex CLI signed in)" >&2
+  echo "       see QUICKSTART.md > Prerequisites (gh authenticated, Codex CLI signed in, git installed)" >&2
   exit 1
 fi
 
@@ -136,36 +145,56 @@ if ! repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" |
   exit 1
 fi
 
-# Resolve the target repo's git top-level. The usage allows running from anywhere inside the
-# clone (and `gh repo view` resolves <owner>/<repo> from any subdirectory), but `codex exec`
-# grounds its read-only review in its working directory — so from a subdir it would see only
-# that subtree while still posting a repo-level verdict. Pin Codex to the repo root via
-# `codex exec -C "$repo_root"` (below), so it always reviews the whole repo regardless of cwd.
-if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || [ -z "$repo_root" ]; then
-  echo "error: cannot resolve the git top-level of the current repo" >&2
+# Resolve the current commit (HEAD) — this is the tracked content Codex grounds its
+# judgment in, materialized in a clean detached worktree below. The usage allows running
+# from anywhere inside the clone, and a worktree at HEAD always contains the WHOLE repo's
+# tracked tree, so the review covers the full repo regardless of cwd (subdir vs. root).
+if ! head_commit="$(git rev-parse HEAD 2>/dev/null)" || [ -z "$head_commit" ]; then
+  echo "error: cannot resolve HEAD of the current repo" >&2
   echo "       run this from within the target repo's clone" >&2
   exit 1
 fi
 
-# Pull the issue title + body — this is the proposal Codex debates. Fail early if the
-# issue can't be read (wrong number, no access) before invoking codex. gh's `-q` runs its
-# bundled jq, so we extract the fields without an external jq dependency.
+# Pull the issue title + body + the comment thread — the proposal Codex debates, PLUS the
+# prior debate. On a REFINE rerun, Faber edits the issue and replies in an issue comment
+# (issue-as-bus), so the comment thread carries the prior Codex verdicts and Faber's
+# refinement rationale; feeding it in means the next Codex run sees the prior debate and
+# does not just repeat the same objection or miss why the issue was refined. Fail early if
+# the issue can't be read (wrong number, no access) before invoking codex. gh's `-q` runs
+# its bundled jq, so we extract each field with gh's own jq — no external jq dependency. The
+# title/body fetch also serves as the access check; the comments are rendered into a readable
+# "@author (createdAt): body" thread, oldest first (gh returns them in chronological order).
 if ! issue_title="$(gh issue view "$issue" --repo "$repo" --json title -q .title 2>/dev/null)"; then
   echo "error: cannot read issue #${issue} on ${repo} via gh" >&2
   echo "       confirm the issue exists and you have access, then re-run" >&2
   exit 1
 fi
 issue_body="$(gh issue view "$issue" --repo "$repo" --json body -q .body)"
+issue_comments="$(gh issue view "$issue" --repo "$repo" --json comments \
+  -q 'if (.comments | length) == 0 then "(no comments yet)" else (.comments[] | "@\(.author.login) (\(.createdAt)):\n\(.body)\n") end')"
 
-# Allocate the temp output file in the system temp dir (never inside the repo, so nothing
-# here can be committed). A fresh mktemp path each run means concurrent runs never collide.
+# Allocate temp paths in the system temp dir (never inside the repo, so nothing here can be
+# committed): a detached worktree dir and the Codex output file. Both get a fresh mktemp path
+# each run, so a stale worktree entry from a hard-killed previous run never collides with — or
+# blocks — the `git worktree add` below; that is why no global `git worktree prune` is needed
+# (and we avoid one so unrelated operator worktrees are never touched).
+worktree="$(mktemp -d)"
 tmp="$(mktemp)"
 
-# Clean up on EVERY exit (success or failure): remove the temp output file.
+# Clean up on EVERY exit (success or failure): remove the temp worktree and the temp output
+# file. `git worktree remove --force` drops the worktree even at a detached head; the rm -rf
+# fallback covers the case where it was never added.
 cleanup() {
+  git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
   rm -f "$tmp"
 }
 trap cleanup EXIT
+
+# Add a DETACHED, throwaway worktree at the current HEAD, isolated from the operator's
+# checkout. Codex reviews HERE — so it sees exactly the tracked content at HEAD (the right
+# thing to ground the issue review), never untracked/ignored files (`.env`, secrets, WIP) or
+# uncommitted state, and never mutates the operator's branch / index / working tree.
+git worktree add --detach "$worktree" "$head_commit"
 
 # Build the manager-reviewer prompt: the role + the current north star + the issue under
 # debate + an instruction to read the repo to ground the judgment, asking for a structured
@@ -201,6 +230,13 @@ Title: %s
 
 %s
 
+== ISSUE COMMENT THREAD (the debate so far, oldest first) ==
+On a rerun this carries any prior verdicts of yours and Faber's refinement replies (the
+issue is the message bus). Read it: do not just repeat a prior objection if Faber already
+addressed it, and weigh the refinement rationale. On a first round it may be empty.
+
+%s
+
 == YOUR TASK ==
 Read the repository (read-only) to ground your judgment in what actually exists — do not
 judge on the issue text alone. Then respond with EXACTLY this structure:
@@ -221,15 +257,16 @@ PROMPT_TMPL
 # Substitute the issue/north-star content into the template as %s ARGS (never as the format
 # string), so untrusted issue text can't act as a printf format or be evaluated by the shell.
 # shellcheck disable=SC2059  # prompt_tmpl is our own trusted template; values are %s args.
-prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_body")"
+prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_body" "$issue_comments")"
 
 # Run Codex read-only. Force the read-only sandbox via -c so the review cannot inherit a
 # writable sandbox from the operator's Codex config; we deliberately do NOT pass
 # --dangerously-bypass-* , and avoid --ignore-user-config so the operator's model/effort
 # defaults still apply. `-o <tmp>` captures Codex's clean final message off the noisy exec
-# trace. `-C "$repo_root"` pins Codex to the target repo's git top-level so it reads the
-# whole repo read-only to ground its judgment, even when invoked from a subdirectory.
-review_cmd=(codex exec -C "$repo_root" -c sandbox_mode="read-only" -o "$tmp")
+# trace. `-C "$worktree"` pins Codex to the clean detached worktree at HEAD so it reads the
+# whole repo's tracked content (never the operator's untracked/ignored files or dirty state)
+# read-only to ground its judgment, regardless of which subdirectory the script was run from.
+review_cmd=(codex exec -C "$worktree" -c sandbox_mode="read-only" -o "$tmp")
 if [ -n "$model" ]; then
   review_cmd+=(-m "$model")
 fi
@@ -241,7 +278,10 @@ fi
 # rewriting). Build it into a second temp file so we can both echo it to stdout (the
 # operator sees the verdict in-session) and post it as the issue comment.
 comment="$(mktemp)"
-trap 'rm -f "$tmp" "$comment"' EXIT
+# Re-arm the trap to also remove this second temp file. We re-`git worktree remove` the
+# worktree here too (replacing, not appending to, the EXIT trap) so the worktree cleanup is
+# not lost; it is idempotent / harmless if the worktree is already gone.
+trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$comment"' EXIT
 {
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
   echo
