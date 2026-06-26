@@ -30,28 +30,15 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      within the target repo's clone. It posts Codex's review to the PR verbatim.
   3. Read the review and decide **pass / not-pass** conservatively:
      - **Pass** only when nothing beyond optional / nit-level remains. Apply **`merge-ready`**
-       to the PR — it means **"the CURRENT head SHA passed Codex review."** If it's low-risk,
-       **merge it now, in-session, back-to-back with the review you just ran** — once CI is
-       green, per my standing authorization — no per-PR confirmation. **This in-session
-       review→merge is the ONLY auto-merge path:** you reviewed this exact head moments ago,
-       there's no concurrent pusher and no cross-repo ambiguity. Run this exact ordered, safe
-       sequence (`<repo>` derived from the cwd's remote, `GH_REPO` unset so it can't redirect):
-         1. **Capture the head BEFORE review** so the pin can't be back-filled from post-review
-            state:
-            `head="$(gh pr view <PR#> --repo <repo> --json headRefOid -q .headRefOid)"`.
-         2. **Review that head:** `"<fabrica>/scripts/codex-review.sh" <PR#>` (it reviews the
-            current PR head).
-         3. **On a clean review + low-risk + CI green, merge pinned to the captured head:**
-            `gh pr merge <PR#> --repo <repo> --squash --match-head-commit "$head"`.
-         4. **If the merge refuses** (the head moved at any point — a commit landed before,
-            during, or after review), do **not** force it: treat `merge-ready` as void,
-            re-capture `$head` + re-review the new head, then re-evaluate. **Never fill
-            `--match-head-commit` from post-review / current state to "make it pass."**
-       This guarantees you only merge the exact head you reviewed, in the right repo; if
-       anything changed, the merge safely refuses. This is acting on the passed review, **not**
-       self-approval (Codex is comments-only and never approves). Bring it to me instead of
-       merging when human review is required: safety-rail changes, north-star milestones /
-       goal drift, or high-risk work you'd want a back-look on (auth, migrations, shared repos).
+       to the PR — it means **"the CURRENT head SHA passed Codex review."** You **MAY auto-merge
+       a PR you reviewed in-session** when it is CI-green, Codex-clean, and low-risk — scoped to
+       the target repo (never another repo) and bound to the exact head you reviewed (if the head
+       moved, **re-review rather than merge**). This in-session review→merge is acting on the
+       passed review, **not** self-approval (Codex is comments-only and never approves). High-risk
+       PRs (auth, migrations, shared/production repos, security-sensitive) always go to the human
+       merge gate — the last word on merging. The precise, race-safe merge command sequence — and
+       the unattended status-scan / cross-repo auto-merge — are specified in issue #46 (pending);
+       until it lands, follow this intent for in-session merges.
      - **`merge-ready` is void the moment new commits land.** GitHub keeps the label across a
        head change, but a new push (a fix round, or any contributor commit) means the reviewed
        head is stale. Whenever a PR's head changes, **clear `merge-ready`**; it is only
@@ -94,35 +81,24 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 
 ## Merge & never
 
-- **Merge clean PRs in-session.** Per my standing authorization, the one auto-merge path is
-  **in-session: you merge a PR only when you just reviewed that exact head back-to-back**
-  (CI-green + Codex review passed **for its current head**, nothing beyond optional/nit-level
-  remains) — no per-PR confirmation needed — **unless it is high-risk**. Because the
-  review→merge is back-to-back there's no concurrent pusher and no cross-repo ambiguity. A
-  `merge-ready` label only counts if it reflects the current head: if commits landed since
-  the review, the label is void — clear it and re-run `codex-review.sh` before merging.
-  **Always pin the merge to the reviewed head via this safe capture sequence** (`<repo>`
-  derived from the cwd's remote, `GH_REPO` unset — mirroring `codex-review.sh`, so a stray
-  `GH_REPO` can't redirect the merge to the wrong repo): **capture the head BEFORE review**
-  — `head="$(gh pr view <PR#> --repo <repo> --json headRefOid -q .headRefOid)"` — then review
-  that head, then merge with
-  `gh pr merge <PR#> --repo <repo> --squash --match-head-commit "$head"`. Because `$head` is
-  captured *before* the review, a commit landing at any point (before, during, or after the
-  review) makes the merge **fail atomically** rather than merge an unreviewed head. **Never
-  back-fill `--match-head-commit` from post-review / current state to force it through** — if
-  the merge refuses, treat `merge-ready` as void and re-capture + re-review the new head. A
-  later **status/Tracking scan never
-  auto-merges** — it only surfaces `merge-ready` PRs; those get merged on a fresh in-session
-  review, or by me. (Unattended status-scan / cross-repo auto-merge — acting on a `merge-ready`
-  label whose review predates the scan, possibly in another repo — is **deferred to #46**;
-  it needs a durable reviewed-SHA mechanism and `--repo` qualification, and is intentionally
-  not enabled yet.) High-risk PRs always go to my merge gate even when CI-green +
-  Codex-clean: auth, DB/schema migrations, shared/production repos, other security-sensitive
-  changes, or anything else that warrants operator judgment / a back-look. You also do
-  **not** merge when human review is required for other reasons: safety-rail changes,
-  ambiguous specs, anything escalated (`needs-human`/round-cap), or north-star milestones /
-  goal drift — those come to me. This carve-out is the last word on merging: when in doubt
-  about risk, hand it to me.
+- **Merge clean PRs in-session (auto-merge policy).** Per my standing authorization, you
+  **MAY auto-merge a PR you reviewed in-session** when it is CI-green, Codex-clean, and
+  low-risk — scoped to the target repo (never another repo) and bound to the exact head you
+  reviewed (if the head moved, **re-review rather than merge**). No per-PR confirmation needed.
+  This is acting on the passed review, not self-approval (Codex is comments-only and never
+  approves). A `merge-ready` label only counts if it reflects the current head: if commits
+  landed since the review, the label is void — clear it and re-run `codex-review.sh` on the
+  new head before merging. A later **status/Tracking scan never auto-merges** — it only
+  surfaces `merge-ready` PRs (read-only); those get merged on a fresh in-session review, or by
+  me. **High-risk PRs always go to the human merge gate** even when CI-green + Codex-clean:
+  auth, DB/schema migrations, shared/production repos, other security-sensitive changes, or
+  anything else that warrants operator judgment / a back-look. You also do **not** merge when
+  human review is required for other reasons: safety-rail changes, ambiguous specs, anything
+  escalated (`needs-human`/round-cap), or north-star milestones / goal drift — those come to
+  me. This high-risk carve-out is the last word on merging: when in doubt about risk, hand it
+  to me. **The precise, race-safe merge command sequence — and the unattended status-scan /
+  cross-repo auto-merge — are specified in issue #46 (pending); until it lands, follow this
+  intent for in-session merges.**
 - **Never write code or open PRs yourself.** You create issues, not diffs.
 - **Never self-approve.** Apply `ready` only as the record of *my* explicit approval —
   never on an issue I haven't approved. (Codex is comments-only and never approves either;
