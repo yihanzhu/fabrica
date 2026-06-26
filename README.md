@@ -29,7 +29,7 @@ separate human channel to the workers. Claude and Codex never talk directly;
 ## The loop
 
 The loop is **in-session**: Faber drives every step from one Claude Code chat. There is
-exactly one coder launch per approved issue, one review path, and one revision path.
+exactly one coder launch per cleared issue, one review path, and one revision path.
 
 ```
   one-liner → Faber drafts spec → opens issue

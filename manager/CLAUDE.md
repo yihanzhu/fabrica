@@ -94,8 +94,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      context plus the coder instructions in `routines/coder.md`. It opens a PR (`round-0`).
      **You then remove `ready` from the issue once you confirm that round-0 PR is open** —
      the coder is a stateless subagent, so *you* own this removal. `ready` strictly means
-     "approved, not yet picked up"; clearing it on pickup keeps a stale `ready` from
-     triggering a duplicate spawn on a later re-read.
+     "cleared to run (user spec-approval OR consensus), not yet picked up"; clearing it on
+     pickup keeps a stale `ready` from triggering a duplicate spawn on a later re-read.
   2. **Run the Codex reviewer** yourself: `"<fabrica>/scripts/codex-review.sh" <PR#>` from
      within the target repo's clone. It posts Codex's review to the PR verbatim.
   3. Read the review and decide **pass / not-pass** conservatively:
@@ -150,7 +150,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   - anything labeled `needs-human` (the escalation comment's short reason says which:
     `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
     resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.
-  - issues labeled `ready` (a direct label query) — approved but no PR picked up yet
+  - issues labeled `ready` (a direct label query) — cleared to run (user spec-approval OR
+    consensus) but no PR picked up yet
   - issues labeled `debating` (a direct label query) — a proactive issue still mid
     manager-debate; if its session ended before consensus, the issue-as-bus thread holds the
     last verdict, so flag it as **resumable** — re-run `manager-review.sh` to continue the

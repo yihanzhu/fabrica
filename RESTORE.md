@@ -85,8 +85,8 @@ Notes:
   installed Faber will use them when it spawns a coder; there is no separate trigger,
   repository, or connector setting to configure.
 - The coder instructions self-guard: the coder confirms the issue carries `ready` (Faber's
-  record of your approval) before doing anything. That keeps the front gate intact even
-  inside the spawn.
+  record that it is cleared to run — your spec-approval OR Faber⇄Codex consensus) before
+  doing anything. That keeps the front gate intact even inside the spawn.
 
 ---
 
@@ -244,8 +244,9 @@ Real lessons from setting this up:
   `codex-review.sh` all run in your local Claude Code session and hit GitHub through your
   local `gh` auth. If GitHub calls fail, check `gh auth status` first.
 - **Coder won't start on an issue?** Expected unless the issue carries exactly `ready`
-  (Faber's record of your approval) — the coder instructions stop on anything else (step
-  2). Confirm you approved it and Faber applied `ready`.
+  (Faber's record that it is cleared to run — your spec-approval for a user-directed issue,
+  OR Faber⇄Codex consensus for a proactive one) — the coder instructions stop on anything
+  else (step 2). Confirm the issue is cleared and Faber applied `ready`.
 - **No Codex review on the PR?** The review is not automatic — **Faber must run**
   `scripts/codex-review.sh <PR#>` from the target repo's clone. Check the Codex CLI is
   installed and signed in (`codex` runs), and that the script is invoked by absolute path.
