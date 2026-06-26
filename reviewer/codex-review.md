@@ -107,7 +107,11 @@ Faber reads the Codex comment
                               ↓
                          Faber re-runs codex-review.sh   (bump round-N)
                               ↺  repeat
-                              └── ~3-round cap → label needs-human → Faber pings you
+                              └── ~3-round cap → SCOPE DOWN + FOLLOW-UP (productive):
+                                    land the converged core (one scoped-down change →
+                                    clean review → merge) + open a follow-up issue for the
+                                    contested remainder; reserve needs-human → Faber pings you
+                                    for a genuine standoff / safety-rail / north-star
 ```
 
 Faber, not the reviewer, drives each step; Claude and Codex never talk directly — the

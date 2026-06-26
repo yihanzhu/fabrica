@@ -51,7 +51,11 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
                                        │              (bump round-N)
                           ┌── round < 3 ┘
                           ↺  Faber re-runs codex-review.sh
-                          └── round = 3 → label `needs-human` → Faber pings YOU
+                          └── round = 3 (cap) → SCOPE DOWN + FOLLOW-UP (productive):
+                                 land the converged core (one scoped-down change →
+                                 clean review → merge) + open a follow-up issue for
+                                 the contested remainder; only a genuine standoff /
+                                 safety-rail / north-star → label `needs-human` → pings YOU
                                        ↓
               CI green + Codex clean (low-risk) → Faber runs scripts/merge-pr.sh <PR#>
                  (in-session, back-to-back; SHA-pinned merge — status scan / brief only report)
@@ -106,8 +110,14 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   **unattended status-scan / cross-repo auto-merge** (a daemon merging without a Faber session)
   is a **future extension of `merge-pr.sh`, deferred to [#46](../../issues/46)** — not supported
   yet per the script's header.
-- **One rounds counter (~3).** Comments resolved or disagreement burned both count;
-  a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
+- **One rounds counter (~3), and the cap is productive.** Comments resolved or disagreement
+  burned both count; a single push-back doesn't escalate. At the ~3-round cap Faber **scopes
+  down + splits** rather than dead-ending: land the part the reviewer is satisfied with (one
+  scoped-down final change → clean review → merge the core) and **open a follow-up issue** for
+  the contested remainder (logged, not lost). `needs-human` is **reserved** for when even the
+  scoped-down core is contested, it's a genuine coder↔reviewer standoff, or it's a
+  safety-rail / north-star decision — only then does the cap reach you. The cap **count** is
+  unchanged; only how it resolves.
 - **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
   the last round, so rounds + escalation live in **labels** (`round-0..3`, `needs-human`)
   that Faber reads and bumps each round.
