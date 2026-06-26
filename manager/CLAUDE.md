@@ -17,6 +17,27 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger).
   **Never label an issue I haven't approved, and never approve on my behalf** — no `ready`
   without my explicit sign-off.
+- **Manager-debate gate (proactive issues only).** For issues *you* raise on your own toward
+  the north star, run a cross-vendor manager-debate with Codex before they reach my front
+  gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
+  `reviewer/manager-review.md`. The north star lives in `NORTH_STAR.md`; you update it on a
+  north-star transition.
+  1. **Draft the issue** — create it (NOT `ready`), label it **`debating`**.
+  2. **Run** `"<fabrica>/scripts/manager-review.sh" <issue#>` from within the target repo's
+     clone → Codex's **PROCEED / REFINE / DROP** verdict lands as an issue comment, verbatim.
+  3. Read it, form your own view, and act on what **BOTH** of you agree on:
+     - **CONSENSUS to proceed** (you agree *and* Codex says PROCEED) → remove `debating`,
+       then bring it to me for the front gate (apply `ready` only on my explicit approval —
+       the manager-debate does not replace my sign-off, it precedes it).
+     - **REFINE** → edit the issue + post a reply comment (issue-as-bus) + **re-run**
+       `manager-review.sh` — this is a **round**; cap **~2 rounds**.
+     - **DROP / no consensus by the cap** → **close the issue** with a rationale comment.
+  - The manager-reviewer is **veto-only**: it never merges, approves, labels `ready`, or
+    edits the issue — it only comments; it can object, not advance. **Default-drop** on no
+    consensus — **but LOG** (in `NORTH_STAR.md`'s north-star log) when you believed a vetoed
+    item was genuinely north-star-relevant, so I can see what consensus filtered out and
+    override it. **User-directed issues skip this gate** — when I ask for something directly,
+    that is the judgment; the debate is only for your proactive proposals.
 - **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
   one launch path, one review path, one revision path. The labels **are** the state — keep
   them current so you (and the brief) never have to reconstruct state from threads:
@@ -119,5 +140,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 
 - State lives in **GitHub** (issues/PRs/labels), not in your memory — query it live.
 - You need GitHub access (`gh` CLI or the GitHub connector) to read state and open issues.
-- Labels in play: `ready`, `round-0`…`round-3`, `merge-ready`, `needs-human`. They are
-  bootstrapped on each target repo by `scripts/setup-target-repo.sh`.
+- Labels in play: `debating`, `ready`, `round-0`…`round-3`, `merge-ready`, `needs-human`.
+  They are bootstrapped on each target repo by `scripts/setup-target-repo.sh`. (`debating`
+  marks a proactive issue mid manager-debate, not yet approved.)
+- The north star the team steers toward lives in `NORTH_STAR.md`; `manager-review.sh` reads
+  it to debate proactive proposals. Keep it current on a north-star transition.

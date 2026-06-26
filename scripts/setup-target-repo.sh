@@ -27,7 +27,7 @@ set -euo pipefail
 
 usage() {
   echo "usage: $0 [--check] <owner>/<repo>" >&2
-  echo "  bootstraps the loop labels (ready, round-0..3, needs-human, merge-ready) on the target repo" >&2
+  echo "  bootstraps the loop labels (debating, ready, round-0..3, needs-human, merge-ready) on the target repo" >&2
   echo "  --check  read-only drift report: per label print matches/differs/missing; mutate nothing;" >&2
   echo "           exit non-zero if anything is missing or differs, zero if all match" >&2
 }
@@ -82,6 +82,7 @@ fi
 
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
+  "debating|fbca04|Issue under manager-debate; not yet approved"
   "ready|0e8a16|Record of your approval; Faber's cue to spawn the coder"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
