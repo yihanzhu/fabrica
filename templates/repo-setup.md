@@ -4,6 +4,7 @@ Do this once per target repo before pointing the team at it.
 
 ## 1. Labels
 Create these labels (the loop uses them as its state — each coder spawn is stateless):
+- `debating` — issue under manager-debate (Faber + Codex); not yet approved
 - `ready` — the record of your approval; Faber's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure

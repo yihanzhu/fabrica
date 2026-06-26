@@ -122,8 +122,9 @@ Do this **once per target repo**. The full checklist already exists — **reuse 
 not re-derive it: [`templates/repo-setup.md`](templates/repo-setup.md).
 
 That checklist covers:
-- **Labels** — the `ready` / `round-0..round-3` / `needs-human` / `merge-ready` set the
-  loop uses as its state (each coder spawn is stateless, so the round lives in the label).
+- **Labels** — the `debating` / `ready` / `round-0..round-3` / `needs-human` / `merge-ready`
+  set the loop uses as its state (each coder spawn is stateless, so the round lives in the
+  label; `debating` marks a proactive issue under manager-debate, not yet approved).
   The `gh label create` loop is in that file. `setup-target-repo.sh` is the **canonical
   source of truth** for these labels: a normal run force-edits each live label to the
   script's definitions, so **re-running reconciles any drift**. To verify labels after a

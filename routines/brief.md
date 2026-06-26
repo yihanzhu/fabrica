@@ -22,6 +22,9 @@ action-first:
   Skip anything I've already acted on: once resolved, `needs-human` is cleared, so
   never re-report a resolved item.
 - Issues labeled `ready` (a direct label query) — approved but no PR picked up yet
+- Issues labeled `debating` (a direct label query) — a proactive issue still mid
+  manager-debate; if the session ended before consensus, flag it as **resumable** (the
+  issue-as-bus thread holds the last verdict) — re-run `manager-review.sh` to continue, or drop it
 - Open issues idle > 7 days — name the likely next step (resurfacing)
 
 Lead with what needs my action. Be brief. If nothing needs me, say "all clear"

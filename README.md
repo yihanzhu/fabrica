@@ -111,13 +111,16 @@ routines/coder.md          Coder baseline instructions Faber passes to a spawned
 routines/coder-revision.md Coder fix-mode instructions (handle review feedback)
 routines/brief.md          Brief instructions Faber can run (resurfacing; not auto-scheduled)
 reviewer/codex-review.md   Codex reviewer mechanism + in-session review loop
+reviewer/manager-review.md Codex manager-reviewer mechanism (issue-as-bus): rounds + consensus / veto-only
 scripts/install.sh         Generate the /faber command with a repo-derived path (idempotent)
 scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a PR, verbatim (stamps Reviewed-head: marker)
+scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed issue vs. the north star, post the verdict to the issue verbatim
 scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + CI-green, then squash-merge
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 templates/faber-command.md Template for the /faber command (path placeholder)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
 templates/repo-setup.md    Labels + branch protection checklist
+NORTH_STAR.md              The team's current north star + done-signal + log (manager-review reads this)
 RESTORE.md                 Disaster-recovery runbook: rebuild the team from this repo
 ```
 

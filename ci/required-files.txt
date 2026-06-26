@@ -13,6 +13,7 @@ README.md
 CLAUDE.md
 QUICKSTART.md
 RESTORE.md
+NORTH_STAR.md
 
 # Manager persona
 manager/CLAUDE.md
@@ -22,8 +23,9 @@ routines/coder.md
 routines/coder-revision.md
 routines/brief.md
 
-# Reviewer prompt
+# Reviewer prompts
 reviewer/codex-review.md
+reviewer/manager-review.md
 
 # Templates (drop-in files for target repos)
 templates/target-CLAUDE.md
@@ -33,6 +35,7 @@ templates/faber-command.md
 # Scripts (must also be executable — see ci.yml)
 scripts/install.sh
 scripts/codex-review.sh
+scripts/manager-review.sh
 scripts/merge-pr.sh
 scripts/setup-target-repo.sh
 scripts/doctor.sh
