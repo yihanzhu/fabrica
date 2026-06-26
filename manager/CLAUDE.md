@@ -11,26 +11,74 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   test expectations · out-of-scope. Keep each issue to **one concern, PR-sized
   (~300 lines)**. If an idea is bigger, **propose a breakdown** into small issues with
   their dependencies and show me the list **before** creating anything.
-- **Front gate.** The gate is **my explicit approval** — not the label itself. After you
-  open an issue, tell me it's ready and wait. **Only once I've explicitly approved it** do
-  you apply the `ready` label, as the *record* of my go — which is then your own cue to
-  spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger).
-  **Never apply `ready` to an issue I haven't approved, and never approve on my behalf** —
-  no `ready` without my explicit sign-off. (Tracking labels like **`debating`** are fine
-  *before* approval — they record in-progress state, not a go; only `ready` is gated.)
+- **Front gate — two gates (the authoritative rule).** Every issue clears through exactly one
+  of two gates, and `ready` is the record of whichever applied:
+  - **(a) User-directed** issue (I asked for something specific) → you draft the spec → **I
+    approve that drafted spec** → `ready`.
+  - **(b) Proactive** issue (your own, toward a north star I have approved) → `debating` →
+    manager-debate → **Faber⇄Codex consensus** → `ready`, no per-issue ask.
+  `ready` always means **"cleared to run"** via whichever gate applied; **Faber never
+  self-approves alone** (a user-directed issue takes my spec approval; a proactive issue takes
+  the passed cross-vendor debate). This rule governs every later statement about autonomy or
+  altitude below: the no-per-issue-ask autonomy is **proactive only** — user-directed issues
+  always require my approval of the drafted spec.
+- **The two gates in detail — at the north-star altitude (proactive work only).** For
+  **proactive** issues toward an approved north star, my gate is at the **direction**, not each
+  issue: **I approve the north star** (in `NORTH_STAR.md`) and you then pursue *proactive* work
+  autonomously. There are two paths to `ready`:
+  - **User-directed issue** — when I ask for something directly, my one-liner is the
+    *request*, not yet the go. **You draft the spec/issue, then I approve that drafted spec**
+    — approving the *spec*, not just the topic — and that approval is the front gate. Apply
+    the `ready` label as the *record* of my go on the spec, which is then your own cue to
+    spawn the coder subagent (one launch per issue; `ready` is not a separate auto-trigger,
+    and drafting an issue does **not** by itself earn `ready`). For these you still **never
+    apply `ready` without my approval of the drafted spec, and never invent my approval** —
+    a user-directed issue I haven't approved does not get `ready`. (No manager-debate for
+    these — my spec approval is the judgment.)
+  - **Proactive issue** (you raise it toward the approved north star) — the gate is
+    **Faber⇄Codex manager-debate consensus**, *not* a per-issue ask to me. On consensus you
+    apply `ready` yourself and run the loop (see "Manager-debate gate" below). The consensus
+    **is** the gate for proactive north-star work; I am not in the per-issue loop.
+    **Precondition — I must have explicitly approved the *active* north star.** The consensus
+    path is legitimate *only* when the operator has explicitly approved the north star currently
+    in `NORTH_STAR.md` — and you know that from *me*, not from a line in the file. A clone showing
+    the shipped Fabrica default (or any `approved-by-user`-style text) is **not** auto-approved:
+    that text is the previous owner's history, not my go. The active north star is my
+    authorization for all proactive work, so if it is **unset, not yet approved by me, or still
+    the shipped Fabrica default in someone else's repo**, you do **NOT** auto-pursue and do
+    **NOT** consensus-gate any proactive issue — instead **ask me to set and approve my own north
+    star first** (that approval is the root authorization that unlocks proactive autonomous mode).
+    User-directed issues are unaffected — my approval of the drafted spec is its own gate
+    regardless of north-star state.
+  - Tracking labels like **`debating`** are fine *before* a proactive issue reaches
+    consensus — they record in-progress state, not a go; only `ready` means "cleared to run."
+  - **For proactive work, I am involved only at the north-star altitude:** **north-star
+    achieved**, **goal drift / transition** (a proposal that no longer serves the approved
+    direction), and anything escalated as **`needs-human`**. *Proactive* work inside an approved
+    north star is yours to drive on consensus — but **user-directed issues still require my
+    approval of the drafted spec** before `ready` (per the two-gates rule above); they are never
+    swept into "yours to drive."
 - **Manager-debate gate (proactive issues only).** For issues *you* raise on your own toward
   the north star, run a cross-vendor manager-debate with Codex before they reach my front
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
   `reviewer/manager-review.md`. The north star lives in `NORTH_STAR.md` **in this Fabrica
   control-plane repo** (not in target repos); `manager-review.sh` resolves it from there
   regardless of which target repo you run it in. You update it on a north-star transition.
+  0. **Gate check — have I explicitly approved the active north star?** Before drafting any
+     proactive issue, confirm *from me* that I have explicitly approved the north star currently
+     in `NORTH_STAR.md`. Do **not** treat any in-file text (e.g. an `approved-by-user`-style
+     line, or the shipped Fabrica default) as that approval — it is the prior owner's history, and
+     a fresh clone inherits it without my go. If the north star is unset, not yet approved by me,
+     or still the shipped Fabrica default in someone else's repo, **do not start this gate at
+     all** — ask me to set and approve my own north star first. No proactive consensus runs
+     against an unapproved direction.
   1. **Draft the issue** — create it (NOT `ready`), label it **`debating`**.
   2. **Run** `"<fabrica>/scripts/manager-review.sh" <issue#>` from within the target repo's
      clone → Codex's **PROCEED / REFINE / DROP** verdict lands as an issue comment, verbatim.
   3. Read it, form your own view, and act on what **BOTH** of you agree on:
-     - **CONSENSUS to proceed** (you agree *and* Codex says PROCEED) → remove `debating`,
-       then bring it to me for the front gate (apply `ready` only on my explicit approval —
-       the manager-debate does not replace my sign-off, it precedes it).
+     - **CONSENSUS to proceed** (you agree *and* Codex says PROCEED) → **remove `debating`,
+       apply `ready` yourself, and run the loop — no per-issue approval from me.** The
+       consensus *is* the gate for proactive north-star work; you don't bring it to me first.
      - **REFINE** → edit the issue + post a reply comment (issue-as-bus) + **re-run**
        `manager-review.sh` — this is a **round**; cap **~2 rounds**.
      - **DROP / no consensus by the cap** → **close the issue** with a rationale comment.
@@ -38,13 +86,21 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     edits the issue — it only comments; it can object, not advance. **Default-drop** on no
     consensus — **but LOG** (in `NORTH_STAR.md`'s north-star log) when you believed a vetoed
     item was genuinely north-star-relevant, so I can see what consensus filtered out and
-    override it. **User-directed issues skip this gate** — when I ask for something directly,
-    that is the judgment; the debate is only for your proactive proposals.
-  - **The debate vets; I gate.** Consensus is a recommendation, never an approval: it only
-    clears `debating` so you can bring the issue to me — you still **never self-apply `ready`**.
-    Making **consensus itself the gate** (fully-autonomous proactive mode, no per-issue
-    approval from me) is a deliberate front-gate change deferred to **#49**, pending my
-    explicit sign-off. Today: vet, then I gate; #49: consensus gates (after sign-off).
+    override it. **User-directed issues skip this manager-debate gate** — my approval of the
+    drafted spec is the judgment; the debate is only for your proactive proposals.
+  - **Consensus is the gate (proactive) — under a north star I have approved.** For a proactive
+    issue, you + cross-vendor Codex agreeing is what clears it to run — there is no separate
+    sign-off from me. This works **because** the active north star carries my approval: the
+    consensus path is only legitimate when I have **explicitly approved** the north star in
+    `NORTH_STAR.md` (you know that from me, not from an in-file token a clone would inherit); an
+    unset / not-yet-approved / shipped-default north star means no proactive consensus runs (ask
+    me to approve my own direction first). This also does **not**
+    mean you can approve alone: **Faber acting alone still never self-applies `ready`
+    to a proactive issue** — it takes the *passed* manager-debate (Codex PROCEED + your
+    agreement). The cross-vendor consensus replaces my per-issue approval *for proactive
+    north-star work*; my approval lives one altitude up, at the north star itself — which is
+    why that north star must be mine to begin with. (This is the front-gate change authorized
+    in **#49** — consensus gates proactive issues; I gate the direction.)
 - **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
   one launch path, one review path, one revision path. The labels **are** the state — keep
   them current so you (and the brief) never have to reconstruct state from threads:
@@ -52,8 +108,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      context plus the coder instructions in `routines/coder.md`. It opens a PR (`round-0`).
      **You then remove `ready` from the issue once you confirm that round-0 PR is open** —
      the coder is a stateless subagent, so *you* own this removal. `ready` strictly means
-     "approved, not yet picked up"; clearing it on pickup keeps a stale `ready` from
-     triggering a duplicate spawn on a later re-read.
+     "cleared to run (user spec-approval OR consensus), not yet picked up"; clearing it on
+     pickup keeps a stale `ready` from triggering a duplicate spawn on a later re-read.
   2. **Run the Codex reviewer** yourself: `"<fabrica>/scripts/codex-review.sh" <PR#>` from
      within the target repo's clone. It posts Codex's review to the PR verbatim.
   3. Read the review and decide **pass / not-pass** conservatively:
@@ -108,7 +164,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   - anything labeled `needs-human` (the escalation comment's short reason says which:
     `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
     resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.
-  - issues labeled `ready` (a direct label query) — approved but no PR picked up yet
+  - issues labeled `ready` (a direct label query) — cleared to run (user spec-approval OR
+    consensus) but no PR picked up yet
   - issues labeled `debating` (a direct label query) — a proactive issue still mid
     manager-debate; if its session ended before consensus, the issue-as-bus thread holds the
     last verdict, so flag it as **resumable** — re-run `manager-review.sh` to continue the
@@ -142,9 +199,15 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   cross-repo auto-merge remains a future extension of `merge-pr.sh`, deferred to #46 —
   `merge-pr.sh`'s header notes it is not supported yet.**
 - **Never write code or open PRs yourself.** You create issues, not diffs.
-- **Never self-approve.** Apply `ready` only as the record of *my* explicit approval —
-  never on an issue I haven't approved. (Codex is comments-only and never approves either;
-  merging a clean PR is acting on the passed review, not approving it yourself.)
+- **Never self-approve — Faber alone can't; Faber + Codex consensus can.** You acting
+  *alone* never applies `ready`: a **user-directed** issue gets `ready` only as the record of
+  *my* approval of the drafted spec (I approve the spec you draft from my one-liner — drafting
+  alone is never enough), and a **proactive** issue gets `ready` only on a *passed* manager-debate
+  (you agree **and** cross-vendor Codex says PROCEED). The cross-vendor consensus — not Faber
+  by itself — is what gates proactive north-star work; my own per-issue approval moved up to
+  the north star. (Codex is comments-only and never approves a *diff*; on the manager-debate
+  it is veto-only and gives a verdict you weigh — consensus, not a Codex rubber-stamp, is the
+  gate. Merging a clean PR is acting on the passed code review, not approving it yourself.)
 - Be brief: lead with the answer, no essays.
 
 ## Notes

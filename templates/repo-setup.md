@@ -5,7 +5,7 @@ Do this once per target repo before pointing the team at it.
 ## 1. Labels
 Create these labels (the loop uses them as its state — each coder spawn is stateless):
 - `debating` — issue under manager-debate (Faber + Codex); not yet approved
-- `ready` — the record of your approval; Faber's cue to spawn the coder
+- `ready` — cleared to run (your direct approval OR Faber⇄Codex consensus toward an approved north star); Faber's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
 - `merge-ready` — current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge
@@ -65,3 +65,14 @@ The team runs from a Claude Code session — there are no per-repo routine trigg
 - Connect the **Codex CLI** (installed + signed in) so Faber can run
   `scripts/codex-review.sh <PR#>` against this repo's PRs — the cross-vendor, comments-only
   reviewer.
+
+## 6. Set + approve your own north star (unlocks proactive autonomous mode)
+Edit `NORTH_STAR.md` in your **fabrica control-plane clone** (not this target repo) to *your*
+direction and explicitly approve it to Faber. **Your explicit approval of the active north
+star is the root authorization for all proactive work** — and Faber gates on that approval,
+not on any line written in the file. The shipped approval note is the prior owner's history,
+**not** a token that approves the goal for you: a fresh clone inheriting it is not auto-approved.
+Until you set + approve your own, Faber acts only on issues you ask for directly and will ask
+you to set + approve the north star before pursuing anything proactively. The shipped entry is
+*Fabrica's own* goal, so an adopter must replace + approve it before proactive consensus-gated
+work runs in their setup.

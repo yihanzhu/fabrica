@@ -21,7 +21,8 @@ action-first:
   (`round-cap` / `ambiguous-spec` / `oversized` / `failure`); say which and why.
   Skip anything I've already acted on: once resolved, `needs-human` is cleared, so
   never re-report a resolved item.
-- Issues labeled `ready` (a direct label query) — approved but no PR picked up yet
+- Issues labeled `ready` (a direct label query) — cleared to run (user spec-approval OR
+  consensus) but no PR picked up yet
 - Issues labeled `debating` (a direct label query) — a proactive issue still mid
   manager-debate; if the session ended before consensus, flag it as **resumable** (the
   issue-as-bus thread holds the last verdict) — re-run `manager-review.sh` to continue, or drop it

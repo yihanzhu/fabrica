@@ -83,7 +83,7 @@ fi
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
   "debating|fbca04|Issue under manager-debate; not yet approved"
-  "ready|0e8a16|Record of your approval; Faber's cue to spawn the coder"
+  "ready|0e8a16|Cleared to run (user approval OR consensus); Faber's cue to spawn the coder"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
   "round-2|4a90d9|Review-loop counter: revision 2"
@@ -189,4 +189,10 @@ Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
   3. Install the /faber command: run scripts/install.sh from your fabrica clone.
   4. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
+  5. Set your own north star (NORTH_STAR.md in your fabrica clone) — replace the shipped
+     Fabrica default with your own direction; then approve it with Faber once you run /faber
+     (this unlocks proactive autonomous mode). Approve it to Faber in-session, not by editing
+     the file — the shipped approval note is the prior owner's history, not a token that
+     approves the goal for you. Until it's set + approved, Faber acts only on issues you
+     direct (your one-liner → Faber drafts the spec → you approve that drafted spec → ready).
 EOF

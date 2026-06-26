@@ -9,11 +9,22 @@ serves it (see [`reviewer/manager-review.md`](reviewer/manager-review.md)).
 transition: mark the achieved one `achieved` and promote (or add) the next as `active`.
 Keep the log below so the human can see where the team has been.
 
+**Approval gates proactive autonomy.** The active north star is the user's authorization for
+*all* proactive work: Faber may consensus-gate and self-apply `ready` to a proactive issue
+**only when the operator has explicitly approved the *active* north star** (Faber knows this
+from the operator, not from a line in this file). Until the operator approves it, Faber does
+**not** auto-pursue — it asks them to set and approve the north star first. The approval notes
+below are **descriptive owner-history**, not a machine token: a fresh clone inheriting them is
+**not** auto-approved for a new operator. The shipped entry below is **Fabrica's own** direction;
+an **adopter must replace it with their own north star and explicitly approve that** before
+proactive autonomous mode applies to their repo. (User-directed issues are unaffected — the
+user's approval of the spec Faber drafts from their one-liner is its own gate.)
+
 ---
 
 ## Current north star
 
-### A — "Frictionless first-run"  ·  status: **active**
+### A — "Frictionless first-run"  ·  status: **active** · history: set + approved by the **Fabrica owner** (this is Fabrica's *own* control-plane repo). **Adopters:** this is Fabrica's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo. This history line is **not** a token that auto-approves a clone.
 
 A new adopter can stand the team up from a fresh clone without getting stuck.
 
@@ -31,8 +42,9 @@ A new adopter can stand the team up from a fresh clone without getting stuck.
 A short history of north stars and consensus-filtered proposals, so the human can see the
 trajectory and override anything consensus dropped.
 
-- **A — "Frictionless first-run"** — *active.* Done-signal: `doctor.sh` exits 0 + an
-  accurate fresh-clone `QUICKSTART.md` walkthrough.
+- **A — "Frictionless first-run"** — *active; set + approved by the Fabrica owner (history, not
+  an inheritable token).* Done-signal: `doctor.sh` exits 0 + an accurate fresh-clone
+  `QUICKSTART.md` walkthrough.
 
 ### Vetoed-but-Faber-thought-relevant (manager-debate filtered these out)
 
