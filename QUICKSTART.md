@@ -83,11 +83,12 @@ command, point it at a target repo, and watch one loop run. For the mental model
 8. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
    opens a GitHub issue. You talk only to Faber.
 
-9. **Approve the issue.** For a user-directed issue, front gate = *your* approval. Faber
-   records it by applying the `ready` label (it never self-approves), which is its cue to
-   spawn the coder. (For proactive issues Faber raises toward your approved north star, the
-   gate is Faber⇄Codex consensus instead — no per-issue ask — which is exactly why approving
-   the north star in step 6 matters.)
+9. **Approve the drafted spec.** For a user-directed issue, the front gate is *your* approval
+   of the spec Faber drafted in step 8 — your one-liner was the request; this is the go.
+   Faber records that approval by applying the `ready` label (it never self-approves), which
+   is its cue to spawn the coder. (For proactive issues Faber raises toward your approved north
+   star, the gate is Faber⇄Codex consensus instead — no per-issue ask — which is exactly why
+   approving the north star in step 6 matters.)
 
 10. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
    Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
