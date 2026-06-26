@@ -34,8 +34,12 @@ exactly one coder launch per approved issue, one review path, and one revision p
 ```
   one-liner → Faber drafts spec → opens issue
                                        │
-           YOU approve → Faber labels  ┤  (front gate = your approval;
-              it `ready` (your go)  ───┤   Faber records it, never self-approves)
+        gate (front gate = at the north-star altitude):
+          • user-directed issue → YOU ask → Faber labels it `ready`
+          • proactive issue → Faber⇄Codex manager-debate CONSENSUS
+              → Faber removes `debating`, labels it `ready` (no per-issue ask)
+          (Faber alone never self-approves; the consensus IS the gate
+           for proactive north-star work — see manager-review.md)
                                        ↓
               Faber spawns [Coder] subagent  → opens PR (label round-0)
                                        ↓
@@ -61,9 +65,16 @@ exactly one coder launch per approved issue, one review path, and one revision p
   architecture = decorrelated blind spots. A reviewer's value is being *different*,
   not a second copy.
 - **Reviewer is read-only, comments only, never the author.** Non-negotiable.
-- **Judgment lives at the spec (front gate), not the diff.** You approve intent up front;
-  Faber records your approval with the `ready` label (never self-approving) — you stop
-  reviewing diffs.
+- **Judgment lives at the direction (front gate at the north-star altitude), not the diff.**
+  You approve the **north star** ([`NORTH_STAR.md`](NORTH_STAR.md)) and Faber pursues it
+  autonomously — you stop reviewing diffs *and* stop approving each issue. Two paths clear an
+  issue to run: a **user-directed** issue on your explicit ask (Faber records it with `ready`);
+  a **proactive** issue on **Faber⇄Codex manager-debate consensus** — on consensus Faber
+  removes `debating` and applies `ready` itself, no per-issue ask. **Faber acting alone never
+  self-approves**; for proactive north-star work the cross-vendor consensus *is* the gate (see
+  [`reviewer/manager-review.md`](reviewer/manager-review.md)). You are pulled back in only at
+  the north-star altitude: **north-star achieved**, **goal drift / transition**, and
+  `needs-human` escalations.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
 - **Faber auto-merges clean, low-risk PRs — in-session only.** Under your standing

@@ -32,9 +32,9 @@ Faber runs manager-review.sh <issue#>   (by absolute path, from the target repo'
         ↓
 Faber reads the Codex comment and forms its own view
         ├── CONSENSUS to proceed (Faber agrees AND Codex says PROCEED)
-        │      → remove `debating`, then bring the vetted issue to the USER for the
-        │        front gate (the user's approval — recorded by applying `ready` — is
-        │        still required to launch the coder; the debate vets, it doesn't approve)
+        │      → remove `debating`, apply `ready`, and run the loop — NO per-issue
+        │        user approval (the consensus IS the gate for proactive north-star
+        │        work; the user gates the direction, not each issue)
         ├── REFINE → Faber edits the issue + posts a reply comment (issue-as-bus)
         │      + re-runs manager-review.sh   ← this is a ROUND; cap ~2 rounds
         │      ↺ repeat
@@ -47,12 +47,17 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 
 ## Consensus / veto-only (the rule)
 
-- **Consensus vets; the user gates.** The manager-debate is a *vetting / recommendation*
-  step, not an approval. Consensus (both Faber and Codex agree the issue is worth building)
-  clears the issue out of `debating` and lets Faber bring it to the **user** — but the coder
-  loop still starts only on the **user's explicit approval** (recorded by applying `ready`).
-  Faber never self-applies `ready`: the user's approval is the front gate, and consensus
-  precedes it rather than replacing it.
+- **Consensus IS the gate (proactive issues).** For a proactive issue, the manager-debate
+  is not just a recommendation — it is the **front gate**. On consensus (both Faber and Codex
+  agree the issue is worth building) Faber removes `debating`, **applies `ready` itself, and
+  runs the loop — with no per-issue user approval.** This does **not** make Faber a
+  self-approver: **Faber acting alone still never applies `ready`** — it takes the *passed*
+  cross-vendor debate (Faber's agreement **and** Codex PROCEED). The user's gate moved up an
+  altitude — the user approves the **north star** and is involved at **north-star achieved**,
+  **goal drift / transition**, and `needs-human`; *within* an approved north star, the
+  cross-vendor consensus gates proactive work. (**User-directed issues keep the direct gate** —
+  the user's explicit request is the judgment; this consensus gate is only for the issues Faber
+  raises on its own.)
 - **The manager-reviewer is VETO-ONLY.** It never merges, approves, labels `ready`, or
   edits the issue — its *only* effect is the verdict comment. It cannot advance an issue;
   it can only object to one. (Mirror of the code reviewer being comments-only.)
@@ -66,13 +71,15 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
   what consensus filtered out and override it if they want. Default-drop is the floor, not
   a silent shredder.
 
-> **Deferred: fully-autonomous proactive mode (#49).** Today the manager-debate only
-> *vets* — consensus removes `debating` and Faber brings the issue to the user, whose
-> approval (the `ready` label) is still required to launch the coder. Making
-> **manager-debate consensus itself the gate** (no per-issue user approval for proactive
-> issues) is a deliberate *front-gate change* deferred to issue **#49**, pending the user's
-> explicit sign-off. Until then: today = vet, then the user gates; #49 = consensus gates
-> (after sign-off).
+> **Front gate at the north-star altitude (#49).** Per the user-authorized front-gate
+> change in **#49**, the manager-debate consensus **is** the gate for proactive issues: on
+> consensus Faber removes `debating`, applies `ready`, and runs the loop — **no per-issue
+> user approval.** The user's gate moved up an altitude: the user approves the **north star /
+> direction** and is involved at **north-star achieved**, **goal drift / transition**, and
+> `needs-human` escalations; everything inside an approved north star is Faber's to drive.
+> This is not self-approval — **Faber acting alone still never applies `ready`**; it takes the
+> passed cross-vendor debate (Faber's agreement **and** Codex PROCEED). **User-directed issues
+> keep the direct gate** (the user's explicit ask).
 
 ## How the manager-reviewer actually runs
 
