@@ -70,10 +70,14 @@ exactly one coder launch per approved issue, one review path, and one revision p
   authorization, Faber merges a PR once CI is green and Codex is clean — no per-PR
   confirmation — **unless it is high-risk**. The one auto-merge path is **in-session:
   Faber merges a PR only when it just reviewed that exact head back-to-back** (review→merge,
-  no concurrent pusher, no cross-repo ambiguity). The merge is **pinned to the reviewed head**
-  (`gh pr merge --squash --match-head-commit <reviewed-sha>`), so a commit landing between the
-  head-check and the merge makes it **fail atomically** rather than merge a head Codex never
-  reviewed. A later **status/Tracking scan and the brief only surface `merge-ready` PRs
+  no concurrent pusher, no cross-repo ambiguity). The merge follows a **safe capture sequence**:
+  Faber captures the head **before** review (`head=$(gh pr view <PR#> --repo <repo> --json
+  headRefOid -q .headRefOid)`), reviews that head, then merges **pinned to the captured head**
+  (`gh pr merge <PR#> --repo <repo> --squash --match-head-commit "$head"`). The merge is
+  **repo-qualified with `GH_REPO` unset** (mirroring `codex-review.sh`) so a stray `GH_REPO`
+  can't redirect it to the wrong repo, and because `$head` is captured before the review — never
+  back-filled from post-review state — a commit landing at any point makes the merge **fail
+  atomically** rather than merge a head Codex never reviewed. A later **status/Tracking scan and the brief only surface `merge-ready` PRs
   (read-only)** — they never auto-merge; those get merged on a fresh in-session review, or by
   you. (Unattended status-scan / cross-repo auto-merge — acting on a `merge-ready` label whose
   review predates the scan — is **deferred to [#46](../../issues/46)**: it needs a durable

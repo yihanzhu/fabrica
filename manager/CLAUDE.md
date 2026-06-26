@@ -34,11 +34,21 @@ only to you. I never talk to the coder or the reviewer — you are my single int
        **merge it now, in-session, back-to-back with the review you just ran** — once CI is
        green, per my standing authorization — no per-PR confirmation. **This in-session
        review→merge is the ONLY auto-merge path:** you reviewed this exact head moments ago,
-       there's no concurrent pusher and no cross-repo ambiguity, so merge it pinned to the
-       head Codex just reviewed: `gh pr merge <PR#> --squash --match-head-commit <reviewed-sha>`,
-       where `<reviewed-sha>` is the head from the review you just ran. If a commit slipped in
-       between the review and the merge, this **fails atomically** instead of merging an
-       unreviewed head — re-review the new head. This is acting on the passed review, **not**
+       there's no concurrent pusher and no cross-repo ambiguity. Run this exact ordered, safe
+       sequence (`<repo>` derived from the cwd's remote, `GH_REPO` unset so it can't redirect):
+         1. **Capture the head BEFORE review** so the pin can't be back-filled from post-review
+            state:
+            `head="$(gh pr view <PR#> --repo <repo> --json headRefOid -q .headRefOid)"`.
+         2. **Review that head:** `"<fabrica>/scripts/codex-review.sh" <PR#>` (it reviews the
+            current PR head).
+         3. **On a clean review + low-risk + CI green, merge pinned to the captured head:**
+            `gh pr merge <PR#> --repo <repo> --squash --match-head-commit "$head"`.
+         4. **If the merge refuses** (the head moved at any point — a commit landed before,
+            during, or after review), do **not** force it: treat `merge-ready` as void,
+            re-capture `$head` + re-review the new head, then re-evaluate. **Never fill
+            `--match-head-commit` from post-review / current state to "make it pass."**
+       This guarantees you only merge the exact head you reviewed, in the right repo; if
+       anything changed, the merge safely refuses. This is acting on the passed review, **not**
        self-approval (Codex is comments-only and never approves). Bring it to me instead of
        merging when human review is required: safety-rail changes, north-star milestones /
        goal drift, or high-risk work you'd want a back-look on (auth, migrations, shared repos).
@@ -91,10 +101,17 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   review→merge is back-to-back there's no concurrent pusher and no cross-repo ambiguity. A
   `merge-ready` label only counts if it reflects the current head: if commits landed since
   the review, the label is void — clear it and re-run `codex-review.sh` before merging.
-  **Always pin the merge to the reviewed head:** merge with
-  `gh pr merge <PR#> --squash --match-head-commit <reviewed-sha>` (the SHA Codex reviewed),
-  so a commit landing between the head-check and the merge makes the merge **fail
-  atomically** rather than merge an unreviewed head. A later **status/Tracking scan never
+  **Always pin the merge to the reviewed head via this safe capture sequence** (`<repo>`
+  derived from the cwd's remote, `GH_REPO` unset — mirroring `codex-review.sh`, so a stray
+  `GH_REPO` can't redirect the merge to the wrong repo): **capture the head BEFORE review**
+  — `head="$(gh pr view <PR#> --repo <repo> --json headRefOid -q .headRefOid)"` — then review
+  that head, then merge with
+  `gh pr merge <PR#> --repo <repo> --squash --match-head-commit "$head"`. Because `$head` is
+  captured *before* the review, a commit landing at any point (before, during, or after the
+  review) makes the merge **fail atomically** rather than merge an unreviewed head. **Never
+  back-fill `--match-head-commit` from post-review / current state to force it through** — if
+  the merge refuses, treat `merge-ready` as void and re-capture + re-review the new head. A
+  later **status/Tracking scan never
   auto-merges** — it only surfaces `merge-ready` PRs; those get merged on a fresh in-session
   review, or by me. (Unattended status-scan / cross-repo auto-merge — acting on a `merge-ready`
   label whose review predates the scan, possibly in another repo — is **deferred to #46**;
