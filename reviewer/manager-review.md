@@ -92,7 +92,7 @@ comment to a *different* repo's issue. Then:
    in fabrica, not in each target repo; errors out with a pointer if it is missing — the
    debate needs a goal to judge against). It also reads the issue's title + body (`gh issue
    view <issue#> --json title,body`).
-2. **Runs `codex exec -c sandbox_mode="read-only" -o <tmpfile> "<prompt>"`** — Codex forms
+2. **Runs `codex exec -C <worktree> -c sandbox_mode="read-only" -o <tmpfile> "<prompt>"`** — Codex forms
    the manager-review with the **manager-reviewer prompt + the north star + the issue +
    "read the repo to ground your judgment"** (below). Unlike `codex-review.sh`, this uses a
    **hand-written prompt**, not Codex's built-in `review`: there is no built-in "should this
@@ -101,8 +101,15 @@ comment to a *different* repo's issue. Then:
    sandbox so the review can't inherit a writable default from the operator's Codex config;
    the script deliberately does **not** pass `--dangerously-bypass-approvals-and-sandbox`,
    and avoids `--ignore-user-config` so the operator's model/effort defaults still apply.
-   Codex reads the cwd (the operator's checkout) read-only to ground its judgment — there is
-   no PR head to fetch and no temp worktree (this judges an issue, not a diff).
+   Codex grounds its judgment by reading a **clean detached temp worktree at HEAD** —
+   `git worktree add --detach <worktree> HEAD` under `mktemp -d`, with `codex exec -C
+   <worktree>` pinning the review there — isolated from the operator's live checkout, so
+   Codex sees only the tracked content at HEAD, never untracked/ignored/uncommitted files
+   (`.env`, secrets, local WIP). The read-only sandbox blocks writes but not reads, so the
+   worktree — not the sandbox — is what keeps the operator's dirty/local state out of the
+   review, mirroring `codex-review.sh`'s isolation. The worktree (and the `<tmpfile>` below)
+   is removed via a `trap ... EXIT` on every exit. There is no PR head to fetch (this judges
+   an issue, not a diff); HEAD is the commit the worktree is materialized at.
 3. **Posts Codex's verdict to the issue VERBATIM**: `gh issue comment <issue#> --body-file
    <tmpfile>`, prefixed only with a short header marking it the Codex manager-reviewer (and
    also echoes it to stdout). No Claude session rewrites, blends, or summarizes it — that
