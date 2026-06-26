@@ -83,7 +83,7 @@ fi
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
   "debating|fbca04|Issue under manager-debate; not yet approved"
-  "ready|0e8a16|Record of your approval; Faber's cue to spawn the coder"
+  "ready|0e8a16|Cleared to run (user approval OR consensus); Faber's cue to spawn the coder"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
   "round-2|4a90d9|Review-loop counter: revision 2"

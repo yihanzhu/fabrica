@@ -71,15 +71,25 @@ command, point it at a target repo, and watch one loop run. For the mental model
    target repo's loop labels exist. One pass/fail line per check; non-zero exit if
    anything's off. Mutates nothing.
 
-6. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
+6. **Set and approve your north star** (this unlocks proactive autonomous mode). Edit
+   [`NORTH_STAR.md`](NORTH_STAR.md) to your own direction and mark its status line
+   `approved-by-user` — the shipped entry is *Fabrica's own* goal, so until you approve your
+   own, Faber will only act on issues you ask for directly and will ask you to set + approve
+   the north star before pursuing anything proactively. **Your approval of the north star is
+   the root authorization for all proactive work** (the front gate sits at this altitude).
 
-7. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
+7. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
+
+8. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
    opens a GitHub issue. You talk only to Faber.
 
-8. **Approve the issue.** Front gate = *your* approval. Faber records it by applying the
-   `ready` label (it never self-approves), which is its cue to spawn the coder.
+9. **Approve the issue.** For a user-directed issue, front gate = *your* approval. Faber
+   records it by applying the `ready` label (it never self-approves), which is its cue to
+   spawn the coder. (For proactive issues Faber raises toward your approved north star, the
+   gate is Faber⇄Codex consensus instead — no per-issue ask — which is exactly why approving
+   the north star in step 6 matters.)
 
-9. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
+10. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
    Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
    clone — by absolute path, since the harness lives only in the fabrica clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
