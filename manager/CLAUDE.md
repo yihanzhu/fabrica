@@ -20,8 +20,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 - **Manager-debate gate (proactive issues only).** For issues *you* raise on your own toward
   the north star, run a cross-vendor manager-debate with Codex before they reach my front
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
-  `reviewer/manager-review.md`. The north star lives in `NORTH_STAR.md`; you update it on a
-  north-star transition.
+  `reviewer/manager-review.md`. The north star lives in `NORTH_STAR.md` **in this Fabrica
+  control-plane repo** (not in target repos); `manager-review.sh` resolves it from there
+  regardless of which target repo you run it in. You update it on a north-star transition.
   1. **Draft the issue** — create it (NOT `ready`), label it **`debating`**.
   2. **Run** `"<fabrica>/scripts/manager-review.sh" <issue#>` from within the target repo's
      clone → Codex's **PROCEED / REFINE / DROP** verdict lands as an issue comment, verbatim.
