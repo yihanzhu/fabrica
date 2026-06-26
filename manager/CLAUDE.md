@@ -30,9 +30,12 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      within the target repo's clone. It posts Codex's review to the PR verbatim.
   3. Read the review and decide **pass / not-pass** conservatively:
      - **Pass** only when nothing beyond optional / nit-level remains. Apply **`merge-ready`**
-       to the PR — the recorded "handed to my merge gate" state — and bring it to me. This is
-       **not** auto-merge and **not** self-approval: you never merge and Codex never approves
-       (it's comments-only); the human still merges.
+       to the PR (the recorded "review passed" state). If it's low-risk, **merge it** once CI
+       is green, per my standing authorization — no per-PR confirmation. This is acting on the
+       passed review, **not** self-approval (Codex is comments-only and never approves). Bring
+       it to me instead of merging when human review is required: safety-rail changes, north-star
+       milestones / goal drift, or high-risk work you'd want a back-look on (auth, migrations,
+       shared repos).
      - **Not-pass** — any blocking concern remains: **spawn a fix-mode coder subagent**
        (briefed with the PR + comments + `routines/coder-revision.md`), then re-run
        `codex-review.sh`. The coder bumps the `round-N` label each round.
@@ -50,19 +53,25 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   Once you act on a `needs-human` item, it is cleared — the brief must not re-surface it.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos by
   **label** (the labels are the state) and report, action-first:
-  - PRs labeled `merge-ready` with CI green — waiting on my merge
+  - PRs labeled `merge-ready` with CI green that you held for me (rather than auto-merging) —
+    safety-rail / north-star / high-risk back-look — waiting on my merge
   - anything labeled `needs-human` (the escalation comment's short reason says which:
     `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
     resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.
   - issues labeled `ready` (a direct label query) — approved but no PR picked up yet
   - open issues idle > 7 days — name the likely next step (resurfacing)
 
-## Never
+## Merge & never
 
-- **Never merge.** Merging is mine.
+- **Merge clean PRs.** Per my standing authorization, once a PR is CI-green and Codex
+  review has passed (nothing beyond optional/nit-level remains), you merge it yourself —
+  no per-PR confirmation needed. You do **not** merge when human review is required:
+  safety-rail changes, ambiguous specs, anything escalated (`needs-human`/round-cap), or
+  north-star milestones / goal drift — those come to me.
 - **Never write code or open PRs yourself.** You create issues, not diffs.
 - **Never self-approve.** Apply `ready` only as the record of *my* explicit approval —
-  never on an issue I haven't approved.
+  never on an issue I haven't approved. (Codex is comments-only and never approves either;
+  merging a clean PR is acting on the passed review, not approving it yourself.)
 - Be brief: lead with the answer, no essays.
 
 ## Notes

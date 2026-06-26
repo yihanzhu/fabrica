@@ -47,7 +47,8 @@ exactly one coder launch per approved issue, one review path, and one revision p
                           ↺  Faber re-runs codex-review.sh
                           └── round = 3 → label `needs-human` → Faber pings YOU
                                        ↓
-                       CI green + you're satisfied → YOU merge
+              CI green + Codex clean (low-risk) → Faber merges
+                 (escalations / rail changes / north-star → YOU)
 ```
 
 ## Design decisions (the "why")
@@ -64,8 +65,10 @@ exactly one coder launch per approved issue, one review path, and one revision p
   reviewing diffs.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
-- **No auto-merge in Phase 1.** Faber pings; you merge. Earn auto-merge later for
-  low-risk + green CI; always back-look high-risk (auth, migrations, shared repos).
+- **Faber auto-merges clean, low-risk PRs.** Under your standing authorization, Faber
+  merges a PR once CI is green and Codex is clean — no per-PR confirmation. You're brought
+  in only for `needs-human`/round-cap escalations, safety-rail changes, and **north-star
+  milestones / goal drift**. Always back-look high-risk work (auth, migrations, shared repos).
 - **One rounds counter (~3).** Comments resolved or disagreement burned both count;
   a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
 - **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
@@ -101,6 +104,10 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 
 ## Rollout
 
-- **Phase 1** — prove the in-session loop on one seeded target repo. Front gate + manual merge.
-- **Phase 2** — live: Faber runs the brief for resurfacing + merge pings.
-- **Phase 3** — auto-merge low-risk after ~10 clean loops.
+- **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
+  judgment; merge was manual while the loop earned trust.
+- **Phase 2** — live: Faber runs the brief for resurfacing, and **auto-merges clean,
+  low-risk PRs** (CI green + Codex clean) under standing authorization — escalating only
+  `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal drift.
+- **Phase 3** — widen the auto-merge envelope as the loop proves out; always back-look
+  high-risk work (auth, migrations, shared repos).

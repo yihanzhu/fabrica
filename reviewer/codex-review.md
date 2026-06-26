@@ -95,7 +95,7 @@ Faber runs codex-review.sh <PR#>  (by absolute path, from the target repo's clon
    (script posts Codex's verdict to the PR, verbatim)
         ↓
 Faber reads the Codex comment
-        ├── pass      →  hand to the human merge gate (no auto-merge in Phase 1)
+        ├── pass      →  Faber merges if low-risk (CI green); else hands to the human
         └── not pass  →  Faber spawns coder (fix mode) to address comments
                               ↓
                          Faber re-runs codex-review.sh   (bump round-N)

@@ -40,8 +40,10 @@ the backlog:
   Merging a prompt change does NOT change live behavior until synced — call this out in the
   PR description when a prompt changes.
 - **Never weaken the safety rails without explicit human sign-off:** reviewer stays
-  read-only / comments-only; no auto-merge; the rounds cap and `needs-human` escalation
-  stay intact.
+  read-only / comments-only; merge stays gated (Faber may merge only CI-green + Codex-clean
+  + low-risk PRs under standing authorization, and must bring safety-rail / north-star /
+  ambiguous / high-risk PRs to the human); the rounds cap and `needs-human` escalation stay
+  intact. Faber never writes code/opens PRs and never self-approves.
 
 ## Reusability goal
 - No hardcoded personal values (usernames, repo names) in shipped templates — keep the

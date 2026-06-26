@@ -31,8 +31,9 @@ and exits non-zero if anything is missing or differs (zero if all match).
 ## 2. Branch protection (main)
 - ✅ Require status checks to pass before merging (your CI) — the **hard gate**
 - ✅ Require branches to be up to date before merging
-- ⛔️ **Phase 1: no auto-merge** — you merge manually after CI is green
-- (Phase 3, once trusted) enable auto-merge for low-risk PRs only
+- ⛔️ **Keep GitHub's native auto-merge button off** — merges run through Faber or the
+  human (both gated on green CI), not a server-side auto-merge trigger. Faber merging a
+  clean, low-risk PR is a deliberate `gh pr merge`, not this checkbox.
 
 ## 3. CI — the loop's hard gate
 CI must run the **exact commands** you put in this repo's `CLAUDE.md` (its tests /

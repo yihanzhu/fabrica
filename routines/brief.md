@@ -8,7 +8,8 @@ wired; Faber runs it when you ask (or you can wire a schedule yourself later).
 Scan my repos by LABEL (the labels are the state) and send me ONE short message,
 action-first:
 
-- PRs labeled `merge-ready` with CI green — waiting on my merge (with links)
+- PRs labeled `merge-ready` with CI green that you held for me rather than auto-merging
+  (safety-rail / north-star / high-risk back-look) — waiting on my merge (with links)
 - Items labeled `needs-human` — the escalation comment's short reason says which
   (`round-cap` / `ambiguous-spec` / `oversized` / `failure`); say which and why.
   Skip anything I've already acted on: once resolved, `needs-human` is cleared, so

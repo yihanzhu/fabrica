@@ -55,8 +55,11 @@ human channel.
 4. Give that session GitHub access (`gh` CLI or the GitHub connector) so Faber can read
    state and open issues.
 
-Faber **only opens issues** — never writes code, never merges, and never approves on your
-behalf. The front gate is **your explicit approval**: once you approve an issue, Faber
+Faber **never writes code or opens PRs** and **never approves on your behalf** — it opens
+issues and orchestrates the loop. Faber **does** merge clean, low-risk PRs (CI green +
+Codex review passed) under your standing authorization, and brings you anything needing
+human review (safety-rail changes, north-star / goal drift, high-risk back-look). The
+front gate is **your explicit approval**: once you approve an issue, Faber
 applies the `ready` label as the record of your go (it never labels an issue you haven't
 approved). That `ready` label is Faber's own cue to spawn the coder subagent — one launch
 per issue, not a separate automated trigger.
@@ -127,8 +130,9 @@ That checklist covers:
   restore **without mutating anything**, run the read-only dry mode —
   `scripts/setup-target-repo.sh --check <owner>/<repo>` — which reports per label
   `matches` / `differs` / `missing` and exits non-zero if anything is missing or differs.
-- **Branch protection on `main`** — require CI status checks to pass; **no auto-merge in
-  Phase 1**. Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
+- **Branch protection on `main`** — require CI status checks to pass; keep GitHub's
+  **native auto-merge button off** (merges go through Faber or the human, both gated on
+  green CI — not a server-side trigger). Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
   command** (unlike the labels loop), and **branch protection isn't available on free
   private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
   still the hard gate** (see Safety rails); you just lose the server-side enforcement.
@@ -186,7 +190,9 @@ Run **one trivial issue** through the full loop end to end, all from your Faber 
    - **CI** runs on the PR and goes green.
 5. If there's feedback, confirm **Faber spawns a fix-mode coder** that pushes follow-up
    commits and bumps the `round-N` label, then re-runs `codex-review.sh`.
-6. **You** merge once CI is green and you're satisfied.
+6. Confirm the merge path: for a clean, low-risk PR (CI green + Codex passed) **Faber
+   merges** under your standing authorization; a PR needing human review (safety-rail /
+   north-star / high-risk) is brought to **you** instead.
 
 If every step above fired, the team is back. If one stage is silent: re-check `/faber` is
 installed and points at this repo (step 1), the coder instruction files are present (step
@@ -204,8 +210,11 @@ These are load-bearing — per the self-modification safety section of
 
 - **Reviewer stays read-only / comments-only.** Codex never pushes, approves-to-merge, or
   merges, and is never the author.
-- **No auto-merge in Phase 1.** Faber pings; **you** merge. Auto-merge is earned later,
-  low-risk + green CI only.
+- **Merge stays gated, and human-review carve-outs survive.** Faber may auto-merge a PR
+  only when it's **CI-green + Codex-clean + low-risk** (standing authorization). It must
+  **not** merge — it brings the PR to you — for safety-rail changes, ambiguous specs,
+  anything escalated (`needs-human`/round-cap), north-star milestones / goal drift, or
+  high-risk back-look (auth, migrations, shared repos). Codex never approves or merges.
 - **Rounds cap (~3) + `needs-human` escalation stay intact.** Because each coder spawn is
   stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in agent
   memory — so the labels (step 4) are part of the safety system, not decoration.
