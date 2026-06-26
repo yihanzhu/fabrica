@@ -30,12 +30,18 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      within the target repo's clone. It posts Codex's review to the PR verbatim.
   3. Read the review and decide **pass / not-pass** conservatively:
      - **Pass** only when nothing beyond optional / nit-level remains. Apply **`merge-ready`**
-       to the PR (the recorded "review passed" state). If it's low-risk, **merge it** once CI
-       is green, per my standing authorization — no per-PR confirmation. This is acting on the
-       passed review, **not** self-approval (Codex is comments-only and never approves). Bring
-       it to me instead of merging when human review is required: safety-rail changes, north-star
-       milestones / goal drift, or high-risk work you'd want a back-look on (auth, migrations,
-       shared repos).
+       to the PR — it means **"the CURRENT head SHA passed Codex review."** If it's low-risk,
+       **merge it** once CI is green, per my standing authorization — no per-PR confirmation.
+       This is acting on the passed review, **not** self-approval (Codex is comments-only and
+       never approves). Bring it to me instead of merging when human review is required:
+       safety-rail changes, north-star milestones / goal drift, or high-risk work you'd want a
+       back-look on (auth, migrations, shared repos).
+     - **`merge-ready` is void the moment new commits land.** GitHub keeps the label across a
+       head change, but a new push (a fix round, or any contributor commit) means the reviewed
+       head is stale. Whenever a PR's head changes, **clear `merge-ready`**; it is only
+       (re)applied after a passing Codex review of the *new* current head. Never merge on a
+       `merge-ready` label whose review predates the current head — re-run `codex-review.sh`
+       on the new head first.
      - **Not-pass** — any blocking concern remains: **spawn a fix-mode coder subagent**
        (briefed with the PR + comments + `routines/coder-revision.md`), then re-run
        `codex-review.sh`. The coder bumps the `round-N` label each round.
@@ -56,9 +62,13 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   is the **auto-merge actor** — it acts, unlike the read-only `routines/brief.md`, which only
   surfaces the same state:
   - PRs labeled `merge-ready` whose CI is now green: **auto-merge the low-risk ones on this
-    scan** (CI may have gone green after the loop ended — don't strand them), then list any
-    you held for me — high-risk (auth / migrations / shared repos / security-sensitive),
-    safety-rail, or north-star — as still waiting on my merge gate
+    scan** (CI may have gone green after the loop ended — don't strand them), **but first
+    confirm the latest Codex review covered the current head SHA.** If the head changed since
+    `merge-ready` was applied, the label is stale: **clear `merge-ready`, re-run
+    `codex-review.sh` on the new head, and only re-apply `merge-ready` on a passing review of
+    that head** — never merge a head Codex hasn't reviewed. Then list any you held for me —
+    high-risk (auth / migrations / shared repos / security-sensitive), safety-rail, or
+    north-star — as still waiting on my merge gate
   - anything labeled `needs-human` (the escalation comment's short reason says which:
     `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
     resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.
@@ -68,8 +78,10 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 ## Merge & never
 
 - **Merge clean PRs.** Per my standing authorization, once a PR is CI-green and Codex
-  review has passed (nothing beyond optional/nit-level remains), you merge it yourself —
-  no per-PR confirmation needed — **unless it is high-risk**. High-risk PRs always go to
+  review has passed **for its current head** (nothing beyond optional/nit-level remains),
+  you merge it yourself — no per-PR confirmation needed — **unless it is high-risk**. A
+  `merge-ready` label only counts if it reflects the current head: if commits landed since
+  the review, the label is void — clear it and re-run `codex-review.sh` before merging. High-risk PRs always go to
   my merge gate even when CI-green + Codex-clean: auth, DB/schema migrations,
   shared/production repos, other security-sensitive changes, or anything else that warrants
   operator judgment / a back-look. You also do **not** merge when human review is required

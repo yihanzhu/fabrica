@@ -11,7 +11,9 @@ action-first:
 - PRs labeled `merge-ready` whose CI is now green (with links): this report is read-only —
   it surfaces state, it does not merge. Report any low-risk ones as **auto-merge-eligible**
   (Faber merges these on a status/Tracking pass — CI may have gone green after the loop
-  ended, so they're picked up there, not here), and call out the ones held for me —
+  ended, so they're picked up there, not here). `merge-ready` means the reviewed head passed,
+  so if a PR's head changed after the label was applied, flag it as **stale — needs a fresh
+  Codex review of the current head**, not auto-merge-eligible. Call out the ones held for me —
   high-risk (auth / migrations / shared repos / security-sensitive), safety-rail, or
   north-star — as waiting on my merge gate
 - Items labeled `needs-human` — the escalation comment's short reason says which
