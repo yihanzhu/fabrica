@@ -47,8 +47,8 @@ exactly one coder launch per approved issue, one review path, and one revision p
                           ↺  Faber re-runs codex-review.sh
                           └── round = 3 → label `needs-human` → Faber pings YOU
                                        ↓
-              CI green + Codex clean (low-risk) → Faber merges in-session
-                 (back-to-back with the review; status scan / brief only report)
+              CI green + Codex clean (low-risk) → Faber runs scripts/merge-pr.sh <PR#>
+                 (in-session, back-to-back; SHA-pinned merge — status scan / brief only report)
                  (high-risk / escalations / rail changes / north-star → YOU)
 ```
 
@@ -68,20 +68,25 @@ exactly one coder launch per approved issue, one review path, and one revision p
   reviewer second.
 - **Faber auto-merges clean, low-risk PRs — in-session only.** Under your standing
   authorization, Faber **may auto-merge a PR it reviewed in-session** when it is CI-green,
-  Codex-clean, and low-risk — no per-PR confirmation — **unless it is high-risk**. The merge
-  is **scoped to the target repo** (never another repo) and **bound to the exact head Faber
-  reviewed** — if the head moved, Faber **re-reviews rather than merges** (a head Codex never
-  reviewed is never merged). A later **status/Tracking scan and the brief only surface
-  `merge-ready` PRs (read-only)** — they never auto-merge; those get merged on a fresh
-  in-session review, or by you. The **precise, race-safe merge command sequence — and the
-  unattended status-scan / cross-repo auto-merge — are specified in
-  [#46](../../issues/46)** (pending; it needs a durable reviewed-SHA mechanism and is
-  intentionally not enabled yet); until it lands, Faber follows this intent for in-session
-  merges. High-risk PRs always come to your merge gate even when CI-green + Codex-clean (auth,
-  DB/schema migrations, shared/production repos, security-sensitive or other operator-judgment
-  changes). You're also brought in for `needs-human`/round-cap escalations, safety-rail
-  changes, and **north-star milestones / goal drift**. The high-risk carve-out is the last
-  word on merging — when in doubt about risk, it comes to you.
+  Codex-clean, and low-risk — no per-PR confirmation — **unless it is high-risk**. Faber does
+  this by running **`scripts/merge-pr.sh <PR#>`** from within the target repo's clone (it does
+  not hand-craft a merge command). `merge-pr.sh` owns the mechanical safety: it reads the
+  reviewed head+base SHAs from the authenticated `codex-review.sh` marker, confirms the PR's
+  current head **and** base still match those (refusing if either moved since the review),
+  requires ≥1 real passing CI check, and merges **pinned via `--match-head-commit`** — refusing
+  otherwise. The merge is **scoped to the target repo** (never another repo) and **bound to the
+  exact head Faber reviewed** — if the head moved, Faber **re-reviews rather than merges** (the
+  script itself refuses a moved head; a head Codex never reviewed is never merged). A later
+  **status/Tracking scan and the brief only surface `merge-ready` PRs (read-only)** — they never
+  auto-merge; those get merged on a fresh in-session review, or by you. High-risk PRs always
+  come to your merge gate even when CI-green + Codex-clean (auth, DB/schema migrations,
+  shared/production repos, security-sensitive or other operator-judgment changes) — Faber does
+  **not** run `merge-pr.sh` for those. You're also brought in for `needs-human`/round-cap
+  escalations, safety-rail changes, and **north-star milestones / goal drift**. The high-risk
+  carve-out is the last word on merging — when in doubt about risk, it comes to you. The
+  **unattended status-scan / cross-repo auto-merge** (a daemon merging without a Faber session)
+  is a **future extension of `merge-pr.sh`, deferred to [#46](../../issues/46)** — not supported
+  yet per the script's header.
 - **One rounds counter (~3).** Comments resolved or disagreement burned both count;
   a single push-back doesn't escalate — only an unresolved one at the cap reaches you.
 - **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
@@ -127,6 +132,6 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
   surface `merge-ready` PRs, they never merge** (those get merged on a fresh in-session
   review, or by you).
 - **Phase 3** — widen the auto-merge envelope as the loop proves out, including the
-  **unattended status-scan / cross-repo auto-merge deferred to [#46](../../issues/46)**
-  (needs a durable reviewed-SHA mechanism); always back-look high-risk work
-  (auth, migrations, shared repos).
+  **unattended status-scan / cross-repo auto-merge** — a future extension of `merge-pr.sh`
+  **deferred to [#46](../../issues/46)** (the script's header notes it is not supported yet);
+  always back-look high-risk work (auth, migrations, shared repos).
