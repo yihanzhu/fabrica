@@ -69,13 +69,16 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
 - **Reviewer is read-only, comments only, never the author.** Non-negotiable.
 - **Judgment lives at the direction (front gate at the north-star altitude), not the diff.**
   You approve the **north star** ([`NORTH_STAR.md`](NORTH_STAR.md)) and Faber pursues it
-  autonomously — you stop reviewing diffs *and* stop approving each issue. Two paths clear an
-  issue to run: a **user-directed** issue where your one-liner is the *request* — Faber drafts
-  the spec, you approve that drafted spec, and *that approval* is the gate Faber records with
-  `ready` (drafting alone does not earn `ready`);
+  autonomously — you stop reviewing diffs, and for **proactive** work you stop approving each
+  issue. Two paths clear an issue to run: a **user-directed** issue where your one-liner is the
+  *request* — Faber drafts the spec, **you still approve that drafted spec**, and *that approval*
+  is the gate Faber records with `ready` (drafting alone does not earn `ready`; user-directed
+  issues are *not* exempt from per-spec approval);
   a **proactive** issue on **Faber⇄Codex manager-debate consensus** — on consensus Faber
-  removes `debating` and applies `ready` itself, no per-issue ask. **Faber acting alone never
-  self-approves**; for proactive north-star work the cross-vendor consensus *is* the gate (see
+  removes `debating` and applies `ready` itself, no per-issue ask (this is the only path with no
+  per-issue approval, and it is conditional on your having explicitly approved the active north
+  star). **Faber acting alone never self-approves**; for proactive north-star work the
+  cross-vendor consensus *is* the gate (see
   [`reviewer/manager-review.md`](reviewer/manager-review.md)). You are pulled back in only at
   the north-star altitude: **north-star achieved**, **goal drift / transition**, and
   `needs-human` escalations.

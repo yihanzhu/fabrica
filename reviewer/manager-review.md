@@ -25,6 +25,16 @@ state never lives in an agent's memory.
 ## The rounds model
 
 ```
+Step 0 — gate check: has the operator explicitly approved the ACTIVE north star?
+   (Faber knows this from the operator, NOT from a line in the file — a fresh
+    adopter clone showing the shipped Fabrica default, or any `approved-by-user`-
+    style text, is the prior owner's history, NOT this operator's go.)
+        ├── unset / not yet operator-approved / still the shipped default
+        │      → do NOT draft, do NOT run the debate, do NOT apply `ready`;
+        │        ask the operator to set + approve their own north star first
+        │        (that approval is the root authorization for ALL proactive work)
+        └── operator has explicitly approved the active north star → proceed:
+        ↓
 Faber drafts a proactive issue (created, NOT `ready`, labeled `debating`)
         ↓
 Faber runs manager-review.sh <issue#>   (by absolute path, from the target repo's clone)
@@ -47,7 +57,20 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 
 ## Consensus / veto-only (the rule)
 
-- **Consensus IS the gate (proactive issues).** For a proactive issue, the manager-debate
+- **Step 0 — the operator must have explicitly approved the active north star.** Before Faber
+  drafts a proactive issue, runs this manager-debate, or applies `ready` on consensus, Faber must
+  confirm *from the operator* that they have explicitly approved the north star currently in
+  [`NORTH_STAR.md`](../NORTH_STAR.md). Faber knows this **from the operator, not from a line in
+  the file** — a fresh adopter clone showing the shipped Fabrica default (or any
+  `approved-by-user`-style text) is the prior owner's history, **not** this operator's go. If the
+  north star is **unset, not yet approved by this operator, or still the shipped Fabrica default**,
+  Faber does **not** start this gate or self-apply `ready` — it asks the operator to set and approve
+  their own north star first (that approval is the root authorization that unlocks all proactive
+  work). This is the same step-0 guard the manager prompt (`manager/CLAUDE.md`) and the generated
+  `/faber` command (`templates/faber-command.md`) carry — the consensus gate below is legitimate
+  *only* under an operator-approved north star.
+- **Consensus IS the gate (proactive issues).** For a proactive issue *under an operator-approved
+  north star* (see step 0 above), the manager-debate
   is not just a recommendation — it is the **front gate**. On consensus (both Faber and Codex
   agree the issue is worth building) Faber removes `debating`, **applies `ready` itself, and
   runs the loop — with no per-issue user approval.** This does **not** make Faber a
