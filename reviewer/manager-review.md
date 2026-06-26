@@ -32,7 +32,9 @@ Faber runs manager-review.sh <issue#>   (by absolute path, from the target repo'
         ↓
 Faber reads the Codex comment and forms its own view
         ├── CONSENSUS to proceed (Faber agrees AND Codex says PROCEED)
-        │      → remove `debating`, apply `ready`  (enter the coder loop)
+        │      → remove `debating`, then bring the vetted issue to the USER for the
+        │        front gate (the user's approval — recorded by applying `ready` — is
+        │        still required to launch the coder; the debate vets, it doesn't approve)
         ├── REFINE → Faber edits the issue + posts a reply comment (issue-as-bus)
         │      + re-runs manager-review.sh   ← this is a ROUND; cap ~2 rounds
         │      ↺ repeat
@@ -45,8 +47,12 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 
 ## Consensus / veto-only (the rule)
 
-- **Proceed only on consensus.** The coder loop starts only when **both** Faber and Codex
-  agree the issue is worth building. Do only what they agree on.
+- **Consensus vets; the user gates.** The manager-debate is a *vetting / recommendation*
+  step, not an approval. Consensus (both Faber and Codex agree the issue is worth building)
+  clears the issue out of `debating` and lets Faber bring it to the **user** — but the coder
+  loop still starts only on the **user's explicit approval** (recorded by applying `ready`).
+  Faber never self-applies `ready`: the user's approval is the front gate, and consensus
+  precedes it rather than replacing it.
 - **The manager-reviewer is VETO-ONLY.** It never merges, approves, labels `ready`, or
   edits the issue — its *only* effect is the verdict comment. It cannot advance an issue;
   it can only object to one. (Mirror of the code reviewer being comments-only.)
@@ -60,6 +66,14 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
   what consensus filtered out and override it if they want. Default-drop is the floor, not
   a silent shredder.
 
+> **Deferred: fully-autonomous proactive mode (#49).** Today the manager-debate only
+> *vets* — consensus removes `debating` and Faber brings the issue to the user, whose
+> approval (the `ready` label) is still required to launch the coder. Making
+> **manager-debate consensus itself the gate** (no per-issue user approval for proactive
+> issues) is a deliberate *front-gate change* deferred to issue **#49**, pending the user's
+> explicit sign-off. Until then: today = vet, then the user gates; #49 = consensus gates
+> (after sign-off).
+
 ## How the manager-reviewer actually runs
 
 [`scripts/manager-review.sh`](../scripts/manager-review.sh) is the harness. It operates on
@@ -71,10 +85,13 @@ target repo. It `unset`s `GH_REPO` then derives the repo from the cwd and passes
 explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect the
 comment to a *different* repo's issue. Then:
 
-1. **Reads the current north star** from [`NORTH_STAR.md`](../NORTH_STAR.md) at the repo
-   root (errors out with a pointer if it is missing — the debate needs a goal to judge
-   against), and reads the issue's title + body (`gh issue view <issue#> --json
-   title,body`).
+1. **Reads the current north star** from [`NORTH_STAR.md`](../NORTH_STAR.md) in the
+   **control-plane repo** — resolved from the script's *own* location (follow symlinks, then
+   `dirname/..`), the same derivation `install.sh`/`doctor.sh` use, so it reads the control
+   plane's north star regardless of which target repo's cwd it is run from (the file lives
+   in fabrica, not in each target repo; errors out with a pointer if it is missing — the
+   debate needs a goal to judge against). It also reads the issue's title + body (`gh issue
+   view <issue#> --json title,body`).
 2. **Runs `codex exec -c sandbox_mode="read-only" -o <tmpfile> "<prompt>"`** — Codex forms
    the manager-review with the **manager-reviewer prompt + the north star + the issue +
    "read the repo to ground your judgment"** (below). Unlike `codex-review.sh`, this uses a

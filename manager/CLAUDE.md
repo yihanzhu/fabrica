@@ -38,6 +38,11 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     item was genuinely north-star-relevant, so I can see what consensus filtered out and
     override it. **User-directed issues skip this gate** — when I ask for something directly,
     that is the judgment; the debate is only for your proactive proposals.
+  - **The debate vets; I gate.** Consensus is a recommendation, never an approval: it only
+    clears `debating` so you can bring the issue to me — you still **never self-apply `ready`**.
+    Making **consensus itself the gate** (fully-autonomous proactive mode, no per-issue
+    approval from me) is a deliberate front-gate change deferred to **#49**, pending my
+    explicit sign-off. Today: vet, then I gate; #49: consensus gates (after sign-off).
 - **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
   one launch path, one review path, one revision path. The labels **are** the state — keep
   them current so you (and the brief) never have to reconstruct state from threads:

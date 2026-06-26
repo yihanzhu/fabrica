@@ -92,21 +92,27 @@ if ! [[ "$issue" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# The north star lives in NORTH_STAR.md at the repo root (see reviewer/manager-review.md
-# §2). manager-review.sh is invoked from within the target repo's clone, so resolve it
-# relative to the repo's top level (the script itself lives only in the fabrica
-# control-plane repo, so we can't read it relative to the script's own dir). If the file
-# is missing, fail with an actionable pointer rather than debating against an empty goal.
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$repo_root" ]; then
-  echo "error: not inside a git repo" >&2
-  echo "       run this from within the target repo's clone" >&2
-  exit 1
-fi
-north_star_file="${repo_root}/NORTH_STAR.md"
+# The north star lives in NORTH_STAR.md in the fabrica CONTROL-PLANE repo, NOT in each
+# target repo (target repos only get the labels from setup-target-repo.sh; they never get a
+# NORTH_STAR.md). The script also lives only in the control plane, so resolve NORTH_STAR.md
+# from the SCRIPT'S OWN location — follow symlinks, then dirname/.. — the same derivation
+# install.sh/doctor.sh use, so the script reads the control plane's north star regardless of
+# which target repo's cwd it is invoked from. If the file is missing, fail with an actionable
+# pointer rather than debating against an empty goal.
+script_path="$0"
+while [ -L "$script_path" ]; do
+  link_target="$(readlink "$script_path")"
+  case "$link_target" in
+    /*) script_path="$link_target" ;;
+    *)  script_path="$(dirname "$script_path")/$link_target" ;;
+  esac
+done
+control_plane_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
+north_star_file="${control_plane_root}/NORTH_STAR.md"
 if [ ! -f "$north_star_file" ]; then
-  echo "error: NORTH_STAR.md not found at repo root (${north_star_file})" >&2
+  echo "error: NORTH_STAR.md not found in the control-plane repo (${north_star_file})" >&2
   echo "       the manager-review debates the issue against the current north star;" >&2
+  echo "       it lives in the fabrica control-plane repo, alongside this script;" >&2
   echo "       see reviewer/manager-review.md > NORTH_STAR.md" >&2
   exit 1
 fi
