@@ -109,7 +109,8 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 
 - **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
   judgment; merge was manual while the loop earned trust.
-- **Phase 2** — live: Faber runs the brief for resurfacing, and **auto-merges clean,
+- **Phase 2** — live: the **brief** resurfaces what needs you (read-only — it surfaces
+  state, never merges), and on a **status / Tracking pass** Faber **auto-merges clean,
   low-risk PRs** (CI green + Codex clean) under standing authorization — escalating only
   `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal drift.
 - **Phase 3** — widen the auto-merge envelope as the loop proves out; always back-look

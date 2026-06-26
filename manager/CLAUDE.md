@@ -52,11 +52,13 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     (which is again your cue to spawn the round-0 coder).
   Once you act on a `needs-human` item, it is cleared — the brief must not re-surface it.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos by
-  **label** (the labels are the state) and report, action-first:
+  **label** (the labels are the state) and report, action-first. This status/Tracking pass
+  is the **auto-merge actor** — it acts, unlike the read-only `routines/brief.md`, which only
+  surfaces the same state:
   - PRs labeled `merge-ready` whose CI is now green: **auto-merge the low-risk ones on this
     scan** (CI may have gone green after the loop ended — don't strand them), then list any
     you held for me — high-risk (auth / migrations / shared repos / security-sensitive),
-    safety-rail, or north-star — as still waiting on my merge
+    safety-rail, or north-star — as still waiting on my merge gate
   - anything labeled `needs-human` (the escalation comment's short reason says which:
     `round-cap` / `ambiguous-spec` / `oversized` / `failure`). Skip any I've already
     resolved — once acted on, `needs-human` is cleared, so it must not be re-reported.

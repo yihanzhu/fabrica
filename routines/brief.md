@@ -8,10 +8,12 @@ wired; Faber runs it when you ask (or you can wire a schedule yourself later).
 Scan my repos by LABEL (the labels are the state) and send me ONE short message,
 action-first:
 
-- PRs labeled `merge-ready` whose CI is now green (with links): flag any low-risk ones as
-  ready to merge on the next status scan (CI may have gone green after the loop ended — don't
-  let them sit), and call out the ones held for me — high-risk (auth / migrations / shared
-  repos / security-sensitive), safety-rail, or north-star — as waiting on my merge
+- PRs labeled `merge-ready` whose CI is now green (with links): this report is read-only —
+  it surfaces state, it does not merge. Report any low-risk ones as **auto-merge-eligible**
+  (Faber merges these on a status/Tracking pass — CI may have gone green after the loop
+  ended, so they're picked up there, not here), and call out the ones held for me —
+  high-risk (auth / migrations / shared repos / security-sensitive), safety-rail, or
+  north-star — as waiting on my merge gate
 - Items labeled `needs-human` — the escalation comment's short reason says which
   (`round-cap` / `ambiguous-spec` / `oversized` / `failure`); say which and why.
   Skip anything I've already acted on: once resolved, `needs-human` is cleared, so
