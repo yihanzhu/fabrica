@@ -118,7 +118,7 @@ else
 fi
 
 # (c) claude (Claude Code CLI) on PATH --------------------------------------------
-# The whole team runs inside a Claude Code session (QUICKSTART step 6 = run /faber),
+# The whole team runs inside a Claude Code session (QUICKSTART step 7 = run /faber),
 # so a green doctor must not imply readiness when claude is unavailable. `command -v
 # claude` is the probe; a hard fail keeps this consistent with the gh/codex checks.
 if command -v claude >/dev/null 2>&1; then

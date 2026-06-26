@@ -71,16 +71,19 @@ command, point it at a target repo, and watch one loop run. For the mental model
    target repo's loop labels exist. One pass/fail line per check; non-zero exit if
    anything's off. Mutates nothing.
 
-6. **Set and approve your own north star** (this unlocks proactive autonomous mode). Edit
-   [`NORTH_STAR.md`](NORTH_STAR.md) to *your* direction and explicitly tell Faber you approve
-   it — the shipped entry is *Fabrica's own* goal and its approval note is the prior owner's
-   history, **not** a token that approves the goal for you. Until you set + approve your own,
-   Faber will only act on issues you ask for directly and will ask you to set + approve the
-   north star before pursuing anything proactively. **Your explicit approval of the active
-   north star is the root authorization for all proactive work** (the front gate sits at this
-   altitude) — Faber gates on that approval, not on any line written in the file.
+6. **Set your own north star.** Edit [`NORTH_STAR.md`](NORTH_STAR.md) to *your* direction —
+   the shipped entry is *Fabrica's own* goal and its approval note is the prior owner's
+   history, **not** a token that approves the goal for you. (Setting the file is the pre-flight
+   step; *approving* it happens with Faber in the next step, once a session exists to receive
+   that approval.)
 
-7. **Open Claude Code in the target repo and run `/faber`** to summon the manager.
+7. **Open Claude Code in the target repo and run `/faber`** to summon the manager. Then, in
+   that session, **approve your north star** (this unlocks proactive autonomous mode) —
+   explicitly tell Faber you approve the direction you set in step 6. **Your explicit approval
+   of the active north star is the root authorization for all proactive work** (the front gate
+   sits at this altitude); Faber gates on that approval, not on any line written in the file.
+   Until you set + approve your own, Faber will only act on issues you ask for directly and
+   will ask you to set + approve the north star before pursuing anything proactively.
 
 8. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
    opens a GitHub issue. You talk only to Faber.
@@ -90,7 +93,7 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Faber records that approval by applying the `ready` label (it never self-approves), which
    is its cue to spawn the coder. (For proactive issues Faber raises toward your approved north
    star, the gate is Faber⇄Codex consensus instead — no per-issue ask — which is exactly why
-   approving the north star in step 6 matters.)
+   approving the north star in step 7 matters.)
 
 10. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
    Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
