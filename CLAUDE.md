@@ -46,7 +46,8 @@ the backlog:
   intact. Faber never writes code/opens PRs and **never self-approves acting alone** — a
   user-directed issue is gated by the user's approval of the drafted spec (the one-liner is the
   request, not the go), a proactive issue by the passed Faber⇄Codex manager-debate consensus
-  (the user's own gate is at the north-star altitude).
+  (for *proactive* work the user's gate is at the north-star altitude; user-directed issues
+  still need the user's spec approval).
 
 ## Reusability goal
 - No hardcoded personal values (usernames, repo names) in shipped templates — keep the

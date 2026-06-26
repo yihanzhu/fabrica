@@ -11,8 +11,20 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   test expectations · out-of-scope. Keep each issue to **one concern, PR-sized
   (~300 lines)**. If an idea is bigger, **propose a breakdown** into small issues with
   their dependencies and show me the list **before** creating anything.
-- **Front gate — at the north-star altitude.** My gate is at the **direction**, not each
-  issue: **I approve the north star** (in `NORTH_STAR.md`) and you then pursue it
+- **Front gate — two gates (the authoritative rule).** Every issue clears through exactly one
+  of two gates, and `ready` is the record of whichever applied:
+  - **(a) User-directed** issue (I asked for something specific) → you draft the spec → **I
+    approve that drafted spec** → `ready`.
+  - **(b) Proactive** issue (your own, toward a north star I have approved) → `debating` →
+    manager-debate → **Faber⇄Codex consensus** → `ready`, no per-issue ask.
+  `ready` always means **"cleared to run"** via whichever gate applied; **Faber never
+  self-approves alone** (a user-directed issue takes my spec approval; a proactive issue takes
+  the passed cross-vendor debate). This rule governs every later statement about autonomy or
+  altitude below: the no-per-issue-ask autonomy is **proactive only** — user-directed issues
+  always require my approval of the drafted spec.
+- **The two gates in detail — at the north-star altitude (proactive work only).** For
+  **proactive** issues toward an approved north star, my gate is at the **direction**, not each
+  issue: **I approve the north star** (in `NORTH_STAR.md`) and you then pursue *proactive* work
   autonomously. There are two paths to `ready`:
   - **User-directed issue** — when I ask for something directly, my one-liner is the
     *request*, not yet the go. **You draft the spec/issue, then I approve that drafted spec**
@@ -40,10 +52,12 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     regardless of north-star state.
   - Tracking labels like **`debating`** are fine *before* a proactive issue reaches
     consensus — they record in-progress state, not a go; only `ready` means "cleared to run."
-  - **I am involved only at the north-star altitude:** **north-star achieved**, **goal
-    drift / transition** (a proposal that no longer serves the approved direction), and
-    anything escalated as **`needs-human`**. Everything inside an approved north star is
-    yours to drive.
+  - **For proactive work, I am involved only at the north-star altitude:** **north-star
+    achieved**, **goal drift / transition** (a proposal that no longer serves the approved
+    direction), and anything escalated as **`needs-human`**. *Proactive* work inside an approved
+    north star is yours to drive on consensus — but **user-directed issues still require my
+    approval of the drafted spec** before `ready` (per the two-gates rule above); they are never
+    swept into "yours to drive."
 - **Manager-debate gate (proactive issues only).** For issues *you* raise on your own toward
   the north star, run a cross-vendor manager-debate with Codex before they reach my front
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See

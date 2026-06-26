@@ -79,9 +79,10 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   per-issue approval, and it is conditional on your having explicitly approved the active north
   star). **Faber acting alone never self-approves**; for proactive north-star work the
   cross-vendor consensus *is* the gate (see
-  [`reviewer/manager-review.md`](reviewer/manager-review.md)). You are pulled back in only at
-  the north-star altitude: **north-star achieved**, **goal drift / transition**, and
-  `needs-human` escalations.
+  [`reviewer/manager-review.md`](reviewer/manager-review.md)). For *proactive* work you are
+  pulled back in only at the north-star altitude: **north-star achieved**, **goal drift /
+  transition**, and `needs-human` escalations — user-directed issues still come to you for the
+  drafted-spec approval.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
 - **Faber auto-merges clean, low-risk PRs — in-session only.** Under your standing

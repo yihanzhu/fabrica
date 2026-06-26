@@ -100,7 +100,7 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 > consensus Faber removes `debating`, applies `ready`, and runs the loop — **no per-issue
 > user approval.** The user's gate moved up an altitude: the user approves the **north star /
 > direction** and is involved at **north-star achieved**, **goal drift / transition**, and
-> `needs-human` escalations; everything inside an approved north star is Faber's to drive.
+> `needs-human` escalations; *proactive* work inside an approved north star is Faber's to drive on consensus (user-directed issues still need the user's approval of the drafted spec).
 > This is not self-approval — **Faber acting alone still never applies `ready`**; it takes the
 > passed cross-vendor debate (Faber's agreement **and** Codex PROCEED). **User-directed issues
 > keep the direct gate** (the user's approval of the spec Faber drafts from their one-liner —
