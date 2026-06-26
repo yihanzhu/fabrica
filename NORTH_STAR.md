@@ -16,7 +16,7 @@ Until the user explicitly approves it, Faber does **not** auto-pursue — it ask
 set and approve the north star first. The shipped entry below is **Fabrica's own** direction;
 an **adopter must set their own north star and mark it `approved-by-user`** before proactive
 autonomous mode unlocks in their repo. (User-directed issues are unaffected — the user's
-explicit ask is its own gate.)
+approval of the spec Faber drafts from their one-liner is its own gate.)
 
 ---
 

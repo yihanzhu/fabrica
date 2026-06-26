@@ -44,8 +44,9 @@ the backlog:
   + low-risk PRs under standing authorization, and must bring safety-rail / north-star /
   ambiguous / high-risk PRs to the human); the rounds cap and `needs-human` escalation stay
   intact. Faber never writes code/opens PRs and **never self-approves acting alone** — a
-  user-directed issue is gated by the user's explicit ask, a proactive issue by the passed
-  Faber⇄Codex manager-debate consensus (the user's own gate is at the north-star altitude).
+  user-directed issue is gated by the user's approval of the drafted spec (the one-liner is the
+  request, not the go), a proactive issue by the passed Faber⇄Codex manager-debate consensus
+  (the user's own gate is at the north-star altitude).
 
 ## Reusability goal
 - No hardcoded personal values (usernames, repo names) in shipped templates — keep the

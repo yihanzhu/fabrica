@@ -79,7 +79,8 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 > `needs-human` escalations; everything inside an approved north star is Faber's to drive.
 > This is not self-approval — **Faber acting alone still never applies `ready`**; it takes the
 > passed cross-vendor debate (Faber's agreement **and** Codex PROCEED). **User-directed issues
-> keep the direct gate** (the user's explicit ask).
+> keep the direct gate** (the user's approval of the spec Faber drafts from their one-liner —
+> the one-liner is the request, not the go).
 
 ## How the manager-reviewer actually runs
 

@@ -68,7 +68,9 @@ exactly one coder launch per approved issue, one review path, and one revision p
 - **Judgment lives at the direction (front gate at the north-star altitude), not the diff.**
   You approve the **north star** ([`NORTH_STAR.md`](NORTH_STAR.md)) and Faber pursues it
   autonomously — you stop reviewing diffs *and* stop approving each issue. Two paths clear an
-  issue to run: a **user-directed** issue on your explicit ask (Faber records it with `ready`);
+  issue to run: a **user-directed** issue where your one-liner is the *request* — Faber drafts
+  the spec, you approve that drafted spec, and *that approval* is the gate Faber records with
+  `ready` (drafting alone does not earn `ready`);
   a **proactive** issue on **Faber⇄Codex manager-debate consensus** — on consensus Faber
   removes `debating` and applies `ready` itself, no per-issue ask. **Faber acting alone never
   self-approves**; for proactive north-star work the cross-vendor consensus *is* the gate (see
