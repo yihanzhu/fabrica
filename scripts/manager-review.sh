@@ -31,10 +31,11 @@ set -euo pipefail
 # `--repo` to every gh call, so a GH_REPO in the environment can't redirect the comment to
 # a different repo's issue.
 #
-# Codex reads the repo read-only to ground its judgment (the cwd is the operator's own
-# checkout — the manager-review forms a judgment about the issue, it does not touch a diff,
-# so there is no PR head to fetch and no temp worktree as in codex-review.sh). The
-# read-only sandbox guarantees the checkout is never mutated.
+# Codex reads the repo read-only to ground its judgment (the operator's own checkout — the
+# manager-review forms a judgment about the issue, it does not touch a diff, so there is no
+# PR head to fetch and no temp worktree as in codex-review.sh). It is pinned to the repo's
+# git top-level via `codex exec -C <repo_root>` so it reviews the WHOLE repo even when
+# invoked from a subdirectory. The read-only sandbox guarantees the checkout is never mutated.
 #
 # Re-run safe: a `trap ... EXIT` removes the temp output file even on failure. No leftover
 # temp files. Re-running posts a fresh verdict comment (each round is its own comment) —
@@ -135,6 +136,17 @@ if ! repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" |
   exit 1
 fi
 
+# Resolve the target repo's git top-level. The usage allows running from anywhere inside the
+# clone (and `gh repo view` resolves <owner>/<repo> from any subdirectory), but `codex exec`
+# grounds its read-only review in its working directory — so from a subdir it would see only
+# that subtree while still posting a repo-level verdict. Pin Codex to the repo root via
+# `codex exec -C "$repo_root"` (below), so it always reviews the whole repo regardless of cwd.
+if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || [ -z "$repo_root" ]; then
+  echo "error: cannot resolve the git top-level of the current repo" >&2
+  echo "       run this from within the target repo's clone" >&2
+  exit 1
+fi
+
 # Pull the issue title + body — this is the proposal Codex debates. Fail early if the
 # issue can't be read (wrong number, no access) before invoking codex. gh's `-q` runs its
 # bundled jq, so we extract the fields without an external jq dependency.
@@ -215,8 +227,9 @@ prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_bo
 # writable sandbox from the operator's Codex config; we deliberately do NOT pass
 # --dangerously-bypass-* , and avoid --ignore-user-config so the operator's model/effort
 # defaults still apply. `-o <tmp>` captures Codex's clean final message off the noisy exec
-# trace. Codex reads the cwd (the operator's checkout) read-only to ground its judgment.
-review_cmd=(codex exec -c sandbox_mode="read-only" -o "$tmp")
+# trace. `-C "$repo_root"` pins Codex to the target repo's git top-level so it reads the
+# whole repo read-only to ground its judgment, even when invoked from a subdirectory.
+review_cmd=(codex exec -C "$repo_root" -c sandbox_mode="read-only" -o "$tmp")
 if [ -n "$model" ]; then
   review_cmd+=(-m "$model")
 fi
