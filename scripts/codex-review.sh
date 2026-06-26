@@ -178,8 +178,15 @@ fi
 "${review_cmd[@]}"
 
 # Post the review verbatim, with a short header marking it the cross-vendor reviewer.
+# The header also records the EXACT head SHA Codex reviewed as a parseable marker line
+# (`Reviewed-head: <full-sha>`), so a later actor (e.g. scripts/merge-pr.sh) can bind a
+# merge to the precise commit this review covered, and refuse if the head has since moved.
+# The marker is part of Faber's header prefix — clearly separate from Codex's verbatim
+# body below — so this stays read-only / comments-only / verbatim (no behavior change).
 {
   echo "## Codex reviewer (cross-vendor, read-only)"
+  echo
+  echo "Reviewed-head: ${pr_head}"
   echo
   echo "_Posted verbatim by \`codex-review.sh\` (\`codex exec review --base ${base_ref}\` in an isolated temp worktree, sandbox forced read-only). Comments only — Codex never pushes, approves, or merges._"
   echo
