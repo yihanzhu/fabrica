@@ -41,16 +41,16 @@ set -euo pipefail
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate).
-#       Detected via MULTIPLE signals — pass if ANY is positive: a GitHub Actions
-#       workflow with a `pull_request` trigger (heuristic, covers the inline
-#       scalar/array, block-mapping-key, and block-sequence-item forms, and
-#       `pull_request_target`; not a full YAML parse), OR check-runs / commit statuses
-#       on a recent PR's HEAD (covers external CI like CircleCI/Buildkite/Jenkins that
-#       post PR statuses). Both signals are PR-SPECIFIC: a repo whose CI runs only on
-#       pushes to the default branch — never on PRs — has no gate for merge-pr.sh, so
-#       doctor must NOT count default-branch checks. No signal → WARN, not FAIL:
-#       merge-pr.sh's `gh pr checks` is the real enforcement, so doctor flags the risk
-#       rather than hard-failing a valid external-CI repo (or one with no PRs yet).
+#       Detected from the OBSERVED checks on recent PRs (ground truth): check-runs /
+#       commit statuses on a recent PR's HEAD. This covers GitHub Actions AND external
+#       CI (CircleCI/Buildkite/Jenkins) uniformly — anything that posts a check on a PR
+#       head — with no false pass from disabled/inactive workflow files. It is
+#       PR-SPECIFIC: a repo whose CI runs only on pushes to the default branch — never on
+#       PRs — has no gate for merge-pr.sh, so doctor must NOT count default-branch checks.
+#       No checks (or no PRs) → WARN, not FAIL: merge-pr.sh's `gh pr checks` is the real
+#       enforcement, so doctor flags the risk rather than hard-failing a valid
+#       external-CI repo (or one with no PRs yet). Enumerating *active* Actions workflows
+#       via the Actions API is a deferred enhancement (a follow-up issue).
 #   (j) [target-repo path] the target's CLAUDE.md is present and filled in: it exists,
 #       has no `<cmd>` placeholders, AND has a `Stack & commands` section — WARN otherwise.
 #
@@ -265,75 +265,49 @@ fi
 # A green doctor on a real repo must not mean "no hard gate." But the gate that's
 # actually enforced is merge-pr.sh's `gh pr checks`, which surfaces ANY PR check —
 # GitHub Actions AND external CI (CircleCI/Buildkite/Jenkins) wired in as required
-# status checks. So doctor must not hard-fail a valid external-CI repo just because it
-# has no Actions workflows. We detect PR-triggered CI via MULTIPLE signals and pass if
-# ANY is positive; if none is detectable we WARN (not FAIL) — the merge gate is the
+# status checks. If none is detectable we WARN (not FAIL) — the merge gate is the
 # real enforcement, so doctor flags the risk (confirm the repo runs checks on PRs)
 # rather than blocking a setup that may be fine (external CI, or CI that hasn't run yet).
 #
-# Signal (a) — a GitHub Actions workflow with a `pull_request` trigger. Detection is a
-# HEURISTIC, not a full YAML parse (we only have jq, not yq). `pull_request` can be
-# declared several valid ways, all of which run CI on PRs, so we cover each form with
-# line-anchored alternatives and avoid false positives from unrelated
-# `github.event.pull_request` expressions:
-#   - an `on:`/`"on":`/`'on':` line that contains pull_request (inline scalar `on:
-#     pull_request` and inline array `on: [push, pull_request]`), OR
-#   - a block mapping key `  pull_request:` on its own line, OR
-#   - a block sequence item `  - pull_request` on its own line.
-# `pull_request_target` counts too — it also triggers on PRs.
+# We detect via the OBSERVED checks on recent PRs (ground truth), not by scanning
+# workflow files. Reading `.github/workflows` for a `pull_request` trigger is a
+# heuristic with an endless tail of edge cases — disabled/ignored files (`ci.yml.disabled`),
+# `.github/workflows` listing non-active YAML, format variants — and it false-passes when
+# an inactive workflow merely mentions the trigger. Observed PR checks have no such
+# false pass: a disabled workflow produces no checks. This signal covers GitHub Actions
+# AND external CI uniformly (anything that posts a check-run/status on a PR head).
 #
-# Signal (b) — check-runs / commit statuses on a RECENT PR's HEAD. This covers external
-# CI (no Actions workflow at all) that posts checks/statuses on PRs. It must be
-# PR-specific: probing the default branch's HEAD would false-pass a repo whose CI runs
-# only on pushes to the default branch and NOT on PRs — exactly the repo with no gate
-# for merge-pr.sh. So we list recent PRs and inspect the head SHA of each that has one,
-# stopping at the first with any check-run/status. We tolerate the API calls' error/empty
-# cases (no PRs, no checks, 404, 403) without aborting under `set -e` (each call is
-# `|| true`, defaulting the count to 0).
-pr_trigger_re='^("on"|'\''on'\''|on):.*pull_request|^[[:space:]]*pull_request(_target)?:[[:space:]]*$|^[[:space:]]*-[[:space:]]*pull_request(_target)?[[:space:]]*$'
+# It must be PR-specific: probing the default branch's HEAD would false-pass a repo
+# whose CI runs only on pushes to the default branch and NOT on PRs — exactly the repo
+# with no gate for merge-pr.sh. So we list recent PRs and inspect the head SHA of each
+# that has one, stopping at the first with any check-run/status. We tolerate the API
+# calls' error/empty cases (no PRs, no checks, 404, 403) without aborting under `set -e`
+# (each call is `|| true`, defaulting the count to 0); the PR list is buffered into a
+# variable and looped via a here-string (no `… | grep` pipe).
+#
+# DEFERRED ENHANCEMENT (follow-up issue): enumerating the *active* Actions workflows via
+# the Actions API (`repos/<repo>/actions/workflows`, which reports each workflow's
+# state) would let doctor pass a freshly-set-up repo that has a valid PR workflow but no
+# PRs yet — without re-introducing the file-scan's false passes.
 if [ -n "$target_repo" ]; then
   ci_seen=0
 
-  # Signal (a): a GitHub Actions workflow declaring a pull_request trigger.
-  if workflow_paths="$(gh api "repos/$target_repo/contents/.github/workflows" \
-      --jq '.[] | select(.type=="file") | .path' 2>/dev/null)"; then
-    while IFS= read -r wf; do
-      [ -n "$wf" ] || continue
-      # Buffer the workflow body into a variable, then match with a here-string. Piping
-      # `gh api ... | grep -q` is unsafe under `set -o pipefail`: grep -q exits on the
-      # first match and closes the pipe, so gh can die with SIGPIPE and fail the whole
-      # pipeline — a false negative on large workflows. The here-string has no pipe.
-      wf_content="$(gh api -H "Accept: application/vnd.github.raw" \
-        "repos/$target_repo/contents/$wf" 2>/dev/null || true)"
-      if grep -qE "$pr_trigger_re" <<<"$wf_content"; then
-        ci_seen=1
-        break
-      fi
-    done <<< "$workflow_paths"
-  fi
-
-  # Signal (b): check-runs / commit statuses on a RECENT PR's HEAD — covers external CI
-  # with no Actions workflows that posts PR checks. PR-specific (NOT the default branch):
-  # buffer the PR list into a variable, then inspect each head SHA via a here-string loop
-  # (no `… | grep` pipe). Tolerate failure/empty (|| true, default 0).
-  if [ "$ci_seen" -eq 0 ]; then
-    pr_head_shas="$(gh pr list --repo "$target_repo" --state all --limit 5 \
-      --json headRefOid --jq '.[].headRefOid' 2>/dev/null || true)"
-    while IFS= read -r pr_sha; do
-      [ -n "$pr_sha" ] || continue
-      check_runs="$(gh api "repos/$target_repo/commits/$pr_sha/check-runs" \
-        --jq '.total_count' 2>/dev/null || true)"
-      statuses="$(gh api "repos/$target_repo/commits/$pr_sha/status" \
-        --jq '.statuses | length' 2>/dev/null || true)"
-      if [ "${check_runs:-0}" -gt 0 ] 2>/dev/null || [ "${statuses:-0}" -gt 0 ] 2>/dev/null; then
-        ci_seen=1
-        break
-      fi
-    done <<< "$pr_head_shas"
-  fi
+  pr_head_shas="$(gh pr list --repo "$target_repo" --state all --limit 5 \
+    --json headRefOid --jq '.[].headRefOid' 2>/dev/null || true)"
+  while IFS= read -r pr_sha; do
+    [ -n "$pr_sha" ] || continue
+    check_runs="$(gh api "repos/$target_repo/commits/$pr_sha/check-runs" \
+      --jq '.total_count' 2>/dev/null || true)"
+    statuses="$(gh api "repos/$target_repo/commits/$pr_sha/status" \
+      --jq '.statuses | length' 2>/dev/null || true)"
+    if [ "${check_runs:-0}" -gt 0 ] 2>/dev/null || [ "${statuses:-0}" -gt 0 ] 2>/dev/null; then
+      ci_seen=1
+      break
+    fi
+  done <<< "$pr_head_shas"
 
   if [ "$ci_seen" -eq 1 ]; then
-    report 0 "(i) PR-triggered CI detected on $target_repo (Actions pull_request workflow and/or checks on a recent PR)"
+    report 0 "(i) PR-triggered CI detected on $target_repo (checks observed on a recent PR)"
   else
     report_warn "(i) no PR-triggered CI detected on $target_repo — CI is the hard merge gate; confirm the repo runs checks on PRs (Actions workflow or external CI as required status checks)"
   fi
