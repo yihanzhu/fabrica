@@ -43,11 +43,13 @@ set -euo pipefail
 #       Detected via MULTIPLE signals — pass if ANY is positive: a GitHub Actions
 #       workflow with a `pull_request` trigger (heuristic, covers the inline
 #       scalar/array, block-mapping-key, and block-sequence-item forms, and
-#       `pull_request_target`; not a full YAML parse), OR recent check-runs / commit
-#       statuses on the default branch (covers external CI like CircleCI/Buildkite/
-#       Jenkins wired in as required status checks). No signal → WARN, not FAIL:
+#       `pull_request_target`; not a full YAML parse), OR check-runs / commit statuses
+#       on a recent PR's HEAD (covers external CI like CircleCI/Buildkite/Jenkins that
+#       post PR statuses). Both signals are PR-SPECIFIC: a repo whose CI runs only on
+#       pushes to the default branch — never on PRs — has no gate for merge-pr.sh, so
+#       doctor must NOT count default-branch checks. No signal → WARN, not FAIL:
 #       merge-pr.sh's `gh pr checks` is the real enforcement, so doctor flags the risk
-#       rather than hard-failing a valid external-CI repo (or one whose CI hasn't run).
+#       rather than hard-failing a valid external-CI repo (or one with no PRs yet).
 #   (j) [target-repo path] the target's CLAUDE.md is present and filled in (no `<cmd>`
 #       placeholders) — WARN otherwise.
 #
@@ -277,10 +279,14 @@ fi
 #   - a block sequence item `  - pull_request` on its own line.
 # `pull_request_target` counts too — it also triggers on PRs.
 #
-# Signal (b) — recent check-runs / commit statuses on the default branch's HEAD. This
-# covers external CI (no Actions workflow at all) and any checks already reporting on
-# the repo. We tolerate the API call's error/empty cases (no checks, 404, 403) without
-# aborting under `set -e` (each call is `|| true`, defaulting the count to 0).
+# Signal (b) — check-runs / commit statuses on a RECENT PR's HEAD. This covers external
+# CI (no Actions workflow at all) that posts checks/statuses on PRs. It must be
+# PR-specific: probing the default branch's HEAD would false-pass a repo whose CI runs
+# only on pushes to the default branch and NOT on PRs — exactly the repo with no gate
+# for merge-pr.sh. So we list recent PRs and inspect the head SHA of each that has one,
+# stopping at the first with any check-run/status. We tolerate the API calls' error/empty
+# cases (no PRs, no checks, 404, 403) without aborting under `set -e` (each call is
+# `|| true`, defaulting the count to 0).
 pr_trigger_re='^("on"|'\''on'\''|on):.*pull_request|^[[:space:]]*pull_request(_target)?:[[:space:]]*$|^[[:space:]]*-[[:space:]]*pull_request(_target)?[[:space:]]*$'
 if [ -n "$target_repo" ]; then
   ci_seen=0
@@ -303,23 +309,28 @@ if [ -n "$target_repo" ]; then
     done <<< "$workflow_paths"
   fi
 
-  # Signal (b): recent check-runs / commit statuses on the default branch HEAD — covers
-  # external CI with no Actions workflows. Tolerate failure/empty (|| true, default 0).
+  # Signal (b): check-runs / commit statuses on a RECENT PR's HEAD — covers external CI
+  # with no Actions workflows that posts PR checks. PR-specific (NOT the default branch):
+  # buffer the PR list into a variable, then inspect each head SHA via a here-string loop
+  # (no `… | grep` pipe). Tolerate failure/empty (|| true, default 0).
   if [ "$ci_seen" -eq 0 ]; then
-    default_branch="$(gh api "repos/$target_repo" --jq '.default_branch' 2>/dev/null || true)"
-    if [ -n "$default_branch" ]; then
-      check_runs="$(gh api "repos/$target_repo/commits/$default_branch/check-runs" \
+    pr_head_shas="$(gh pr list --repo "$target_repo" --state all --limit 5 \
+      --json headRefOid --jq '.[].headRefOid' 2>/dev/null || true)"
+    while IFS= read -r pr_sha; do
+      [ -n "$pr_sha" ] || continue
+      check_runs="$(gh api "repos/$target_repo/commits/$pr_sha/check-runs" \
         --jq '.total_count' 2>/dev/null || true)"
-      statuses="$(gh api "repos/$target_repo/commits/$default_branch/status" \
+      statuses="$(gh api "repos/$target_repo/commits/$pr_sha/status" \
         --jq '.statuses | length' 2>/dev/null || true)"
       if [ "${check_runs:-0}" -gt 0 ] 2>/dev/null || [ "${statuses:-0}" -gt 0 ] 2>/dev/null; then
         ci_seen=1
+        break
       fi
-    fi
+    done <<< "$pr_head_shas"
   fi
 
   if [ "$ci_seen" -eq 1 ]; then
-    report 0 "(i) PR-triggered CI detected on $target_repo (Actions workflow and/or recent checks/statuses)"
+    report 0 "(i) PR-triggered CI detected on $target_repo (Actions pull_request workflow and/or checks on a recent PR)"
   else
     report_warn "(i) no PR-triggered CI detected on $target_repo — CI is the hard merge gate; confirm the repo runs checks on PRs (Actions workflow or external CI as required status checks)"
   fi
