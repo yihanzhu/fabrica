@@ -34,11 +34,15 @@ set -euo pipefail
 #   (e) jq is on PATH — required by scripts/merge-pr.sh to parse gh's CI-check JSON.
 #   (f) every file in ci/required-files.txt is present on disk (the manifest is
 #       read live — the list is never duplicated here).
-#   (h) NORTH_STAR.md is not still the shipped Fabrica-self default (WARN).
+#   (h) NORTH_STAR.md's ACTIVE entry is not still the shipped Fabrica-self default
+#       (WARN). Scoped to the `status: active` designation, so a kept historical log
+#       entry doesn't keep warning once the active star is replaced.
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate) — FAIL
-#       if none is detectable.
+#       if none is detectable. Trigger detection is a heuristic (covers the inline
+#       scalar/array, block-mapping-key, and block-sequence-item `pull_request` forms,
+#       and `pull_request_target`), not a full YAML parse.
 #   (j) [target-repo path] the target's CLAUDE.md is present and filled in (no `<cmd>`
 #       placeholders) — WARN otherwise.
 #
@@ -211,13 +215,25 @@ fi
 # first-run"). If an adopter never replaces it, manager-review.sh debates proposals
 # against the wrong goal. WARN (not FAIL): a stale north star doesn't block restore,
 # but it must be replaced before proactive mode is meaningful for the adopter's repo.
+#
+# Scope this to the ACTIVE entry only, not the whole file. NORTH_STAR.md instructs
+# keeping a historical log ("## North-star log"), so once an adopter promotes their own
+# active star the shipped name legitimately survives in the log — grepping the whole
+# file would keep warning forever. The active north star is designated by a `status:
+# active` marker on its heading line (the `status:` field, distinct from the log's
+# descriptive `*active; ...*` prose), so we isolate THAT line and only warn if it still
+# carries the shipped default name. Replace the active star and the warning clears even
+# if the old name remains logged.
 north_star="$repo_root/NORTH_STAR.md"
 if [ ! -f "$north_star" ]; then
   report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
-elif grep -qF -- 'Frictionless first-run' "$north_star"; then
-  report_warn "(h) NORTH_STAR.md is still the shipped Fabrica-self default ('Frictionless first-run') — replace it with your own direction before enabling proactive mode"
 else
-  report 0 "(h) NORTH_STAR.md replaced (not the shipped default)"
+  active_designation="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" || true)"
+  if printf '%s\n' "$active_designation" | grep -qF -- 'Frictionless first-run'; then
+    report_warn "(h) NORTH_STAR.md's active entry is still the shipped Fabrica-self default ('Frictionless first-run') — replace it with your own direction before enabling proactive mode"
+  else
+    report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
+  fi
 fi
 
 # (g) optional loop-label check --------------------------------------------------
@@ -241,6 +257,18 @@ fi
 # (gh returns 403), so we don't depend on it. Instead we enumerate the target's
 # workflow files and check whether ANY declares a `pull_request` trigger — the thing
 # that makes CI run on a PR and become a merge gate. No PR-triggered workflow → FAIL.
+#
+# Trigger detection is a HEURISTIC, not a full YAML parse (we only have jq, not yq).
+# `pull_request` can be declared several valid ways, all of which run CI on PRs, so we
+# cover each form with line-anchored alternatives and avoid false positives from
+# unrelated `github.event.pull_request` expressions:
+#   - an `on:`/`"on":`/`'on':` line that contains pull_request (inline scalar `on:
+#     pull_request` and inline array `on: [push, pull_request]`), OR
+#   - a block mapping key `  pull_request:` on its own line, OR
+#   - a block sequence item `  - pull_request` on its own line.
+# `pull_request_target` counts too — it also triggers on PRs. A heuristic is fine for a
+# preflight WARN/FAIL; worst case is a rare miss, which surfaces as a conservative FAIL.
+pr_trigger_re='^("on"|'\''on'\''|on):.*pull_request|^[[:space:]]*pull_request(_target)?:[[:space:]]*$|^[[:space:]]*-[[:space:]]*pull_request(_target)?[[:space:]]*$'
 if [ -n "$target_repo" ]; then
   ci_seen=0
   if ! workflow_paths="$(gh api "repos/$target_repo/contents/.github/workflows" \
@@ -250,7 +278,7 @@ if [ -n "$target_repo" ]; then
     while IFS= read -r wf; do
       [ -n "$wf" ] || continue
       if gh api -H "Accept: application/vnd.github.raw" "repos/$target_repo/contents/$wf" 2>/dev/null \
-          | grep -qE '^[[:space:]]*pull_request:?([[:space:]]|$)'; then
+          | grep -qE "$pr_trigger_re"; then
         ci_seen=1
         break
       fi
