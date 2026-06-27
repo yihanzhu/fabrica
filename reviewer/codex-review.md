@@ -19,15 +19,23 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 *different* repo's PR. Then:
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and **fetches the PR
-   head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --no-tags origin
-   +refs/pull/<PR#>/head:<tmpref> +refs/heads/<base>:refs/remotes/origin/<base>`. Both sources are
-   qualified so a same-named tag on origin (e.g. branch and tag both named `v1.2.0`) can't make
-   the fetch resolve ambiguously or fail before Codex runs. The `refs/pull/<PR#>/head` source
-   brings the PR head commit into the object store even for **fork** PRs (a plain `git fetch
-   origin` would not), and the base is fetched straight into `refs/remotes/origin/<base>` so the
-   `--base origin/<base>` review is always **current** regardless of the clone's configured fetch
-   refspecs (a bare `git fetch origin <base>` would only set `FETCH_HEAD` and could leave
-   `origin/<base>` stale or missing). The `+` prefixes force-update **only** these two
+   head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --no-tags
+   https://github.com/<owner>/<repo>.git +refs/pull/<PR#>/head:<tmpref>
+   +refs/heads/<base>:<base-tmpref>`. The fetch source is the **canonical repo `gh` resolved**
+   (`<owner>/<repo>` from `gh repo view --json nameWithOwner`), **not the literal `origin`
+   remote** — in a fork workflow (`origin` = your fork, `upstream` = the canonical repo PRs
+   target) `gh` reports the PR on the canonical repo, so fetching from `origin` would fail (the
+   PR ref doesn't exist on the fork) or silently grab a same-numbered, unrelated PR and review
+   the wrong diff. Pointing the fetch at `https://github.com/<owner>/<repo>.git` makes the source
+   **provably** the repo `gh` resolved. Both sources are qualified so a same-named tag (e.g.
+   branch and tag both named `v1.2.0`) can't make the fetch resolve ambiguously or fail before
+   Codex runs. The `refs/pull/<PR#>/head` source brings the PR head commit into the object store
+   even for **fork** PRs (a plain `git fetch` of a branch would not). Both destinations are
+   private refs we own under `refs/codex-review/` (not a `refs/remotes/origin/*` tracking ref) —
+   that keeps them independent of which remote `origin` is and avoids clobbering the operator's
+   `origin/<base>` with a commit fetched from a different URL — and the `--base` review runs
+   against the freshly-fetched base ref, always **current** regardless of the clone's configured
+   fetch refspecs. The `+` prefixes force-update **only** these two
    destination refs we own — never a global `git fetch --force`, which combined with git's tag
    auto-following could force-update local `refs/tags/*` and mutate operator state; `--no-tags`
    disables that auto-following so the fetch touches nothing outside the two named refs (the
@@ -40,8 +48,8 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    adds its worktree at a fresh `mktemp` path, a stale entry from a hard-killed previous run
    never blocks a re-run. (It deliberately avoids a global `git worktree prune`, which is
    repo-wide and would touch unrelated operator worktrees.)
-2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
-   Codex's built-in review of the PR head diff vs. its **current** (qualified, remote) base,
+2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base refs/codex-review/base -o <tmpfile>`** —
+   Codex's built-in review of the PR head diff vs. its **current** (qualified, freshly-fetched) base,
    inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the
    `review` subcommand). The `-c sandbox_mode="read-only"` override **forces** the read-only
    sandbox so the review can't inherit a writable default from the operator's Codex config

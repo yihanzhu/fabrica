@@ -27,13 +27,14 @@ set -euo pipefail
 # Isolated review — the operator's checkout is never touched. Instead of checking the
 # PR out into the operator's own working tree (which, even with a clean guard, risks
 # discarding unpushed commits via a force reset), the script fetches the PR head
-# fork-safely (`git fetch origin refs/pull/<PR#>/head`, which brings the head commit into
-# the object store even for fork PRs) and adds a DETACHED, throwaway git worktree at
-# that exact commit. `codex exec review` runs inside that temp worktree against the
-# qualified, freshly-fetched `origin/<base>`, so it always sees the latest head vs. a
-# current base. The operator's branch, index, working tree, and unpushed commits are
-# provably untouched — "read-only" is literally true — so there is no clean-worktree
-# guard, and the reviewer works even when the operator has local uncommitted work.
+# fork-safely (`git fetch https://github.com/<owner>/<repo>.git refs/pull/<PR#>/head`,
+# which brings the head commit into the object store even for fork PRs) and adds a
+# DETACHED, throwaway git worktree at that exact commit. `codex exec review` runs inside
+# that temp worktree against the qualified, freshly-fetched base, so it always sees the
+# latest head vs. a current base. The operator's branch, index, working tree, and
+# unpushed commits are provably untouched — "read-only" is literally true — so there is
+# no clean-worktree guard, and the reviewer works even when the operator has local
+# uncommitted work.
 #
 # Re-run safe: a `trap ... EXIT` removes the temp worktree (`git worktree remove
 # --force`) and the temp output file even on failure, so this script never leaves a
@@ -118,33 +119,42 @@ fi
 base="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 
 # Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store,
-# using EXPLICIT, FULLY-QUALIFIED refspecs so both land at a known ref regardless of the
+# from the CANONICAL repo `gh` resolved (`$repo`), NOT the literal `origin` remote. In a
+# fork workflow (`origin` = your fork, `upstream` = the canonical repo PRs target), `gh`
+# reports the PR on the canonical repo; fetching from `origin` would fail (the PR ref
+# doesn't exist on the fork) or silently grab a same-numbered, unrelated PR — reviewing
+# the wrong diff or nothing. Pointing the fetch at `https://github.com/$repo.git` makes
+# the source PROVABLY the repo `gh` resolved (`$repo` is its `nameWithOwner`), so the head
+# and base always come from the repo the review is bound to.
+#
+# We use EXPLICIT, FULLY-QUALIFIED refspecs so both land at a known ref regardless of the
 # clone's configured fetch refspecs. Both sources are qualified (`refs/pull/<PR#>/head`
-# and `refs/heads/<base>`) so a same-named tag on origin (e.g. a release branch and tag
+# and `refs/heads/<base>`) so a same-named tag on the repo (e.g. a release branch and tag
 # both named `v1.2.0`) can't make the fetch source resolve ambiguously or fail before
 # Codex runs. The `refs/pull/<PR#>/head` source brings the PR head commit in even when
-# the PR comes from a fork (a plain `git fetch origin` would not); we write it to a
-# private local ref we control so its resolution can't be ambiguous. The base is fetched
-# straight into its remote-tracking ref (`refs/remotes/origin/<base>`) so that
-# `--base origin/<base>` below is always CURRENT — a bare `git fetch origin <base>`
-# would only set FETCH_HEAD and, in a clone without the default `origin/*` mapping,
-# could leave origin/<base> stale or missing and review against an old base.
-# Read-only stays literally true: we force-update (the `+` prefix) ONLY these two refs we
-# own, never a global `git fetch --force`. A global `--force` plus git's tag
-# auto-following could force-update local `refs/tags/*` if origin moved a tag reachable
+# the PR comes from a fork (a plain `git fetch` of a branch would not). We write BOTH into
+# private local refs we control (under `refs/codex-review/`), never a remote-tracking ref
+# tied to a remote name — that keeps the destinations independent of which remote `origin`
+# happens to be, and avoids clobbering the operator's `origin/<base>` tracking ref with a
+# commit fetched from a different URL. Read-only stays literally true: we force-update
+# (the `+` prefix) ONLY these two refs we own and delete both before exit (the head right
+# after its SHA is captured, the base in the cleanup trap once `--base` has read it);
+# never a global `git fetch --force`. A global `--force` plus git's tag
+# auto-following could force-update local `refs/tags/*` if the repo moved a tag reachable
 # from the fetched commits — an operator-state mutation. `--no-tags` disables that
 # auto-following, so this fetch touches nothing outside the two named destination refs.
 pr_head_ref="refs/codex-review/pr-head"
-git fetch --no-tags origin \
+base_dest_ref="refs/codex-review/base"
+git fetch --no-tags "https://github.com/${repo}.git" \
   "+refs/pull/${pr}/head:${pr_head_ref}" \
-  "+refs/heads/${base}:refs/remotes/origin/${base}"
+  "+refs/heads/${base}:${base_dest_ref}"
 pr_head="$(git rev-parse "$pr_head_ref")"
 git update-ref -d "$pr_head_ref"
-base_ref="origin/${base}"
+base_ref="$base_dest_ref"
 # Record the EXACT base commit Codex reviews against. The review runs `--base
-# origin/<base>`, so the effective diff is `pr_head` vs. THIS commit. Capturing it lets a
-# later actor (scripts/merge-pr.sh) refuse if the base advanced after the review — a moved
-# base changes the merged integration even when the head is unchanged.
+# refs/codex-review/base`, so the effective diff is `pr_head` vs. THIS commit. Capturing it
+# lets a later actor (scripts/merge-pr.sh) refuse if the base advanced after the review — a
+# moved base changes the merged integration even when the head is unchanged.
 base_head="$(git rev-parse "$base_ref")"
 
 # Allocate temp paths in the system temp dir (never inside the repo, so nothing here
@@ -155,11 +165,14 @@ base_head="$(git rev-parse "$base_ref")"
 worktree="$(mktemp -d)"
 tmp="$(mktemp)"
 
-# Clean up on EVERY exit (success or failure): remove the temp worktree and the temp
-# output file. `git worktree remove --force` drops the worktree even though it is at a
+# Clean up on EVERY exit (success or failure): remove the temp worktree, the temp output
+# file, and the private base ref we own (the head ref was already deleted above once its
+# SHA was captured; the base ref must live until `codex exec review --base` reads it, so it
+# is dropped here). `git worktree remove --force` drops the worktree even though it is at a
 # detached head; the rm -rf fallback covers the case where it was never added.
 cleanup() {
   git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
+  git update-ref -d "$base_dest_ref" 2>/dev/null || true
   rm -f "$tmp"
 }
 trap cleanup EXIT
@@ -175,7 +188,7 @@ git worktree add --detach "$worktree" "$pr_head"
 # --ignore-user-config so the operator's model/effort defaults still apply. `-C` is a
 # flag on the parent `codex exec` (not on the `review` subcommand), so it must come
 # before `review`; it points codex at the temp worktree to review the PR head diff
-# against the qualified remote base origin/<base>.
+# against the qualified, freshly-fetched base ref (refs/codex-review/base).
 review_cmd=(codex exec -C "$worktree" review -c sandbox_mode="read-only" --base "$base_ref" -o "$tmp")
 if [ -n "$model" ]; then
   review_cmd+=(-m "$model")
