@@ -33,11 +33,13 @@ and exits non-zero if anything is missing or differs (zero if all match).
 The supported protection shape is **required status checks** — that is the gate
 `scripts/merge-pr.sh` reads and enforces.
 - ✅ Require status checks to pass before merging (your CI) — the **hard gate**. Mark your
-  CI contexts (lint/test/build) as **required**; `merge-pr.sh` gates on exactly the required
-  contexts and treats any non-required check (preview deploys, coverage bots) as
-  informational, so a pending/failing optional check won't stall a mergeable PR. If you
-  leave the base unprotected (or define no required checks), the script falls back to
-  requiring ≥1 passing check with none failing/pending.
+  CI contexts (lint/test/build) as **required**; `merge-pr.sh` discovers the required checks
+  from the PR's own status-check rollup (`gh pr checks --required`, readable by anyone who can
+  view the PR — **no branch-protection / admin read access needed**, so a non-admin maintainer
+  who can merge is supported), gates on exactly those required checks, and treats any
+  non-required check (preview deploys, coverage bots) as informational, so a pending/failing
+  optional check won't stall a mergeable PR. If you leave the base unprotected (or define no
+  required checks), the script falls back to requiring ≥1 passing check with none failing/pending.
 - ✅ Require branches to be up to date before merging
 - ⛔️ **Do NOT use "Require a pull request before merging → require approving review."**
   Fabrica's reviewer (`scripts/codex-review.sh`) is **comments-only and never approves**, so a

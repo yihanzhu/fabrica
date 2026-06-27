@@ -29,22 +29,22 @@ set -euo pipefail
 #                    PR's CURRENT base still equals it immediately before the merge, so a
 #                    base that advanced after the review (a different effective diff) is
 #                    refused.
-#   3. CI-green    — it confirms CI is green on the current head before merging. When the
-#                    base branch's protection defines REQUIRED status checks, the gate is
-#                    those required contexts (a pending/failing OPTIONAL check — a preview
-#                    deploy, coverage bot, etc. — is informational and does NOT block). When
-#                    no required checks are defined (CONFIRMED by a genuine HTTP 404 — branch
-#                    unprotected / required checks not configured — or a successful response
-#                    with an empty required-context set), it falls back to the legacy gate:
-#                    refuse unless ≥1 check passes and none fail/pend. If required-checks
-#                    discovery is INDETERMINATE (the endpoint failed for any reason OTHER than
-#                    a genuine 404 — 403 no-read-permission, rate limit, transient 5xx, network
-#                    error), it FAILS CLOSED: refuse with the HTTP cause rather than guess "no
-#                    required checks" (guessing would misclassify a protected base and let an
-#                    optional check block, or merge onto a base whose required checks went
-#                    unverified). Either way the guarantee holds: never merge with a failing
-#                    REQUIRED check, never merge with zero passing checks, and never merge when
-#                    we could not determine the required checks.
+#   3. CI-green    — it confirms CI is green on the current head before merging. It discovers
+#                    which checks are REQUIRED from the PR's own status-check rollup, via
+#                    `gh pr checks <pr> --required` (the rollup's `isRequired` flag) — readable
+#                    by anyone who can view the PR, so NO branch-protection / Administration
+#                    read permission is needed (a non-admin maintainer who can merge but lacks
+#                    that permission is no longer locked out). When the rollup reports REQUIRED
+#                    checks, the gate is exactly those (a pending/failing OPTIONAL check — a
+#                    preview deploy, coverage bot, etc. — is informational and does NOT block).
+#                    When the rollup reports NO required checks (gh prints `no required checks
+#                    reported …` and emits no JSON), it falls back to the legacy gate over the
+#                    FULL check set: refuse unless ≥1 check passes and none fail/pend. If the
+#                    discovery call fails for any OTHER reason (auth/network/transient error —
+#                    neither a JSON array nor the benign no-required message), it FAILS CLOSED:
+#                    refuse with the captured error rather than guess. Either way the guarantee
+#                    holds: never merge with a failing REQUIRED check, never merge with zero
+#                    passing checks, and never merge when we could not determine the checks.
 #   3b. Review-gate — if the base branch requires ≥1 APPROVING review (the PR's
 #                    reviewDecision is REVIEW_REQUIRED), it refuses: Fabrica's reviewer is
 #                    comments-only and never approves, so that protection is incompatible
@@ -82,7 +82,7 @@ usage() {
   echo "usage: $0 <PR#>" >&2
   echo "  run from within the target repo's clone, after scripts/codex-review.sh on the same PR" >&2
   echo "  refuses unless: a Reviewed-head marker exists, the PR head still equals it, CI is green" >&2
-  echo "  (required checks if branch protection defines them, else ≥1 pass / no fail), and the" >&2
+  echo "  (required checks if the PR rollup reports any, else ≥1 pass / no fail), and the" >&2
   echo "  PR does not need an approving review (Fabrica's reviewer is comments-only)" >&2
   echo "  then merges (squash if allowed, else a permitted method), pinned to the reviewed SHA" >&2
 }
@@ -205,115 +205,82 @@ fi
 
 # Confirm CI is green on the current head. `gh pr checks --json` tags each check with a
 # `bucket` (pass / fail / pending / skipping / cancel). Which checks GATE the merge depends
-# on whether the PR's BASE branch defines REQUIRED status checks in its branch protection:
+# on whether the PR's status-check rollup marks any check REQUIRED. We discover that from the
+# PR's OWN rollup via `gh pr checks <pr> --required` (gh derives "required" from each check
+# run's `isRequired` flag) — this is readable by ANYONE who can view the PR, so it needs NO
+# branch-protection / Administration read permission. (The prior approach read the base
+# branch's protection via `gh api .../protection/required_status_checks`, which needs that
+# admin-level permission; a non-admin maintainer who could merge but lacked it hit a
+# permission error and the fail-closed path then refused even a green PR. The rollup removes
+# that requirement.)
 #
-#   * REQUIRED checks defined (protected base) — gate on EXACTLY those required contexts:
-#       - every required context must be present on the head AND in bucket `pass`
-#         (a missing required context = it hasn't reported yet = not green); and
-#       - a non-required (optional) check in ANY bucket — a pending preview deploy, a
-#         failing coverage bot — is INFORMATIONAL and does NOT block. (operator-approved
-#         semantics change: optional checks no longer stall a genuinely mergeable PR.)
-#     Guarantee preserved: we never merge with a failing/absent REQUIRED check, and the set
-#     of required contexts is non-empty here, so ≥1 check passes by construction.
+# `gh pr checks --required` behaves (gh 2.92.0):
+#   * required checks present  — exits 0, prints a JSON array of just the required checks.
+#   * no required checks        — exits non-zero, prints NO JSON array, and writes
+#                                 `no required checks reported on the '<branch>' branch` to
+#                                 stderr. This is the benign "unprotected / no required
+#                                 checks" case → legacy fallback over the full set.
+#   * genuine error (auth/net)  — exits non-zero with neither a JSON array nor that benign
+#                                 message → fail closed.
+# `gh pr checks` also exits non-zero merely because checks aren't all green (e.g. pending),
+# so we DECIDE FROM THE OUTPUT CONTENT, not the exit code: capture stdout and stderr without
+# letting `set -e` abort, then classify. We request `name,state,bucket` so diagnostics can
+# name offending checks (`gh --json` returns only requested fields).
 #
-#   * NO required checks defined (unprotected / free private repo — the protection endpoint
-#     404s) — fall back to the LEGACY gate over ALL reported checks:
+#   * REQUIRED checks present — gate on EXACTLY those required checks:
+#       - every required check must be in bucket `pass`; any other bucket (pending preview
+#         deploy that is required, a failing required test) blocks — name the non-pass ones.
+#       - a non-required (optional) check in ANY bucket is INFORMATIONAL and does NOT block.
+#     Guarantee preserved: we never merge with a non-pass REQUIRED check; the required set is
+#     non-empty here, so ≥1 check passes by construction.
+#
+#   * NO required checks reported — fall back to the LEGACY gate over ALL reported checks:
 #       - AT LEAST ONE check is `pass` (something CI actually ran and passed); and
 #       - NO check is fail/pending/cancel (skipping is tolerated alongside the pass);
 #       - refuse on zero checks (CI is the gate, so "no checks" is not "green").
 #     This closes the all-skipped hole: if every check is `skipping`, nothing passed.
 #
 # Either way: never merge with a failing required check; never merge with zero passing checks.
-#
-# `gh pr checks` exits non-zero when checks aren't all passing (e.g. 8 = pending), so we
-# capture its output without letting `set -e` abort, then judge the buckets ourselves. We
-# request `name` alongside `bucket` so diagnostics can name the offending checks — `gh --json`
-# returns only requested fields, so omitting `name` would print null.
-checks_json="$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null || true)"
-if [ -z "$checks_json" ] || [ "$(jq 'length' <<<"$checks_json")" -eq 0 ]; then
-  echo "error: no CI checks found on PR #$pr head ($current_head); refusing to merge" >&2
-  echo "       CI is the hard gate — there must be at least one green check" >&2
-  exit 1
+req_errfile="$(mktemp "${TMPDIR:-/tmp}/merge-pr-required-err.XXXXXX")"
+# `|| true` so the non-zero exit (no-required-checks, or merely-pending checks) does not
+# abort under `set -e` — we classify from the OUTPUT CONTENT below, not the exit code.
+req_out="$(gh pr checks "$pr" --repo "$repo" --required --json name,state,bucket 2>"$req_errfile" || true)"
+req_err="$(cat "$req_errfile" 2>/dev/null || true)"
+rm -f "$req_errfile"
+
+# Is req_out a non-empty JSON array (required checks present)? Tolerate the non-zero rc.
+req_is_array="false"
+if [ -n "$req_out" ] && jq -e 'type == "array" and length > 0' >/dev/null 2>&1 <<<"$req_out"; then
+  req_is_array="true"
 fi
 
-# Determine the REQUIRED status-check contexts from the base branch's protection, and
-# FAIL CLOSED if discovery is indeterminate. The required-checks endpoint returns a genuine
-# HTTP 404 only when the branch is unprotected OR protected WITHOUT required status checks —
-# THAT (and only that) is the "no required checks" case that takes the legacy all-checks
-# fallback. Any OTHER failure (403 = no branch-protection read permission, 429 rate-limit,
-# 5xx, network error) means we COULD NOT DETERMINE the required checks; treating that as
-# "no required checks" would misclassify a protected base and let an optional pending/failing
-# check block the merge (the regression this change fixes) while the diagnostic lies. So we
-# capture `gh api`'s stderr + exit code, detect a real `HTTP 404` for the fallback, and
-# refuse on anything else.
-base_ref="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
-# URL-encode the branch name for the REST path: slashed names like `release/1.0` or
-# `feature/x` carry `/`, which a raw interpolation would send as path separators — the
-# lookup would 404 and wrongly fall back to the legacy all-checks gate. `@uri` encodes
-# `/` → `%2F` (and other reserved chars).
-base_ref_enc="$(jq -rn --arg b "$base_ref" '$b | @uri')"
-# Capture `gh api`'s stderr (where it prints the `(HTTP <code>)` on failure) in a temp file
-# so we can distinguish a genuine 404 from any other error. mktemp gives an unpredictable
-# path (no `$$` collision/symlink race), and we delete it the moment we've read it back.
-required_err=""
-required_json=""
-required_rc=0
-required_errfile="$(mktemp "${TMPDIR:-/tmp}/merge-pr-required-err.XXXXXX")"
-required_json="$(gh api "repos/$repo/branches/$base_ref_enc/protection/required_status_checks" 2>"$required_errfile")" || required_rc=$?
-required_err="$(cat "$required_errfile" 2>/dev/null || true)"
-rm -f "$required_errfile"
-if [ "$required_rc" -ne 0 ]; then
-  # The call failed. Take the legacy fallback ONLY on a confirmed HTTP 404 (branch
-  # protection / required checks not configured). On any other error (403/5xx/429/network)
-  # we cannot tell what the required checks are — refuse rather than risk merging onto a
-  # base whose real required checks we never read.
-  if printf '%s' "$required_err" | grep -q 'HTTP 404'; then
-    required_json=""  # genuine "no required checks" → legacy fallback below
-  else
-    http_code="$(printf '%s' "$required_err" | grep -oE 'HTTP [0-9]{3}' | head -n1)"
-    [ -z "$http_code" ] && http_code="no HTTP status (network/transport error)"
-    echo "error: could not determine required status checks for '$base_ref' ($http_code); refusing to merge" >&2
-    echo "       discovery of the base branch's required checks failed for a reason other than" >&2
-    echo "       'not configured' (a genuine 404) — e.g. missing branch-protection read access," >&2
-    echo "       a rate limit, a transient 5xx, or a network error. Merging blind could land onto" >&2
-    echo "       a protected base whose required checks were never verified." >&2
-    echo "       re-run, or grant the gh operator branch-protection read access on '$repo'." >&2
-    if [ -n "$required_err" ]; then
-      echo "       gh api error: $(printf '%s' "$required_err" | head -n1)" >&2
-    fi
-    exit 1
-  fi
-fi
-required_contexts="$(
-  jq -r '([.contexts // []] | flatten) + ([.checks // [] | map(.context)] | flatten) | unique | .[]' \
-    <<<"${required_json:-{}}" 2>/dev/null || true
-)"
-
-if [ -n "$required_contexts" ]; then
-  # Protected base with required checks — gate on those contexts only.
-  not_green_required=""
-  while IFS= read -r ctx; do
-    [ -z "$ctx" ] && continue
-    bucket="$(jq -r --arg ctx "$ctx" '[.[] | select(.name == $ctx)] | (.[0].bucket // "missing")' <<<"$checks_json")"
-    if [ "$bucket" != "pass" ]; then
-      not_green_required+="         - $ctx: $bucket"$'\n'
-    fi
-  done <<<"$required_contexts"
+if [ "$req_is_array" = "true" ]; then
+  # REQUIRED checks present (from the PR rollup) — gate on exactly those.
+  not_green_required="$(
+    jq -r '.[] | select(.bucket != "pass") | "         - \(.name): \(.bucket)"' <<<"$req_out"
+  )"
+  total_required="$(jq -r 'length' <<<"$req_out")"
   if [ -n "$not_green_required" ]; then
     echo "error: required CI check(s) not green on PR #$pr head ($current_head); refusing to merge" >&2
-    echo "       required checks not passing (optional checks are informational and ignored):" >&2
-    printf '%s' "$not_green_required" >&2
+    echo "       gated on the $total_required required check(s) from the PR rollup" >&2
+    echo "       (optional/non-required checks are informational and ignored):" >&2
+    printf '%s\n' "$not_green_required" >&2
     exit 1
   fi
-else
-  # No required checks — confirmed by a genuine 404 (branch unprotected / required checks
-  # not configured) OR a successful response with an empty required-context set. (An
-  # indeterminate discovery failure already refused above, so we never reach here blind.)
-  # Legacy gate over all reported checks.
+  echo "CI gate: all $total_required required check(s) pass (from PR rollup; optional checks ignored)"
+elif printf '%s\n%s' "$req_out" "$req_err" | grep -qi 'no required checks'; then
+  # NO required checks reported by the rollup — the benign case. Legacy gate over the FULL
+  # check set: ≥1 pass and nothing failing/pending (skipping tolerated), refuse on zero.
+  checks_json="$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null || true)"
+  if [ -z "$checks_json" ] || [ "$(jq 'length' <<<"$checks_json")" -eq 0 ]; then
+    echo "error: no CI checks found on PR #$pr head ($current_head); refusing to merge" >&2
+    echo "       CI is the hard gate — there must be at least one green check" >&2
+    exit 1
+  fi
   not_green="$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping")] | length' <<<"$checks_json")"
   if [ "$not_green" -ne 0 ]; then
     echo "error: CI not green on PR #$pr head ($current_head); refusing to merge" >&2
-    echo "       (no required checks defined on base '$base_ref' — gating on all checks)" >&2
+    echo "       (no required checks reported on PR #$pr — legacy fallback gating on all checks)" >&2
     echo "       not-passing checks:" >&2
     jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "         - \(.name): \(.bucket)"' <<<"$checks_json" >&2
     exit 1
@@ -324,6 +291,18 @@ else
     echo "       every check is skipped/optional — CI must actually run and pass to be the gate" >&2
     exit 1
   fi
+  echo "CI gate: legacy fallback (no required checks reported) — $passing passing, none failing/pending"
+else
+  # Neither a JSON array of required checks nor the benign "no required checks" message — a
+  # genuine unexpected failure (auth/network/transient). Fail closed: refuse rather than guess.
+  echo "error: could not determine required status checks for PR #$pr; refusing to merge" >&2
+  echo "       'gh pr checks --required' returned neither a list of required checks nor the" >&2
+  echo "       benign 'no required checks' message — likely an auth, rate-limit, or network" >&2
+  echo "       error. Merging blind could land with unverified checks. Re-run when resolved." >&2
+  if [ -n "$req_err" ]; then
+    echo "       gh error: $(printf '%s' "$req_err" | head -n1)" >&2
+  fi
+  exit 1
 fi
 
 # Pick a merge method the repo actually allows. Hardcoding `--squash` fails server-side on
