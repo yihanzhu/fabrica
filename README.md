@@ -96,8 +96,12 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   not hand-craft a merge command). `merge-pr.sh` owns the mechanical safety: it reads the
   reviewed head+base SHAs from the authenticated `codex-review.sh` marker, confirms the PR's
   current head **and** base still match those (refusing if either moved since the review),
-  requires ≥1 real passing CI check, and merges **pinned via `--match-head-commit`** — refusing
-  otherwise. The merge is **scoped to the target repo** (never another repo) and **bound to the
+  gates on the base branch's **required status checks** (falling back to ≥1 real passing CI
+  check with none failing when no required checks are defined — optional checks like preview
+  deploys are informational), refuses a PR that needs an **approving review**
+  (`reviewDecision=REVIEW_REQUIRED`, since the comments-only reviewer never approves), and
+  merges with a **repo-permitted method** (squash if allowed) **pinned via
+  `--match-head-commit`** — refusing otherwise. The merge is **scoped to the target repo** (never another repo) and **bound to the
   exact head Faber reviewed** — if the head moved, Faber **re-reviews rather than merges** (the
   script itself refuses a moved head; a head Codex never reviewed is never merged). A later
   **status/Tracking scan and the brief only surface `merge-ready` PRs (read-only)** — they never
@@ -144,7 +148,7 @@ reviewer/manager-review.md Codex manager-reviewer mechanism (issue-as-bus): roun
 scripts/install.sh         Generate the /faber command with a repo-derived path (idempotent)
 scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a PR, verbatim (stamps Reviewed-head: marker)
 scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed issue vs. the north star, post the verdict to the issue verbatim
-scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + CI-green, then squash-merge
+scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 templates/faber-command.md Template for the /faber command (path placeholder)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
