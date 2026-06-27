@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fabrica — an autonomous coding workshop</title>
+  <meta name="description" content="Fabrica is a small, cross-vendor coding team. You set the north star; Faber plans and Codex debates it, a coder builds and Codex reviews it, and CI guards the gate. Coming soon." />
+  <meta name="theme-color" content="#131210" />
+  <link rel="canonical" href="https://fabrica.yihanzhu.com/" />
+
+  <!-- Open Graph / social. Add an og:image (1200×630 PNG) once distribution is decided. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Fabrica — an autonomous coding workshop" />
+  <meta property="og:description" content="A small, cross-vendor coding team: you set the north star, Faber plans and Codex debates, a coder builds and Codex reviews, CI guards the gate. Coming soon." />
+  <meta property="og:url" content="https://fabrica.yihanzhu.com/" />
+  <meta name="twitter:card" content="summary" />
+
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+  <!-- Fonts (with system fallbacks if these fail to load) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="#top" aria-label="Fabrica — home">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <defs>
+            <linearGradient id="brandEmber" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#ffce8a"/>
+              <stop offset="0.5" stop-color="#ff9b4d"/>
+              <stop offset="1" stop-color="#f2602c"/>
+            </linearGradient>
+          </defs>
+          <g fill="url(#brandEmber)">
+            <path d="M6 9.6 L1.6 11.7 L6 13.9 Z"/>
+            <rect x="5" y="9" width="22" height="5" rx="1.6"/>
+            <rect x="12.5" y="14" width="7" height="4"/>
+            <rect x="7" y="18" width="18" height="5" rx="2"/>
+          </g>
+        </svg>
+        Fabrica
+        <span class="sub">The workshop</span>
+      </a>
+      <span class="chip"><span class="dot" aria-hidden="true"></span>Coming soon</span>
+    </div>
+  </header>
+
+  <main id="top">
+
+    <!-- ============ HERO ============ -->
+    <section class="hero wrap">
+      <p class="eyebrow">Cross-vendor · Autonomous · CI-gated</p>
+      <h1>The workshop where software <span class="accent">builds itself</span>.</h1>
+      <p class="lead">
+        Fabrica is a small, autonomous coding team. You set the north star; Faber breaks it
+        into PR-sized pieces and debates each with a cross-vendor reviewer, then a coder
+        builds them while a second reviewer checks every change. You stay above the diff.
+      </p>
+      <div class="cta">
+        <span class="chip chip--ember"><span class="dot" aria-hidden="true"></span>Coming soon</span>
+        <span class="note">Being forged in private. A public release is on the way.</span>
+      </div>
+
+      <!--
+        WAITLIST PLACEHOLDER
+        When you decide distribution, drop a capture form here. With Cloudflare Pages you can
+        POST to a Pages Function / Worker, or embed a hosted form. Keep it inline + dependency-free.
+      -->
+
+      <!-- The loop, at a glance — Codex checks at BOTH altitudes (debate, then review) -->
+      <div class="loop" role="list" aria-label="The build loop">
+        <div class="node" role="listitem"><span class="k">You</span><span class="v">North star</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node" role="listitem"><span class="k">Faber · Claude</span><span class="v">Plan</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node" role="listitem"><span class="k">Codex</span><span class="v">Debate</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node" role="listitem"><span class="k">Coder · Claude</span><span class="v">Build</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node" role="listitem"><span class="k">Codex</span><span class="v">Review</span></div>
+        <span class="arrow" aria-hidden="true">→</span>
+        <div class="node node--merge" role="listitem"><span class="k">CI green</span><span class="v">Merge</span></div>
+      </div>
+      <p class="loop-caption">Two cross-vendor checks — Codex debates the plan, then reviews the code. Revision rounds cap at ~3; genuinely stuck work escalates to a human.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ============ THE TEAM ============ -->
+    <section class="wrap" id="team">
+      <div class="section-head" data-reveal>
+        <span class="kicker">The team</span>
+        <h2>Four roles, two altitudes. You talk to one.</h2>
+        <p>
+          You set the north star and talk only to Faber, the manager. At each altitude,
+          Claude proposes or builds and a <em>different</em> vendor — Codex — checks the work.
+          The reviewers are read-only: they can object, never merge.
+        </p>
+      </div>
+
+      <div class="lanes">
+
+        <!-- Manager altitude -->
+        <div class="lane" data-reveal>
+          <div class="lane-head">
+            <span class="altitude">Direction</span>
+            <span class="bus">the <b>issue</b> is the message bus</span>
+          </div>
+          <div class="pair">
+            <article class="card is-claude">
+              <span class="role">Manager <span class="vendor">Claude</span></span>
+              <h3>Faber</h3>
+              <p>Your single interface. Breaks the north star into PR-sized issues — one
+                 concern each — and drives the loop end to end. Files issues, never code.</p>
+            </article>
+            <span class="connector" aria-hidden="true">⇄</span>
+            <article class="card is-codex">
+              <span class="role">Plan reviewer <span class="vendor">Codex · OpenAI</span></span>
+              <h3>The Debater</h3>
+              <p>Debates each proposal against the north star before any code is written.
+                 Proactive work ships only on <em>consensus</em> — veto-only, defaulting to drop.</p>
+            </article>
+          </div>
+        </div>
+
+        <!-- Build altitude -->
+        <div class="lane" data-reveal>
+          <div class="lane-head">
+            <span class="altitude">Delivery</span>
+            <span class="bus">the <b>pull request</b> is the message bus</span>
+          </div>
+          <div class="pair">
+            <article class="card is-claude">
+              <span class="role">Coder <span class="vendor">Claude</span></span>
+              <h3>The Builder</h3>
+              <p>A fresh subagent per issue. Branches, builds, and opens the pull request —
+                 then revises it against the review until it converges.</p>
+            </article>
+            <span class="connector" aria-hidden="true">⇄</span>
+            <article class="card is-codex">
+              <span class="role">Code reviewer <span class="vendor">Codex · OpenAI</span></span>
+              <h3>The Reviewer</h3>
+              <p>The cross-vendor second opinion on every change. Comments only — it can
+                 object, but it can never merge. CI is the hard gate behind it.</p>
+            </article>
+          </div>
+        </div>
+
+      </div>
+
+      <p class="bus-note" data-reveal>
+        Claude and Codex never talk directly. <b>The issue and the pull request are the message bus.</b>
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ============ PRINCIPLES ============ -->
+    <section class="wrap" id="principles">
+      <div class="section-head" data-reveal>
+        <span class="kicker">Why it's built this way</span>
+        <h2>Autonomy that rests on ground truth, not hope.</h2>
+      </div>
+
+      <div class="principles">
+        <article class="principle" data-reveal>
+          <span class="num">01</span>
+          <h3>Cross-vendor by design</h3>
+          <p>Claude proposes and builds; Codex checks — at <em>both</em> altitudes, the plan
+             and the code. Different architectures mean decorrelated blind spots: a reviewer
+             that's valuable because it's another mind, not a second copy.</p>
+        </article>
+
+        <article class="principle" data-reveal>
+          <span class="num">02</span>
+          <h3>You stay above the diff</h3>
+          <p>Judgment lives at the direction, not the change. You approve a north star; the
+             team pursues it. You stop reviewing every diff.</p>
+        </article>
+
+        <article class="principle" data-reveal>
+          <span class="num">03</span>
+          <h3>CI is the hard gate</h3>
+          <p>Nothing merges unless the tests are green. Ground truth comes first; the diverse
+             reviewer is the second line, not the first.</p>
+        </article>
+
+        <article class="principle" data-reveal>
+          <span class="num">04</span>
+          <h3>Safety rails, not trust falls</h3>
+          <p>The reviewer is read-only. Merges are gated and SHA-pinned. Rounds are capped.
+             When the team is stuck, it escalates to a human.</p>
+        </article>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ============ CLOSING ============ -->
+    <section class="closing wrap">
+      <span class="chip chip--ember" data-reveal><span class="dot" aria-hidden="true"></span>Coming soon</span>
+      <h2 data-reveal>Fabrica is being <span class="accent">forged</span>.</h2>
+      <p data-reveal>
+        The workshop is taking shape. We're still deciding how it ships —
+        check back, and it'll be here.
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>© <span id="year">2026</span> <a class="credit" href="https://yihanzhu.com" rel="me">Yihan Zhu</a></span>
+      <span class="motto">Faber est suae quisque fortunae.</span>
+    </div>
+  </footer>
+
+  <script>
+    // Footer year
+    document.getElementById("year").textContent = new Date().getFullYear();
+
+    // Scroll reveal (respects reduced-motion)
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var items = document.querySelectorAll("[data-reveal]");
+    if (reduce || !("IntersectionObserver" in window)) {
+      items.forEach(function (el) { el.classList.add("in"); });
+    } else {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+        });
+      }, { threshold: 0.12, rootMargin: "0px 0px -8% 0px" });
+      items.forEach(function (el) { io.observe(el); });
+    }
+  </script>
+</body>
+</html>
