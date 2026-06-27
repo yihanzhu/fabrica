@@ -53,11 +53,14 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Creates the `ready` / `round-0..3` / `needs-human` / `merge-ready` labels the loop uses
    as its state. Idempotent. It prints the manual follow-ups it can't script.
 
-4. **Confirm the target repo has CI** (the hard merge gate) and, optionally, drop a
+4. **Confirm the target repo has CI** (the hard merge gate) and drop a filled-in
    `CLAUDE.md` of conventions from [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md)
-   into its root. Branch protection on `main` is a UI step (see
-   [`templates/repo-setup.md`](templates/repo-setup.md)); if you can't enable it, CI is
-   still the hard gate.
+   into its root. For a **code repo this `CLAUDE.md` is a hard prerequisite** — its
+   "Stack & commands" are the only authoritative source for the install / lint / build /
+   test commands the coder runs, so without it the coder cannot verify its work (it is
+   optional only for docs/trivial repos with no toolchain). Branch protection on `main` is
+   a UI step (see [`templates/repo-setup.md`](templates/repo-setup.md)); if you can't enable
+   it, CI is still the hard gate.
 
 5. **Pre-flight check (optional but recommended)** — from your fabrica clone, run the
    read-only self-check to confirm the basics are in place before you summon Faber:

@@ -20,18 +20,40 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    acceptance criteria, do NOT guess: comment on the issue with your specific
    questions, lead the comment with a SHORT reason (`ambiguous-spec`), add label
    `needs-human`, and stop.
-2. Create a branch `issue-<number>-<slug>`.
-3. Implement ONLY what the issue asks — one concern.
-4. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
+2. WORKING CONTEXT: you operate in the **target repo's local clone** — the session
+   cwd Faber spawned you in (not the Fabrica control-plane repo).
+3. DISCOVER THE COMMANDS (do this **before** you branch or edit anything — it is a
+   prerequisite gate, so a missing prerequisite never leaves a dirty clone): read the
+   target repo's `CLAUDE.md` → "Stack & commands" for the exact **install / lint /
+   build / test** commands — that file is the authoritative command source. For a
+   **code repo (one with a toolchain)** a filled-in `CLAUDE.md` is required: if a code
+   repo has **no `CLAUDE.md`**, or it still contains `<cmd>` placeholders, do NOT guess
+   the toolchain — comment on the issue (lead with the SHORT reason `ambiguous-spec`),
+   add label `needs-human`, and stop **before creating a branch or making any edit**. A
+   **docs/trivial repo with no toolchain** has no commands to run, so `CLAUDE.md` is
+   optional there: proceed normally (skip the install/check steps that need commands and
+   just make whatever checks exist pass — if there are none, that's fine).
+4. Create your branch off an up-to-date base: `git fetch origin`, then create
+   `issue-<number>-<slug>` off the **up-to-date default branch** (e.g. `origin/main`)
+   — never a stale local base.
+5. Implement ONLY what the issue asks — one concern.
+6. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
    concerns, stop, open a DRAFT PR with what you have, comment that it should be
    split into smaller issues (lead the comment with the SHORT reason `oversized`),
    add label `needs-human`, and stop.
-5. Make the repo's CI pass before you open the PR: run the same checks CI runs
-   (lint / structure / build / tests), locally. Where the repo has a test suite,
-   add or adjust tests to cover the change. Never open a PR with red CI.
-6. Open a PR that links the issue ("Closes #<number>") with a short description:
+7. INSTALL FIRST: when "Stack & commands" gives an **Install** command, run it before
+   you run any checks (so the toolchain and dependencies are present). (No toolchain →
+   nothing to install.)
+8. Make the repo's CI pass before you open the PR: run the same checks CI runs
+   (the lint / build / test commands from "Stack & commands"), **locally**. Where the
+   repo has a test suite, add or adjust tests to cover the change. Never open a PR
+   with red CI. Local green is **necessary but not sufficient** — the PR's own CI is
+   the ultimate gate, but you don't wait on it: **Faber enforces PR CI at merge**
+   (`merge-pr.sh` refuses unless CI is green). Your job is the local green, then
+   open the PR and stop.
+9. Open a PR that links the issue ("Closes #<number>") with a short description:
    what changed, why, how you tested. Add label `round-0`.
-7. Do NOT merge. Do NOT approve. Stop after opening the PR.
+10. Do NOT merge. Do NOT approve. Stop after opening the PR.
 
 On any error you cannot resolve: never fail silently — comment on the issue with
 what you tried and why you stopped (lead the comment with the SHORT reason
