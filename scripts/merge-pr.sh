@@ -33,10 +33,18 @@ set -euo pipefail
 #                    base branch's protection defines REQUIRED status checks, the gate is
 #                    those required contexts (a pending/failing OPTIONAL check — a preview
 #                    deploy, coverage bot, etc. — is informational and does NOT block). When
-#                    no required checks are defined (unprotected / free private repo), it
-#                    falls back to the legacy gate: refuse unless ≥1 check passes and none
-#                    fail/pend. Either way the guarantee holds: never merge with a failing
-#                    REQUIRED check, and never merge with zero passing checks.
+#                    no required checks are defined (CONFIRMED by a genuine HTTP 404 — branch
+#                    unprotected / required checks not configured — or a successful response
+#                    with an empty required-context set), it falls back to the legacy gate:
+#                    refuse unless ≥1 check passes and none fail/pend. If required-checks
+#                    discovery is INDETERMINATE (the endpoint failed for any reason OTHER than
+#                    a genuine 404 — 403 no-read-permission, rate limit, transient 5xx, network
+#                    error), it FAILS CLOSED: refuse with the HTTP cause rather than guess "no
+#                    required checks" (guessing would misclassify a protected base and let an
+#                    optional check block, or merge onto a base whose required checks went
+#                    unverified). Either way the guarantee holds: never merge with a failing
+#                    REQUIRED check, never merge with zero passing checks, and never merge when
+#                    we could not determine the required checks.
 #   3b. Review-gate — if the base branch requires ≥1 APPROVING review (the PR's
 #                    reviewDecision is REVIEW_REQUIRED), it refuses: Fabrica's reviewer is
 #                    comments-only and never approves, so that protection is incompatible
@@ -228,22 +236,53 @@ if [ -z "$checks_json" ] || [ "$(jq 'length' <<<"$checks_json")" -eq 0 ]; then
   exit 1
 fi
 
-# Determine the REQUIRED status-check contexts from the base branch's protection. The
-# endpoint 404s (and `gh api` exits non-zero) when the branch is unprotected OR protected
-# without required status checks — both are the "no required checks" fallback. We capture
-# the body and exit code separately so `set -e` can't abort on the expected 404, then read
-# the `contexts` array (legacy field; the `checks[].context` shape carries the same names).
+# Determine the REQUIRED status-check contexts from the base branch's protection, and
+# FAIL CLOSED if discovery is indeterminate. The required-checks endpoint returns a genuine
+# HTTP 404 only when the branch is unprotected OR protected WITHOUT required status checks —
+# THAT (and only that) is the "no required checks" case that takes the legacy all-checks
+# fallback. Any OTHER failure (403 = no branch-protection read permission, 429 rate-limit,
+# 5xx, network error) means we COULD NOT DETERMINE the required checks; treating that as
+# "no required checks" would misclassify a protected base and let an optional pending/failing
+# check block the merge (the regression this change fixes) while the diagnostic lies. So we
+# capture `gh api`'s stderr + exit code, detect a real `HTTP 404` for the fallback, and
+# refuse on anything else.
 base_ref="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 # URL-encode the branch name for the REST path: slashed names like `release/1.0` or
 # `feature/x` carry `/`, which a raw interpolation would send as path separators — the
 # lookup would 404 and wrongly fall back to the legacy all-checks gate. `@uri` encodes
 # `/` → `%2F` (and other reserved chars).
 base_ref_enc="$(jq -rn --arg b "$base_ref" '$b | @uri')"
+# Capture `gh api`'s stderr (where it prints the `(HTTP <code>)` on failure) in a temp file
+# so we can distinguish a genuine 404 from any other error. mktemp gives an unpredictable
+# path (no `$$` collision/symlink race), and we delete it the moment we've read it back.
+required_err=""
 required_json=""
-if required_json="$(gh api "repos/$repo/branches/$base_ref_enc/protection/required_status_checks" 2>/dev/null)"; then
-  :
-else
-  required_json=""
+required_rc=0
+required_errfile="$(mktemp "${TMPDIR:-/tmp}/merge-pr-required-err.XXXXXX")"
+required_json="$(gh api "repos/$repo/branches/$base_ref_enc/protection/required_status_checks" 2>"$required_errfile")" || required_rc=$?
+required_err="$(cat "$required_errfile" 2>/dev/null || true)"
+rm -f "$required_errfile"
+if [ "$required_rc" -ne 0 ]; then
+  # The call failed. Take the legacy fallback ONLY on a confirmed HTTP 404 (branch
+  # protection / required checks not configured). On any other error (403/5xx/429/network)
+  # we cannot tell what the required checks are — refuse rather than risk merging onto a
+  # base whose real required checks we never read.
+  if printf '%s' "$required_err" | grep -q 'HTTP 404'; then
+    required_json=""  # genuine "no required checks" → legacy fallback below
+  else
+    http_code="$(printf '%s' "$required_err" | grep -oE 'HTTP [0-9]{3}' | head -n1)"
+    [ -z "$http_code" ] && http_code="no HTTP status (network/transport error)"
+    echo "error: could not determine required status checks for '$base_ref' ($http_code); refusing to merge" >&2
+    echo "       discovery of the base branch's required checks failed for a reason other than" >&2
+    echo "       'not configured' (a genuine 404) — e.g. missing branch-protection read access," >&2
+    echo "       a rate limit, a transient 5xx, or a network error. Merging blind could land onto" >&2
+    echo "       a protected base whose required checks were never verified." >&2
+    echo "       re-run, or grant the gh operator branch-protection read access on '$repo'." >&2
+    if [ -n "$required_err" ]; then
+      echo "       gh api error: $(printf '%s' "$required_err" | head -n1)" >&2
+    fi
+    exit 1
+  fi
 fi
 required_contexts="$(
   jq -r '([.contexts // []] | flatten) + ([.checks // [] | map(.context)] | flatten) | unique | .[]' \
@@ -267,7 +306,10 @@ if [ -n "$required_contexts" ]; then
     exit 1
   fi
 else
-  # No required checks (unprotected / free private repo) — legacy gate over all checks.
+  # No required checks — confirmed by a genuine 404 (branch unprotected / required checks
+  # not configured) OR a successful response with an empty required-context set. (An
+  # indeterminate discovery failure already refused above, so we never reach here blind.)
+  # Legacy gate over all reported checks.
   not_green="$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping")] | length' <<<"$checks_json")"
   if [ "$not_green" -ne 0 ]; then
     echo "error: CI not green on PR #$pr head ($current_head); refusing to merge" >&2
@@ -284,27 +326,15 @@ else
   fi
 fi
 
-# Confirm the PR's CURRENT base still equals the reviewed base SHA — done HERE, as the LAST
-# read immediately before the merge, to minimize the base-race window. `--match-head-commit`
-# and the head check above only pin the PR head; gh has no `--match-base-commit`, so the base
-# cannot be pinned server-side and we must verify it as late as possible. If the base branch
-# advanced after the review (in a repo without an up-to-date-branch merge queue), the merge
-# would integrate the head with a base Codex never saw — a different effective diff — yet the
-# head guard would still pass. Binding the base here closes most of that hole: refuse and ask
-# for a re-review. (Residual: a base landing in the gap between this read and the merge below
-# is closed only by server-side branch protection / required-up-to-date — see the header.)
-current_base="$(gh pr view "$pr" --repo "$repo" --json baseRefOid -q .baseRefOid)"
-if [ "$current_base" != "$reviewed_base" ]; then
-  echo "error: base advanced since review ($reviewed_base -> $current_base); re-review before merging" >&2
-  echo "       run scripts/codex-review.sh $pr on the current base, then re-run this" >&2
-  exit 1
-fi
-
 # Pick a merge method the repo actually allows. Hardcoding `--squash` fails server-side on
 # any repo that disallows squash merges; we detect the permitted methods and PREFER squash
 # (the repo's own history convention here), falling back to merge-commit then rebase. The
 # `--match-head-commit` SHA-pin below works across all three methods, so the safety guarantee
 # is method-independent. If the repo allows NO merge method, refuse with an actionable error.
+# IMPORTANT: this network read (and every other) is done BEFORE the base-race re-check below,
+# so the `baseRefOid` read stays the LAST API call before `gh pr merge`. Doing it after the
+# base re-check would reopen the base-race window: another PR could land on the base during
+# this extra API round-trip, and we'd merge onto a base Codex never reviewed.
 merge_flags="$(gh repo view "$repo" --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed)"
 if [ "$(jq -r '.squashMergeAllowed' <<<"$merge_flags")" = "true" ]; then
   merge_method="--squash"
@@ -315,6 +345,25 @@ elif [ "$(jq -r '.rebaseMergeAllowed' <<<"$merge_flags")" = "true" ]; then
 else
   echo "error: repo $repo allows no merge method (squash/merge/rebase all disabled); refusing" >&2
   echo "       enable at least one merge method in the repo's settings, then re-run" >&2
+  exit 1
+fi
+
+# Confirm the PR's CURRENT base still equals the reviewed base SHA — done HERE, as the LAST
+# API read immediately before the merge, to minimize the base-race window. Every other network
+# read (merge-method detection above, CI checks, review-decision, head re-check) happens
+# earlier ON PURPOSE so this `baseRefOid` read is the final call before `gh pr merge` — no API
+# round-trip sits between it and the merge. `--match-head-commit` and the head check only pin
+# the PR head; gh has no `--match-base-commit`, so the base cannot be pinned server-side and we
+# must verify it as late as possible. If the base branch advanced after the review (in a repo
+# without an up-to-date-branch merge queue), the merge would integrate the head with a base
+# Codex never saw — a different effective diff — yet the head guard would still pass. Binding
+# the base here closes most of that hole: refuse and ask for a re-review. (Residual: a base
+# landing in the gap between this read and the merge below is closed only by server-side branch
+# protection / required-up-to-date — see the header.)
+current_base="$(gh pr view "$pr" --repo "$repo" --json baseRefOid -q .baseRefOid)"
+if [ "$current_base" != "$reviewed_base" ]; then
+  echo "error: base advanced since review ($reviewed_base -> $current_base); re-review before merging" >&2
+  echo "       run scripts/codex-review.sh $pr on the current base, then re-run this" >&2
   exit 1
 fi
 
