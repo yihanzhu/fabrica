@@ -8,10 +8,20 @@ set -euo pipefail
 # every file back yet still be blocked on a missing credential, an uninstalled
 # /faber command, or absent loop labels. doctor surfaces those gaps in seconds.
 #
+# Beyond presence/PATH it also probes whether the setup actually WORKS for a real
+# run, so a green doctor can't overstate readiness: it verifies Codex is signed in
+# (not merely on PATH), warns when NORTH_STAR.md is still the shipped Fabrica-self
+# default, and — in the target-repo path — checks the target has PR-triggered CI
+# (the hard merge gate) and a filled-in CLAUDE.md.
+#
 # It is STRICTLY READ-ONLY: it never creates, edits, or deletes anything (and the
 # optional label check delegates to setup-target-repo.sh's --check mode, which is
-# itself read-only). Every check prints a single `pass:`/`fail:` line; the script
-# exits non-zero if ANY check fails, so it is usable as a CI/pre-flight gate.
+# itself read-only). Every check prints a single `pass:`/`warn:`/`fail:` line.
+#
+# WARN vs FAIL: a `fail:` is a real blocker and makes doctor exit non-zero (so it
+# stays usable as a CI/pre-flight gate); a `warn:` flags a likely-wrong-but-not-
+# blocking condition (e.g. an unreplaced north star) and does NOT by itself change
+# the exit code. doctor exits non-zero ONLY when at least one check failed.
 #
 # Checks:
 #   (a) ~/.claude/commands/faber.md exists AND contains THIS clone's resolved
@@ -19,22 +29,30 @@ set -euo pipefail
 #       derivation install.sh uses).
 #   (b) gh is present and authenticated.
 #   (c) claude (Claude Code CLI) is on PATH — the team runs in a Claude Code session.
-#   (d) codex is on PATH.
+#   (d) codex is on PATH AND signed in (auth probed via `codex login status` when that
+#       subcommand exists; degrades to a PATH-only pass with a note if it doesn't).
 #   (e) jq is on PATH — required by scripts/merge-pr.sh to parse gh's CI-check JSON.
 #   (f) every file in ci/required-files.txt is present on disk (the manifest is
 #       read live — the list is never duplicated here).
+#   (h) NORTH_STAR.md is not still the shipped Fabrica-self default (WARN).
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
+#   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate) — FAIL
+#       if none is detectable.
+#   (j) [target-repo path] the target's CLAUDE.md is present and filled in (no `<cmd>`
+#       placeholders) — WARN otherwise.
 #
 # Usage:
-#   scripts/doctor.sh                 run checks (a)-(e) against this clone
-#   scripts/doctor.sh <owner>/<repo>  also run check (f) for that repo's labels
+#   scripts/doctor.sh                 run the clone-local checks against this clone
+#   scripts/doctor.sh <owner>/<repo>  also run the target-repo checks for that repo
 
 usage() {
   echo "usage: $0 [<owner>/<repo>]" >&2
-  echo "  read-only restore self-check: /faber install, gh auth, claude/codex/jq on PATH," >&2
-  echo "  and restore-critical files. Prints a pass/fail line per check and exits non-zero" >&2
-  echo "  if any fail. Pass <owner>/<repo> to also verify that repo's loop labels." >&2
+  echo "  read-only restore self-check: /faber install, gh auth, claude/codex (auth)/jq on" >&2
+  echo "  PATH, restore-critical files, and NORTH_STAR not still the shipped default. Prints" >&2
+  echo "  a pass/warn/fail line per check; exits non-zero only on a fail (warnings never do)." >&2
+  echo "  Pass <owner>/<repo> to also verify that repo's loop labels, PR-triggered CI, and" >&2
+  echo "  a filled-in CLAUDE.md." >&2
 }
 
 # Accept at most one positional arg (the optional <owner>/<repo>). Reject -h/--help
@@ -68,9 +86,10 @@ done
 repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 
 passed=0
+warned=0
 failed=0
 
-# Record a check result and print one aligned pass/fail line. First arg: 0 = pass,
+# Record a check result and print one aligned pass/warn/fail line. First arg: 0 = pass,
 # non-zero = fail. Remaining args: the human-readable check description.
 report() {
   local ok="$1"
@@ -82,6 +101,13 @@ report() {
     failed=$((failed + 1))
     echo "fail: $*"
   fi
+}
+
+# Record a non-blocking warning. WARN never increments `failed`, so warnings alone
+# leave the exit code at 0 — they flag a likely-wrong-but-not-blocking condition.
+report_warn() {
+  warned=$((warned + 1))
+  echo "warn: $*"
 }
 
 # (a) /faber points at this clone -------------------------------------------------
@@ -127,11 +153,24 @@ else
   report 1 "(c) claude NOT on PATH — install Claude Code; the team runs in a Claude Code session"
 fi
 
-# (d) codex on PATH ---------------------------------------------------------------
-if command -v codex >/dev/null 2>&1; then
-  report 0 "(d) codex on PATH"
-else
+# (d) codex on PATH AND signed in -------------------------------------------------
+# PATH alone is not enough: the loop's first `codex exec review` fails mid-run if Codex
+# isn't authenticated, yet a PATH-only check would go green. So when codex is present we
+# also probe sign-in. The auth subcommand differs across CLI versions, so we discover it
+# rather than hardcode: if `codex login status` exists on THIS install (detected from
+# `codex login --help`), we run it and treat a clean exit as signed-in (mirroring the gh
+# auth check). If that subcommand is absent we degrade gracefully — keep the PATH pass and
+# skip the auth assertion with a note, rather than breaking doctor on an unknown version.
+if ! command -v codex >/dev/null 2>&1; then
   report 1 "(d) codex NOT on PATH — install the Codex CLI and sign in"
+elif codex login --help 2>/dev/null | grep -qw status; then
+  if codex login status >/dev/null 2>&1; then
+    report 0 "(d) codex on PATH and signed in"
+  else
+    report 1 "(d) codex on PATH but NOT signed in — run 'codex login'"
+  fi
+else
+  report 0 "(d) codex on PATH (sign-in not verifiable on this CLI version — run 'codex login status' to confirm)"
 fi
 
 # (e) jq on PATH ------------------------------------------------------------------
@@ -167,6 +206,20 @@ else
   fi
 fi
 
+# (h) NORTH_STAR.md not still the shipped default --------------------------------
+# The shipped NORTH_STAR.md aims at Fabrica's OWN control-plane goal ("Frictionless
+# first-run"). If an adopter never replaces it, manager-review.sh debates proposals
+# against the wrong goal. WARN (not FAIL): a stale north star doesn't block restore,
+# but it must be replaced before proactive mode is meaningful for the adopter's repo.
+north_star="$repo_root/NORTH_STAR.md"
+if [ ! -f "$north_star" ]; then
+  report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
+elif grep -qF -- 'Frictionless first-run' "$north_star"; then
+  report_warn "(h) NORTH_STAR.md is still the shipped Fabrica-self default ('Frictionless first-run') — replace it with your own direction before enabling proactive mode"
+else
+  report 0 "(h) NORTH_STAR.md replaced (not the shipped default)"
+fi
+
 # (g) optional loop-label check --------------------------------------------------
 # Delegate to setup-target-repo.sh --check, which is read-only and reports per-label
 # matches/differs/missing. We only surface a single pass/fail line here; its detailed
@@ -182,8 +235,54 @@ if [ -n "$target_repo" ]; then
   fi
 fi
 
+# (i) target repo has PR-triggered CI (the hard merge gate) -----------------------
+# A green doctor on a real repo must not mean "no hard gate." Branch protection's
+# required_status_checks is the ideal signal but is unavailable on free/private repos
+# (gh returns 403), so we don't depend on it. Instead we enumerate the target's
+# workflow files and check whether ANY declares a `pull_request` trigger — the thing
+# that makes CI run on a PR and become a merge gate. No PR-triggered workflow → FAIL.
+if [ -n "$target_repo" ]; then
+  ci_seen=0
+  if ! workflow_paths="$(gh api "repos/$target_repo/contents/.github/workflows" \
+      --jq '.[] | select(.type=="file") | .path' 2>/dev/null)"; then
+    report 1 "(i) PR-triggered CI on $target_repo (no .github/workflows — the hard merge gate is absent)"
+  else
+    while IFS= read -r wf; do
+      [ -n "$wf" ] || continue
+      if gh api -H "Accept: application/vnd.github.raw" "repos/$target_repo/contents/$wf" 2>/dev/null \
+          | grep -qE '^[[:space:]]*pull_request:?([[:space:]]|$)'; then
+        ci_seen=1
+        break
+      fi
+    done <<< "$workflow_paths"
+    if [ "$ci_seen" -eq 1 ]; then
+      report 0 "(i) PR-triggered CI present on $target_repo"
+    else
+      report 1 "(i) no PR-triggered CI on $target_repo — workflows exist but none triggers on pull_request; the hard merge gate is absent"
+    fi
+  fi
+fi
+
+# (j) target repo's CLAUDE.md is present and filled in ----------------------------
+# The coder reads the target CLAUDE.md's "Stack & commands" to discover install/test/
+# build commands. A missing CLAUDE.md (for a code repo) or one still carrying the
+# template's `<cmd>` placeholders means the coder can't discover real commands. WARN
+# (not FAIL): a doc repo legitimately has no commands, so this is a heads-up, not a block.
+if [ -n "$target_repo" ]; then
+  if ! claude_md="$(gh api -H "Accept: application/vnd.github.raw" \
+      "repos/$target_repo/contents/CLAUDE.md" 2>/dev/null)"; then
+    report_warn "(j) $target_repo has no CLAUDE.md — a code repo needs one with a 'Stack & commands' section so the coder can discover install/test/build commands"
+  elif printf '%s' "$claude_md" | grep -qF -- '<cmd>'; then
+    report_warn "(j) $target_repo CLAUDE.md still has '<cmd>' placeholders — fill in the 'Stack & commands' section before running the loop"
+  else
+    report 0 "(j) $target_repo CLAUDE.md present and filled in (no '<cmd>' placeholders)"
+  fi
+fi
+
 # Final summary ------------------------------------------------------------------
-echo "doctor: $passed passed, $failed failed"
+# Exit non-zero ONLY when a check failed — warnings are advisory and never flip the
+# exit code, so doctor stays usable as a CI/pre-flight gate without false reds.
+echo "doctor: $passed passed, $warned warned, $failed failed"
 if [ "$failed" -ne 0 ]; then
   exit 1
 fi
