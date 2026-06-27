@@ -29,7 +29,22 @@ set -euo pipefail
 #                    PR's CURRENT base still equals it immediately before the merge, so a
 #                    base that advanced after the review (a different effective diff) is
 #                    refused.
-#   3. CI-green    — it confirms CI is green on the current head before merging.
+#   3. CI-green    — it confirms CI is green on the current head before merging. When the
+#                    base branch's protection defines REQUIRED status checks, the gate is
+#                    those required contexts (a pending/failing OPTIONAL check — a preview
+#                    deploy, coverage bot, etc. — is informational and does NOT block). When
+#                    no required checks are defined (unprotected / free private repo), it
+#                    falls back to the legacy gate: refuse unless ≥1 check passes and none
+#                    fail/pend. Either way the guarantee holds: never merge with a failing
+#                    REQUIRED check, and never merge with zero passing checks.
+#   3b. Review-gate — if the base branch requires ≥1 APPROVING review (the PR's
+#                    reviewDecision is REVIEW_REQUIRED), it refuses: Fabrica's reviewer is
+#                    comments-only and never approves, so that protection is incompatible
+#                    with the in-session auto-merge path — it hands to the human merge gate.
+#   3c. Merge-method — it detects the repo's allowed merge methods (squash / merge / rebase)
+#                    and prefers `--squash`, falling back to a permitted method; the
+#                    `--match-head-commit` SHA-pin works across all three. If none is
+#                    allowed it refuses with an actionable message.
 #
 # RESIDUAL LIMITATION (base-race, honest): `--match-head-commit` pins ONLY the head — gh
 # has no `--match-base-commit`, so the merge cannot atomically pin the base server-side the
@@ -58,8 +73,10 @@ set -euo pipefail
 usage() {
   echo "usage: $0 <PR#>" >&2
   echo "  run from within the target repo's clone, after scripts/codex-review.sh on the same PR" >&2
-  echo "  refuses unless: a Reviewed-head marker exists, the PR head still equals it, and CI is green" >&2
-  echo "  then squash-merges, pinned to the reviewed SHA (--match-head-commit)" >&2
+  echo "  refuses unless: a Reviewed-head marker exists, the PR head still equals it, CI is green" >&2
+  echo "  (required checks if branch protection defines them, else ≥1 pass / no fail), and the" >&2
+  echo "  PR does not need an approving review (Fabrica's reviewer is comments-only)" >&2
+  echo "  then merges (squash if allowed, else a permitted method), pinned to the reviewed SHA" >&2
 }
 
 if [ "$#" -lt 1 ] || [ -z "${1:-}" ]; then
@@ -161,36 +178,105 @@ if [ "$current_head" != "$reviewed_sha" ]; then
   exit 1
 fi
 
+# Approving-review protection (additive guard). GitHub's `reviewDecision` is REVIEW_REQUIRED
+# when the base branch's protection requires ≥1 approving review and none is present. Fabrica's
+# Codex reviewer is COMMENTS-ONLY and never approves, so `gh pr merge` would be rejected
+# server-side with no actionable message. Refuse early and clearly: this protection is
+# incompatible with the in-session auto-merge path — the PR must go to the human merge gate.
+# (APPROVED / CHANGES_REQUESTED / null are not our concern here; the SHA-pin + CI gate below
+# are the mechanical safety. We only intercept the REVIEW_REQUIRED dead-end.)
+review_decision="$(gh pr view "$pr" --repo "$repo" --json reviewDecision -q .reviewDecision 2>/dev/null || true)"
+if [ "$review_decision" = "REVIEW_REQUIRED" ]; then
+  echo "error: PR #$pr requires an approving review (reviewDecision=REVIEW_REQUIRED); refusing to merge" >&2
+  echo "       Fabrica's reviewer (codex-review.sh) is comments-only and never approves, so this" >&2
+  echo "       branch-protection shape is incompatible with the in-session auto-merge path" >&2
+  echo "       hand this PR to the human merge gate, or switch protection to required status checks" >&2
+  echo "       (see templates/repo-setup.md > Branch protection)" >&2
+  exit 1
+fi
+
 # Confirm CI is green on the current head. `gh pr checks --json` tags each check with a
-# `bucket` (pass / fail / pending / skipping / cancel). Green here means BOTH:
-#   - AT LEAST ONE check is `pass` — something CI actually ran and passed; and
-#   - NO check is fail/pending/cancel (skipping is tolerated alongside the pass).
-# Requiring a real pass closes the all-skipped hole: when every reported check is
-# `skipping` (e.g. jobs gated off by `if:` conditions), there is no fail/pending/cancel
-# but nothing actually passed — that must NOT count as green. We still refuse on zero
-# checks (CI must be the gate, so "no checks" is not "green").
+# `bucket` (pass / fail / pending / skipping / cancel). Which checks GATE the merge depends
+# on whether the PR's BASE branch defines REQUIRED status checks in its branch protection:
+#
+#   * REQUIRED checks defined (protected base) — gate on EXACTLY those required contexts:
+#       - every required context must be present on the head AND in bucket `pass`
+#         (a missing required context = it hasn't reported yet = not green); and
+#       - a non-required (optional) check in ANY bucket — a pending preview deploy, a
+#         failing coverage bot — is INFORMATIONAL and does NOT block. (operator-approved
+#         semantics change: optional checks no longer stall a genuinely mergeable PR.)
+#     Guarantee preserved: we never merge with a failing/absent REQUIRED check, and the set
+#     of required contexts is non-empty here, so ≥1 check passes by construction.
+#
+#   * NO required checks defined (unprotected / free private repo — the protection endpoint
+#     404s) — fall back to the LEGACY gate over ALL reported checks:
+#       - AT LEAST ONE check is `pass` (something CI actually ran and passed); and
+#       - NO check is fail/pending/cancel (skipping is tolerated alongside the pass);
+#       - refuse on zero checks (CI is the gate, so "no checks" is not "green").
+#     This closes the all-skipped hole: if every check is `skipping`, nothing passed.
+#
+# Either way: never merge with a failing required check; never merge with zero passing checks.
+#
 # `gh pr checks` exits non-zero when checks aren't all passing (e.g. 8 = pending), so we
 # capture its output without letting `set -e` abort, then judge the buckets ourselves. We
-# request `name` alongside `bucket` so the not-green diagnostic below can name the failing
-# checks — `gh --json` returns only requested fields, so omitting `name` would print null.
+# request `name` alongside `bucket` so diagnostics can name the offending checks — `gh --json`
+# returns only requested fields, so omitting `name` would print null.
 checks_json="$(gh pr checks "$pr" --repo "$repo" --json name,bucket 2>/dev/null || true)"
 if [ -z "$checks_json" ] || [ "$(jq 'length' <<<"$checks_json")" -eq 0 ]; then
   echo "error: no CI checks found on PR #$pr head ($current_head); refusing to merge" >&2
   echo "       CI is the hard gate — there must be at least one green check" >&2
   exit 1
 fi
-not_green="$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping")] | length' <<<"$checks_json")"
-if [ "$not_green" -ne 0 ]; then
-  echo "error: CI not green on PR #$pr head ($current_head); refusing to merge" >&2
-  echo "       not-passing checks:" >&2
-  jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "         - \(.name): \(.bucket)"' <<<"$checks_json" >&2
-  exit 1
+
+# Determine the REQUIRED status-check contexts from the base branch's protection. The
+# endpoint 404s (and `gh api` exits non-zero) when the branch is unprotected OR protected
+# without required status checks — both are the "no required checks" fallback. We capture
+# the body and exit code separately so `set -e` can't abort on the expected 404, then read
+# the `contexts` array (legacy field; the `checks[].context` shape carries the same names).
+base_ref="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
+required_json=""
+if required_json="$(gh api "repos/$repo/branches/$base_ref/protection/required_status_checks" 2>/dev/null)"; then
+  :
+else
+  required_json=""
 fi
-passing="$(jq -r '[.[] | select(.bucket == "pass")] | length' <<<"$checks_json")"
-if [ "$passing" -eq 0 ]; then
-  echo "error: no passing CI check on PR #$pr head ($current_head); refusing to merge" >&2
-  echo "       every check is skipped/optional — CI must actually run and pass to be the gate" >&2
-  exit 1
+required_contexts="$(
+  jq -r '([.contexts // []] | flatten) + ([.checks // [] | map(.context)] | flatten) | unique | .[]' \
+    <<<"${required_json:-{}}" 2>/dev/null || true
+)"
+
+if [ -n "$required_contexts" ]; then
+  # Protected base with required checks — gate on those contexts only.
+  not_green_required=""
+  while IFS= read -r ctx; do
+    [ -z "$ctx" ] && continue
+    bucket="$(jq -r --arg ctx "$ctx" '[.[] | select(.name == $ctx)] | (.[0].bucket // "missing")' <<<"$checks_json")"
+    if [ "$bucket" != "pass" ]; then
+      not_green_required+="         - $ctx: $bucket"$'\n'
+    fi
+  done <<<"$required_contexts"
+  if [ -n "$not_green_required" ]; then
+    echo "error: required CI check(s) not green on PR #$pr head ($current_head); refusing to merge" >&2
+    echo "       required checks not passing (optional checks are informational and ignored):" >&2
+    printf '%s' "$not_green_required" >&2
+    exit 1
+  fi
+else
+  # No required checks (unprotected / free private repo) — legacy gate over all checks.
+  not_green="$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping")] | length' <<<"$checks_json")"
+  if [ "$not_green" -ne 0 ]; then
+    echo "error: CI not green on PR #$pr head ($current_head); refusing to merge" >&2
+    echo "       (no required checks defined on base '$base_ref' — gating on all checks)" >&2
+    echo "       not-passing checks:" >&2
+    jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "         - \(.name): \(.bucket)"' <<<"$checks_json" >&2
+    exit 1
+  fi
+  passing="$(jq -r '[.[] | select(.bucket == "pass")] | length' <<<"$checks_json")"
+  if [ "$passing" -eq 0 ]; then
+    echo "error: no passing CI check on PR #$pr head ($current_head); refusing to merge" >&2
+    echo "       every check is skipped/optional — CI must actually run and pass to be the gate" >&2
+    exit 1
+  fi
 fi
 
 # Confirm the PR's CURRENT base still equals the reviewed base SHA — done HERE, as the LAST
@@ -209,9 +295,27 @@ if [ "$current_base" != "$reviewed_base" ]; then
   exit 1
 fi
 
+# Pick a merge method the repo actually allows. Hardcoding `--squash` fails server-side on
+# any repo that disallows squash merges; we detect the permitted methods and PREFER squash
+# (the repo's own history convention here), falling back to merge-commit then rebase. The
+# `--match-head-commit` SHA-pin below works across all three methods, so the safety guarantee
+# is method-independent. If the repo allows NO merge method, refuse with an actionable error.
+merge_flags="$(gh repo view "$repo" --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed)"
+if [ "$(jq -r '.squashMergeAllowed' <<<"$merge_flags")" = "true" ]; then
+  merge_method="--squash"
+elif [ "$(jq -r '.mergeCommitAllowed' <<<"$merge_flags")" = "true" ]; then
+  merge_method="--merge"
+elif [ "$(jq -r '.rebaseMergeAllowed' <<<"$merge_flags")" = "true" ]; then
+  merge_method="--rebase"
+else
+  echo "error: repo $repo allows no merge method (squash/merge/rebase all disabled); refusing" >&2
+  echo "       enable at least one merge method in the repo's settings, then re-run" >&2
+  exit 1
+fi
+
 # All guards passed — merge, pinned to the reviewed SHA. `--match-head-commit` is a
 # server-side belt-and-suspenders on top of the head==reviewed check above: GitHub itself
 # refuses the merge if the head isn't exactly this commit, closing the tiny window between
 # our check and the merge call.
-echo "merging PR #$pr (reviewed head $reviewed_sha, base $reviewed_base, CI green) ..."
-gh pr merge "$pr" --repo "$repo" --squash --match-head-commit "$reviewed_sha"
+echo "merging PR #$pr (reviewed head $reviewed_sha, base $reviewed_base, CI green, method ${merge_method#--}) ..."
+gh pr merge "$pr" --repo "$repo" "$merge_method" --match-head-commit "$reviewed_sha"

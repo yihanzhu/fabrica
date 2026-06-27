@@ -30,11 +30,27 @@ It reports per label `matches` / `differs` (which of name/color/description) / `
 and exits non-zero if anything is missing or differs (zero if all match).
 
 ## 2. Branch protection (main)
-- ✅ Require status checks to pass before merging (your CI) — the **hard gate**
+The supported protection shape is **required status checks** — that is the gate
+`scripts/merge-pr.sh` reads and enforces.
+- ✅ Require status checks to pass before merging (your CI) — the **hard gate**. Mark your
+  CI contexts (lint/test/build) as **required**; `merge-pr.sh` gates on exactly the required
+  contexts and treats any non-required check (preview deploys, coverage bots) as
+  informational, so a pending/failing optional check won't stall a mergeable PR. If you
+  leave the base unprotected (or define no required checks), the script falls back to
+  requiring ≥1 passing check with none failing/pending.
 - ✅ Require branches to be up to date before merging
+- ⛔️ **Do NOT use "Require a pull request before merging → require approving review."**
+  Fabrica's reviewer (`scripts/codex-review.sh`) is **comments-only and never approves**, so a
+  required approving review can never be satisfied by the loop — `merge-pr.sh` detects this
+  (`reviewDecision=REVIEW_REQUIRED`) and refuses, handing the PR to the human merge gate.
+  Gate on required **status checks**, not on a required approving review.
 - ⛔️ **Keep GitHub's native auto-merge button off** — merges run through Faber or the
   human (both gated on green CI), not a server-side auto-merge trigger. Faber merging a
   clean, low-risk PR is a deliberate `gh pr merge`, not this checkbox.
+
+**Merged-branch cleanup.** `merge-pr.sh` does not delete the head branch. Either enable the
+repo's **"Automatically delete head branches"** setting, or run `gh pr merge … --delete-branch`
+manually, so merged feature branches don't accumulate.
 
 ## 3. CI — the loop's hard gate
 CI must run the **exact commands** you put in this repo's `CLAUDE.md` (its tests /
