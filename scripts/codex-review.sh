@@ -284,6 +284,19 @@ if [ -n "$model" ]; then
 fi
 "${review_cmd[@]}"
 
+# Non-empty guard. `set -e` already aborts before posting if Codex exits non-zero, but a
+# zero exit with an empty (or whitespace-only) `-o` capture — a terse non-answer, or an empty
+# review for some diffs — would otherwise post a header-only comment with no body. That
+# vacuous review still carries the `Reviewed-head:`/`Reviewed-base:` markers, so
+# scripts/merge-pr.sh (which keys its "a review exists" check on the markers, not the content)
+# would treat the merge gate as satisfied. Refuse to post when there's no review content. The
+# cleanup trap still runs on this exit (it is an EXIT trap), so the temp worktree, output
+# file, and per-run base ref are removed.
+if ! grep -q '[^[:space:]]' "$tmp"; then
+  echo 'error: Codex produced no review output; not posting' >&2
+  exit 1
+fi
+
 # Post the review verbatim, with a short header marking it the cross-vendor reviewer.
 # The header also records the EXACT commits Codex reviewed as parseable marker lines
 # (`Reviewed-head: <full-sha>` and `Reviewed-base: <full-sha>`), so a later actor (e.g.
