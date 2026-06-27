@@ -27,9 +27,11 @@ set -euo pipefail
 # Isolated review — the operator's checkout is never touched. Instead of checking the
 # PR out into the operator's own working tree (which, even with a clean guard, risks
 # discarding unpushed commits via a force reset), the script fetches the PR head
-# fork-safely (`git fetch <gh-resolved-clone-url> refs/pull/<PR#>/head`, from the clone URL
-# gh returns for the resolved repo — host-correct on GitHub Enterprise too — which brings
-# the head commit into the object store even for fork PRs) and adds a
+# fork-safely (`git fetch <remote> refs/pull/<PR#>/head`, from the configured git remote
+# whose URL matches the repo gh resolved — so the operator's own authenticated transport is
+# used, which works on private repos and SSH-only checkouts where a synthesized web URL would
+# fail; fork-safe + host-correct on GitHub Enterprise too — which brings the head commit into
+# the object store even for fork PRs) and adds a
 # DETACHED, throwaway git worktree at that exact commit. `codex exec review` runs inside
 # that temp worktree against the qualified, freshly-fetched base, so it always sees the
 # latest head vs. a current base. The operator's branch, index, working tree, and
@@ -119,23 +121,94 @@ fi
 # <owner>/<repo> from the cwd).
 base="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 
-# Resolve the CLONE URL `gh` returns for the repo it bound the review to, on the CORRECT
-# host. We pass `$repo` EXPLICITLY to `gh repo view` so it reports THAT repo's URL — never a
-# PR-followed parent/upstream. Using gh's own URL (not a synthesized `https://github.com/...`)
-# keeps the fetch host-correct on GitHub Enterprise / non-github.com hosts, where
-# `nameWithOwner` resolves the same but the canonical host is NOT github.com — a synthesized
-# github.com URL there would fail or, worse, hit an unrelated same-named repo. `gh repo view`
-# returns the web URL (no `.git` suffix); we append `.git` for the fetch.
+# Resolve gh's canonical repo identity — the HOST + `owner/repo` of the repo it bound the
+# review to. `$repo` is already the `owner/repo` (`nameWithOwner`); we pass it EXPLICITLY to
+# `gh repo view` so the URL reports THAT repo — never a PR-followed parent/upstream — and we
+# read the HOST off that URL so the match below is host-correct on GitHub Enterprise /
+# non-github.com hosts (where `nameWithOwner` resolves the same but the canonical host is NOT
+# github.com). `gh repo view` returns the web URL (e.g. `https://HOST/owner/repo`).
 repo_url="$(gh repo view "$repo" --json url -q .url)"
 
-# Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store,
-# from the CANONICAL repo `gh` resolved (`$repo` / `$repo_url`), NOT the literal `origin`
-# remote. In a fork workflow (`origin` = your fork, `upstream` = the canonical repo PRs
-# target), `gh` reports the PR on the canonical repo; fetching from `origin` would fail (the
-# PR ref doesn't exist on the fork) or silently grab a same-numbered, unrelated PR —
-# reviewing the wrong diff or nothing. Pointing the fetch at gh's own clone URL makes the
-# source PROVABLY the repo `gh` resolved, so the head and base always come from the repo the
-# review is bound to.
+# Normalize a git remote URL (or gh web URL) to "<host>/<owner>/<repo>", lowercased, with any
+# trailing `.git` stripped. Handles the three common transports without fragile regex (pure
+# parameter expansion + `case`):
+#   git@host:owner/repo(.git)         (scp-style SSH)
+#   ssh://git@host/owner/repo(.git)   (ssh:// URL, optional user@)
+#   https://host/owner/repo(.git)     (https, optional user@host)
+# Prints the normalized id, or nothing if the URL doesn't parse to host + owner/repo.
+normalize_repo_id() {
+  local url="$1" host rest
+  case "$url" in
+    *://*)
+      # scheme://[user@]host/owner/repo... — drop scheme, then any leading userinfo, then split host/path.
+      rest="${url#*://}"
+      rest="${rest#*@}"
+      host="${rest%%/*}"
+      rest="${rest#*/}"
+      ;;
+    *@*:*)
+      # scp-style git@host:owner/repo — drop userinfo, split on the FIRST colon.
+      rest="${url#*@}"
+      host="${rest%%:*}"
+      rest="${rest#*:}"
+      ;;
+    *)
+      # Unrecognized form — can't match.
+      return 0
+      ;;
+  esac
+  # `rest` is now the path "owner/repo[/...]"; keep exactly the first two segments.
+  local owner="${rest%%/*}"
+  rest="${rest#*/}"
+  local name="${rest%%/*}"
+  name="${name%.git}"
+  [ -n "$host" ] && [ -n "$owner" ] && [ -n "$name" ] || return 0
+  printf '%s/%s/%s' "$host" "$owner" "$name" | tr '[:upper:]' '[:lower:]'
+}
+
+# Compute gh's normalized identity to match against: host (from `$repo_url`) + `owner/repo`
+# (`$repo`). We synthesize a normalizable string from the gh-resolved host and `$repo`.
+gh_host="$(normalize_repo_id "$repo_url")"; gh_host="${gh_host%%/*}"
+gh_repo_id="$(normalize_repo_id "https://${gh_host}/${repo}")"
+
+# Select the configured git remote whose URL resolves to the SAME host + owner/repo that gh
+# bound the review to, and fetch from THAT REMOTE NAME — so the operator's own configured
+# transport AND credentials are used. This is what makes the fetch work on private repos and
+# SSH-only-authenticated checkouts: a synthesized HTTPS web URL carries no credentials, so
+# `git fetch <url>` would fail there even though `gh auth status` passes and `origin` works.
+# We do NOT blindly use `origin`: in a fork workflow `origin` = your fork while the PR lives
+# on `upstream`, so we match on identity (fork-safe). `origin` is only PREFERRED when it is
+# itself the match. If NO configured remote resolves to gh's repo, we REFUSE (below) rather
+# than fall back to an unauthenticated synthesized URL.
+selected_remote=""
+while IFS= read -r remote_name; do
+  [ -n "$remote_name" ] || continue
+  remote_url="$(git remote get-url "$remote_name" 2>/dev/null)" || continue
+  [ -n "$remote_url" ] || continue
+  if [ "$(normalize_repo_id "$remote_url")" = "$gh_repo_id" ]; then
+    if [ "$remote_name" = "origin" ]; then
+      selected_remote="origin"
+      break
+    fi
+    [ -n "$selected_remote" ] || selected_remote="$remote_name"
+  fi
+done < <(git remote)
+
+if [ -z "$selected_remote" ]; then
+  echo "error: the repo gh resolved (${repo}) is not reachable via any configured git remote;" >&2
+  echo "       add it (e.g. 'git remote add upstream <url>') and re-run" >&2
+  exit 1
+fi
+
+# Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store, from the
+# SELECTED REMOTE NAME (not a synthesized URL) so the operator's configured transport +
+# credentials are used. The remote was chosen by matching gh's canonical host + owner/repo, so
+# the source is PROVABLY the repo `gh` resolved — fork-safe (we match identity, not blindly
+# `origin`), host-correct (it's the operator's real remote URL, GHE included), and auth-correct
+# (the operator's transport: SSH key, gh credential helper, etc.). In a fork workflow (`origin`
+# = your fork, `upstream` = the canonical repo PRs target) we'd select `upstream`; fetching from
+# `origin` there would fail (the PR ref doesn't exist on the fork) or grab a same-numbered,
+# unrelated PR.
 #
 # We use EXPLICIT, FULLY-QUALIFIED refspecs so both land at a known ref regardless of the
 # clone's configured fetch refspecs. Both sources are qualified (`refs/pull/<PR#>/head`
@@ -145,8 +218,8 @@ repo_url="$(gh repo view "$repo" --json url -q .url)"
 # the PR comes from a fork (a plain `git fetch` of a branch would not). We write BOTH into
 # private, PER-RUN-UNIQUE local refs we control (under `refs/codex-review/<PR#>-<PID>/`),
 # never a remote-tracking ref tied to a remote name — that keeps the destinations
-# independent of which remote `origin` happens to be, avoids clobbering the operator's
-# `origin/<base>` tracking ref with a commit fetched from a different URL, AND keeps two
+# independent of which remote we selected, avoids clobbering the operator's
+# `<remote>/<base>` tracking ref with a commit fetched into our own ref, AND keeps two
 # reviews launched from the SAME checkout from colliding (a shared ref name would let a later
 # run's fetch force-update — or its cleanup delete — the ref while an earlier run is still
 # resolving `--base`, reviewing the wrong base or failing spuriously; the temp worktree is
@@ -160,7 +233,7 @@ repo_url="$(gh repo view "$repo" --json url -q .url)"
 run_ref_ns="refs/codex-review/${pr}-$$"
 pr_head_ref="${run_ref_ns}/head"
 base_dest_ref="${run_ref_ns}/base"
-git fetch --no-tags "${repo_url}.git" \
+git fetch --no-tags "$selected_remote" \
   "+refs/pull/${pr}/head:${pr_head_ref}" \
   "+refs/heads/${base}:${base_dest_ref}"
 pr_head="$(git rev-parse "$pr_head_ref")"

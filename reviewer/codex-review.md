@@ -20,24 +20,37 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and **fetches the PR
    head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --no-tags
-   <gh-resolved-clone-url> +refs/pull/<PR#>/head:<tmpref> +refs/heads/<base>:<base-tmpref>`. The
-   fetch source is the **clone URL `gh` returns for the resolved repo** — `gh repo view <repo>
-   --json url` (with `<repo>` passed **explicitly** so `gh` views that repo, never a PR-followed
-   parent), then `.git` appended — **not the literal `origin` remote** and **not a synthesized
-   `https://github.com/...` URL**. Two reasons: (a) in a fork workflow (`origin` = your fork,
-   `upstream` = the canonical repo PRs target) `gh` reports the PR on the canonical repo, so
-   fetching from `origin` would fail (the PR ref doesn't exist on the fork) or silently grab a
-   same-numbered, unrelated PR and review the wrong diff; (b) using gh's own clone URL keeps the
-   fetch **host-correct on GitHub Enterprise / non-github.com hosts**, where `nameWithOwner`
-   resolves the same but a synthesized github.com URL would hit the wrong host (fail, or worse,
-   an unrelated same-named repo). That makes the source **provably** the repo `gh` resolved. Both
-   sources are qualified so a same-named tag (e.g. branch and tag both named `v1.2.0`) can't make
+   <remote> +refs/pull/<PR#>/head:<tmpref> +refs/heads/<base>:<base-tmpref>`. The fetch source is
+   the **configured git remote whose URL resolves to the repo `gh` bound the review to** — *not*
+   the literal `origin`, *not* a synthesized `https://github.com/...` URL. The script resolves
+   gh's canonical identity (`gh repo view <repo> --json url` for the **host**, with `<repo>` passed
+   **explicitly** so `gh` views that repo, never a PR-followed parent; `<repo>` itself is the
+   `owner/repo`), then iterates `git remote`, **normalizes** each remote's URL to `host` +
+   `owner/repo` (handling scp-style `git@host:owner/repo(.git)`, `ssh://git@host/owner/repo(.git)`,
+   and `https://host/owner/repo(.git)` — trailing `.git` stripped, compared case-insensitively),
+   and **selects the remote that matches** gh's host + `owner/repo` (preferring `origin` when it is
+   itself the match). It then fetches from that **remote name**. Three reasons this is right:
+   (a) **auth-correct** — using the operator's configured remote means the fetch uses the
+   operator's own transport and credentials (SSH key, gh's git credential helper, etc.). A
+   synthesized HTTPS *web* URL carries no credentials, so on **private repos or
+   SSH-only-authenticated checkouts** `git fetch <url>` would fail even though `gh auth status`
+   passes and `origin` works — aborting the review before Codex runs. (b) **fork-safe** — we match
+   on the gh-resolved identity, not blind `origin`: in a fork workflow (`origin` = your fork,
+   `upstream` = the canonical repo PRs target) `gh` reports the PR on the canonical repo, so we
+   select `upstream`; fetching from `origin` would fail (the PR ref doesn't exist on the fork) or
+   silently grab a same-numbered, unrelated PR and review the wrong diff. (c) **host-correct** —
+   it's the operator's real remote URL, so GitHub Enterprise / non-github.com hosts work, where a
+   synthesized github.com URL would hit the wrong host. That makes the source **provably** the repo
+   `gh` resolved. If **no** configured remote matches the gh-resolved repo, the script **refuses**
+   with an actionable error (`add it (e.g. 'git remote add upstream <url>') and re-run`) and a
+   non-zero exit — it does **not** fall back to an unauthenticated synthesized URL. Both sources
+   are qualified so a same-named tag (e.g. branch and tag both named `v1.2.0`) can't make
    the fetch resolve ambiguously or fail before Codex runs. The `refs/pull/<PR#>/head` source
    brings the PR head commit into the object store even for **fork** PRs (a plain `git fetch` of
    a branch would not). Both destinations are **private, per-run-unique refs we own** under
-   `refs/codex-review/<PR#>-<PID>/` (not a `refs/remotes/origin/*` tracking ref) — that keeps them
-   independent of which remote `origin` is, avoids clobbering the operator's `origin/<base>` with
-   a commit fetched from a different URL, **and** keeps two reviews launched from the same checkout
+   `refs/codex-review/<PR#>-<PID>/` (not a `refs/remotes/<remote>/*` tracking ref) — that keeps them
+   independent of which remote we selected, avoids clobbering the operator's `<remote>/<base>` with
+   a commit fetched into our own ref, **and** keeps two reviews launched from the same checkout
    from colliding (a shared ref name would let a later run's fetch/cleanup force-update or delete
    the ref while an earlier run is still resolving `--base`). The `--base` review runs against the
    freshly-fetched per-run base ref, always **current** regardless of the clone's configured
