@@ -36,7 +36,8 @@ set -euo pipefail
 #       read live — the list is never duplicated here).
 #   (h) NORTH_STAR.md's ACTIVE entry is not still the shipped Fabrica-self default
 #       (WARN). Scoped to the `status: active` designation, so a kept historical log
-#       entry doesn't keep warning once the active star is replaced.
+#       entry doesn't keep warning once the active star is replaced. Also WARNs if there
+#       is no `status: active` entry at all (a malformed/active-less file).
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate).
@@ -50,8 +51,8 @@ set -euo pipefail
 #       doctor must NOT count default-branch checks. No signal → WARN, not FAIL:
 #       merge-pr.sh's `gh pr checks` is the real enforcement, so doctor flags the risk
 #       rather than hard-failing a valid external-CI repo (or one with no PRs yet).
-#   (j) [target-repo path] the target's CLAUDE.md is present and filled in (no `<cmd>`
-#       placeholders) — WARN otherwise.
+#   (j) [target-repo path] the target's CLAUDE.md is present and filled in: it exists,
+#       has no `<cmd>` placeholders, AND has a `Stack & commands` section — WARN otherwise.
 #
 # Usage:
 #   scripts/doctor.sh                 run the clone-local checks against this clone
@@ -236,7 +237,9 @@ if [ ! -f "$north_star" ]; then
   report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
 else
   active_designation="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" || true)"
-  if printf '%s\n' "$active_designation" | grep -qF -- 'Frictionless first-run'; then
+  if [ -z "$active_designation" ]; then
+    report_warn "(h) NORTH_STAR.md has no 'status: active' entry — set an active north star before enabling proactive mode"
+  elif printf '%s\n' "$active_designation" | grep -qF -- 'Frictionless first-run'; then
     report_warn "(h) NORTH_STAR.md's active entry is still the shipped Fabrica-self default ('Frictionless first-run') — replace it with your own direction before enabling proactive mode"
   else
     report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
@@ -338,17 +341,23 @@ fi
 
 # (j) target repo's CLAUDE.md is present and filled in ----------------------------
 # The coder reads the target CLAUDE.md's "Stack & commands" to discover install/test/
-# build commands. A missing CLAUDE.md (for a code repo) or one still carrying the
-# template's `<cmd>` placeholders means the coder can't discover real commands. WARN
-# (not FAIL): a doc repo legitimately has no commands, so this is a heads-up, not a block.
+# build commands. A missing CLAUDE.md (for a code repo), one still carrying the
+# template's `<cmd>` placeholders, or one lacking a "Stack & commands" section entirely
+# means the coder can't discover real commands. The placeholder check alone is not
+# enough: an unrelated CLAUDE.md (or one whose commands section was deleted) has no
+# `<cmd>` yet also no authoritative commands, so it would falsely pass — hence we also
+# require evidence of the section heading. WARN (not FAIL): a doc repo legitimately has
+# no commands, so this is a heads-up, not a block.
 if [ -n "$target_repo" ]; then
   if ! claude_md="$(gh api -H "Accept: application/vnd.github.raw" \
       "repos/$target_repo/contents/CLAUDE.md" 2>/dev/null)"; then
     report_warn "(j) $target_repo has no CLAUDE.md — a code repo needs one with a 'Stack & commands' section so the coder can discover install/test/build commands"
   elif printf '%s' "$claude_md" | grep -qF -- '<cmd>'; then
     report_warn "(j) $target_repo CLAUDE.md still has '<cmd>' placeholders — fill in the 'Stack & commands' section before running the loop"
+  elif ! printf '%s' "$claude_md" | grep -qiE 'Stack & commands'; then
+    report_warn "(j) $target_repo CLAUDE.md has no 'Stack & commands' section — add one with install/test/build commands so the coder can discover them"
   else
-    report 0 "(j) $target_repo CLAUDE.md present and filled in (no '<cmd>' placeholders)"
+    report 0 "(j) $target_repo CLAUDE.md present and filled in ('Stack & commands' section, no '<cmd>' placeholders)"
   fi
 fi
 
