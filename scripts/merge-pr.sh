@@ -234,8 +234,13 @@ fi
 # the body and exit code separately so `set -e` can't abort on the expected 404, then read
 # the `contexts` array (legacy field; the `checks[].context` shape carries the same names).
 base_ref="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
+# URL-encode the branch name for the REST path: slashed names like `release/1.0` or
+# `feature/x` carry `/`, which a raw interpolation would send as path separators — the
+# lookup would 404 and wrongly fall back to the legacy all-checks gate. `@uri` encodes
+# `/` → `%2F` (and other reserved chars).
+base_ref_enc="$(jq -rn --arg b "$base_ref" '$b | @uri')"
 required_json=""
-if required_json="$(gh api "repos/$repo/branches/$base_ref/protection/required_status_checks" 2>/dev/null)"; then
+if required_json="$(gh api "repos/$repo/branches/$base_ref_enc/protection/required_status_checks" 2>/dev/null)"; then
   :
 else
   required_json=""
