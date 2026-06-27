@@ -187,9 +187,13 @@ cat <<EOF
 Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md):
   1. Branch protection on main — UI-only, and unavailable on free private repos.
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
-  3. Install the /faber command: run scripts/install.sh from your fabrica clone.
-  4. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
-  5. Set your own north star (NORTH_STAR.md in your fabrica clone) — replace the shipped
+  3. For a CODE repo, drop a filled-in CLAUDE.md (a HARD PREREQUISITE — its
+     "Stack & commands" are the only authoritative source for the install/lint/build/test
+     commands the coder runs; optional only for docs/trivial repos with no toolchain).
+     See templates/target-CLAUDE.md.
+  4. Install the /faber command: run scripts/install.sh from your fabrica clone.
+  5. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
+  6. Set your own north star (NORTH_STAR.md in your fabrica clone) — replace the shipped
      Fabrica default with your own direction; then approve it with Faber once you run /faber
      (this unlocks proactive autonomous mode). Approve it to Faber in-session, not by editing
      the file — the shipped approval note is the prior owner's history, not a token that

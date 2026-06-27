@@ -21,25 +21,26 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    questions, lead the comment with a SHORT reason (`ambiguous-spec`), add label
    `needs-human`, and stop.
 2. WORKING CONTEXT: you operate in the **target repo's local clone** — the session
-   cwd Faber spawned you in (not the Fabrica control-plane repo). Before you create
-   your branch, `git fetch origin` and branch off the **up-to-date default branch**
-   (e.g. `origin/main`) — never a stale local base.
-3. Create a branch `issue-<number>-<slug>` off that up-to-date base.
-4. Implement ONLY what the issue asks — one concern.
-5. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
+   cwd Faber spawned you in (not the Fabrica control-plane repo).
+3. DISCOVER THE COMMANDS (do this **before** you branch or edit anything — it is a
+   prerequisite gate, so a missing prerequisite never leaves a dirty clone): read the
+   target repo's `CLAUDE.md` → "Stack & commands" for the exact **install / lint /
+   build / test** commands — that file is the authoritative command source. For a
+   **code repo (one with a toolchain)** a filled-in `CLAUDE.md` is required: if a code
+   repo has **no `CLAUDE.md`**, or it still contains `<cmd>` placeholders, do NOT guess
+   the toolchain — comment on the issue (lead with the SHORT reason `ambiguous-spec`),
+   add label `needs-human`, and stop **before creating a branch or making any edit**. A
+   **docs/trivial repo with no toolchain** has no commands to run, so `CLAUDE.md` is
+   optional there: proceed normally (skip the install/check steps that need commands and
+   just make whatever checks exist pass — if there are none, that's fine).
+4. Create your branch off an up-to-date base: `git fetch origin`, then create
+   `issue-<number>-<slug>` off the **up-to-date default branch** (e.g. `origin/main`)
+   — never a stale local base.
+5. Implement ONLY what the issue asks — one concern.
+6. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
    concerns, stop, open a DRAFT PR with what you have, comment that it should be
    split into smaller issues (lead the comment with the SHORT reason `oversized`),
    add label `needs-human`, and stop.
-6. DISCOVER THE COMMANDS: read the target repo's `CLAUDE.md` → "Stack & commands"
-   for the exact **install / lint / build / test** commands — that file is the
-   authoritative command source. For a **code repo (one with a toolchain)** a
-   filled-in `CLAUDE.md` is required: if a code repo has **no `CLAUDE.md`**, or it
-   still contains `<cmd>` placeholders, do NOT guess the toolchain — comment on the
-   issue (lead with the SHORT reason `ambiguous-spec`), add label `needs-human`, and
-   stop. A **docs/trivial repo with no toolchain** has no commands to run, so
-   `CLAUDE.md` is optional there: proceed normally (skip the install/check steps that
-   need commands and just make whatever checks exist pass — if there are none, that's
-   fine).
 7. INSTALL FIRST: when "Stack & commands" gives an **Install** command, run it before
    you run any checks (so the toolchain and dependencies are present). (No toolchain →
    nothing to install.)
