@@ -25,11 +25,15 @@ Faber has briefed you with the PR, the latest review comments, and the current r
      back. Never silently ignore a comment.
 4. Push your changes to the same branch. Keep CI green: you are in the target repo's
    local clone, so before re-running checks read its `CLAUDE.md` → "Stack & commands"
-   (for a code repo; a docs/trivial repo with no toolchain has nothing to install/run),
-   run **Install first** when there's an Install command, then verify **locally**. Local
-   green is necessary but not sufficient — the PR's own CI is the ultimate gate, but you
-   don't wait on it: **Faber enforces PR CI at merge** (`merge-pr.sh` refuses unless CI
-   is green). Your job is the local green; push and stop.
+   (for a code repo; a docs/trivial repo with no toolchain has nothing to install/run).
+   Mirror `coder.md`'s guard: if the target is a **code repo with no `CLAUDE.md` or with
+   `<cmd>` placeholders still present**, do NOT guess — comment with the SHORT reason
+   `ambiguous-spec`, add label `needs-human`, and stop (a docs/trivial repo with no
+   toolchain proceeds normally). Otherwise run **Install first** when there's an Install
+   command, then verify **locally**. Local green is necessary but not sufficient — the
+   PR's own CI is the ultimate gate, but you don't wait on it: **Faber enforces PR CI at
+   merge** (`merge-pr.sh` refuses unless CI is green). Your job is the local green — then
+   continue with steps 5–6 below.
 5. Bump the round label: remove `round-N`, add `round-(N+1)`.
 6. Post a brief summary comment: what you changed vs. what you pushed back on.
 7. Do NOT merge. Stop.
