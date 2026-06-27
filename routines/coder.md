@@ -32,16 +32,24 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    add label `needs-human`, and stop.
 6. DISCOVER THE COMMANDS: read the target repo's `CLAUDE.md` → "Stack & commands"
    for the exact **install / lint / build / test** commands — that file is the
-   authoritative command source. If the target has **no `CLAUDE.md`**, or it still
-   contains `<cmd>` placeholders, do NOT guess the toolchain: comment on the issue
-   (lead with the SHORT reason `ambiguous-spec`), add label `needs-human`, and stop.
-7. INSTALL FIRST: run the **Install** command from "Stack & commands" before you
-   run any checks (so the toolchain and dependencies are present).
+   authoritative command source. For a **code repo (one with a toolchain)** a
+   filled-in `CLAUDE.md` is required: if a code repo has **no `CLAUDE.md`**, or it
+   still contains `<cmd>` placeholders, do NOT guess the toolchain — comment on the
+   issue (lead with the SHORT reason `ambiguous-spec`), add label `needs-human`, and
+   stop. A **docs/trivial repo with no toolchain** has no commands to run, so
+   `CLAUDE.md` is optional there: proceed normally (skip the install/check steps that
+   need commands and just make whatever checks exist pass — if there are none, that's
+   fine).
+7. INSTALL FIRST: when "Stack & commands" gives an **Install** command, run it before
+   you run any checks (so the toolchain and dependencies are present). (No toolchain →
+   nothing to install.)
 8. Make the repo's CI pass before you open the PR: run the same checks CI runs
-   (the lint / build / test commands from "Stack & commands"), locally. Where the
+   (the lint / build / test commands from "Stack & commands"), **locally**. Where the
    repo has a test suite, add or adjust tests to cover the change. Never open a PR
-   with red CI. Local green is **necessary but not sufficient** — the change is not
-   done until **CI is green on the PR itself** (CI is the ground truth).
+   with red CI. Local green is **necessary but not sufficient** — the PR's own CI is
+   the ultimate gate, but you don't wait on it: **Faber enforces PR CI at merge**
+   (`merge-pr.sh` refuses unless CI is green). Your job is the local green, then
+   open the PR and stop.
 9. Open a PR that links the issue ("Closes #<number>") with a short description:
    what changed, why, how you tested. Add label `round-0`.
 10. Do NOT merge. Do NOT approve. Stop after opening the PR.
