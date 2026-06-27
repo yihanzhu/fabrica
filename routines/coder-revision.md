@@ -23,7 +23,10 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
      back. Never silently ignore a comment.
-4. Push your changes to the same branch. Keep CI green.
+4. Push your changes to the same branch. Keep CI green: you are in the target repo's
+   local clone, so before re-running checks read its `CLAUDE.md` → "Stack & commands"
+   for the install / lint / build / test commands, run **Install first**, then verify
+   locally. Local green is necessary but not sufficient — CI on the PR is the ground truth.
 5. Bump the round label: remove `round-N`, add `round-(N+1)`.
 6. Post a brief summary comment: what you changed vs. what you pushed back on.
 7. Do NOT merge. Stop.
