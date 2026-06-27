@@ -19,15 +19,42 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 *different* repo's PR. Then:
 
 1. Derives the PR's base branch (`gh pr view <PR#> --json baseRefName`) and **fetches the PR
-   head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --no-tags origin
-   +refs/pull/<PR#>/head:<tmpref> +refs/heads/<base>:refs/remotes/origin/<base>`. Both sources are
-   qualified so a same-named tag on origin (e.g. branch and tag both named `v1.2.0`) can't make
+   head fork-safely** with explicit, **fully-qualified** refspecs — `git fetch --no-tags
+   <remote> +refs/pull/<PR#>/head:<tmpref> +refs/heads/<base>:<base-tmpref>`. The fetch source is
+   the **configured git remote whose URL resolves to the repo `gh` bound the review to** — *not*
+   the literal `origin`, *not* a synthesized `https://github.com/...` URL. The script resolves
+   gh's canonical identity (`gh repo view <repo> --json url` for the **host**, with `<repo>` passed
+   **explicitly** so `gh` views that repo, never a PR-followed parent; `<repo>` itself is the
+   `owner/repo`), then iterates `git remote`, **normalizes** each remote's URL to `host` +
+   `owner/repo` (handling scp-style `git@host:owner/repo(.git)`, `ssh://git@host/owner/repo(.git)`,
+   and `https://host/owner/repo(.git)` — trailing `.git` stripped, compared case-insensitively),
+   and **selects the remote that matches** gh's host + `owner/repo` (preferring `origin` when it is
+   itself the match). It then fetches from that **remote name**. Three reasons this is right:
+   (a) **auth-correct** — using the operator's configured remote means the fetch uses the
+   operator's own transport and credentials (SSH key, gh's git credential helper, etc.). A
+   synthesized HTTPS *web* URL carries no credentials, so on **private repos or
+   SSH-only-authenticated checkouts** `git fetch <url>` would fail even though `gh auth status`
+   passes and `origin` works — aborting the review before Codex runs. (b) **fork-safe** — we match
+   on the gh-resolved identity, not blind `origin`: in a fork workflow (`origin` = your fork,
+   `upstream` = the canonical repo PRs target) `gh` reports the PR on the canonical repo, so we
+   select `upstream`; fetching from `origin` would fail (the PR ref doesn't exist on the fork) or
+   silently grab a same-numbered, unrelated PR and review the wrong diff. (c) **host-correct** —
+   it's the operator's real remote URL, so GitHub Enterprise / non-github.com hosts work, where a
+   synthesized github.com URL would hit the wrong host. That makes the source **provably** the repo
+   `gh` resolved. If **no** configured remote matches the gh-resolved repo, the script **refuses**
+   with an actionable error (`add it (e.g. 'git remote add upstream <url>') and re-run`) and a
+   non-zero exit — it does **not** fall back to an unauthenticated synthesized URL. Both sources
+   are qualified so a same-named tag (e.g. branch and tag both named `v1.2.0`) can't make
    the fetch resolve ambiguously or fail before Codex runs. The `refs/pull/<PR#>/head` source
-   brings the PR head commit into the object store even for **fork** PRs (a plain `git fetch
-   origin` would not), and the base is fetched straight into `refs/remotes/origin/<base>` so the
-   `--base origin/<base>` review is always **current** regardless of the clone's configured fetch
-   refspecs (a bare `git fetch origin <base>` would only set `FETCH_HEAD` and could leave
-   `origin/<base>` stale or missing). The `+` prefixes force-update **only** these two
+   brings the PR head commit into the object store even for **fork** PRs (a plain `git fetch` of
+   a branch would not). Both destinations are **private, per-run-unique refs we own** under
+   `refs/codex-review/<PR#>-<PID>/` (not a `refs/remotes/<remote>/*` tracking ref) — that keeps them
+   independent of which remote we selected, avoids clobbering the operator's `<remote>/<base>` with
+   a commit fetched into our own ref, **and** keeps two reviews launched from the same checkout
+   from colliding (a shared ref name would let a later run's fetch/cleanup force-update or delete
+   the ref while an earlier run is still resolving `--base`). The `--base` review runs against the
+   freshly-fetched per-run base ref, always **current** regardless of the clone's configured
+   fetch refspecs. The `+` prefixes force-update **only** these two
    destination refs we own — never a global `git fetch --force`, which combined with git's tag
    auto-following could force-update local `refs/tags/*` and mutate operator state; `--no-tags`
    disables that auto-following so the fetch touches nothing outside the two named refs (the
@@ -40,8 +67,8 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    adds its worktree at a fresh `mktemp` path, a stale entry from a hard-killed previous run
    never blocks a re-run. (It deliberately avoids a global `git worktree prune`, which is
    repo-wide and would touch unrelated operator worktrees.)
-2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base origin/<base> -o <tmpfile>`** —
-   Codex's built-in review of the PR head diff vs. its **current** (qualified, remote) base,
+2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile>`** —
+   Codex's built-in review of the PR head diff vs. its **current** (qualified, freshly-fetched) base,
    inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the
    `review` subcommand). The `-c sandbox_mode="read-only"` override **forces** the read-only
    sandbox so the review can't inherit a writable default from the operator's Codex config
