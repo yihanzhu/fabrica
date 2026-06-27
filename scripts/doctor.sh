@@ -39,10 +39,15 @@ set -euo pipefail
 #       entry doesn't keep warning once the active star is replaced.
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
-#   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate) — FAIL
-#       if none is detectable. Trigger detection is a heuristic (covers the inline
-#       scalar/array, block-mapping-key, and block-sequence-item `pull_request` forms,
-#       and `pull_request_target`), not a full YAML parse.
+#   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate).
+#       Detected via MULTIPLE signals — pass if ANY is positive: a GitHub Actions
+#       workflow with a `pull_request` trigger (heuristic, covers the inline
+#       scalar/array, block-mapping-key, and block-sequence-item forms, and
+#       `pull_request_target`; not a full YAML parse), OR recent check-runs / commit
+#       statuses on the default branch (covers external CI like CircleCI/Buildkite/
+#       Jenkins wired in as required status checks). No signal → WARN, not FAIL:
+#       merge-pr.sh's `gh pr checks` is the real enforcement, so doctor flags the risk
+#       rather than hard-failing a valid external-CI repo (or one whose CI hasn't run).
 #   (j) [target-repo path] the target's CLAUDE.md is present and filled in (no `<cmd>`
 #       placeholders) — WARN otherwise.
 #
@@ -252,42 +257,71 @@ if [ -n "$target_repo" ]; then
 fi
 
 # (i) target repo has PR-triggered CI (the hard merge gate) -----------------------
-# A green doctor on a real repo must not mean "no hard gate." Branch protection's
-# required_status_checks is the ideal signal but is unavailable on free/private repos
-# (gh returns 403), so we don't depend on it. Instead we enumerate the target's
-# workflow files and check whether ANY declares a `pull_request` trigger — the thing
-# that makes CI run on a PR and become a merge gate. No PR-triggered workflow → FAIL.
+# A green doctor on a real repo must not mean "no hard gate." But the gate that's
+# actually enforced is merge-pr.sh's `gh pr checks`, which surfaces ANY PR check —
+# GitHub Actions AND external CI (CircleCI/Buildkite/Jenkins) wired in as required
+# status checks. So doctor must not hard-fail a valid external-CI repo just because it
+# has no Actions workflows. We detect PR-triggered CI via MULTIPLE signals and pass if
+# ANY is positive; if none is detectable we WARN (not FAIL) — the merge gate is the
+# real enforcement, so doctor flags the risk (confirm the repo runs checks on PRs)
+# rather than blocking a setup that may be fine (external CI, or CI that hasn't run yet).
 #
-# Trigger detection is a HEURISTIC, not a full YAML parse (we only have jq, not yq).
-# `pull_request` can be declared several valid ways, all of which run CI on PRs, so we
-# cover each form with line-anchored alternatives and avoid false positives from
-# unrelated `github.event.pull_request` expressions:
+# Signal (a) — a GitHub Actions workflow with a `pull_request` trigger. Detection is a
+# HEURISTIC, not a full YAML parse (we only have jq, not yq). `pull_request` can be
+# declared several valid ways, all of which run CI on PRs, so we cover each form with
+# line-anchored alternatives and avoid false positives from unrelated
+# `github.event.pull_request` expressions:
 #   - an `on:`/`"on":`/`'on':` line that contains pull_request (inline scalar `on:
 #     pull_request` and inline array `on: [push, pull_request]`), OR
 #   - a block mapping key `  pull_request:` on its own line, OR
 #   - a block sequence item `  - pull_request` on its own line.
-# `pull_request_target` counts too — it also triggers on PRs. A heuristic is fine for a
-# preflight WARN/FAIL; worst case is a rare miss, which surfaces as a conservative FAIL.
+# `pull_request_target` counts too — it also triggers on PRs.
+#
+# Signal (b) — recent check-runs / commit statuses on the default branch's HEAD. This
+# covers external CI (no Actions workflow at all) and any checks already reporting on
+# the repo. We tolerate the API call's error/empty cases (no checks, 404, 403) without
+# aborting under `set -e` (each call is `|| true`, defaulting the count to 0).
 pr_trigger_re='^("on"|'\''on'\''|on):.*pull_request|^[[:space:]]*pull_request(_target)?:[[:space:]]*$|^[[:space:]]*-[[:space:]]*pull_request(_target)?[[:space:]]*$'
 if [ -n "$target_repo" ]; then
   ci_seen=0
-  if ! workflow_paths="$(gh api "repos/$target_repo/contents/.github/workflows" \
+
+  # Signal (a): a GitHub Actions workflow declaring a pull_request trigger.
+  if workflow_paths="$(gh api "repos/$target_repo/contents/.github/workflows" \
       --jq '.[] | select(.type=="file") | .path' 2>/dev/null)"; then
-    report 1 "(i) PR-triggered CI on $target_repo (no .github/workflows — the hard merge gate is absent)"
-  else
     while IFS= read -r wf; do
       [ -n "$wf" ] || continue
-      if gh api -H "Accept: application/vnd.github.raw" "repos/$target_repo/contents/$wf" 2>/dev/null \
-          | grep -qE "$pr_trigger_re"; then
+      # Buffer the workflow body into a variable, then match with a here-string. Piping
+      # `gh api ... | grep -q` is unsafe under `set -o pipefail`: grep -q exits on the
+      # first match and closes the pipe, so gh can die with SIGPIPE and fail the whole
+      # pipeline — a false negative on large workflows. The here-string has no pipe.
+      wf_content="$(gh api -H "Accept: application/vnd.github.raw" \
+        "repos/$target_repo/contents/$wf" 2>/dev/null || true)"
+      if grep -qE "$pr_trigger_re" <<<"$wf_content"; then
         ci_seen=1
         break
       fi
     done <<< "$workflow_paths"
-    if [ "$ci_seen" -eq 1 ]; then
-      report 0 "(i) PR-triggered CI present on $target_repo"
-    else
-      report 1 "(i) no PR-triggered CI on $target_repo — workflows exist but none triggers on pull_request; the hard merge gate is absent"
+  fi
+
+  # Signal (b): recent check-runs / commit statuses on the default branch HEAD — covers
+  # external CI with no Actions workflows. Tolerate failure/empty (|| true, default 0).
+  if [ "$ci_seen" -eq 0 ]; then
+    default_branch="$(gh api "repos/$target_repo" --jq '.default_branch' 2>/dev/null || true)"
+    if [ -n "$default_branch" ]; then
+      check_runs="$(gh api "repos/$target_repo/commits/$default_branch/check-runs" \
+        --jq '.total_count' 2>/dev/null || true)"
+      statuses="$(gh api "repos/$target_repo/commits/$default_branch/status" \
+        --jq '.statuses | length' 2>/dev/null || true)"
+      if [ "${check_runs:-0}" -gt 0 ] 2>/dev/null || [ "${statuses:-0}" -gt 0 ] 2>/dev/null; then
+        ci_seen=1
+      fi
     fi
+  fi
+
+  if [ "$ci_seen" -eq 1 ]; then
+    report 0 "(i) PR-triggered CI detected on $target_repo (Actions workflow and/or recent checks/statuses)"
+  else
+    report_warn "(i) no PR-triggered CI detected on $target_repo — CI is the hard merge gate; confirm the repo runs checks on PRs (Actions workflow or external CI as required status checks)"
   fi
 fi
 
