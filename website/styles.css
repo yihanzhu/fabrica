@@ -420,6 +420,63 @@ section { padding: clamp(56px, 9vh, 104px) 0; }
 }
 .principle p { color: var(--muted); margin: 0; font-size: 1rem; }
 
+/* ---------- Outcomes / who it's for ---------- */
+.outcomes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+}
+@media (max-width: 720px) { .outcomes { grid-template-columns: 1fr; } }
+.outcome { padding: 30px 28px; }
+.outcome-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-sm);
+  color: var(--ember-soft);
+  border: 1px solid rgba(255, 138, 76, 0.3);
+  background: linear-gradient(180deg, rgba(255, 138, 76, 0.12), rgba(255, 138, 76, 0.03));
+  margin-bottom: 18px;
+}
+.outcome-icon svg { width: 24px; height: 24px; display: block; }
+.outcome h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.5rem;
+  margin: 10px 0 10px;
+}
+.outcome code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.audience {
+  margin: 22px 0 0;
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+.audience .audience-label {
+  display: block;
+  font-family: var(--sans);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ember-soft);
+  margin-bottom: 8px;
+}
+.audience b { color: var(--text); font-weight: 600; }
+
 /* ---------- In practice: vertical stepper ---------- */
 .steps {
   list-style: none;
