@@ -82,17 +82,30 @@ command, point it at a target repo, and watch one loop run. For the mental model
 
 7. **Clone the target repo and `cd` into it.** `/faber` and every orchestration script
    (`codex-review.sh`, `merge-pr.sh`, `manager-review.sh`) run from **inside the target
-   repo's local clone** — they read its git remote and run `gh` against it — so you need a
-   working copy on disk:
+   repo's local clone** — they read its git remote and resolve the repo via `gh` (e.g.
+   `codex-review.sh` calls `gh repo view`) — so you need a working copy on disk, and `gh`
+   must resolve to **the repo PRs target**.
+
+   **Recommended (simplest):** a **direct, non-fork clone of the canonical repo**, so
+   `origin` *is* the repo PRs target and `gh` resolves correctly with no extra config:
 
    ```sh
-   git clone <target-repo> "$HOME/git/<repo>" && cd "$HOME/git/<repo>"
+   git clone <canonical-repo> "$HOME/git/<repo>" && cd "$HOME/git/<repo>"
    # or: gh repo clone <owner>/<repo> "$HOME/git/<repo>" && cd "$HOME/git/<repo>"
    ```
 
-   A configured git remote in this clone must resolve to the repo PRs target — a direct
-   (non-fork) clone already does; if you cloned a fork, add the canonical repo as a remote
-   so `gh` and the merge helper act on the right repo. Everything below runs from here.
+   **Fork-clone alternative:** if you must work from a fork, `origin` points at the fork, so
+   you have to point both git *and* `gh` at the canonical repo (the repo PRs target):
+
+   ```sh
+   git remote add upstream <canonical-repo>      # add the canonical repo as a remote
+   gh repo set-default <owner>/<repo>            # the repo PRs target
+   ```
+
+   `gh repo set-default` is **required**: adding the remote alone does not change which repo
+   `gh` resolves to, so `gh repo view` / `gh pr view` and the orchestration scripts could
+   otherwise target the fork (or prompt non-interactively) and you'd review/merge against the
+   wrong repo. Everything below runs from this clone.
 
 8. **Open Claude Code in the target repo and run `/faber`** to summon the manager. Then, in
    that session, **approve your north star** (this unlocks proactive autonomous mode) —
