@@ -202,6 +202,81 @@
 
     <hr class="divider" />
 
+    <!-- ============ IN PRACTICE ============ -->
+    <section class="wrap" id="in-practice">
+      <div class="section-head" data-reveal>
+        <span class="kicker">In practice</span>
+        <h2>How one change ships, end to end.</h2>
+        <p>
+          The loop isn't a diagram — it's the path every change takes. Here's a single
+          iteration, from your direction to a merged, SHA-pinned diff.
+        </p>
+      </div>
+
+      <!-- Vertical numbered stepper. The two cross-vendor Codex checks carry the
+           --cool accent (step--cool); everything else stays ember. -->
+      <ol class="steps">
+
+        <li class="step" data-reveal>
+          <span class="step-num" aria-hidden="true">1</span>
+          <div class="step-body">
+            <span class="step-tag">You · Direction</span>
+            <h3>You set the direction</h3>
+            <p>You approve a north star, or hand Faber a one-liner. That's the whole
+               interface — you stay above the diff from here on.</p>
+          </div>
+        </li>
+
+        <li class="step step--cool" data-reveal>
+          <span class="step-num" aria-hidden="true">2</span>
+          <div class="step-body">
+            <span class="step-tag">Faber · Claude<span class="step-vendor step-vendor--cool">Codex debates</span></span>
+            <h3>Faber drafts a PR-sized issue</h3>
+            <p>Faber breaks the work into one concern — roughly 300–400 lines. For
+               <em>proactive</em> work, Codex debates the plan first and it proceeds only on
+               <em>consensus</em>: veto-only, defaulting to drop. User-directed work is gated
+               by your approval of the drafted spec.</p>
+          </div>
+        </li>
+
+        <li class="step" data-reveal>
+          <span class="step-num" aria-hidden="true">3</span>
+          <div class="step-body">
+            <span class="step-tag">Coder · Claude</span>
+            <h3>A fresh coder builds it</h3>
+            <p>A new subagent picks up the issue, branches off an up-to-date base, implements
+               the one concern, and opens the pull request.</p>
+          </div>
+        </li>
+
+        <li class="step step--cool" data-reveal>
+          <span class="step-num" aria-hidden="true">4</span>
+          <div class="step-body">
+            <span class="step-tag">Codex · OpenAI<span class="step-vendor step-vendor--cool">Codex reviews</span></span>
+            <h3>Codex reviews the diff</h3>
+            <p>The cross-vendor second opinion reads the code — comments only, never merges.
+               The coder revises across capped rounds (~3); genuinely stuck work escalates to
+               a human rather than grinding on.</p>
+          </div>
+        </li>
+
+        <li class="step step--merge" data-reveal>
+          <span class="step-num" aria-hidden="true">5</span>
+          <div class="step-body">
+            <span class="step-tag">CI green · Merge</span>
+            <h3>CI is the hard gate; Faber merges</h3>
+            <p>Nothing lands until the tests are green. Faber merges only a clean, low-risk
+               PR — SHA-pinned to the exact head Codex reviewed.</p>
+          </div>
+        </li>
+
+      </ol>
+
+      <p class="steps-meta" data-reveal>This page was built this way.</p>
+    </section>
+
+    <hr class="divider" />
+
     <!-- ============ CLOSING ============ -->
     <section class="closing wrap">
       <span class="chip chip--ember" data-reveal><span class="dot" aria-hidden="true"></span>Coming soon</span>

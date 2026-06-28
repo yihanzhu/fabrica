@@ -420,6 +420,118 @@ section { padding: clamp(56px, 9vh, 104px) 0; }
 }
 .principle p { color: var(--muted); margin: 0; font-size: 1rem; }
 
+/* ---------- In practice: vertical stepper ---------- */
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+  display: grid;
+  gap: 18px;
+}
+.step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 20px;
+  position: relative;
+}
+/* The connecting rail: a vertical line drawn down from each number to the next,
+   so the steps read as a single timeline. The last step omits it. */
+.step::before {
+  content: "";
+  position: absolute;
+  left: 25px;            /* centre of the 52px-wide number badge (26 - 1) */
+  top: 52px;
+  bottom: -18px;         /* span the grid gap into the next step */
+  width: 2px;
+  background: linear-gradient(to bottom, var(--border-strong), var(--border));
+}
+.step:last-child::before { display: none; }
+
+.step-num {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.35rem;
+  color: var(--ember-soft);
+  background: var(--surface);
+  border: 1px solid rgba(255, 138, 76, 0.35);
+  position: relative;
+  z-index: 1;
+}
+.step--cool .step-num {
+  color: var(--cool);
+  border-color: rgba(122, 167, 255, 0.4);
+}
+.step--merge .step-num {
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(255, 138, 76, 0.18), rgba(255, 138, 76, 0.05));
+  border-color: rgba(255, 138, 76, 0.5);
+}
+
+.step-body {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+.step-body:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.step--merge .step-body {
+  border-color: rgba(255, 138, 76, 0.28);
+  background: linear-gradient(180deg, rgba(255, 138, 76, 0.07), rgba(255, 138, 76, 0.02));
+}
+
+.step-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.step-vendor {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: none;
+}
+.step-vendor--cool { color: var(--cool); border-color: rgba(122, 167, 255, 0.35); }
+.step-body h3 {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.36rem;
+  margin: 10px 0 8px;
+}
+.step-body p { color: var(--muted); margin: 0; font-size: 1rem; }
+
+.steps-meta {
+  margin: 28px 0 0;
+  text-align: center;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+@media (max-width: 600px) {
+  .step { gap: 14px; }
+  .step-num { width: 44px; height: 44px; font-size: 1.18rem; }
+  .step::before { left: 21px; top: 44px; }
+  .step-body { padding: 18px 18px; }
+}
+
 /* ---------- Closing / coming soon ---------- */
 .closing {
   text-align: center;
