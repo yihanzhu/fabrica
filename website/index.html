@@ -101,19 +101,45 @@
         POST to a Pages Function / Worker, or embed a hosted form. Keep it inline + dependency-free.
       -->
 
-      <!-- The loop, at a glance — Codex checks at BOTH altitudes (debate, then review) -->
-      <div class="loop" role="list" aria-label="The build loop">
-        <div class="node" role="listitem"><span class="k">You</span><span class="v">North star</span></div>
-        <span class="arrow" aria-hidden="true">→</span>
-        <div class="node" role="listitem"><span class="k">Faber · Claude</span><span class="v">Plan</span></div>
-        <span class="arrow" aria-hidden="true">→</span>
-        <div class="node" role="listitem"><span class="k">Codex</span><span class="v">Debate</span></div>
-        <span class="arrow" aria-hidden="true">→</span>
-        <div class="node" role="listitem"><span class="k">Coder · Claude</span><span class="v">Build</span></div>
-        <span class="arrow" aria-hidden="true">→</span>
-        <div class="node" role="listitem"><span class="k">Codex</span><span class="v">Review</span></div>
-        <span class="arrow" aria-hidden="true">→</span>
-        <div class="node node--merge" role="listitem"><span class="k">CI green</span><span class="v">Merge</span></div>
+      <!-- The build loop — a focal, continuous cycle. A traveling ember pulse runs
+           the connectors in order (and along a return arc back to the start) to convey
+           a loop that never ends. The two Codex steps carry the --cool accent. The
+           pulse and the ambient sparks are decorative; the labels carry all meaning. -->
+      <div class="loop-stage">
+        <div class="embers" aria-hidden="true">
+          <span class="ember-spark"></span><span class="ember-spark"></span><span class="ember-spark"></span>
+          <span class="ember-spark"></span><span class="ember-spark"></span><span class="ember-spark"></span>
+          <span class="ember-spark"></span><span class="ember-spark"></span>
+        </div>
+
+        <div class="loop" role="list" aria-label="The build loop">
+          <div class="node node--step1" role="listitem"><span class="k">You</span><span class="v">North star</span></div>
+          <span class="arrow" aria-hidden="true"></span>
+          <div class="node node--step2" role="listitem"><span class="k">Faber · Claude</span><span class="v">Plan</span></div>
+          <span class="arrow arrow--cool" aria-hidden="true"></span>
+          <div class="node node--cool node--step3" role="listitem"><span class="k">Codex</span><span class="v">Debate</span></div>
+          <span class="arrow arrow--cool" aria-hidden="true"></span>
+          <div class="node node--step4" role="listitem"><span class="k">Coder · Claude</span><span class="v">Build</span></div>
+          <span class="arrow arrow--cool" aria-hidden="true"></span>
+          <div class="node node--cool node--step5" role="listitem"><span class="k">Codex</span><span class="v">Review</span></div>
+          <span class="arrow" aria-hidden="true"></span>
+          <div class="node node--merge node--step6" role="listitem"><span class="k">CI green</span><span class="v">Merge</span></div>
+        </div>
+
+        <!-- Return path: closes the cycle visually (Merge → You). Decorative; the
+             SVG track is static, the ember dot is the only moving part. -->
+        <div class="loop-return" aria-hidden="true">
+          <svg viewBox="0 0 1000 64" preserveAspectRatio="none" focusable="false" xmlns:xlink="http://www.w3.org/1999/xlink">
+            <path id="returnTrack" class="return-track"
+                  d="M 980 4 C 980 44, 980 60, 920 60 L 80 60 C 20 60, 20 44, 20 4" />
+            <circle class="return-pulse" r="4">
+              <animateMotion dur="9s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear">
+                <mpath xlink:href="#returnTrack" href="#returnTrack" />
+              </animateMotion>
+            </circle>
+          </svg>
+          <span class="loop-return-label">one continuous loop — it returns, it never ends</span>
+        </div>
       </div>
       <p class="loop-caption">Two cross-vendor checks — Codex debates the plan, then reviews the code. Revision rounds cap at ~3; genuinely stuck work escalates to a human.</p>
     </section>

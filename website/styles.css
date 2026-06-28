@@ -209,25 +209,81 @@ a { color: inherit; text-decoration: none; }
   color: var(--faint);
 }
 
-/* ---------- The loop ---------- */
-.loop {
-  margin: 46px auto 0;
+/* ---------- The build loop (hero centerpiece) ---------- */
+/* A focal cycle: six nodes joined by connectors carrying a traveling ember
+   pulse, closed by a return arc so it reads as one continuous loop. Decorative
+   motion lives behind `aria-hidden`; the labels carry all meaning. */
+.loop-stage {
+  position: relative;
+  margin: 54px auto 0;
   max-width: 1000px;
+}
+
+/* Ambient forge: a few rising ember sparks, drifting up behind the loop.
+   Background-level, never competing with the headline. */
+.embers {
+  position: absolute;
+  inset: -28px 0 -10px;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ember-spark {
+  position: absolute;
+  bottom: -6px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--ember-soft);
+  box-shadow: 0 0 6px 1px rgba(255, 138, 76, 0.6);
+  opacity: 0;
+  animation: ember-rise 7s ease-in infinite;
+}
+.ember-spark:nth-child(1) { left: 8%;  animation-delay: 0s;    animation-duration: 7.5s; }
+.ember-spark:nth-child(2) { left: 22%; animation-delay: 2.4s;  animation-duration: 6.8s; }
+.ember-spark:nth-child(3) { left: 35%; animation-delay: 4.1s;  animation-duration: 8.2s; }
+.ember-spark:nth-child(4) { left: 49%; animation-delay: 1.3s;  animation-duration: 7.1s; width: 2px; height: 2px; }
+.ember-spark:nth-child(5) { left: 63%; animation-delay: 5.2s;  animation-duration: 6.5s; }
+.ember-spark:nth-child(6) { left: 77%; animation-delay: 3.0s;  animation-duration: 8.6s; }
+.ember-spark:nth-child(7) { left: 88%; animation-delay: 0.9s;  animation-duration: 7.3s; width: 2px; height: 2px; }
+.ember-spark:nth-child(8) { left: 95%; animation-delay: 6.0s;  animation-duration: 6.9s; }
+@keyframes ember-rise {
+  0%   { transform: translateY(0) translateX(0);    opacity: 0; }
+  12%  { opacity: 0.8; }
+  70%  { opacity: 0.5; }
+  100% { transform: translateY(-118px) translateX(10px); opacity: 0; }
+}
+
+.loop {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  gap: 5px;
-  flex-wrap: wrap;
+  gap: 0;
+  flex-wrap: nowrap;
 }
 .loop .node {
   flex: 1 1 0;
-  min-width: 104px;
+  min-width: 0;
   border: 1px solid var(--border);
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   border-radius: var(--radius-sm);
-  padding: 15px 10px;
+  padding: 17px 12px;
   text-align: center;
   position: relative;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+}
+/* A faint top hairline that lights up as the pulse passes through each node. */
+.loop .node::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: linear-gradient(90deg, transparent, var(--ember), transparent);
+  opacity: 0;
+  transition: opacity 0.4s ease;
 }
 .loop .node .k {
   font-size: 0.68rem;
@@ -235,34 +291,176 @@ a { color: inherit; text-decoration: none; }
   text-transform: uppercase;
   color: var(--faint);
   display: block;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
 .loop .node .v {
   font-family: var(--serif);
-  font-size: 1.05rem;
+  font-size: 1.06rem;
   font-weight: 600;
 }
+/* The two Codex steps keep the cool, cross-vendor accent. */
+.loop .node--cool { border-color: rgba(122, 167, 255, 0.28); }
+.loop .node--cool .k { color: var(--cool); opacity: 0.85; }
+.loop .node--cool::before { background: linear-gradient(90deg, transparent, var(--cool), transparent); }
 .loop .node--merge {
   border-color: rgba(255, 138, 76, 0.35);
-  background: linear-gradient(180deg, rgba(255, 138, 76, 0.12), rgba(255, 138, 76, 0.03));
+  background: linear-gradient(180deg, rgba(255, 138, 76, 0.14), rgba(255, 138, 76, 0.04));
 }
+
+/* Connector: a thin track between nodes with a bright ember head that sweeps
+   across left→right, lighting each link in cycle order (a "baton pass" of
+   light). The chevron stays drawn as a static fallback. */
 .loop .arrow {
   align-self: center;
-  color: var(--faint);
-  font-size: 1.1rem;
-  padding: 0 2px;
-  flex: 0 0 auto;
+  flex: 0 0 26px;
+  height: 2px;
+  position: relative;
+  margin: 0 -1px;
+  background: linear-gradient(90deg, var(--border-strong), var(--border));
+  border-radius: 2px;
 }
+.loop .arrow::before {  /* static chevron — readable without motion */
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-top: 2px solid var(--faint);
+  border-right: 2px solid var(--faint);
+  transform: translateY(-50%) rotate(45deg);
+}
+.loop .arrow::after {   /* traveling ember head */
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 14px;
+  height: 4px;
+  border-radius: 4px;
+  transform: translate(-6px, -50%);
+  background: linear-gradient(90deg, transparent, var(--ember-soft), #fff);
+  box-shadow: 0 0 10px 1px rgba(255, 178, 103, 0.85);
+  opacity: 0;
+}
+.loop .arrow--cool::after {
+  background: linear-gradient(90deg, transparent, #9bbcff, #eaf1ff);
+  box-shadow: 0 0 10px 1px rgba(122, 167, 255, 0.85);
+}
+
+/* Sequenced "baton pass": each connector + the node after it light up in turn
+   across a single shared cycle, then the return arc carries the pulse home. */
+.loop .arrow:nth-of-type(1)::after { animation: pulse-run 9s linear infinite; animation-delay: 0.30s; }
+.loop .arrow:nth-of-type(2)::after { animation: pulse-run 9s linear infinite; animation-delay: 1.65s; }
+.loop .arrow:nth-of-type(3)::after { animation: pulse-run 9s linear infinite; animation-delay: 3.00s; }
+.loop .arrow:nth-of-type(4)::after { animation: pulse-run 9s linear infinite; animation-delay: 4.35s; }
+.loop .arrow:nth-of-type(5)::after { animation: pulse-run 9s linear infinite; animation-delay: 5.70s; }
+.loop .node--step2::before { animation: node-lit 9s ease-in-out infinite; animation-delay: 0.95s; }
+.loop .node--step3::before { animation: node-lit 9s ease-in-out infinite; animation-delay: 2.30s; }
+.loop .node--step4::before { animation: node-lit 9s ease-in-out infinite; animation-delay: 3.65s; }
+.loop .node--step5::before { animation: node-lit 9s ease-in-out infinite; animation-delay: 5.00s; }
+.loop .node--step6::before { animation: node-lit 9s ease-in-out infinite; animation-delay: 6.35s; }
+.loop .node--step1::before { animation: node-lit 9s ease-in-out infinite; animation-delay: 8.30s; } /* lit by the returning pulse */
+@keyframes pulse-run {
+  0%   { transform: translate(-6px, -50%);  opacity: 0; }
+  3%   { opacity: 1; }
+  /* the head crosses its own connector in ~10% of the cycle, then waits */
+  11%  { transform: translate(20px, -50%);  opacity: 1; }
+  14%  { opacity: 0; }
+  100% { transform: translate(20px, -50%);  opacity: 0; }
+}
+@keyframes node-lit {
+  0%, 6%   { opacity: 0; }
+  9%       { opacity: 1; }
+  16%      { opacity: 0; }
+  100%     { opacity: 0; }
+}
+
+/* Return arc: closes the cycle (Merge → You). The track is static; a single
+   ember dot travels it via SVG <animateMotion> (reversed: keyPoints 1→0). */
+.loop-return {
+  position: relative;
+  z-index: 1;
+  margin-top: 4px;
+  height: 64px;
+}
+.loop-return svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.return-track {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 7;
+  opacity: 0.7;
+}
+.return-pulse {
+  fill: #fff;
+  filter: drop-shadow(0 0 6px rgba(255, 178, 103, 0.95));
+}
+.loop-return-label {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  background: var(--bg);
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
 .loop-caption {
   text-align: center;
-  margin: 16px auto 0;
+  margin: 18px auto 0;
   font-size: 0.9rem;
   color: var(--faint);
 }
+
+/* Mobile: stack into a vertical cycle. Connectors rotate to point down; the
+   return arc collapses to a simple "loops back" label so nothing overflows. */
 @media (max-width: 720px) {
-  .loop { flex-direction: column; align-items: stretch; }
-  .loop .arrow { transform: rotate(90deg); padding: 2px 0; }
-  .loop .node { min-width: 0; }
+  .loop-stage { margin-top: 40px; }
+  .loop { flex-direction: column; align-items: stretch; gap: 0; }
+  .loop .node { padding: 14px 12px; }
+  .loop .arrow {
+    flex: 0 0 22px;
+    width: 2px;
+    height: 22px;
+    align-self: center;
+    margin: -1px 0;
+    background: linear-gradient(180deg, var(--border-strong), var(--border));
+  }
+  .loop .arrow::before { right: 50%; top: auto; bottom: -1px; transform: translateX(50%) rotate(135deg); }
+  .loop .arrow::after {  /* travel downward on mobile */
+    top: 0; left: 50%;
+    width: 4px; height: 14px;
+    transform: translate(-50%, -6px);
+    background: linear-gradient(180deg, transparent, var(--ember-soft), #fff);
+  }
+  .loop .arrow--cool::after { background: linear-gradient(180deg, transparent, #9bbcff, #eaf1ff); }
+  @keyframes pulse-run {
+    0%   { transform: translate(-50%, -6px);  opacity: 0; }
+    3%   { opacity: 1; }
+    11%  { transform: translate(-50%, 18px);  opacity: 1; }
+    14%  { opacity: 0; }
+    100% { transform: translate(-50%, 18px);  opacity: 0; }
+  }
+  .loop-return { height: auto; margin-top: 12px; }
+  .loop-return svg { display: none; }
+  .loop-return-label {
+    position: static;
+    display: block;
+    transform: none;
+    text-align: center;
+    background: none;
+    white-space: normal;
+  }
 }
 
 /* ---------- Sections ---------- */
@@ -648,6 +846,24 @@ section { padding: clamp(56px, 9vh, 104px) 0; }
   html { scroll-behavior: auto; }
   [data-reveal] { opacity: 1; transform: none; transition: none; }
   .chip .dot { animation: none; }
+
+  /* Hero loop: all decorative motion off; the static cycle stays complete and
+     legible. Connectors keep their chevrons; the return arc keeps its track and
+     label; nodes keep their accents. No meaning is carried by motion alone.
+     Selectors mirror the animated ones so these overrides win on specificity. */
+  .embers { display: none; }
+  .loop .arrow:nth-of-type(1)::after,
+  .loop .arrow:nth-of-type(2)::after,
+  .loop .arrow:nth-of-type(3)::after,
+  .loop .arrow:nth-of-type(4)::after,
+  .loop .arrow:nth-of-type(5)::after { animation: none; opacity: 0; }
+  .loop .node--step1::before,
+  .loop .node--step2::before,
+  .loop .node--step3::before,
+  .loop .node--step4::before,
+  .loop .node--step5::before,
+  .loop .node--step6::before { animation: none; opacity: 0; }
+  .return-pulse { display: none; }
 }
 
 /* Focus visibility for keyboard users */
