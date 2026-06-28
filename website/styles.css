@@ -31,6 +31,12 @@
   --radius-sm: 11px;
   --maxw:      1080px;
 
+  /* Vertical rhythm — generous, responsive section spacing. Each section pads
+     by this token top and bottom, so the air *between* two stacked sections is
+     two full --section-pad. This is the page's breathing room — the main lever
+     of the polish pass, replacing the old hard <hr> dividers with open space. */
+  --section-pad: clamp(80px, 12vh, 136px);
+
   --serif: "Fraunces", "Iowan Old Style", Georgia, "Times New Roman", serif;
   --sans:  "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
@@ -161,10 +167,13 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ---------- Hero ---------- */
-.hero {
+/* section.hero.wrap (0,2,1) so this wins over the generic section.wrap rhythm
+   rule regardless of source order. padding-block keeps .wrap gutters intact. */
+section.hero.wrap {
   text-align: center;
-  /* padding-block only — keep the horizontal gutters from .wrap intact */
-  padding-block: clamp(72px, 13vh, 132px) clamp(56px, 9vh, 96px);
+  /* Top: generous space below the sticky header. Bottom: a full --section-pad
+     so the hero → first section gap matches the open inter-section rhythm. */
+  padding-block: clamp(84px, 14vh, 148px) var(--section-pad);
 }
 .eyebrow {
   font-size: 0.8rem;
@@ -464,8 +473,16 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ---------- Sections ---------- */
-section { padding: clamp(56px, 9vh, 104px) 0; }
-.section-head { max-width: 60ch; margin-bottom: 40px; }
+/* Open, even vertical rhythm. With the dividers gone, whitespace alone reads
+   the section boundaries — so the inter-section air (two --section-pad) is
+   deliberately generous. No hard rules, no tinted panels: just open space.
+   NB: every section also carries `.wrap` (padding: 0 24px), so the vertical
+   rhythm must be set with matching specificity — hence `section.wrap` and
+   `padding-block` (which leaves .wrap's horizontal gutters intact). The hero
+   and closing override this with their own `section.hero` / `section.closing`
+   rules below, at equal specificity but later in the cascade. */
+section.wrap { padding-block: var(--section-pad); }
+.section-head { max-width: 60ch; margin-bottom: 44px; }
 .section-head .kicker {
   font-size: 0.78rem;
   font-weight: 600;
@@ -486,7 +503,6 @@ section { padding: clamp(56px, 9vh, 104px) 0; }
   font-size: 1.08rem;
   margin: 14px 0 0;
 }
-.divider { height: 1px; background: var(--border); border: 0; margin: 0; }
 
 /* ---------- Team: two altitudes, four roles ---------- */
 .lanes { display: grid; gap: 30px; }
@@ -603,6 +619,12 @@ section { padding: clamp(56px, 9vh, 104px) 0; }
   background: var(--surface);
   border-radius: var(--radius);
   padding: 28px 26px;
+  transition: transform 0.25s ease, border-color 0.25s ease, background 0.25s ease;
+}
+.principle:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
 }
 .principle .num {
   font-family: var(--serif);
@@ -787,11 +809,23 @@ section { padding: clamp(56px, 9vh, 104px) 0; }
   .step-body { padding: 18px 18px; }
 }
 
-/* ---------- Closing / coming soon ---------- */
-.closing {
+/* ---------- Closing ---------- */
+/* section.closing.wrap (0,2,1) to win over the generic section.wrap rhythm. */
+section.closing.wrap {
   text-align: center;
-  /* padding-block only — keep the horizontal gutters from .wrap intact */
-  padding-block: clamp(72px, 12vh, 130px);
+  /* padding-block keeps .wrap's horizontal gutters intact.
+     A touch more than --section-pad up top so the final beat lands with air. */
+  padding-block: clamp(96px, 14vh, 156px) clamp(88px, 13vh, 140px);
+}
+/* Eyebrow in place of the old (redundant) "Coming soon" chip — the header chip
+   carries the status; here we just set the closing beat with a quiet kicker. */
+.closing-eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ember-soft);
 }
 .closing h2 {
   font-family: var(--serif);
