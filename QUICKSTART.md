@@ -80,7 +80,34 @@ command, point it at a target repo, and watch one loop run. For the mental model
    step; *approving* it happens with Faber in the next step, once a session exists to receive
    that approval.)
 
-7. **Open Claude Code in the target repo and run `/faber`** to summon the manager. Then, in
+7. **Clone the target repo and `cd` into it.** `/faber` and every orchestration script
+   (`codex-review.sh`, `merge-pr.sh`, `manager-review.sh`) run from **inside the target
+   repo's local clone** — they read its git remote and resolve the repo via `gh` (e.g.
+   `codex-review.sh` calls `gh repo view`) — so you need a working copy on disk, and `gh`
+   must resolve to **the repo PRs target**.
+
+   **Recommended (simplest):** a **direct, non-fork clone of the canonical repo**, so
+   `origin` *is* the repo PRs target and `gh` resolves correctly with no extra config:
+
+   ```sh
+   git clone <canonical-repo> "$HOME/git/<repo>" && cd "$HOME/git/<repo>"
+   # or: gh repo clone <owner>/<repo> "$HOME/git/<repo>" && cd "$HOME/git/<repo>"
+   ```
+
+   **Fork-clone alternative:** if you must work from a fork, `origin` points at the fork, so
+   you have to point both git *and* `gh` at the canonical repo (the repo PRs target):
+
+   ```sh
+   git remote add upstream <canonical-repo>      # add the canonical repo as a remote
+   gh repo set-default <owner>/<repo>            # the repo PRs target
+   ```
+
+   `gh repo set-default` is **required**: adding the remote alone does not change which repo
+   `gh` resolves to, so `gh repo view` / `gh pr view` and the orchestration scripts could
+   otherwise target the fork (or prompt non-interactively) and you'd review/merge against the
+   wrong repo. Everything below runs from this clone.
+
+8. **Open Claude Code in the target repo and run `/faber`** to summon the manager. Then, in
    that session, **approve your north star** (this unlocks proactive autonomous mode) —
    explicitly tell Faber you approve the direction you set in step 6. **Your explicit approval
    of the active north star is the root authorization for all proactive work** (the front gate
@@ -88,17 +115,17 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Until you set + approve your own, Faber will only act on issues you ask for directly and
    will ask you to set + approve the north star before pursuing anything proactively.
 
-8. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
+9. **Give Faber a one-liner** — describe the change you want. Faber drafts a spec and
    opens a GitHub issue. You talk only to Faber.
 
-9. **Approve the drafted spec.** For a user-directed issue, the front gate is *your* approval
-   of the spec Faber drafted in step 8 — your one-liner was the request; this is the go.
+10. **Approve the drafted spec.** For a user-directed issue, the front gate is *your* approval
+   of the spec Faber drafted in step 9 — your one-liner was the request; this is the go.
    Faber records that approval by applying the `ready` label (it never self-approves), which
    is its cue to spawn the coder. (For proactive issues Faber raises toward your approved north
    star, the gate is Faber⇄Codex consensus instead — no per-issue ask — which is exactly why
-   approving the north star in step 7 matters.)
+   approving the north star in step 8 matters.)
 
-10. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
+11. **Watch one loop:** Faber spawns the coder subagent → coder opens a PR (`round-0`) →
    Faber runs `"<fabrica>/scripts/codex-review.sh" <PR#>` from inside the target repo's
    clone — by absolute path, since the harness lives only in the fabrica clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
