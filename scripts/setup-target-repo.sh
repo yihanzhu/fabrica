@@ -47,6 +47,22 @@ fi
 
 repo="$1"
 
+# Resolve THIS Fabrica clone's repo root from the script's own location, following
+# symlinks, so the CLAUDE.md template reminder below can print an ABSOLUTE path. This
+# script is run by absolute path FROM the target repo (per QUICKSTART/install.sh), so a
+# relative "templates/target-CLAUDE.md" would misresolve against the target repo where
+# the template doesn't exist. Same derivation idiom as install.sh / doctor.sh.
+script_path="$0"
+while [ -L "$script_path" ]; do
+  link_target="$(readlink "$script_path")"
+  case "$link_target" in
+    /*) script_path="$link_target" ;;
+    *)  script_path="$(dirname "$script_path")/$link_target" ;;
+  esac
+done
+repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
+target_claude_template="$repo_root/templates/target-CLAUDE.md"
+
 # Preflight — fail honestly and early, BEFORE creating any label, so a misconfigured
 # run surfaces an actionable pointer instead of an opaque mid-loop gh error and a
 # half-bootstrapped repo (see QUICKSTART.md > Prerequisites).
@@ -190,7 +206,7 @@ Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md
   3. For a CODE repo, drop a filled-in CLAUDE.md (a HARD PREREQUISITE — its
      "Stack & commands" are the only authoritative source for the install/lint/build/test
      commands the coder runs; optional only for docs/trivial repos with no toolchain).
-     See templates/target-CLAUDE.md.
+     Template (under your Fabrica clone): ${target_claude_template}.
   4. Install the /faber command: run scripts/install.sh from your fabrica clone.
   5. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
   6. Set your own north star (NORTH_STAR.md in your fabrica clone) — replace the shipped
