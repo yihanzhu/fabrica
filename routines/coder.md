@@ -35,7 +35,8 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      run `<cmd>` — **fall through to (b)** and treat the section as absent.
    - (b) **Else the target's CI configuration, whatever the provider** → extract the
      install / lint / build / test commands from it. This is GitHub Actions workflow(s)
-     under `.github/workflows/*.yml` that trigger on `pull_request` (read their `run:`
+     under `.github/workflows/*.yml` or `.github/workflows/*.yaml` that trigger on
+     `pull_request` (read their `run:`
      steps) **or** an external provider's config — `.circleci/config.yml`, `.buildkite/*`,
      `Jenkinsfile`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `.travis.yml`, etc. A target
      on external CI has no Actions workflow, so don't stop at an empty `.github/workflows/`

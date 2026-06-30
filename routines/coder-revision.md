@@ -32,8 +32,8 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    present but still contains `<cmd>`, do NOT stop here and do NOT try to run `<cmd>` —
    fall through to (b) and treat the section as absent**;
    (b) else the target's CI configuration, whatever the provider — GitHub Actions
-   workflow(s) under `.github/workflows/*.yml` triggered on `pull_request` (read their
-   `run:` steps) **or** an external provider's config (`.circleci/config.yml`,
+   workflow(s) under `.github/workflows/*.yml` or `.github/workflows/*.yaml` triggered on
+   `pull_request` (read their `run:` steps) **or** an external provider's config (`.circleci/config.yml`,
    `.buildkite/*`, `Jenkinsfile`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `.travis.yml`,
    etc.) — extract the install / lint / build / test commands from it (**CI is the ground
    truth; derive local checks to match it**; don't stop at an empty `.github/workflows/`
