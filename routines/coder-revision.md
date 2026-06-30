@@ -15,27 +15,37 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    SHORT reason `round-cap`, and stop. EXCEPTION: Faber may direct ONE scoped-down final change
    — land just the agreed/converged core and drop the contested part (the remainder goes to a
    follow-up issue Faber opens, not more rounds). This scoped-down change is TERMINAL and is
-   still subject to the **step-3 prerequisite guard and step-5 verify-locally-before-push**:
-   run the `CLAUDE.md` prerequisite check first (escalate `ambiguous-spec` / `needs-human`
-   and stop if a code repo is missing it / has `<cmd>` placeholders), make exactly that
-   change, verify locally, then push the green result (step 5) so the scoped core lands on
+   still subject to the **step-3 command discovery and step-5 verify-locally-before-push**:
+   run the step-3 discovery first (escalate `ambiguous-spec` / `needs-human` and stop only
+   if no source yields runnable commands), make exactly that change, verify locally, then
+   push the green result (step 5) so the scoped core lands on
    the branch for re-review and merge, then SKIP step 6's round bump — the PR stays at
    `round-3`, do NOT add a `round-4` (no such label exists) — then post the summary comment
    (step 7) and stop (step 8).
    Otherwise (no scoped-down direction) add label `needs-human` and stop.
-3. PREREQUISITE CHECK (do this **before** you modify or push anything): you are in the
-   target repo's local clone. Mirror `coder.md`'s guard — read its `CLAUDE.md` →
-   "Stack & commands" for the install / lint / build / test commands; if the target is a
-   **code repo with no `CLAUDE.md` or with `<cmd>` placeholders still present**, do NOT
-   guess — comment with the SHORT reason `ambiguous-spec`, add label `needs-human`, and
-   stop before editing or pushing (a docs/trivial repo with no toolchain proceeds normally).
+3. DISCOVER THE COMMANDS (do this **before** you modify or push anything): you are in the
+   target repo's local clone. Mirror `coder.md`'s discovery order, stopping at the first
+   source that yields runnable **install / lint / build / test** commands:
+   (a) target `CLAUDE.md` → "Stack & commands" if present (authoritative override);
+   (b) else the target's CI workflow(s) under `.github/workflows/` triggered on
+   `pull_request` — extract the commands from their `run:` steps (**CI is the ground
+   truth; derive local checks to match it**); (c) else standard manifests (`package.json`
+   scripts + lockfile→package-manager, `Makefile`, `pyproject.toml` / `tox.ini`, etc.).
+   (d) **Only if none** of (a)–(c) yield runnable commands → do NOT guess: comment with
+   the SHORT reason `ambiguous-spec`, add label `needs-human`, and stop before editing or
+   pushing — the #54 guard, now the last resort, not a prerequisite (`CLAUDE.md` is an
+   optional supplement). A docs/trivial repo with no toolchain has nothing to discover and
+   proceeds normally. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
+   runnable **core** locally (install + lint/build/unit) and rely on the PR's CI for the
+   rest; Install first; the PR's own CI is the ultimate gate (Faber enforces at merge).
 4. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
      back. Never silently ignore a comment.
 5. Verify locally, THEN push — never push a red commit. Run **Install first** when
-   there's an Install command, then run the lint / build / test checks **locally** and
-   make them green. Only once local checks pass, push your changes to the same branch.
+   discovery (step 3) yielded an Install command, then run the lint / build / test checks
+   **locally** and make them green. Only once local checks pass, push your changes to the
+   same branch.
    Local green is necessary but not sufficient — the PR's own CI is the ultimate gate,
    but you don't wait on it: **Faber enforces PR CI at merge** (`merge-pr.sh` refuses
    unless CI is green). Your job is the local green, then the push — then continue with

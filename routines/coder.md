@@ -23,16 +23,32 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
 2. WORKING CONTEXT: you operate in the **target repo's local clone** — the session
    cwd Faber spawned you in (not the Fabrica control-plane repo).
 3. DISCOVER THE COMMANDS (do this **before** you branch or edit anything — it is a
-   prerequisite gate, so a missing prerequisite never leaves a dirty clone): read the
-   target repo's `CLAUDE.md` → "Stack & commands" for the exact **install / lint /
-   build / test** commands — that file is the authoritative command source. For a
-   **code repo (one with a toolchain)** a filled-in `CLAUDE.md` is required: if a code
-   repo has **no `CLAUDE.md`**, or it still contains `<cmd>` placeholders, do NOT guess
-   the toolchain — comment on the issue (lead with the SHORT reason `ambiguous-spec`),
-   add label `needs-human`, and stop **before creating a branch or making any edit**. A
-   **docs/trivial repo with no toolchain** has no commands to run, so `CLAUDE.md` is
-   optional there: proceed normally (skip the install/check steps that need commands and
-   just make whatever checks exist pass — if there are none, that's fine).
+   pre-work gate, so a failed discovery never leaves a dirty clone). Work this
+   **discovery order** and stop at the first source that yields runnable **install /
+   lint / build / test** commands:
+   - (a) **Target `CLAUDE.md` → "Stack & commands"** present → use it. An explicit,
+     hand-written command section is the author's stated intent, so it is the
+     authoritative override — trust it over what you'd infer below.
+   - (b) **Else the target's CI workflow(s)** under `.github/workflows/` that trigger on
+     `pull_request` → extract the install / lint / build / test commands from their
+     `run:` steps. **CI is the ground truth: derive your local checks to match it** so
+     local-green and the PR's own CI agree.
+   - (c) **Else standard manifests** → infer the toolchain: `package.json` scripts (pick
+     the package manager from the lockfile — `package-lock.json`→npm, `pnpm-lock.yaml`→pnpm,
+     `yarn.lock`→yarn), `Makefile` targets, `pyproject.toml` / `tox.ini`, etc.
+   - (d) **Only if none** of (a)–(c) yield runnable install/check commands → do NOT
+     guess: comment on the issue (lead with the SHORT reason `ambiguous-spec`), add label
+     `needs-human`, and stop **before creating a branch or making any edit**. This is the
+     #54 no-guess guard, now the last resort rather than the first requirement — a
+     filled-in `CLAUDE.md` is an optional supplement, not a prerequisite. (A
+     **docs/trivial repo with no toolchain** has no commands to run and nothing to
+     discover: proceed normally — just make whatever checks exist pass, and if there are
+     none, that's fine.)
+   - **Pragmatics:** if the discovered CI is a complex matrix or needs secrets/services
+     not available locally, run the runnable **core** locally (install + lint/build/unit
+     tests) and rely on the PR's CI for the rest — don't try to perfectly replicate CI,
+     and don't block on un-runnable steps. Run the **Install** command first; the PR's
+     own CI remains the ultimate gate (Faber enforces it at merge).
 4. Create your branch off an up-to-date base: `git fetch origin`, then create
    `issue-<number>-<slug>` off the **up-to-date default branch** (e.g. `origin/main`)
    — never a stale local base.
@@ -41,11 +57,11 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    concerns, stop, open a DRAFT PR with what you have, comment that it should be
    split into smaller issues (lead the comment with the SHORT reason `oversized`),
    add label `needs-human`, and stop.
-7. INSTALL FIRST: when "Stack & commands" gives an **Install** command, run it before
+7. INSTALL FIRST: when discovery (step 3) yielded an **Install** command, run it before
    you run any checks (so the toolchain and dependencies are present). (No toolchain →
    nothing to install.)
 8. Make the repo's CI pass before you open the PR: run the same checks CI runs
-   (the lint / build / test commands from "Stack & commands"), **locally**. Where the
+   (the lint / build / test commands you discovered in step 3), **locally**. Where the
    repo has a test suite, add or adjust tests to cover the change. Never open a PR
    with red CI. Local green is **necessary but not sufficient** — the PR's own CI is
    the ultimate gate, but you don't wait on it: **Faber enforces PR CI at merge**
