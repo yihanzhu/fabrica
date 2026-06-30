@@ -55,10 +55,13 @@ repo's **"Automatically delete head branches"** setting, or run `gh pr merge …
 manually, so merged feature branches don't accumulate.
 
 ## 3. CI — the loop's hard gate
-CI must run the **exact commands** you put in this repo's `CLAUDE.md` (its tests /
-lint/typecheck / build) on every PR. The contract is simple: what the agents are told to
-run locally is what CI enforces. If the two drift apart, the green check is hollow — it
-proves nothing about the change.
+CI must run this repo's **real lint / typecheck / build / test** on every PR — it is the
+**hard merge gate**, and the green check only means something if CI exercises the change.
+The coder **auto-discovers** the commands to run locally from the repo's CI configuration
+(whatever the provider) plus standard manifests, and matches CI so local-green and the PR's
+own CI agree. You do **not** need a filled-in `CLAUDE.md` for this — a target `CLAUDE.md`
+"Stack & commands" is an **optional override** (see step 4) to pin or disambiguate a
+non-standard toolchain.
 
 **If this repo has no CI, add repo-specific CI first** — it's the loop's hard gate, and the
 team won't merge against a missing or hollow check. There is no blessed drop-in workflow:
@@ -67,14 +70,17 @@ CI is project-specific, so you wire it to *your* commands.
 Illustrative only (not a drop-in — swap in your repo's real commands and runtime):
 
 ```yaml
-# on: [pull_request]  — run the SAME commands your CLAUDE.md tells the agents to run
+# on: [pull_request]  — run your repo's real lint / test / build
 - run: npm ci
 - run: npm test
 - run: npm run lint
 ```
 
 ## 4. Conventions
-- Add `CLAUDE.md` (from `templates/target-CLAUDE.md`), filled in for this repo.
+- `CLAUDE.md` is **optional**. The coder auto-discovers the lint/build/test commands from
+  CI + manifests (step 3), so you don't need one to run the loop. Add one (from
+  `templates/target-CLAUDE.md`), with a filled-in "Stack & commands" section, only to
+  **override** discovery — to pin or disambiguate a non-standard toolchain.
 
 ## 5. Connect the in-session team
 The team runs from a Claude Code session — there are no per-repo routine triggers to wire.

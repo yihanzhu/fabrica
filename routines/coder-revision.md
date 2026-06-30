@@ -31,10 +31,17 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    `templates/target-CLAUDE.md` still carries `<cmd>` placeholders, so if the section is
    present but still contains `<cmd>`, do NOT stop here and do NOT try to run `<cmd>` —
    fall through to (b) and treat the section as absent**;
-   (b) else the target's CI workflow(s) under `.github/workflows/` triggered on
-   `pull_request` — extract the commands from their `run:` steps (**CI is the ground
-   truth; derive local checks to match it**); (c) else standard manifests (`package.json`
-   scripts + lockfile→package-manager, `Makefile`, `pyproject.toml` / `tox.ini`, etc.).
+   (b) else the target's CI configuration, whatever the provider — GitHub Actions
+   workflow(s) under `.github/workflows/*.yml` triggered on `pull_request` (read their
+   `run:` steps) **or** an external provider's config (`.circleci/config.yml`,
+   `.buildkite/*`, `Jenkinsfile`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `.travis.yml`,
+   etc.) — extract the install / lint / build / test commands from it (**CI is the ground
+   truth; derive local checks to match it**; don't stop at an empty `.github/workflows/`
+   when the repo runs on external CI). If a CI config is present but you can't reliably
+   extract runnable commands from it, don't stop here — fall through to (a) or (c), and
+   reach (d) only if none yield runnable commands; (c) else standard manifests
+   (`package.json` scripts + lockfile→package-manager, `Makefile`, `pyproject.toml` /
+   `tox.ini`, etc.).
    (d) **Only if none** of (a)–(c) yield runnable commands → do NOT guess: comment with
    the SHORT reason `ambiguous-spec`, add label `needs-human`, and stop before editing or
    pushing — the #54 guard, now the last resort, not a prerequisite (`CLAUDE.md` is an

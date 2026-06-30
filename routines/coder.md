@@ -33,10 +33,18 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      `templates/target-CLAUDE.md` still carries `<cmd>` placeholders:** if the section is
      present but still contains `<cmd>` placeholders, do NOT stop here and do NOT try to
      run `<cmd>` — **fall through to (b)** and treat the section as absent.
-   - (b) **Else the target's CI workflow(s)** under `.github/workflows/` that trigger on
-     `pull_request` → extract the install / lint / build / test commands from their
-     `run:` steps. **CI is the ground truth: derive your local checks to match it** so
-     local-green and the PR's own CI agree.
+   - (b) **Else the target's CI configuration, whatever the provider** → extract the
+     install / lint / build / test commands from it. This is GitHub Actions workflow(s)
+     under `.github/workflows/*.yml` that trigger on `pull_request` (read their `run:`
+     steps) **or** an external provider's config — `.circleci/config.yml`, `.buildkite/*`,
+     `Jenkinsfile`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `.travis.yml`, etc. A target
+     on external CI has no Actions workflow, so don't stop at an empty `.github/workflows/`
+     — read whichever CI config the repo actually uses. **CI is the ground truth: derive
+     your local checks to match it** so local-green and the PR's own CI agree. If a CI
+     config is present but you can't reliably extract runnable commands from it, do NOT
+     stop here — fall through to a `CLAUDE.md` "Stack & commands" override (a) or standard
+     manifests (c), reaching the (d) escalation only if none of (a)–(c) yield runnable
+     commands.
    - (c) **Else standard manifests** → infer the toolchain: `package.json` scripts (pick
      the package manager from the lockfile — `package-lock.json`→npm, `pnpm-lock.yaml`→pnpm,
      `yarn.lock`→yarn), `Makefile` targets, `pyproject.toml` / `tox.ini`, etc.
