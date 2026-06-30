@@ -26,9 +26,13 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    pre-work gate, so a failed discovery never leaves a dirty clone). Work this
    **discovery order** and stop at the first source that yields runnable **install /
    lint / build / test** commands:
-   - (a) **Target `CLAUDE.md` → "Stack & commands"** present → use it. An explicit,
-     hand-written command section is the author's stated intent, so it is the
-     authoritative override — trust it over what you'd infer below.
+   - (a) **Target `CLAUDE.md` → "Stack & commands" with filled-in, runnable commands**
+     (no remaining `<cmd>` placeholders) → use it. An explicit, hand-written command
+     section is the author's stated intent, so it is the authoritative override — trust
+     it over what you'd infer below. **But a copied-but-unfilled
+     `templates/target-CLAUDE.md` still carries `<cmd>` placeholders:** if the section is
+     present but still contains `<cmd>` placeholders, do NOT stop here and do NOT try to
+     run `<cmd>` — **fall through to (b)** and treat the section as absent.
    - (b) **Else the target's CI workflow(s)** under `.github/workflows/` that trigger on
      `pull_request` → extract the install / lint / build / test commands from their
      `run:` steps. **CI is the ground truth: derive your local checks to match it** so

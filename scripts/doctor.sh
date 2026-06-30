@@ -12,7 +12,8 @@ set -euo pipefail
 # run, so a green doctor can't overstate readiness: it verifies Codex is signed in
 # (not merely on PATH), warns when NORTH_STAR.md is still the shipped Fabrica-self
 # default, and — in the target-repo path — checks the target has PR-triggered CI
-# (the hard merge gate) and a filled-in CLAUDE.md.
+# (the hard merge gate) and reports (advisory only) whether a CLAUDE.md "Stack &
+# commands" override is present (commands are auto-discovered, so it is optional).
 #
 # It is STRICTLY READ-ONLY: it never creates, edits, or deletes anything (and the
 # optional label check delegates to setup-target-repo.sh's --check mode, which is
@@ -51,8 +52,12 @@ set -euo pipefail
 #       enforcement, so doctor flags the risk rather than hard-failing a valid
 #       external-CI repo (or one with no PRs yet). Enumerating *active* Actions workflows
 #       via the Actions API is a deferred enhancement (a follow-up issue).
-#   (j) [target-repo path] the target's CLAUDE.md is present and filled in: it exists,
-#       has no `<cmd>` placeholders, AND has a `Stack & commands` section — WARN otherwise.
+#   (j) [target-repo path] ADVISORY: whether the target has a filled-in CLAUDE.md
+#       "Stack & commands" override (exists, no `<cmd>` placeholders, AND has the section).
+#       Informational only — the coder auto-discovers install/test/build commands from the
+#       repo's CI workflows and standard manifests, so a CLAUDE.md is an OPTIONAL override
+#       (pin/disambiguate a non-standard toolchain), NOT a prerequisite. WARN flags its
+#       absence/placeholders as a heads-up, never as a blocker.
 #
 # Usage:
 #   scripts/doctor.sh                 run the clone-local checks against this clone
@@ -63,8 +68,8 @@ usage() {
   echo "  read-only restore self-check: /faber install, gh auth, claude/codex (auth)/jq on" >&2
   echo "  PATH, restore-critical files, and NORTH_STAR not still the shipped default. Prints" >&2
   echo "  a pass/warn/fail line per check; exits non-zero only on a fail (warnings never do)." >&2
-  echo "  Pass <owner>/<repo> to also verify that repo's loop labels, PR-triggered CI, and" >&2
-  echo "  a filled-in CLAUDE.md." >&2
+  echo "  Pass <owner>/<repo> to also verify that repo's loop labels and PR-triggered CI," >&2
+  echo "  plus an advisory note on whether an optional CLAUDE.md command override is present." >&2
 }
 
 # Accept at most one positional arg (the optional <owner>/<repo>). Reject -h/--help
@@ -313,25 +318,27 @@ if [ -n "$target_repo" ]; then
   fi
 fi
 
-# (j) target repo's CLAUDE.md is present and filled in ----------------------------
-# The coder reads the target CLAUDE.md's "Stack & commands" to discover install/test/
-# build commands. A missing CLAUDE.md (for a code repo), one still carrying the
-# template's `<cmd>` placeholders, or one lacking a "Stack & commands" section entirely
-# means the coder can't discover real commands. The placeholder check alone is not
-# enough: an unrelated CLAUDE.md (or one whose commands section was deleted) has no
-# `<cmd>` yet also no authoritative commands, so it would falsely pass — hence we also
-# require evidence of the section heading. WARN (not FAIL): a doc repo legitimately has
-# no commands, so this is a heads-up, not a block.
+# (j) target repo's CLAUDE.md "Stack & commands" override (ADVISORY) ---------------
+# A target CLAUDE.md is an OPTIONAL command-source override, NOT a prerequisite: the
+# coder auto-discovers install/test/build commands from the repo's CI workflows and
+# standard manifests, and only uses a CLAUDE.md "Stack & commands" section (with
+# filled-in commands) to pin or disambiguate a non-standard toolchain. So this check is
+# purely informational — it reports whether such an override is present and filled in,
+# and WARNs (never FAILs) when it is absent, still carries `<cmd>` placeholders, or lacks
+# the section. The placeholder check alone is not enough: an unrelated CLAUDE.md (or one
+# whose commands section was deleted) has no `<cmd>` yet also no override commands, so it
+# would falsely pass — hence we also require evidence of the section heading. None of
+# these is a blocker; auto-discovery covers the common case.
 if [ -n "$target_repo" ]; then
   if ! claude_md="$(gh api -H "Accept: application/vnd.github.raw" \
       "repos/$target_repo/contents/CLAUDE.md" 2>/dev/null)"; then
-    report_warn "(j) $target_repo has no CLAUDE.md — a code repo needs one with a 'Stack & commands' section so the coder can discover install/test/build commands"
+    report_warn "(j) advisory: $target_repo has no CLAUDE.md command override — fine; the coder auto-discovers commands from CI + manifests. Add a 'Stack & commands' section only to pin/disambiguate a non-standard toolchain"
   elif printf '%s' "$claude_md" | grep -qF -- '<cmd>'; then
-    report_warn "(j) $target_repo CLAUDE.md still has '<cmd>' placeholders — fill in the 'Stack & commands' section before running the loop"
+    report_warn "(j) advisory: $target_repo CLAUDE.md still has '<cmd>' placeholders — its 'Stack & commands' section is not an effective override (the coder auto-discovers from CI + manifests instead); fill it in only if you need to pin a non-standard toolchain"
   elif ! printf '%s' "$claude_md" | grep -qiE 'Stack & commands'; then
-    report_warn "(j) $target_repo CLAUDE.md has no 'Stack & commands' section — add one with install/test/build commands so the coder can discover them"
+    report_warn "(j) advisory: $target_repo CLAUDE.md has no 'Stack & commands' section — fine; the coder auto-discovers commands from CI + manifests. Add one only to override/disambiguate a non-standard toolchain"
   else
-    report 0 "(j) $target_repo CLAUDE.md present and filled in ('Stack & commands' section, no '<cmd>' placeholders)"
+    report 0 "(j) $target_repo CLAUDE.md has a filled-in 'Stack & commands' override (optional; no '<cmd>' placeholders)"
   fi
 fi
 

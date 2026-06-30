@@ -26,7 +26,11 @@ Faber has briefed you with the PR, the latest review comments, and the current r
 3. DISCOVER THE COMMANDS (do this **before** you modify or push anything): you are in the
    target repo's local clone. Mirror `coder.md`'s discovery order, stopping at the first
    source that yields runnable **install / lint / build / test** commands:
-   (a) target `CLAUDE.md` → "Stack & commands" if present (authoritative override);
+   (a) target `CLAUDE.md` → "Stack & commands" **with filled-in, runnable commands** (no
+   remaining `<cmd>` placeholders) → authoritative override; **a copied-but-unfilled
+   `templates/target-CLAUDE.md` still carries `<cmd>` placeholders, so if the section is
+   present but still contains `<cmd>`, do NOT stop here and do NOT try to run `<cmd>` —
+   fall through to (b) and treat the section as absent**;
    (b) else the target's CI workflow(s) under `.github/workflows/` triggered on
    `pull_request` — extract the commands from their `run:` steps (**CI is the ground
    truth; derive local checks to match it**); (c) else standard manifests (`package.json`

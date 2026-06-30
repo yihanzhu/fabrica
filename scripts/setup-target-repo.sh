@@ -203,9 +203,10 @@ cat <<EOF
 Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md):
   1. Branch protection on main — UI-only, and unavailable on free private repos.
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
-  3. For a CODE repo, drop a filled-in CLAUDE.md (a HARD PREREQUISITE — its
-     "Stack & commands" are the only authoritative source for the install/lint/build/test
-     commands the coder runs; optional only for docs/trivial repos with no toolchain).
+  3. (Optional) A target CLAUDE.md is NOT required — the coder auto-discovers the
+     install/lint/build/test commands from the repo's CI workflows and standard manifests.
+     A filled-in CLAUDE.md "Stack & commands" is an OPTIONAL override — add one only to
+     pin or disambiguate a non-standard toolchain auto-discovery wouldn't get right.
      Template (under your Fabrica clone): ${target_claude_template}.
   4. Install the /faber command: run scripts/install.sh from your fabrica clone.
   5. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.

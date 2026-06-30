@@ -18,11 +18,13 @@ command, point it at a target repo, and watch one loop run. For the mental model
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
 - **Claude Code installed** — the whole team runs in-session (no API key); Faber and the
   coder it spawns are an ordinary Claude Code chat.
-- **A target repo with CI** — CI is the **hard merge gate**, so it must run the **exact
-  commands** you put in the target repo's `CLAUDE.md` (its tests / lint / build); otherwise
-  the gate is hollow. **If your repo has no CI, add repo-specific CI first** — see the CI
-  contract in [`templates/repo-setup.md`](templates/repo-setup.md). The team works in
-  *target* repos, not in this control-plane repo.
+- **A target repo with CI that runs on PRs** — this is the **one real precondition**: CI is
+  the **hard merge gate**, so it must run the repo's real tests / lint / build on pull
+  requests; otherwise the gate is hollow. **If your repo has no CI, add repo-specific CI
+  first** — see the CI contract in [`templates/repo-setup.md`](templates/repo-setup.md). A
+  target `CLAUDE.md` is **not** required — the coder auto-discovers the install / lint /
+  build / test commands from the repo's CI workflows and standard manifests. The team works
+  in *target* repos, not in this control-plane repo.
 
 ## Steps
 
@@ -53,14 +55,15 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Creates the `ready` / `round-0..3` / `needs-human` / `merge-ready` labels the loop uses
    as its state. Idempotent. It prints the manual follow-ups it can't script.
 
-4. **Confirm the target repo has CI** (the hard merge gate) and drop a filled-in
-   `CLAUDE.md` of conventions from [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md)
-   into its root. For a **code repo this `CLAUDE.md` is a hard prerequisite** — its
-   "Stack & commands" are the only authoritative source for the install / lint / build /
-   test commands the coder runs, so without it the coder cannot verify its work (it is
-   optional only for docs/trivial repos with no toolchain). Branch protection on `main` is
-   a UI step (see [`templates/repo-setup.md`](templates/repo-setup.md)); if you can't enable
-   it, CI is still the hard gate.
+4. **Confirm the target repo has CI that runs on PRs** (the hard merge gate) — that is the
+   one real precondition. A target `CLAUDE.md` is **optional**: the coder auto-discovers the
+   install / lint / build / test commands from the repo's CI workflows and standard
+   manifests (see the discovery order in [`routines/coder.md`](routines/coder.md)). A
+   filled-in `CLAUDE.md` "Stack & commands" from
+   [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md) is an **optional override** —
+   add one only to pin or disambiguate a non-standard toolchain. Branch protection on `main`
+   is a UI step (see [`templates/repo-setup.md`](templates/repo-setup.md)); if you can't
+   enable it, CI is still the hard gate.
 
 5. **Pre-flight check (optional but recommended)** — from your fabrica clone, run the
    read-only self-check to confirm the basics are in place before you summon Faber:
