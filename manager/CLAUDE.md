@@ -101,6 +101,33 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     north-star work*; my approval lives one altitude up, at the north star itself — which is
     why that north star must be mine to begin with. (This is the front-gate change authorized
     in **#49** — consensus gates proactive issues; I gate the direction.)
+- **First-loop-action bootstrap (auto-setup, once per `/faber` session).** Adoption is
+  `cd repo → /faber → go`: **you** bring a target up to spec, the operator doesn't hand-run
+  setup scripts. Before your **first loop action on this repo this session** (your first
+  spawn / review / status pass), run this once — track that you've bootstrapped this repo so
+  you don't repeat it every turn (there is no durable cross-session marker; once-per-session +
+  idempotent ops is the contract, and re-running across sessions is cheap and harmless):
+  1. **Identity.** Derive `<owner>/<repo>` from the cwd:
+     `env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner`. Unsetting `GH_REPO`
+     binds `gh` to the **cwd repo**, not an environment override — the same safety the
+     `codex-review.sh` / `manager-review.sh` harnesses apply.
+  2. **Labels (idempotent reconcile).** Detect drift first, read-only:
+     `"<fabrica>/scripts/setup-target-repo.sh" --check <owner>/<repo>` (it flags both
+     **`missing`** and **`differs`**). If it reports **any** drift, run
+     `"<fabrica>/scripts/setup-target-repo.sh" <owner>/<repo>` to **create/reconcile** them —
+     this **force-edits labels to their canonical definitions** (fixing missing AND drifted
+     labels), so it is idempotent in *effect* but not a pure no-op. **You no longer ask the
+     operator to run it.**
+  3. **Readiness self-check.** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` once this
+     session and act on its **actual** semantics — `doctor.sh` exits **non-zero only on a hard
+     `fail:`** (warnings never flip the exit): on a **`fail:`** (e.g. `/faber` not installed,
+     `gh` not authed, labels still missing) surface it to the operator **with the specific fix
+     and do NOT start the loop** until it's resolved; on **`warn:` only** (e.g. no
+     PR-triggered CI detected, no target `CLAUDE.md`) **relay them as advisory and proceed** —
+     these are warnings by design, do not block on them. Match `doctor.sh`'s wording; never
+     reclassify a `warn:` as a `fail:` or vice-versa.
+  This automates only **benign setup** — label creation is idempotent + low-risk, `doctor.sh`
+  is strictly read-only. It touches **none** of the gates below.
 - **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
   one launch path, one review path, one revision path. The labels **are** the state — keep
   them current so you (and the brief) never have to reconstruct state from threads:
@@ -230,7 +257,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 - State lives in **GitHub** (issues/PRs/labels), not in your memory — query it live.
 - You need GitHub access (`gh` CLI or the GitHub connector) to read state and open issues.
 - Labels in play: `debating`, `ready`, `round-0`…`round-3`, `merge-ready`, `needs-human`.
-  They are bootstrapped on each target repo by `scripts/setup-target-repo.sh`. (`debating`
-  marks a proactive issue mid manager-debate, not yet approved.)
+  **You** bootstrap them on each target repo on first use this session (the first-loop-action
+  bootstrap above, via `scripts/setup-target-repo.sh`); the operator no longer runs it by hand.
+  (`debating` marks a proactive issue mid manager-debate, not yet approved.)
 - The north star the team steers toward lives in `NORTH_STAR.md`; `manager-review.sh` reads
   it to debate proactive proposals. Keep it current on a north-star transition.
