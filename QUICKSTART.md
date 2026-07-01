@@ -146,3 +146,35 @@ command, point it at a target repo, and watch one loop run. For the mental model
 
 That's the loop. To prove a rebuilt or relocated setup end to end — or recover a lost one
 — follow the smoke test and runbook in [`RESTORE.md`](RESTORE.md).
+
+## Starting from an empty folder (greenfield 0→1)
+
+The steps above adopt an **existing** repo. Fabrica can also start a project from
+**nothing** — an empty folder or a repo with no source yet. The path mirrors the loop, but
+the **first change is a human-gated bootstrap** because at 0→1 there is no CI and no merge
+gate yet (Faber won't run autonomously until a real gate exists):
+
+1. **Open Claude Code in the empty folder and run `/faber`.** Faber detects the target is
+   greenfield (empty / no source) and does **not** try to run the existing-project setup
+   (which would hard-fail on an empty target).
+2. **State your goal.** On a greenfield target your opening command *becomes* the stated
+   first north star — Faber records it as the direction. It is **not** the go on its own
+   (the one-liner is the request, not the go).
+3. **Base-branch prerequisite (if the repo is truly empty).** A brand-new GitHub repo with
+   no commits has no default branch, so a PR can't be opened against it yet. Faber
+   **surfaces** this: you create/connect the repo and land the first commit (an
+   outward-facing action Faber won't do silently). If you already have a folder with a base
+   branch, skip this.
+4. **Approve the concrete bootstrap plan.** Faber proposes the initial scaffold — a runnable
+   **skeleton + manifest + first test + a `pull_request` CI workflow** — and you approve that
+   plan. That approval is the go for the bootstrap.
+5. **Faber scaffolds it.** Faber spawns the coder under its narrow **greenfield-bootstrap
+   exception** to create the skeleton, manifest, first test, and PR CI **together** in one
+   sole-purpose PR (the coder is normally blocked with no commands to discover and no PR CI —
+   this exception exists precisely to establish both). Cross-vendor Codex review still runs.
+6. **You approve and merge the bootstrap PR by hand.** No real gate exists yet for it to
+   certify itself, so Faber classifies it **human-merge-only** and does **not** auto-merge
+   it — you merge that initial gate yourself (same as the add-PR-CI bootstrap above).
+7. **Autonomous loop begins.** Once the skeleton + CI + first test land, a **real gate now
+   exists**, and Faber hands off to the normal 1→N loop — pursuing your north star under the
+   standing rails (including auto-merge for clean, low-risk PRs).

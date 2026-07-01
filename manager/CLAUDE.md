@@ -131,11 +131,33 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     cross-vendor Codex review **still applies** pre-CI; autonomous **1→N begins only once the
     gate is real.** This mirrors the CI-bootstrap rail below (human is the gate that *creates*
     the gate).
-  - **Scope — SAFE ENTRY only.** This carve-out is **detection + sequencing + safety-framing**.
-    The actual scaffold mechanics — the coder greenfield-bootstrap exception, the
-    skeleton/manifest/first-test/PR-CI sequence, and the handoff to the 1→N loop — are a
-    **separate increment (3b)** and are **out of scope here**. Preserve every rail; the
-    greenfield carve-out is **human-gated**.
+  - **Greenfield BOOTSTRAP (3b) — drive the first scaffold once the operator approves the plan.**
+    After the safe entry above (detection + the operator's approval of the concrete bootstrap
+    plan), you drive the **initial scaffold** as a designated **greenfield-bootstrap issue**:
+    a runnable **skeleton + manifest + first test + a `pull_request` CI workflow**, created
+    **together** by a coder subagent under the coder's narrow **greenfield-bootstrap exception**
+    (`routines/coder.md`). That exception lets the coder scaffold this first change even with no
+    commands to discover (#78) and no PR-CI (#81/#86) yet, because this sole-purpose issue
+    *establishes* the toolchain **and** the gate; it is the greenfield analogue of the add-CI
+    exception, and every other/feature issue still hits the normal gates.
+    - **Base-branch prerequisite (operator-gated, you surface it).** A truly empty GitHub repo
+      (no commits → no default branch) can't receive a PR yet, so establishing the initial base
+      (the first commit) is an **operator-gated prerequisite** — consistent with the no-git /
+      no-GitHub-repo rail above: you **surface** it and wait, you do **not** create the base
+      unilaterally. The greenfield-bootstrap PR is opened only **once a base branch exists**.
+    - **The bootstrap PR is operator-approved + human-merged.** No real gate exists yet for it
+      to certify itself, so — as with the add-CI PR (and per #87's lesson) — **classify it as
+      human-merge-only** and do **NOT** run `merge-pr.sh` on it at all; the operator approves
+      and merges it by hand. This is a **deliberate withholding of auto-merge**, not a reliance
+      on the tooling refusing (a same-repo bootstrap workflow can self-report green on its own
+      PR). Cross-vendor Codex review **still applies** pre-CI.
+    - **Handoff to 1→N.** Once the skeleton + CI + first test land (a **real gate now exists**),
+      transition to the **normal loop** and pursue the north star autonomously under the
+      standing rails — the same rails that govern any existing-project target, including the
+      normal auto-merge policy now that a gate is real.
+    - **Preserve every rail.** The greenfield carve-out is **human-gated** end to end (operator
+      approves the plan, operator merges the bootstrap); nothing about the 1→N gates changes
+      once a real gate exists.
 - **First-loop-action bootstrap (auto-setup, once per `/faber` session — existing-project
   targets, i.e. once greenfield detection above finds source and a repo).** Adoption is
   `cd repo → /faber → go`: **you** bring a target up to spec, the operator doesn't hand-run
@@ -212,8 +234,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   that you've surveyed this repo so you don't repeat it every turn), alongside the
   first-loop-action bootstrap and the CI-bootstrap check above. **Non-empty (existing-project)
   targets only** — when the greenfield detection above finds a target with **no source yet**,
-  there is nothing to comprehend, so skip this pass (the 0→1 scaffold mechanics are increment 3b);
-  run it only once detection has classified the target as an existing project.
+  there is nothing to comprehend, so skip this pass (the 0→1 scaffold mechanics are the
+  greenfield-bootstrap carve-out above); run it only once detection has classified the target
+  as an existing project, or once the greenfield bootstrap has landed and handed off to 1→N.
   1. **Build the working model.** Survey the project across: **structure** (top-level layout,
      modules/packages), **stack** (languages/frameworks — read it off the manifests + CI
      config, not guesswork), **conventions** (the target `CLAUDE.md` if present, plus the
