@@ -52,8 +52,9 @@ command, point it at a target repo, and watch one loop run. For the mental model
    one real precondition — but **you no longer have to wire it yourself**: if the repo has no
    PR CI, **Faber offers to bootstrap it for you** at first contact (it scaffolds a
    `pull_request` workflow from your toolchain as the first "add PR CI" issue, and **you
-   approve + merge that initial gate by hand** — `merge-pr.sh` correctly refuses it since no
-   CI exists yet to certify it). Wire it yourself instead if you prefer. Everything else (the
+   approve + merge that initial gate by hand** — Faber classifies it as human-merge-only and
+   won't run `merge-pr.sh` on it, since a self-authored gate can't certify itself). Wire it
+   yourself instead if you prefer. Everything else (the
    loop labels, the readiness pre-flight) **Faber bootstraps for you on first use** — see step 7.
    A target `CLAUDE.md` is **optional**: the coder auto-discovers the install / lint / build /
    test commands from the repo's CI workflows and standard manifests (see the discovery order

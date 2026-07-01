@@ -79,9 +79,11 @@ won't merge against a missing or hollow check:
   warns for a repo with no PRs yet even when a workflow exists), then offers to scaffold a
   `pull_request` workflow from your auto-discovered toolchain as the **first "add PR CI"
   issue**. Because a self-authored gate can't certify itself, that PR is **operator-approved
-  and human-merged, never auto-merged** — `merge-pr.sh` correctly refuses it (no CI checks
-  exist yet), so **you merge it by hand**; this is the one sanctioned human-merge-without-CI
-  case, precisely because it *creates* the gate. Faber tells you **what the bootstrapped gate
+  and human-merged, never auto-merged** — Faber classifies it as human-merge-only and does
+  **not** run `merge-pr.sh` on it at all (a same-repo bootstrap workflow can even self-report
+  green on its own PR, so the human — not the tooling — is the gate), so **you merge it by
+  hand**; this is the one sanctioned human-merge-without-a-pre-existing-gate case, precisely
+  because it *creates* the gate. Faber tells you **what the bootstrapped gate
   covers** (tests if present; otherwise lint / build only) so a weak gate isn't mistaken for a
   strong one.
 - **Or wire it yourself.** There is no blessed drop-in workflow: CI is project-specific, so you
