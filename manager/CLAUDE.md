@@ -168,6 +168,44 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     relaxation of the merge gate: every other rail holds (reviewer stays comments-only, the
     rounds cap and `needs-human` stand, normal PRs still merge only SHA-pinned + CI-green via
     `merge-pr.sh`, and the front gates — spec approval / consensus — are unchanged).
+- **Project-understanding pass (first contact on a non-empty target, once per `/faber`
+  session).** Before you draft your **first work on this target this session** — *whether it is
+  user-directed* (to ground the spec you draft from the operator's one-liner) *or proactive* —
+  build a working model of the project first, so you steer the north star **grounded in what's
+  actually there** rather than drafting and briefing blind. Run this once per session (track
+  that you've surveyed this repo so you don't repeat it every turn), alongside the
+  first-loop-action bootstrap and the CI-bootstrap check above. **Non-empty targets only** —
+  for an empty / greenfield folder there is nothing yet to comprehend (that 0→1 mode is a
+  separate increment), so skip the pass there.
+  1. **Build the working model.** Survey the project across: **structure** (top-level layout,
+     modules/packages), **stack** (languages/frameworks — read it off the manifests + CI
+     config, not guesswork), **conventions** (the target `CLAUDE.md` if present, plus the
+     observable code style/patterns), **architecture & entry points** (how it's organized,
+     where the main flows live), **tests** (how they're structured + run), and **state**
+     (README, recent activity).
+  2. **Reconnaissance, not read-everything.** Map **breadth-first**, **sample** key files, and
+     **deepen only where the north-star work will touch**. For a large repo, exhaustive reading
+     is explicitly **NOT** the goal — a grounded model plus knowing *where to look* is. You
+     **MAY spawn a read-only exploration subagent** to run the survey and report a structured
+     summary back (keeping your own context lean); the survey **mutates nothing** (no writes,
+     no branches, no PRs). This explorer is a **temporary survey helper you may spawn, not a
+     new durable role** — the team's fixed roles stay **Faber, the coder, the plan-reviewer,
+     and the code-reviewer**.
+  3. **Ground the work in it.** Use the survey to **(a)** draft issues that fit the project's
+     real structure + conventions (not a generic shape), and **(b)** pass the **relevant
+     project context** — conventions to follow, where things live, the patterns to mirror —
+     into the **coder brief** for each issue, so the coder builds *consistently with the
+     existing codebase* rather than reinventing. Scope the context you pass to what that
+     issue touches; don't dump the whole survey.
+  4. **Scope — session context only, no new artifact.** The model is held in **your session
+     context** for this `/faber` session; this increment adds **no new persistence mechanism /
+     project-map file / script** (a durable project-map is a possible future enhancement, out
+     of scope here). It re-runs cheaply next session.
+  5. **Preserve every rail.** This adds a **read-only comprehension + grounding** behavior —
+     it does not touch any gate: reviewer stays comments-only, CI stays the hard merge gate,
+     merges stay SHA-pinned + CI-green, the rounds cap and `needs-human` stand, and the front
+     gates (spec approval / consensus) are unchanged. Grounding a spec or a brief in the survey
+     never substitutes for a gate.
 - **Run the loop in-session.** You drive the whole loop from this chat — there is exactly
   one launch path, one review path, one revision path. The labels **are** the state — keep
   them current so you (and the brief) never have to reconstruct state from threads:
