@@ -18,13 +18,16 @@ command, point it at a target repo, and watch one loop run. For the mental model
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
 - **Claude Code installed** — the whole team runs in-session (no API key); Faber and the
   coder it spawns are an ordinary Claude Code chat.
-- **A target repo with CI that runs on PRs** — this is the **one real precondition**: CI is
-  the **hard merge gate**, so it must run the repo's real tests / lint / build on pull
-  requests; otherwise the gate is hollow. **If your repo has no CI, add repo-specific CI
-  first** — see the CI contract in [`templates/repo-setup.md`](templates/repo-setup.md). A
-  target `CLAUDE.md` is **not** required — the coder auto-discovers the install / lint /
-  build / test commands from the repo's CI workflows and standard manifests. The team works
-  in *target* repos, not in this control-plane repo.
+- **A target repo with CI that runs on PRs** — CI is the **hard merge gate**, so it must run
+  the repo's real tests / lint / build on pull requests; otherwise the gate is hollow. **If
+  your repo has no CI, Fabrica can bootstrap PR CI for you** — Faber offers to scaffold a
+  `pull_request` workflow from your toolchain as the *first* change, and **you approve and
+  merge that initial gate by hand** (a self-authored gate can't certify itself). Or wire CI
+  yourself before pointing Fabrica at the repo — see the CI contract in
+  [`templates/repo-setup.md`](templates/repo-setup.md). Either way CI-on-PRs stays the hard
+  gate; only *who sets it up* is up to you. A target `CLAUDE.md` is **not** required — the
+  coder auto-discovers the install / lint / build / test commands from the repo's CI workflows
+  and standard manifests. The team works in *target* repos, not in this control-plane repo.
 
 ## Steps
 
@@ -45,9 +48,14 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Writes `~/.claude/commands/faber.md` with a path derived from this clone (no
    hardcoded location). Idempotent — re-running is safe. The script prints the next steps.
 
-3. **Confirm the target repo has CI that runs on PRs** (the hard merge gate) — that is the
-   **one real precondition, and the one thing you wire yourself**. Everything else (the loop
-   labels, the readiness pre-flight) **Faber bootstraps for you on first use** — see step 7.
+3. **Make sure the target repo has CI that runs on PRs** (the hard merge gate). This is the
+   one real precondition — but **you no longer have to wire it yourself**: if the repo has no
+   PR CI, **Faber offers to bootstrap it for you** at first contact (it scaffolds a
+   `pull_request` workflow from your toolchain as the first "add PR CI" issue, and **you
+   approve + merge that initial gate by hand** — Faber classifies it as human-merge-only and
+   won't run `merge-pr.sh` on it, since a self-authored gate can't certify itself). Wire it
+   yourself instead if you prefer. Everything else (the
+   loop labels, the readiness pre-flight) **Faber bootstraps for you on first use** — see step 7.
    A target `CLAUDE.md` is **optional**: the coder auto-discovers the install / lint / build /
    test commands from the repo's CI workflows and standard manifests (see the discovery order
    in [`routines/coder.md`](routines/coder.md)). A filled-in `CLAUDE.md` "Stack & commands"

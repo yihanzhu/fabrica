@@ -81,6 +81,21 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" —
      add label `needs-human`, and stop **before creating a branch or making any edit**.
      (Push-only CI does not satisfy this gate — a PR gets no checks, so `merge-pr.sh` refuses.)
+   - **SOLE-PURPOSE ADD-CI EXCEPTION.** The gate above stays for all feature work, but there
+     is one exception: when the issue's **only** purpose is to **add PR-triggered CI** (it is
+     *establishing* the gate that doesn't exist yet), you MAY proceed and open the PR despite
+     no PR-CI existing yet — without this exception you would refuse to open the very PR that
+     adds CI. In that case, in step 6, scaffold a `pull_request`-triggered workflow that runs
+     the install / lint / build / test commands you discovered in step 3 (from standard
+     manifests, since there is no CI config to read). Run those same commands locally (step 9)
+     so the workflow you author is green. **Add a smoke/placeholder test ONLY if the issue
+     explicitly asks** — do NOT invent tests silently; a bootstrapped gate that only lints /
+     builds is acceptable. This exception is **narrow**: it applies solely to an issue whose
+     one concern is adding PR CI; any feature issue on a CI-less repo still escalates and stops
+     per the gate above. (Faber's CI-bootstrap offer happens at first contact *before* feature
+     issues, so once the CI PR lands the normal gate is satisfied for later work. Note this
+     "add CI" PR is operator-approved and human-merged, not auto-merged — but that is Faber's
+     concern; your job is only to open the green PR and stop.)
 5. Create your branch off an up-to-date base: `git fetch origin`, then create
    `issue-<number>-<slug>` off the **up-to-date default branch** (e.g. `origin/main`)
    — never a stale local base.

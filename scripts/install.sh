@@ -63,11 +63,16 @@ cat <<EOF
   repo path:    $repo_root  (derived from this script's location)
 
 Next steps:
-  1. Confirm your target repo has CI that runs on PRs (the hard merge gate) — that is the
-     one real precondition, and the one thing you wire yourself. The loop labels + readiness
-     pre-flight are handled by Faber on first use (see step 3), so you do NOT need to run
-     setup-target-repo.sh / doctor.sh by hand — they remain available as an optional/advanced
-     pre-flight. A target CLAUDE.md is OPTIONAL: the coder auto-discovers the
+  1. Make sure your target repo has CI that runs on PRs (the hard merge gate) — the one real
+     precondition. You no longer have to wire it yourself: if the repo has no PR CI, Faber can
+     BOOTSTRAP it for you at first contact (it scaffolds a pull_request workflow from your
+     toolchain as the first 'add PR CI' issue). That CI-bootstrap PR is HUMAN-MERGE-ONLY: Faber
+     classifies it as such and does NOT run merge-pr.sh on it at all — a same-repo bootstrap PR
+     that adds the workflow can run it on its own PR and self-report green, so the human, not the
+     tooling, is the gate — YOU approve and merge it by hand. Or wire it yourself. The loop
+     labels + readiness pre-flight are handled by Faber on first use (see step 3), so you do NOT
+     need to run setup-target-repo.sh / doctor.sh by hand — they remain available as an
+     optional/advanced pre-flight. A target CLAUDE.md is OPTIONAL: the coder auto-discovers the
      install/lint/build/test commands from the repo's CI workflows and standard manifests
      (see the discovery order in $repo_root/routines/coder.md). A filled-in CLAUDE.md
      "Stack & commands" ($repo_root/templates/target-CLAUDE.md) is an OPTIONAL override —
