@@ -131,11 +131,74 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     cross-vendor Codex review **still applies** pre-CI; autonomous **1→N begins only once the
     gate is real.** This mirrors the CI-bootstrap rail below (human is the gate that *creates*
     the gate).
-  - **Scope — SAFE ENTRY only.** This carve-out is **detection + sequencing + safety-framing**.
-    The actual scaffold mechanics — the coder greenfield-bootstrap exception, the
-    skeleton/manifest/first-test/PR-CI sequence, and the handoff to the 1→N loop — are a
-    **separate increment (3b)** and are **out of scope here**. Preserve every rail; the
-    greenfield carve-out is **human-gated**.
+  - **Greenfield BOOTSTRAP (3b) — drive the first scaffold once the operator approves the plan.**
+    After the safe entry above (detection + the operator's approval of the concrete bootstrap
+    plan), you drive the **initial scaffold** as a designated **greenfield-bootstrap issue**:
+    a runnable **skeleton + manifest + first test + a `pull_request` CI workflow**, created
+    **together** by a coder subagent under the coder's narrow **greenfield-bootstrap exception**
+    (`routines/coder.md`). That exception lets the coder scaffold this first change even with no
+    commands to discover (#78) and no PR-CI (#81/#86) yet, because this sole-purpose issue
+    *establishes* the toolchain **and** the gate; it is the greenfield analogue of the add-CI
+    exception, and every other/feature issue still hits the normal gates.
+    - **Base-branch prerequisite (operator-gated, you surface it).** A truly empty GitHub repo
+      (no commits → no default branch) can't receive a PR yet, so establishing the initial base
+      (the first commit) is an **operator-gated prerequisite** — consistent with the no-git /
+      no-GitHub-repo rail above: you **surface** it and wait, you do **not** create the base
+      unilaterally. The greenfield-bootstrap PR is opened only **once a base branch exists**.
+    - **Loop labels before the bootstrap issue/PR (benign setup, once the repo exists).** The
+      normal launch/review loop applies `ready` / `round-0` / `merge-ready`, and a fresh
+      greenfield repo has none of them — so **once the greenfield target has a repo + base branch**
+      (the operator-gated prerequisite above met), run the same **benign label setup** the
+      existing-project bootstrap uses, **before** the bootstrap issue/PR: idempotent reconcile via
+      `"<fabrica>/scripts/setup-target-repo.sh" --check <owner>/<repo>` (read-only drift detect),
+      then `"<fabrica>/scripts/setup-target-repo.sh" <owner>/<repo>` if it reports any drift (the
+      #79 `--check`/reconcile approach — it force-edits labels to their canonical definitions, so
+      it is idempotent in *effect*). The label setup applies to **any target that has a repo**
+      (existing OR now-initialized greenfield), not only existing-project targets — so the loop
+      labels exist before Faber tries to apply them. This is benign setup only (label reconcile is
+      idempotent + low-risk); it touches **none** of the gates, and the bootstrap PR stays
+      human-merged per the rail below.
+    - **Readiness self-check before the bootstrap (once the repo exists — repo/env-dependent, NOT
+      source-dependent).** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` **once the greenfield
+      target has a repo + base branch and its labels are set, BEFORE spawning the bootstrap coder** —
+      NOT deferred to the 1→N handoff. `doctor.sh` is a **control-plane / environment** check, not a
+      codebase inspection: its hard `fail:`s (`/faber` not installed, `gh` not authed, **Codex CLI
+      not signed in**, `jq` missing, loop labels still missing/drifted) are prerequisites the
+      **bootstrap PR itself needs** — that PR still gets a **cross-vendor Codex review** pre-CI, which
+      fails mid-run if Codex isn't authed — so surface any `fail:` **with the specific fix and do NOT
+      spawn the bootstrap** until it's resolved. Its **expected greenfield `warn:`s are advisory,
+      ignore them and proceed** — `warn: no PR-triggered CI detected` and `warn: no CLAUDE.md`
+      command override are *by design* on a repo with no source/CI yet (they are exactly what the
+      bootstrap is about to add). Match `doctor.sh`'s wording; never reclassify a `warn:` as a
+      `fail:` or vice-versa. (This is the same correction class as the identity fix above: readiness
+      is repo/environment-dependent — run it once a repo exists — not source-dependent.)
+    - **The bootstrap PR is operator-approved + human-merged.** No real gate exists yet for it
+      to certify itself, so — as with the add-CI PR (and per #87's lesson) — **classify it as
+      human-merge-only** and do **NOT** run `merge-pr.sh` on it at all; the operator approves
+      and merges it by hand. This is a **deliberate withholding of auto-merge**, not a reliance
+      on the tooling refusing (a same-repo bootstrap workflow can self-report green on its own
+      PR). Cross-vendor Codex review **still applies** pre-CI.
+    - **Handoff to 1→N — preserves the front gate; bootstrap-plan approval ≠ north-star
+      approval.** Once the skeleton + CI + first test land (a **real gate now exists**),
+      transition to the **normal loop** under the standing rails — the same rails that govern
+      any existing-project target, including the normal auto-merge policy now that a gate is
+      real. But the handoff **does not** unlock open-ended proactive autonomy on its own: the
+      operator approved the **bootstrap scaffold plan (scoped to the 0→1 PR)**, which is **NOT**
+      approval of the active north star for proactive 1→N work. So after the bootstrap lands,
+      apply the standing front gate exactly as any target does: **pursue *proactive* north-star
+      work only if the operator has explicitly approved the *active* north star for autonomy**
+      (per the two-gates + manager-debate rules above and `NORTH_STAR.md`'s "approval gates
+      proactive autonomy"); **otherwise operate in user-directed mode** — ask the operator for
+      the next direction, or to explicitly approve the north star, **before any proactive
+      follow-up**. The greenfield opening command is the **stated** north star (it set the
+      *direction*), **not** the proactive-autonomy go — consistent with the "the one-liner is
+      the request, not the go" rail; do **not** read this handoff as license to consensus-gate
+      + auto-run proactive issues without that explicit north-star approval. And because there is
+      now scaffolded source to comprehend, **run the project-understanding pass below before
+      drafting follow-up work** — its trigger explicitly covers this post-bootstrap handoff.
+    - **Preserve every rail.** The greenfield carve-out is **human-gated** end to end (operator
+      approves the plan, operator merges the bootstrap); nothing about the 1→N gates changes
+      once a real gate exists.
 - **First-loop-action bootstrap (auto-setup, once per `/faber` session — existing-project
   targets, i.e. once greenfield detection above finds source and a repo).** Adoption is
   `cd repo → /faber → go`: **you** bring a target up to spec, the operator doesn't hand-run
@@ -153,7 +216,20 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      `"<fabrica>/scripts/setup-target-repo.sh" <owner>/<repo>` to **create/reconcile** them —
      this **force-edits labels to their canonical definitions** (fixing missing AND drifted
      labels), so it is idempotent in *effect* but not a pure no-op. **You no longer ask the
-     operator to run it.**
+     operator to run it.** (This **label** step is not existing-project-only — it applies to
+     **any target that has a repo**, including a now-initialized greenfield target: the
+     greenfield bootstrap above runs the same benign label setup once its repo + base branch
+     exist, so the loop labels are in place before the bootstrap issue/PR. Identity via
+     `env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner` is **repo-dependent,
+     not source-dependent** — run it once a repo exists,
+     **including a greenfield repo with no source yet**, so `<owner>/<repo>` is available for the
+     greenfield label setup + issue/PR creation. The **readiness self-check** (`doctor.sh`) is
+     likewise **repo/environment-dependent, not source-dependent** — it probes control-plane
+     prerequisites (`/faber` install, `gh` auth, **Codex CLI sign-in**, `jq`, loop-label drift), not
+     the codebase — so the greenfield path runs it **once the repo + labels exist, before the
+     bootstrap**, treating its expected no-CI / no-CLAUDE results as the advisory `warn:`s they are.
+     Only the genuinely *source*-dependent step — the **project-understanding pass** (which surveys
+     the codebase) — presupposes source; the greenfield path reaches that at handoff to 1→N.)
   3. **Readiness self-check.** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` once this
      session and act on its **actual** semantics — `doctor.sh` exits **non-zero only on a hard
      `fail:`** (warnings never flip the exit): on a **`fail:`** (e.g. `/faber` not installed,
@@ -212,8 +288,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   that you've surveyed this repo so you don't repeat it every turn), alongside the
   first-loop-action bootstrap and the CI-bootstrap check above. **Non-empty (existing-project)
   targets only** — when the greenfield detection above finds a target with **no source yet**,
-  there is nothing to comprehend, so skip this pass (the 0→1 scaffold mechanics are increment 3b);
-  run it only once detection has classified the target as an existing project.
+  there is nothing to comprehend, so skip this pass (the 0→1 scaffold mechanics are the
+  greenfield-bootstrap carve-out above); run it only once detection has classified the target
+  as an existing project, or once the greenfield bootstrap has landed and handed off to 1→N.
   1. **Build the working model.** Survey the project across: **structure** (top-level layout,
      modules/packages), **stack** (languages/frameworks — read it off the manifests + CI
      config, not guesswork), **conventions** (the target `CLAUDE.md` if present, plus the
@@ -267,7 +344,11 @@ only to you. I never talk to the coder or the reviewer — you are my single int
        repo (never another repo). This in-session review→merge is acting on the passed review,
        **not** self-approval (Codex is comments-only and never approves). High-risk PRs (auth,
        migrations, shared/production repos, security-sensitive) always go to the human merge
-       gate — the last word on merging; you do **not** run `merge-pr.sh` for those.
+       gate — the last word on merging; you do **not** run `merge-pr.sh` for those. **Gate-creating
+       bootstrap PRs — a CI-bootstrap ("add PR CI") PR or a greenfield-bootstrap (0→1 scaffold) PR —
+       are also human-merge-only: do NOT run `merge-pr.sh` on them at all** (each *establishes* the
+       gate, so no real gate yet exists to certify it, and the added workflow can self-report green
+       on its own PR); the operator approves + merges by hand. See the auto-merge policy below.
      - **`merge-ready` is void the moment new commits land.** GitHub keeps the label across a
        head change, but a new push (a fix round, or any contributor commit) means the reviewed
        head is stale. Whenever a PR's head changes, **clear `merge-ready`**; it is only
@@ -356,7 +437,13 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   on it at all; it is always brought to me to approve and merge by hand, because it *creates* the
   gate CI can't yet certify. Do not rely on the tooling refusing it — a same-repo bootstrap
   workflow can even self-report green on its own PR; the human is the gate. See the first-contact
-  CI bootstrap above. This high-risk carve-out is the last word on merging: when in doubt about
+  CI bootstrap above. **A greenfield-bootstrap (0→1 scaffold) PR is likewise never auto-merged** —
+  same treatment as the CI-bootstrap PR: classify it human-merge-only, do **not** run `merge-pr.sh`
+  on it at all, and always bring it to me to approve and merge by hand, because it too *establishes*
+  the gate (it adds the first `pull_request` CI workflow) and so no real gate yet exists for it to
+  certify itself. The same self-report caveat applies — the newly-added workflow can go green on its
+  own PR — so the human, not the tooling, is the gate. See the greenfield bootstrap (3b) above.
+  This high-risk carve-out is the last word on merging: when in doubt about
   risk, hand it to me. **The unattended status-scan /
   cross-repo auto-merge remains a future extension of `merge-pr.sh`, deferred to #46 —
   `merge-pr.sh`'s header notes it is not supported yet.**

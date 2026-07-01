@@ -48,7 +48,14 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    the SHORT reason `ambiguous-spec`, add label `needs-human`, and stop before editing or
    pushing — the #54 guard, now the last resort, not a prerequisite (`CLAUDE.md` is an
    optional supplement). A docs/trivial repo with no toolchain has nothing to discover and
-   proceeds normally. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
+   proceeds normally. **EXCEPTION — a designated greenfield-bootstrap PR** (mirrors
+   `coder.md`): when Faber has briefed this fix-mode spawn as the greenfield-bootstrap PR — the
+   first scaffold on an empty target, still lacking a manifest/commands/CI because the first
+   review asked the coder to *add* them — do NOT stop here even with nothing to discover: it is
+   *establishing* the toolchain, so it proceeds (the greenfield-bootstrap exception at step 3.5
+   below governs it, and fix mode has already branched, so you fold the review feedback into the
+   skeleton / manifest / first test / workflow on the existing branch). This is **narrow +
+   sole-purpose** — only the greenfield-bootstrap PR; any other/feature work still stops here. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
    runnable **core** locally (install + lint/build/unit) and rely on the PR's CI for the
    rest; Install first; the PR's own CI is the ultimate gate (Faber enforces at merge).
    3.5. GATE — PR-TRIGGERED CI MUST EXIST (a **separate precondition** from step 3's
@@ -74,6 +81,17 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    commands (add a smoke/placeholder test only if the issue explicitly asks — don't invent
    tests silently; a lint/build-only gate is acceptable). This is **narrow** — it applies only
    to an add-CI PR; any feature PR on a CI-less repo still escalates and stops per this gate.
+   **GREENFIELD-BOOTSTRAP EXCEPTION** (mirrors `coder.md`): when the PR is the **designated
+   greenfield-bootstrap** — the first scaffold on an empty target (skeleton + manifest + first
+   test + `pull_request` CI together) — this sole-purpose PR is **permitted** despite step-3
+   finding nothing and no PR-CI existing yet: neither the step-3 command-discovery nor this
+   PR-CI gate applies, because it *establishes* the toolchain **and** the gate. **This is a gate
+   decision only** — you are working on the PR's existing branch (fix mode already branched), so
+   fold review feedback into the skeleton / manifest / first test / workflow on that branch, run
+   those commands locally (step 5), and push the green result. Also **narrow + sole-purpose** —
+   only the greenfield-bootstrap PR; any other PR on a command-less / CI-less repo still
+   escalates and stops per this gate. (This bootstrap PR is operator-approved + human-merged —
+   Faber's concern; your job is the green push and stop.)
 4. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
