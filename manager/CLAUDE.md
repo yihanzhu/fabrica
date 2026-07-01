@@ -145,6 +145,19 @@ only to you. I never talk to the coder or the reviewer — you are my single int
       (the first commit) is an **operator-gated prerequisite** — consistent with the no-git /
       no-GitHub-repo rail above: you **surface** it and wait, you do **not** create the base
       unilaterally. The greenfield-bootstrap PR is opened only **once a base branch exists**.
+    - **Loop labels before the bootstrap issue/PR (benign setup, once the repo exists).** The
+      normal launch/review loop applies `ready` / `round-0` / `merge-ready`, and a fresh
+      greenfield repo has none of them — so **once the greenfield target has a repo + base branch**
+      (the operator-gated prerequisite above met), run the same **benign label setup** the
+      existing-project bootstrap uses, **before** the bootstrap issue/PR: idempotent reconcile via
+      `"<fabrica>/scripts/setup-target-repo.sh" --check <owner>/<repo>` (read-only drift detect),
+      then `"<fabrica>/scripts/setup-target-repo.sh" <owner>/<repo>` if it reports any drift (the
+      #79 `--check`/reconcile approach — it force-edits labels to their canonical definitions, so
+      it is idempotent in *effect*). The label setup applies to **any target that has a repo**
+      (existing OR now-initialized greenfield), not only existing-project targets — so the loop
+      labels exist before Faber tries to apply them. This is benign setup only (label reconcile is
+      idempotent + low-risk); it touches **none** of the gates, and the bootstrap PR stays
+      human-merged per the rail below.
     - **The bootstrap PR is operator-approved + human-merged.** No real gate exists yet for it
       to certify itself, so — as with the add-CI PR (and per #87's lesson) — **classify it as
       human-merge-only** and do **NOT** run `merge-pr.sh` on it at all; the operator approves
@@ -175,7 +188,12 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      `"<fabrica>/scripts/setup-target-repo.sh" <owner>/<repo>` to **create/reconcile** them —
      this **force-edits labels to their canonical definitions** (fixing missing AND drifted
      labels), so it is idempotent in *effect* but not a pure no-op. **You no longer ask the
-     operator to run it.**
+     operator to run it.** (This **label** step is not existing-project-only — it applies to
+     **any target that has a repo**, including a now-initialized greenfield target: the
+     greenfield bootstrap above runs the same benign label setup once its repo + base branch
+     exist, so the loop labels are in place before the bootstrap issue/PR. Only the *source*-
+     dependent steps — identity via `gh repo view` and the readiness self-check — presuppose an
+     existing-project target here; the greenfield path reaches them at handoff to 1→N.)
   3. **Readiness self-check.** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` once this
      session and act on its **actual** semantics — `doctor.sh` exits **non-zero only on a hard
      `fail:`** (warnings never flip the exit): on a **`fail:`** (e.g. `/faber` not installed,
