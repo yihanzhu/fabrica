@@ -24,16 +24,26 @@ user's approval of the spec Faber drafts from their one-liner is its own gate.)
 
 ## Current north star
 
-### A — "Frictionless first-run"  ·  status: **active** · history: set + approved by the **Fabrica owner** (this is Fabrica's *own* control-plane repo). **Adopters:** this is Fabrica's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo. This history line is **not** a token that auto-approves a clone.
+### B — "Pick up any project at any stage"  ·  status: **active** · history: set + approved by the **operator** (2026-06-28). **Adopters:** this is Fabrica's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo. This history line is **not** a token that auto-approves a clone.
 
-A new adopter can stand the team up from a fresh clone without getting stuck.
+Fabrica can adopt a project wherever it is and drive it toward the operator's goal — whether
+that project is an empty folder or an existing codebase with history.
 
-- **Done-signal:** `scripts/doctor.sh` exits `0` on a correctly set-up clone, **and** the
-  `QUICKSTART.md` walkthrough is accurate end to end against a real fresh clone (every
-  step does what it says, no missing prerequisite or dead pointer).
-- **Why it's the north star:** the team is only *reusable by anyone* (a core Fabrica goal)
-  if a stranger can reconstruct it from this repo. Until first-run is frictionless, every
-  other improvement sits behind a setup wall.
+- **Two modes:**
+  - **Empty (0→1):** the operator's first command *becomes* the first north star; Fabrica
+    scaffolds the skeleton + a **real PR-CI gate (the operator confirms that initial gate)**
+    + a first commit, then runs the loop.
+  - **Existing (1→N):** Fabrica **understands the whole project first** (structure, stack,
+    conventions, current state), then pursues the operator's north star.
+- **Done-signal:** from BOTH starting points — (a) an empty folder/repo, and (b) an existing
+  repo with no prior Fabrica setup — a first `/faber` session drives one real change to a
+  **merged, CI-gated PR** toward the operator's stated goal, with the CI gate present
+  (**operator-approved when Fabrica bootstrapped it**) before any autonomous merge.
+- **Why it's the north star:** the team is only *"pick up my work"* useful if it meets a
+  project where it is, instead of requiring a pre-wired repo.
+- **Safety note:** Fabrica's autonomy rests on CI + cross-vendor review; on an empty project
+  neither exists yet, so the gate is bootstrapped **early and operator-approved**, and the
+  human stays in the loop until a real gate exists.
 
 ---
 
@@ -42,8 +52,15 @@ A new adopter can stand the team up from a fresh clone without getting stuck.
 A short history of north stars and consensus-filtered proposals, so the human can see the
 trajectory and override anything consensus dropped.
 
-- **A — "Frictionless first-run"** — *active; set + approved by the Fabrica owner (history, not
-  an inheritable token).* Done-signal: `doctor.sh` exits 0 + an accurate fresh-clone
+- **B — "Pick up any project at any stage"** — *active; set + approved by the operator
+  (2026-06-28) (history, not an inheritable token).* Done-signal: from both an empty
+  folder/repo and an existing un-set-up repo, a first `/faber` session reaches a merged,
+  CI-gated PR toward the operator's goal — gate present + operator-approved-if-bootstrapped
+  before any autonomous merge.
+- **A — "Frictionless first-run"** — *superseded — folded into B.* Frictionless adoption of
+  an existing repo is a subset of any-stage adoption. Substantially built out via #54–#82,
+  but **not** independently proven on a real fresh clone, so folded into B rather than marked
+  *achieved*. Original done-signal: `doctor.sh` exits 0 + an accurate fresh-clone
   `QUICKSTART.md` walkthrough.
 
 ### Vetoed-but-Faber-thought-relevant (manager-debate filtered these out)

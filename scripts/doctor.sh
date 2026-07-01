@@ -224,8 +224,8 @@ else
 fi
 
 # (h) NORTH_STAR.md not still the shipped default --------------------------------
-# The shipped NORTH_STAR.md aims at Fabrica's OWN control-plane goal ("Frictionless
-# first-run"). If an adopter never replaces it, manager-review.sh debates proposals
+# The shipped NORTH_STAR.md aims at Fabrica's OWN control-plane goal ("Pick up any
+# project at any stage"). If an adopter never replaces it, manager-review.sh debates proposals
 # against the wrong goal. WARN (not FAIL): a stale north star doesn't block restore,
 # but it must be replaced before proactive mode is meaningful for the adopter's repo.
 #
@@ -244,8 +244,8 @@ else
   active_designation="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" || true)"
   if [ -z "$active_designation" ]; then
     report_warn "(h) NORTH_STAR.md has no 'status: active' entry — set an active north star before enabling proactive mode"
-  elif printf '%s\n' "$active_designation" | grep -qF -- 'Frictionless first-run'; then
-    report_warn "(h) NORTH_STAR.md's active entry is still the shipped Fabrica-self default ('Frictionless first-run') — replace it with your own direction before enabling proactive mode"
+  elif printf '%s\n' "$active_designation" | grep -qF -- 'Pick up any project at any stage'; then
+    report_warn "(h) NORTH_STAR.md's active entry is still the shipped Fabrica-self default ('Pick up any project at any stage') — replace it with your own direction before enabling proactive mode"
   else
     report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
   fi
