@@ -158,6 +158,20 @@ only to you. I never talk to the coder or the reviewer — you are my single int
       labels exist before Faber tries to apply them. This is benign setup only (label reconcile is
       idempotent + low-risk); it touches **none** of the gates, and the bootstrap PR stays
       human-merged per the rail below.
+    - **Readiness self-check before the bootstrap (once the repo exists — repo/env-dependent, NOT
+      source-dependent).** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` **once the greenfield
+      target has a repo + base branch and its labels are set, BEFORE spawning the bootstrap coder** —
+      NOT deferred to the 1→N handoff. `doctor.sh` is a **control-plane / environment** check, not a
+      codebase inspection: its hard `fail:`s (`/faber` not installed, `gh` not authed, **Codex CLI
+      not signed in**, `jq` missing, loop labels still missing/drifted) are prerequisites the
+      **bootstrap PR itself needs** — that PR still gets a **cross-vendor Codex review** pre-CI, which
+      fails mid-run if Codex isn't authed — so surface any `fail:` **with the specific fix and do NOT
+      spawn the bootstrap** until it's resolved. Its **expected greenfield `warn:`s are advisory,
+      ignore them and proceed** — `warn: no PR-triggered CI detected` and `warn: no CLAUDE.md`
+      command override are *by design* on a repo with no source/CI yet (they are exactly what the
+      bootstrap is about to add). Match `doctor.sh`'s wording; never reclassify a `warn:` as a
+      `fail:` or vice-versa. (This is the same correction class as the identity fix above: readiness
+      is repo/environment-dependent — run it once a repo exists — not source-dependent.)
     - **The bootstrap PR is operator-approved + human-merged.** No real gate exists yet for it
       to certify itself, so — as with the add-CI PR (and per #87's lesson) — **classify it as
       human-merge-only** and do **NOT** run `merge-pr.sh` on it at all; the operator approves
@@ -179,7 +193,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
       follow-up**. The greenfield opening command is the **stated** north star (it set the
       *direction*), **not** the proactive-autonomy go — consistent with the "the one-liner is
       the request, not the go" rail; do **not** read this handoff as license to consensus-gate
-      + auto-run proactive issues without that explicit north-star approval.
+      + auto-run proactive issues without that explicit north-star approval. And because there is
+      now scaffolded source to comprehend, **run the project-understanding pass below before
+      drafting follow-up work** — its trigger explicitly covers this post-bootstrap handoff.
     - **Preserve every rail.** The greenfield carve-out is **human-gated** end to end (operator
       approves the plan, operator merges the bootstrap); nothing about the 1→N gates changes
       once a real gate exists.
@@ -207,9 +223,13 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      `env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner` is **repo-dependent,
      not source-dependent** — run it once a repo exists,
      **including a greenfield repo with no source yet**, so `<owner>/<repo>` is available for the
-     greenfield label setup + issue/PR creation. Only genuinely *source*-dependent steps — the
-     readiness self-check (which inspects the codebase) and the project-understanding pass —
-     presuppose source; the greenfield path reaches those at handoff to 1→N.)
+     greenfield label setup + issue/PR creation. The **readiness self-check** (`doctor.sh`) is
+     likewise **repo/environment-dependent, not source-dependent** — it probes control-plane
+     prerequisites (`/faber` install, `gh` auth, **Codex CLI sign-in**, `jq`, loop-label drift), not
+     the codebase — so the greenfield path runs it **once the repo + labels exist, before the
+     bootstrap**, treating its expected no-CI / no-CLAUDE results as the advisory `warn:`s they are.
+     Only the genuinely *source*-dependent step — the **project-understanding pass** (which surveys
+     the codebase) — presupposes source; the greenfield path reaches that at handoff to 1→N.)
   3. **Readiness self-check.** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` once this
      session and act on its **actual** semantics — `doctor.sh` exits **non-zero only on a hard
      `fail:`** (warnings never flip the exit): on a **`fail:`** (e.g. `/faber` not installed,

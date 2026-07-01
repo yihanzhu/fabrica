@@ -168,10 +168,15 @@ gate yet (Faber won't run autonomously until a real gate exists):
 4. **Approve the concrete bootstrap plan.** Faber proposes the initial scaffold — a runnable
    **skeleton + manifest + first test + a `pull_request` CI workflow** — and you approve that
    plan. That approval is the go for the bootstrap.
-5. **Faber scaffolds it.** Faber spawns the coder under its narrow **greenfield-bootstrap
-   exception** to create the skeleton, manifest, first test, and PR CI **together** in one
-   sole-purpose PR (the coder is normally blocked with no commands to discover and no PR CI —
-   this exception exists precisely to establish both). Cross-vendor Codex review still runs.
+5. **Faber scaffolds it.** Once the repo + base branch exist, Faber first bootstraps the loop
+   labels and runs its read-only **readiness self-check** (`doctor.sh`) — surfacing any hard
+   failure like `gh`/Codex CLI not signed in **before** it spawns anything (the bootstrap PR
+   still gets a Codex review, so that prerequisite matters up front); the expected no-CI /
+   no-`CLAUDE.md` results here are just advisory warnings. Then Faber spawns the coder under its
+   narrow **greenfield-bootstrap exception** to create the skeleton, manifest, first test, and
+   PR CI **together** in one sole-purpose PR (the coder is normally blocked with no commands to
+   discover and no PR CI — this exception exists precisely to establish both). Cross-vendor Codex
+   review still runs.
 6. **You approve and merge the bootstrap PR by hand.** No real gate exists yet for it to
    certify itself, so Faber classifies it **human-merge-only** and does **not** auto-merge
    it — you merge that initial gate yourself (same as the add-PR-CI bootstrap above).
