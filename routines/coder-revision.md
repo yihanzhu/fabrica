@@ -15,9 +15,11 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    SHORT reason `round-cap`, and stop. EXCEPTION: Faber may direct ONE scoped-down final change
    — land just the agreed/converged core and drop the contested part (the remainder goes to a
    follow-up issue Faber opens, not more rounds). This scoped-down change is TERMINAL and is
-   still subject to the **step-3 command discovery and step-5 verify-locally-before-push**:
-   run the step-3 discovery first (escalate `ambiguous-spec` / `needs-human` and stop only
-   if no source yields runnable commands), make exactly that change, verify locally, then
+   still subject to the **step-3 command discovery, the step-3.5 PR-CI-presence gate, and
+   step-5 verify-locally-before-push**: run the step-3 discovery and the step-3.5 gate first
+   (escalate `ambiguous-spec` / `needs-human` and stop only if no source yields runnable
+   commands, or if no PR-triggered CI is detectable), make exactly that change, verify
+   locally, then
    push the green result (step 5) so the scoped core lands on
    the branch for re-review and merge, then SKIP step 6's round bump — the PR stays at
    `round-3`, do NOT add a `round-4` (no such label exists) — then post the summary comment
@@ -49,6 +51,23 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    proceeds normally. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
    runnable **core** locally (install + lint/build/unit) and rely on the PR's CI for the
    rest; Install first; the PR's own CI is the ultimate gate (Faber enforces at merge).
+   3.5. GATE — PR-TRIGGERED CI MUST EXIST (a **separate precondition** from step 3's
+   command discovery, also run before you modify or push anything). Step 3 answers *which
+   commands to run*; this gate answers *whether the target has the hard merge gate at all*.
+   Confirm the target repo has **CI that runs on pull requests** — the hard merge gate
+   `merge-pr.sh` enforces — detectable via **ANY** of: a GitHub Actions workflow
+   (`.github/workflows/*.yml` / `*.yaml`) triggered on `pull_request`; an external CI
+   provider's config (`.circleci/config.yml`, `.buildkite/*`, `Jenkinsfile`, `.gitlab-ci.yml`,
+   `azure-pipelines.yml`, `.travis.yml`, etc.) wired to run on PRs; **or** recent PR
+   check-runs (e.g. `gh pr checks` on this PR). **Don't conflate with discovery:** falling
+   back to manifests (3(c)) for the **commands** is fine **as long as PR-triggered CI
+   exists** (external-CI-with-manifest-commands, or PR CI whose config wasn't
+   machine-parseable, still proceeds) — the gate is about **PR-CI presence**, not command
+   source. If **no** PR-triggered CI is detectable at all → do NOT push: comment (lead with
+   the SHORT reason `ambiguous-spec`, or a `needs-human`-appropriate reason) — "no
+   PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" — add
+   label `needs-human`, and stop before editing or pushing. (Push-only CI does not satisfy
+   this gate — a PR gets no checks, so `merge-pr.sh` refuses.)
 4. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
