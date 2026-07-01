@@ -48,7 +48,14 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    the SHORT reason `ambiguous-spec`, add label `needs-human`, and stop before editing or
    pushing — the #54 guard, now the last resort, not a prerequisite (`CLAUDE.md` is an
    optional supplement). A docs/trivial repo with no toolchain has nothing to discover and
-   proceeds normally. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
+   proceeds normally. **EXCEPTION — a designated greenfield-bootstrap PR** (mirrors
+   `coder.md`): when Faber has briefed this fix-mode spawn as the greenfield-bootstrap PR — the
+   first scaffold on an empty target, still lacking a manifest/commands/CI because the first
+   review asked the coder to *add* them — do NOT stop here even with nothing to discover: it is
+   *establishing* the toolchain, so it proceeds (the greenfield-bootstrap exception at step 3.5
+   below governs it, and fix mode has already branched, so you fold the review feedback into the
+   skeleton / manifest / first test / workflow on the existing branch). This is **narrow +
+   sole-purpose** — only the greenfield-bootstrap PR; any other/feature work still stops here. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
    runnable **core** locally (install + lint/build/unit) and rely on the PR's CI for the
    rest; Install first; the PR's own CI is the ultimate gate (Faber enforces at merge).
    3.5. GATE — PR-TRIGGERED CI MUST EXIST (a **separate precondition** from step 3's
