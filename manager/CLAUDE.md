@@ -101,7 +101,43 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     north-star work*; my approval lives one altitude up, at the north star itself — which is
     why that north star must be mine to begin with. (This is the front-gate change authorized
     in **#49** — consensus gates proactive issues; I gate the direction.)
-- **First-loop-action bootstrap (auto-setup, once per `/faber` session).** Adoption is
+- **Greenfield detection FIRST (before any existing-project bootstrap — it would hard-fail on
+  an empty target).** Your very first act on a repo this session — *before* the first-loop-action
+  bootstrap, the CI-bootstrap check, and the project-understanding pass below — is to detect
+  whether this is a **greenfield** target. Those existing-project steps all **assume a real
+  repo** (`env -u GH_REPO gh repo view` for identity, label reconcile, observed-PR CI check),
+  and would **hard-fail on an empty folder / a dir with no git**. So run detection first and let
+  it **gate** whether that existing-project bootstrap runs at all.
+  - **Define greenfield:** an **empty target or a repo with no source yet** — an empty
+    directory, a not-yet-git folder, or a repo containing only scaffolding (a bare README /
+    license, no actual source). This is **distinct from an existing project**, which has source
+    to comprehend. If there is real source, it is **not** greenfield → skip this carve-out and
+    run the normal existing-project sequence (bootstrap → CI check → project-understanding pass).
+  - **No git / no GitHub repo = operator-gated pre-loop prerequisite.** If there's no git repo
+    or no GitHub remote yet, creating/connecting one (`gh repo create`, the first push) is an
+    **outward-facing action — explicit operator consent only, never silent.** Prefer the
+    operator creates/connects it; you **surface the prerequisite** and wait, rather than doing it
+    unilaterally. The identity / label / loop machinery only runs **once a repo exists** — so on
+    a no-repo target you do **not** attempt `gh repo view`, label setup, or any loop step; you
+    name the missing prerequisite and stop there.
+  - **The operator's command is the stated first north star, NOT an auto-go.** On a greenfield
+    target the operator's opening command *is* the stated first north star — **record it** (it
+    sets direction). But it is **still not the go** (respect the standing "the one-liner is the
+    request, not the go" rail): before any autonomous work you **still require the operator's
+    explicit approval of the concrete bootstrap plan + the gate, and human merge.** The command
+    sets direction; the operator's approval of the plan is the go.
+  - **Greenfield safety framing.** At **0→1 there is no CI and no gate yet**, so the bootstrap is
+    **human-gated until a real CI gate exists** — the operator approves and merges by hand;
+    cross-vendor Codex review **still applies** pre-CI; autonomous **1→N begins only once the
+    gate is real.** This mirrors the CI-bootstrap rail below (human is the gate that *creates*
+    the gate).
+  - **Scope — SAFE ENTRY only.** This carve-out is **detection + sequencing + safety-framing**.
+    The actual scaffold mechanics — the coder greenfield-bootstrap exception, the
+    skeleton/manifest/first-test/PR-CI sequence, and the handoff to the 1→N loop — are a
+    **separate increment (3b)** and are **out of scope here**. Preserve every rail; the
+    greenfield carve-out is **human-gated**.
+- **First-loop-action bootstrap (auto-setup, once per `/faber` session — existing-project
+  targets, i.e. once greenfield detection above finds source and a repo).** Adoption is
   `cd repo → /faber → go`: **you** bring a target up to spec, the operator doesn't hand-run
   setup scripts. Before your **first loop action on this repo this session** (your first
   spawn / review / status pass), run this once — track that you've bootstrapped this repo so
@@ -174,9 +210,10 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   build a working model of the project first, so you steer the north star **grounded in what's
   actually there** rather than drafting and briefing blind. Run this once per session (track
   that you've surveyed this repo so you don't repeat it every turn), alongside the
-  first-loop-action bootstrap and the CI-bootstrap check above. **Non-empty targets only** —
-  for an empty / greenfield folder there is nothing yet to comprehend (that 0→1 mode is a
-  separate increment), so skip the pass there.
+  first-loop-action bootstrap and the CI-bootstrap check above. **Non-empty (existing-project)
+  targets only** — when the greenfield detection above finds a target with **no source yet**,
+  there is nothing to comprehend, so skip this pass (the 0→1 scaffold mechanics are increment 3b);
+  run it only once detection has classified the target as an existing project.
   1. **Build the working model.** Survey the project across: **structure** (top-level layout,
      modules/packages), **stack** (languages/frameworks — read it off the manifests + CI
      config, not guesswork), **conventions** (the target `CLAUDE.md` if present, plus the
