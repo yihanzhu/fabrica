@@ -76,13 +76,15 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    to an add-CI PR; any feature PR on a CI-less repo still escalates and stops per this gate.
    **GREENFIELD-BOOTSTRAP EXCEPTION** (mirrors `coder.md`): when the PR is the **designated
    greenfield-bootstrap** — the first scaffold on an empty target (skeleton + manifest + first
-   test + `pull_request` CI together) — neither the step-3 command-discovery nor this PR-CI
-   gate applies, because it *establishes* the toolchain **and** the gate; fold review feedback
-   into the skeleton / manifest / first test / workflow, run those commands locally (step 5),
-   and push the green result. Also **narrow + sole-purpose** — only the greenfield-bootstrap
-   PR; any other PR on a command-less / CI-less repo still escalates and stops per this gate.
-   (This bootstrap PR is operator-approved + human-merged — Faber's concern; your job is the
-   green push and stop.)
+   test + `pull_request` CI together) — this sole-purpose PR is **permitted** despite step-3
+   finding nothing and no PR-CI existing yet: neither the step-3 command-discovery nor this
+   PR-CI gate applies, because it *establishes* the toolchain **and** the gate. **This is a gate
+   decision only** — you are working on the PR's existing branch (fix mode already branched), so
+   fold review feedback into the skeleton / manifest / first test / workflow on that branch, run
+   those commands locally (step 5), and push the green result. Also **narrow + sole-purpose** —
+   only the greenfield-bootstrap PR; any other PR on a command-less / CI-less repo still
+   escalates and stops per this gate. (This bootstrap PR is operator-approved + human-merged —
+   Faber's concern; your job is the green push and stop.)
 4. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing

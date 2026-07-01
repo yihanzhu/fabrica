@@ -191,9 +191,12 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      operator to run it.** (This **label** step is not existing-project-only — it applies to
      **any target that has a repo**, including a now-initialized greenfield target: the
      greenfield bootstrap above runs the same benign label setup once its repo + base branch
-     exist, so the loop labels are in place before the bootstrap issue/PR. Only the *source*-
-     dependent steps — identity via `gh repo view` and the readiness self-check — presuppose an
-     existing-project target here; the greenfield path reaches them at handoff to 1→N.)
+     exist, so the loop labels are in place before the bootstrap issue/PR. Identity via
+     `gh repo view` is **repo-dependent, not source-dependent** — run it once a repo exists,
+     **including a greenfield repo with no source yet**, so `<owner>/<repo>` is available for the
+     greenfield label setup + issue/PR creation. Only genuinely *source*-dependent steps — the
+     readiness self-check (which inspects the codebase) and the project-understanding pass —
+     presuppose source; the greenfield path reaches those at handoff to 1→N.)
   3. **Readiness self-check.** Run `"<fabrica>/scripts/doctor.sh" <owner>/<repo>` once this
      session and act on its **actual** semantics — `doctor.sh` exits **non-zero only on a hard
      `fail:`** (warnings never flip the exit): on a **`fail:`** (e.g. `/faber` not installed,

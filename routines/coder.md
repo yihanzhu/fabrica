@@ -58,8 +58,9 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      discover: proceed normally — just make whatever checks exist pass, and if there are
      none, that's fine.) **EXCEPTION — a designated greenfield-bootstrap issue** (the first
      change on an empty target) does NOT escalate here even with nothing to discover: it is
-     *establishing* the toolchain, so you scaffold it per the greenfield-bootstrap exception
-     under step 4 rather than stopping.
+     *establishing* the toolchain, so it is permitted per the greenfield-bootstrap exception
+     under step 4 (which defers the actual scaffolding to the implementation step after the
+     branch exists) rather than stopping.
    - **Pragmatics:** if the discovered CI is a complex matrix or needs secrets/services
      not available locally, run the runnable **core** locally (install + lint/build/unit
      tests) and rely on the PR's CI for the rest — don't try to perfectly replicate CI,
@@ -102,19 +103,23 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    - **GREENFIELD-BOOTSTRAP EXCEPTION.** The greenfield analogue of the add-CI exception,
      extended to a **full first scaffold**: when Faber briefs you with a **designated
      greenfield-bootstrap issue** — the **first change on an empty target** (no source yet, no
-     commands to discover, no PR-CI, possibly no prior code/base) — you MAY create the initial
-     **project skeleton + a manifest + a first test + a `pull_request` CI workflow together**,
-     even though the step-3 command-discovery order (`(a)`–`(d)`) would find nothing and the
-     step-4 PR-CI gate would refuse. Neither the step-3 "discover commands else escalate"
-     (#78) nor the step-4 "no PR-CI → escalate" (#81/#86) gate applies to this sole-purpose
-     issue, because it is *establishing* the toolchain **AND** the gate in one stroke. Scaffold
-     a minimal runnable skeleton per the goal Faber states in the brief, add its manifest, add
-     one real first test, and author a `pull_request`-triggered workflow that installs and runs
-     the lint / build / test for that skeleton; run those same commands locally (step 9) so the
-     workflow you author is green. This exception is **narrow + sole-purpose** — it applies
-     **only** to the designated greenfield-bootstrap issue (a first scaffold on an empty
-     target); any other/feature work still hits the normal step-3 and step-4 gates and
-     escalates + stops on a CI-less / command-less repo as above. **Base-branch prerequisite:**
+     commands to discover, no PR-CI, possibly no prior code/base) — this sole-purpose issue is
+     **permitted** despite finding nothing in step-3 command-discovery and having no PR-CI:
+     neither the step-3 "discover commands else escalate" (#78) nor the step-4 "no PR-CI →
+     escalate" (#81/#86) gate applies to it, because it is *establishing* the toolchain **AND**
+     the gate in one stroke. **This is a gate decision only** (like the add-CI exception above):
+     it does **not** authorize you to scaffold here on the default branch. **The actual
+     scaffolding happens in the implementation step (step 6), AFTER step 5 creates the branch**
+     — branch first, then scaffold, so branch-safety holds. In that implementation step you
+     create the initial **project skeleton + a manifest + a first test + a `pull_request` CI
+     workflow together**: scaffold a minimal runnable skeleton per the goal Faber states in the
+     brief, add its manifest, add one real first test, and author a `pull_request`-triggered
+     workflow that installs and runs the lint / build / test for that skeleton; run those same
+     commands locally (step 9) so the workflow you author is green. This exception is **narrow +
+     sole-purpose** — it applies **only** to the designated greenfield-bootstrap issue (a first
+     scaffold on an empty target); any other/feature work still hits the normal step-3 and
+     step-4 gates and escalates + stops on a CI-less / command-less repo as above.
+     **Base-branch prerequisite:**
      a truly empty GitHub repo (no commits → no default branch) cannot receive a PR yet;
      establishing the initial base (the first commit) is an **operator-gated prerequisite Faber
      surfaces** — not something you do unilaterally (consistent with the persona's no-git /
