@@ -175,6 +175,14 @@ gate yet (Faber won't run autonomously until a real gate exists):
 6. **You approve and merge the bootstrap PR by hand.** No real gate exists yet for it to
    certify itself, so Faber classifies it **human-merge-only** and does **not** auto-merge
    it — you merge that initial gate yourself (same as the add-PR-CI bootstrap above).
-7. **Autonomous loop begins.** Once the skeleton + CI + first test land, a **real gate now
-   exists**, and Faber hands off to the normal 1→N loop — pursuing your north star under the
-   standing rails (including auto-merge for clean, low-risk PRs).
+7. **Handoff to the 1→N loop — the front gate still holds.** Once the skeleton + CI + first
+   test land, a **real gate now exists** and Faber transitions to the normal loop under the
+   standing rails (including auto-merge for clean, low-risk PRs). But the handoff does **not**
+   by itself unlock open-ended proactive autonomy: you approved the **bootstrap scaffold plan
+   (scoped to the 0→1 PR)**, which is **NOT** approval of the active north star for proactive
+   1→N work. So after the bootstrap lands, Faber pursues **proactive** north-star work **only
+   if you have explicitly approved the active north star** for autonomy; **otherwise it stays
+   user-directed** — it asks you for the next direction, or to explicitly approve the north
+   star, before any proactive follow-up. Your greenfield opening command is the **stated**
+   north star (it set the *direction*), **not** the proactive-autonomy go —
+   bootstrap-plan approval ≠ north-star approval.
