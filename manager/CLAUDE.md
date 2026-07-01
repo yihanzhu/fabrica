@@ -344,7 +344,11 @@ only to you. I never talk to the coder or the reviewer — you are my single int
        repo (never another repo). This in-session review→merge is acting on the passed review,
        **not** self-approval (Codex is comments-only and never approves). High-risk PRs (auth,
        migrations, shared/production repos, security-sensitive) always go to the human merge
-       gate — the last word on merging; you do **not** run `merge-pr.sh` for those.
+       gate — the last word on merging; you do **not** run `merge-pr.sh` for those. **Gate-creating
+       bootstrap PRs — a CI-bootstrap ("add PR CI") PR or a greenfield-bootstrap (0→1 scaffold) PR —
+       are also human-merge-only: do NOT run `merge-pr.sh` on them at all** (each *establishes* the
+       gate, so no real gate yet exists to certify it, and the added workflow can self-report green
+       on its own PR); the operator approves + merges by hand. See the auto-merge policy below.
      - **`merge-ready` is void the moment new commits land.** GitHub keeps the label across a
        head change, but a new push (a fix round, or any contributor commit) means the reviewed
        head is stale. Whenever a PR's head changes, **clear `merge-ready`**; it is only
@@ -433,7 +437,13 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   on it at all; it is always brought to me to approve and merge by hand, because it *creates* the
   gate CI can't yet certify. Do not rely on the tooling refusing it — a same-repo bootstrap
   workflow can even self-report green on its own PR; the human is the gate. See the first-contact
-  CI bootstrap above. This high-risk carve-out is the last word on merging: when in doubt about
+  CI bootstrap above. **A greenfield-bootstrap (0→1 scaffold) PR is likewise never auto-merged** —
+  same treatment as the CI-bootstrap PR: classify it human-merge-only, do **not** run `merge-pr.sh`
+  on it at all, and always bring it to me to approve and merge by hand, because it too *establishes*
+  the gate (it adds the first `pull_request` CI workflow) and so no real gate yet exists for it to
+  certify itself. The same self-report caveat applies — the newly-added workflow can go green on its
+  own PR — so the human, not the tooling, is the gate. See the greenfield bootstrap (3b) above.
+  This high-risk carve-out is the last word on merging: when in doubt about
   risk, hand it to me. **The unattended status-scan /
   cross-repo auto-merge remains a future extension of `merge-pr.sh`, deferred to #46 —
   `merge-pr.sh`'s header notes it is not supported yet.**
