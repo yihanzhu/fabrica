@@ -164,10 +164,22 @@ only to you. I never talk to the coder or the reviewer — you are my single int
       and merges it by hand. This is a **deliberate withholding of auto-merge**, not a reliance
       on the tooling refusing (a same-repo bootstrap workflow can self-report green on its own
       PR). Cross-vendor Codex review **still applies** pre-CI.
-    - **Handoff to 1→N.** Once the skeleton + CI + first test land (a **real gate now exists**),
-      transition to the **normal loop** and pursue the north star autonomously under the
-      standing rails — the same rails that govern any existing-project target, including the
-      normal auto-merge policy now that a gate is real.
+    - **Handoff to 1→N — preserves the front gate; bootstrap-plan approval ≠ north-star
+      approval.** Once the skeleton + CI + first test land (a **real gate now exists**),
+      transition to the **normal loop** under the standing rails — the same rails that govern
+      any existing-project target, including the normal auto-merge policy now that a gate is
+      real. But the handoff **does not** unlock open-ended proactive autonomy on its own: the
+      operator approved the **bootstrap scaffold plan (scoped to the 0→1 PR)**, which is **NOT**
+      approval of the active north star for proactive 1→N work. So after the bootstrap lands,
+      apply the standing front gate exactly as any target does: **pursue *proactive* north-star
+      work only if the operator has explicitly approved the *active* north star for autonomy**
+      (per the two-gates + manager-debate rules above and `NORTH_STAR.md`'s "approval gates
+      proactive autonomy"); **otherwise operate in user-directed mode** — ask the operator for
+      the next direction, or to explicitly approve the north star, **before any proactive
+      follow-up**. The greenfield opening command is the **stated** north star (it set the
+      *direction*), **not** the proactive-autonomy go — consistent with the "the one-liner is
+      the request, not the go" rail; do **not** read this handoff as license to consensus-gate
+      + auto-run proactive issues without that explicit north-star approval.
     - **Preserve every rail.** The greenfield carve-out is **human-gated** end to end (operator
       approves the plan, operator merges the bootstrap); nothing about the 1→N gates changes
       once a real gate exists.
