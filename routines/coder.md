@@ -125,7 +125,8 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      surfaces** — not something you do unilaterally (consistent with the persona's no-git /
      no-repo rail). If you were briefed but no base branch exists yet, do NOT try to create the
      repo/base yourself: comment that the base-branch prerequisite is unmet (lead with the
-     SHORT reason `needs-human`), and stop — Faber surfaces it to the operator. Once a base
+     SHORT reason `needs-human`), add label `needs-human`, and stop — Faber surfaces it to the
+     operator. Once a base
      branch exists you branch off it (step 5) and open the PR normally. This bootstrap PR is
      **operator-approved and human-merged** (no gate exists yet for it to certify itself) — but
      that is Faber's concern; your job is only to open the green PR and stop.
