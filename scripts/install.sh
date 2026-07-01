@@ -66,8 +66,10 @@ Next steps:
   1. Make sure your target repo has CI that runs on PRs (the hard merge gate) — the one real
      precondition. You no longer have to wire it yourself: if the repo has no PR CI, Faber can
      BOOTSTRAP it for you at first contact (it scaffolds a pull_request workflow from your
-     toolchain as the first 'add PR CI' issue, which YOU approve and merge by hand — merge-pr.sh
-     correctly refuses it since no CI exists yet to certify it). Or wire it yourself. The loop
+     toolchain as the first 'add PR CI' issue). That CI-bootstrap PR is HUMAN-MERGE-ONLY: Faber
+     classifies it as such and does NOT run merge-pr.sh on it at all — a same-repo bootstrap PR
+     that adds the workflow can run it on its own PR and self-report green, so the human, not the
+     tooling, is the gate — YOU approve and merge it by hand. Or wire it yourself. The loop
      labels + readiness pre-flight are handled by Faber on first use (see step 3), so you do NOT
      need to run setup-target-repo.sh / doctor.sh by hand — they remain available as an
      optional/advanced pre-flight. A target CLAUDE.md is OPTIONAL: the coder auto-discovers the

@@ -210,9 +210,11 @@ Manual follow-ups this script can't do (see templates/repo-setup.md):
      real precondition; Faber's readiness self-check (doctor.sh, run on first use) flags a
      missing PR-CI as an advisory warning. You no longer have to wire it yourself: if the repo
      has no PR CI, Faber can BOOTSTRAP it — it scaffolds a pull_request workflow from your
-     auto-discovered toolchain as the first 'add PR CI' issue, which YOU approve and merge by
-     hand (merge-pr.sh correctly refuses that PR since no CI exists yet to certify it). Or wire
-     it yourself. Either way CI-on-PRs stays the hard gate.
+     auto-discovered toolchain as the first 'add PR CI' issue. That CI-bootstrap PR is
+     HUMAN-MERGE-ONLY: Faber classifies it as such and does NOT run merge-pr.sh on it at all — a
+     same-repo bootstrap PR that adds the workflow can run it on its own PR and self-report green,
+     so the human, not the tooling, is the gate — YOU approve and merge it by hand. Or wire it
+     yourself. Either way CI-on-PRs stays the hard gate.
   3. (Optional) A target CLAUDE.md is NOT required — the coder auto-discovers the
      install/lint/build/test commands from the repo's CI workflows and standard manifests.
      A filled-in CLAUDE.md "Stack & commands" is an OPTIONAL override — add one only to
