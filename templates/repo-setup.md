@@ -1,26 +1,34 @@
 # Target repo setup checklist
 
-Do this once per target repo before pointing the team at it.
+The **one real precondition** is CI that runs on PRs (§3) — that's the hard merge gate,
+and it's the one thing you have to wire yourself. **Everything else Faber bootstraps for
+you on first use:** the first time you run `/faber` in a target repo this session, Faber
+derives the repo, creates/reconciles the loop labels, and runs the readiness self-check —
+before its first loop action. So adoption collapses to `cd repo → /faber → go`. The steps
+below document what that bootstrap does (and how to run it by hand as an optional
+pre-flight); you don't have to run them yourself.
 
-## 1. Labels
-Create these labels (the loop uses them as its state — each coder spawn is stateless):
+## 1. Labels (Faber creates these on first use)
+The loop uses these labels as its state (each coder spawn is stateless):
 - `debating` — issue under manager-debate (Faber + Codex); not yet approved
 - `ready` — cleared to run (your direct approval OR Faber⇄Codex consensus toward an approved north star); Faber's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
 - `merge-ready` — current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge
 
+**Faber creates/reconciles these automatically** on its first-loop-action bootstrap, so you
+normally don't touch this. If you want to bootstrap or reconcile the labels by hand
+(optional/advanced), run the setup script — it's idempotent, safe to re-run:
+
 ```bash
 scripts/setup-target-repo.sh <owner>/<repo>
 ```
 
-This is idempotent — safe to re-run. It only does the labels; the steps below are
-manual (the script prints these reminders too).
-
 The script is the **canonical source of truth** for these labels: a normal run
-force-edits each existing label to the script's definitions, so re-running reconciles
-any drift live labels have picked up. To check for drift **without** mutating anything,
-run the read-only dry mode:
+force-edits each existing label to the script's definitions, so re-running (whether by you
+or by Faber's bootstrap) reconciles any drift live labels have picked up. To check for drift
+**without** mutating anything, run the read-only dry mode (this is what Faber runs first to
+decide whether a reconcile is needed):
 
 ```bash
 scripts/setup-target-repo.sh --check <owner>/<repo>

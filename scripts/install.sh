@@ -63,20 +63,24 @@ cat <<EOF
   repo path:    $repo_root  (derived from this script's location)
 
 Next steps:
-  1. In a target repo, run: "$repo_root/scripts/setup-target-repo.sh" <owner>/<repo>
-     (bootstraps the loop labels).
-  2. Confirm that target repo has CI that runs on PRs (the hard merge gate) — that is the
-     one real precondition. A target CLAUDE.md is OPTIONAL: the coder auto-discovers the
+  1. Confirm your target repo has CI that runs on PRs (the hard merge gate) — that is the
+     one real precondition, and the one thing you wire yourself. The loop labels + readiness
+     pre-flight are handled by Faber on first use (see step 3), so you do NOT need to run
+     setup-target-repo.sh / doctor.sh by hand — they remain available as an optional/advanced
+     pre-flight. A target CLAUDE.md is OPTIONAL: the coder auto-discovers the
      install/lint/build/test commands from the repo's CI workflows and standard manifests
      (see the discovery order in $repo_root/routines/coder.md). A filled-in CLAUDE.md
      "Stack & commands" ($repo_root/templates/target-CLAUDE.md) is an OPTIONAL override —
      add one only to pin or disambiguate a non-standard toolchain.
-  3. Set your own north star in $repo_root/NORTH_STAR.md — replace the shipped Fabrica
+  2. Set your own north star in $repo_root/NORTH_STAR.md — replace the shipped Fabrica
      default with your own direction. The shipped approval note is the prior owner's
      history, not a token that approves the goal for you.
-  4. Open Claude Code in a target repo and run /faber to summon the manager. Then, in that
-     session, explicitly approve your north star to Faber — this is the root authorization
-     that unlocks proactive autonomous mode (approve it with Faber, not by editing the file).
-     Until it's set + approved, Faber acts only on issues you direct (your one-liner →
-     Faber drafts the spec → you approve that drafted spec → ready).
+  3. Open Claude Code in a target repo and run /faber to summon the manager. On its first
+     loop action this session, Faber auto-bootstraps the repo — derives <owner>/<repo> from
+     the cwd, creates/reconciles the loop labels, and runs the read-only readiness self-check
+     — so adoption is 'cd repo -> /faber -> go'. Then, in that session, explicitly approve
+     your north star to Faber — this is the root authorization that unlocks proactive
+     autonomous mode (approve it with Faber, not by editing the file). Until it's set +
+     approved, Faber acts only on issues you direct (your one-liner -> Faber drafts the spec
+     -> you approve that drafted spec -> ready).
 EOF

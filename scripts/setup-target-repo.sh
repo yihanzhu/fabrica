@@ -200,9 +200,15 @@ done
 
 cat <<EOF
 
-Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md):
+Labels done. Note: running this by hand is OPTIONAL — Faber creates/reconciles these labels
+itself on its first-loop-action bootstrap when you run /faber in the target repo, so
+adoption is 'cd repo -> /faber -> go'. This manual run is a pre-flight / drift-reconcile.
+
+Manual follow-ups this script can't do (see templates/repo-setup.md):
   1. Branch protection on main — UI-only, and unavailable on free private repos.
-  2. CI workflow — a PR check that runs tests + lint (the hard merge gate).
+  2. CI workflow — a PR check that runs tests + lint (the hard merge gate). This is the ONE
+     real precondition you wire yourself; Faber's readiness self-check (doctor.sh, which it
+     also runs on first use) flags a missing PR-CI as an advisory warning.
   3. (Optional) A target CLAUDE.md is NOT required — the coder auto-discovers the
      install/lint/build/test commands from the repo's CI workflows and standard manifests.
      A filled-in CLAUDE.md "Stack & commands" is an OPTIONAL override — add one only to
@@ -215,5 +221,5 @@ Labels done. Manual follow-ups this script can't do (see templates/repo-setup.md
      (this unlocks proactive autonomous mode). Approve it to Faber in-session, not by editing
      the file — the shipped approval note is the prior owner's history, not a token that
      approves the goal for you. Until it's set + approved, Faber acts only on issues you
-     direct (your one-liner → Faber drafts the spec → you approve that drafted spec → ready).
+     direct (your one-liner -> Faber drafts the spec -> you approve that drafted spec -> ready).
 EOF
