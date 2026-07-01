@@ -65,11 +65,12 @@ cat <<EOF
 Next steps:
   1. In a target repo, run: "$repo_root/scripts/setup-target-repo.sh" <owner>/<repo>
      (bootstraps the loop labels).
-  2. Confirm that target repo has CI (the hard merge gate). For a CODE repo, also drop
-     a filled-in CLAUDE.md of conventions (a HARD PREREQUISITE — its "Stack & commands"
-     are the only authoritative source for the install/lint/build/test commands the coder
-     runs; optional only for docs/trivial repos with no toolchain). See
-     $repo_root/templates/target-CLAUDE.md.
+  2. Confirm that target repo has CI that runs on PRs (the hard merge gate) — that is the
+     one real precondition. A target CLAUDE.md is OPTIONAL: the coder auto-discovers the
+     install/lint/build/test commands from the repo's CI workflows and standard manifests
+     (see the discovery order in $repo_root/routines/coder.md). A filled-in CLAUDE.md
+     "Stack & commands" ($repo_root/templates/target-CLAUDE.md) is an OPTIONAL override —
+     add one only to pin or disambiguate a non-standard toolchain.
   3. Set your own north star in $repo_root/NORTH_STAR.md — replace the shipped Fabrica
      default with your own direction. The shipped approval note is the prior owner's
      history, not a token that approves the goal for you.
