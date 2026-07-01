@@ -67,7 +67,13 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    the SHORT reason `ambiguous-spec`, or a `needs-human`-appropriate reason) — "no
    PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" — add
    label `needs-human`, and stop before editing or pushing. (Push-only CI does not satisfy
-   this gate — a PR gets no checks, so `merge-pr.sh` refuses.)
+   this gate — a PR gets no checks, so `merge-pr.sh` refuses.) **SOLE-PURPOSE ADD-CI
+   EXCEPTION** (mirrors `coder.md`): when the PR's **only** purpose is to **add PR-triggered
+   CI** — it is *establishing* the gate — you MAY proceed despite no PR-CI existing yet,
+   folding review feedback into the `pull_request` workflow you scaffold from the discovered
+   commands (add a smoke/placeholder test only if the issue explicitly asks — don't invent
+   tests silently; a lint/build-only gate is acceptable). This is **narrow** — it applies only
+   to an add-CI PR; any feature PR on a CI-less repo still escalates and stops per this gate.
 4. Otherwise, for EACH review comment, do ONE of:
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing

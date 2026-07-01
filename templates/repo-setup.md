@@ -1,12 +1,13 @@
 # Target repo setup checklist
 
-The **one real precondition** is CI that runs on PRs (§3) — that's the hard merge gate,
-and it's the one thing you have to wire yourself. **Everything else Faber bootstraps for
-you on first use:** the first time you run `/faber` in a target repo this session, Faber
-derives the repo, creates/reconciles the loop labels, and runs the readiness self-check —
-before its first loop action. So adoption collapses to `cd repo → /faber → go`. The steps
-below document what that bootstrap does (and how to run it by hand as an optional
-pre-flight); you don't have to run them yourself.
+The **one real precondition** is CI that runs on PRs (§3) — that's the hard merge gate.
+**Everything else Faber bootstraps for you on first use:** the first time you run `/faber`
+in a target repo this session, Faber derives the repo, creates/reconciles the loop labels,
+and runs the readiness self-check — before its first loop action. So adoption collapses to
+`cd repo → /faber → go`. And if the repo has **no PR CI yet, Faber can bootstrap that gate
+too** (§3) — you approve and merge the initial gate by hand — so you don't have to wire it
+yourself first. The steps below document what that bootstrap does (and how to run it by hand
+as an optional pre-flight); you don't have to run them yourself.
 
 ## 1. Labels (Faber creates these on first use)
 The loop uses these labels as its state (each coder spawn is stateless):
@@ -71,9 +72,22 @@ own CI agree. You do **not** need a filled-in `CLAUDE.md` for this — a target 
 "Stack & commands" is an **optional override** (see step 4) to pin or disambiguate a
 non-standard toolchain.
 
-**If this repo has no CI, add repo-specific CI first** — it's the loop's hard gate, and the
-team won't merge against a missing or hollow check. There is no blessed drop-in workflow:
-CI is project-specific, so you wire it to *your* commands.
+**If this repo has no CI, you have two options** — it's the loop's hard gate, and the team
+won't merge against a missing or hollow check:
+- **Let Fabrica bootstrap it (you approve the initial gate).** At first contact Faber confirms
+  CI is genuinely absent (inspecting the CI/provider config, not just `doctor.sh`'s WARN — that
+  warns for a repo with no PRs yet even when a workflow exists), then offers to scaffold a
+  `pull_request` workflow from your auto-discovered toolchain as the **first "add PR CI"
+  issue**. Because a self-authored gate can't certify itself, that PR is **operator-approved
+  and human-merged, never auto-merged** — `merge-pr.sh` correctly refuses it (no CI checks
+  exist yet), so **you merge it by hand**; this is the one sanctioned human-merge-without-CI
+  case, precisely because it *creates* the gate. Faber tells you **what the bootstrapped gate
+  covers** (tests if present; otherwise lint / build only) so a weak gate isn't mistaken for a
+  strong one.
+- **Or wire it yourself.** There is no blessed drop-in workflow: CI is project-specific, so you
+  wire it to *your* commands.
+
+Either way CI-on-PRs stays the hard merge gate — only *who sets it up* changes.
 
 Illustrative only (not a drop-in — swap in your repo's real commands and runtime):
 
