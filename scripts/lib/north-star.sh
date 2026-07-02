@@ -136,7 +136,7 @@ ns_resolve() {
   local target_slug fabrica_slug
   target_slug="$(ns_repo_slug "$toplevel")"
   fabrica_slug="$(ns_fabrica_slug)"
-  if [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && [ "$target_slug" = "$fabrica_slug" ]; then
+  if [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; then
     local root_star
     root_star="$(ns_fabrica_root)/NORTH_STAR.md"
     if [ -f "$root_star" ]; then

@@ -18,6 +18,8 @@ set -euo pipefail
 #   (a) `.fabrica/north-star.md` is chosen over the root fallback when both exist.
 #   (b) a SUBDIRECTORY invocation still resolves the top-level `.fabrica/north-star.md`.
 #   (c) Fabrica-self (repo slug == Fabrica's own) falls back to root NORTH_STAR.md.
+#   (c2) Fabrica-self identity survives a CASING-ONLY slug difference (routes through
+#       ns_slug_eq) → still FABRICA_SELF, not UNSET (P2, round-3).
 #   (c') a NON-Fabrica repo with no local star does NOT inherit the root fallback (identity,
 #       not "file exists") → UNSET.
 #   (d) a doctor-style cwd/slug MISMATCH does NOT read the local file (the resolver reports
@@ -136,6 +138,28 @@ test_fabrica_self_fallback() {
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
   assert_eq "(c) Fabrica-self identity falls back to FABRICA_SELF" "FABRICA_SELF" "$kind"
   assert_eq "(c) fallback path is root NORTH_STAR.md" "$fake_root/NORTH_STAR.md" "$path"
+  unset -f ns_repo_slug ns_fabrica_slug ns_fabrica_root
+}
+
+# --- (c2) Fabrica-self identity survives a CASING-ONLY slug difference (P2, round-3) --
+# GitHub owner/repo slugs are case-insensitive, so a Fabrica clone whose target slug differs
+# from Fabrica's own only in casing (yihanzhu/Fabrica vs yihanzhu/fabrica) is STILL Fabrica.
+# ns_resolve's identity check routes through ns_slug_eq, so the casing-only difference must
+# still fall back to the root NORTH_STAR.md — not skip to UNSET.
+test_fabrica_self_case_insensitive() {
+  local repo; repo="$(make_repo "fabrica-clone-cased")"
+  # No .fabrica/north-star.md here — force the identity/fallback path.
+  local fake_root="$tmproot/fake-fabrica-root-cased"
+  mkdir -p "$fake_root"
+  echo "root fabrica star" > "$fake_root/NORTH_STAR.md"
+  ns_repo_slug() { echo "yihanzhu/Fabrica"; }    # target slug: canonical casing
+  ns_fabrica_slug() { echo "yihanzhu/fabrica"; } # fabrica's own slug: lowercase — same repo
+  ns_fabrica_root() { echo "$fake_root"; }
+  local out kind path
+  out="$(ns_resolve "$repo")"
+  kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
+  assert_eq "(c2) casing-only self slug still matches Fabrica → FABRICA_SELF (not UNSET)" "FABRICA_SELF" "$kind"
+  assert_eq "(c2) casing-only self fallback path is root NORTH_STAR.md" "$fake_root/NORTH_STAR.md" "$path"
   unset -f ns_repo_slug ns_fabrica_slug ns_fabrica_root
 }
 
@@ -268,6 +292,7 @@ echo "== north-star resolver tests =="
 test_local_wins
 test_subdir_resolves_toplevel
 test_fabrica_self_fallback
+test_fabrica_self_case_insensitive
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
