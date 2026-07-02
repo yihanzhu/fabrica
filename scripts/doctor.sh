@@ -270,7 +270,10 @@ shipped_default_marker='<!-- fabrica-shipped-default -->'
 # stops the explanatory doc text (which names the token) from warning forever.
 active_entry_line=""
 if [ -f "$north_star" ]; then
-  active_entry_line="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" | head -n1)"
+  # `|| true`: grep exits non-zero when the file has no `status: active` line, which under
+  # `set -euo pipefail` (pipefail) would abort the whole script — never reaching the intended
+  # no-active WARN branch below. Guarding it lets the empty result flow through to that branch.
+  active_entry_line="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" | head -n1 || true)"
 fi
 if [ ! -f "$north_star" ]; then
   report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
