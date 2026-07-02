@@ -17,6 +17,8 @@ set -euo pipefail
 #   (e) a non-empty target with NEITHER resolves to UNSET (manager-review FAILs on this;
 #       doctor WARNs) — and an EMPTY (commit-less) target is the benign EMPTY case, not UNSET.
 #   (f) `ns_repo_slug` clears a set GH_REPO so the slug reflects the repo at <dir>.
+#   (f2) `ns_slug_eq` compares slugs CASE-INSENSITIVELY (acme/myrepo == Acme/MyRepo), keeps
+#       genuinely different repos different (P2, round-2).
 #
 # setup-target-repo.sh (real script vs. a fake gh):
 #   (g) seeds .fabrica/north-star.md when the cwd IS the target; content matches the shipped
@@ -25,6 +27,12 @@ set -euo pipefail
 #   (i) --check reports a MISSING .fabrica/north-star.md as drift (exit non-zero) so Faber's
 #       "mutate only on drift" bootstrap re-runs the mutating path and seeds it — while --check
 #       itself stays read-only (it does not seed).
+#   (j) a case-mismatched cwd slug (Acme/... vs acme/...) is the SAME target → seed proceeds
+#       (P2, round-2 — the cwd-guard routes through ns_slug_eq).
+#
+# doctor.sh (real script vs. a fake gh):
+#   (k) with the resolver lib temporarily ABSENT, doctor still RUNS: it reports the missing lib
+#       and prints its summary (does not hard-exit at the source) (P3, round-2).
 #
 # Note: manager-review.sh is intentionally NOT asserted here — PR #99 reverts it to the approved
 # control-plane NORTH_STAR.md source (the gate+persona source-switch is deferred to #98).
@@ -238,6 +246,29 @@ GH
   assert_eq "(f) ns_repo_slug ignores a set GH_REPO (slug reflects the repo at <dir>)" "real/at-cwd" "$out"
 }
 
+# --- (f2) ns_slug_eq compares slugs CASE-INSENSITIVELY (P2, round-2) ---------------
+# GitHub owner/repo names are case-insensitive, so a user-typed `acme/myrepo` and gh's
+# canonical `Acme/MyRepo` name the SAME repo. Both the setup cwd-guard and doctor's local-vs-
+# remote guard route their slug compare through ns_slug_eq (not a bare `=`), so a case mismatch
+# must NOT be treated as a different target (which would silently skip seeding / --check drift /
+# doctor's local read). Also assert genuinely different slugs stay unequal, and that two empty
+# slugs are NOT equal (callers still guard on non-emptiness so an unresolved cwd never matches).
+test_slug_eq_case_insensitive() {
+  # Re-source the lib in case an earlier test's `unset -f` stub removed a helper.
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local same="no"; if ns_slug_eq "acme/myrepo" "Acme/MyRepo"; then same="yes"; fi
+  assert_eq "(f2) ns_slug_eq treats acme/myrepo and Acme/MyRepo as the SAME repo" "yes" "$same"
+  local same2="no"; if ns_slug_eq "ACME/MYREPO" "acme/myrepo"; then same2="yes"; fi
+  assert_eq "(f2) ns_slug_eq is fully case-insensitive on both sides" "yes" "$same2"
+  local diff="same"; if ns_slug_eq "acme/myrepo" "acme/other"; then diff="same"; else diff="different"; fi
+  assert_eq "(f2) ns_slug_eq keeps genuinely different repos DIFFERENT" "different" "$diff"
+  local both_empty="same"; if ns_slug_eq "" ""; then both_empty="same"; else both_empty="different"; fi
+  # ns_slug_eq("","") is technically "equal", but callers guard on [ -n "$slug" ] first, so an
+  # empty cwd slug never reaches the compare. We assert the compare itself here for clarity.
+  assert_eq "(f2) ns_slug_eq of two empty strings is equal (callers guard non-emptiness)" "same" "$both_empty"
+}
+
 # --- setup-target-repo.sh: seeding + cwd-guard + --check drift (issues #97 / PR #99) ---
 # These exercise the REAL setup-target-repo.sh end-to-end against a FAKE `gh` on PATH, so they
 # stay hermetic (no network/auth) while covering the integrated behavior: the cwd-guard (seed
@@ -373,6 +404,61 @@ test_check_reports_missing_north_star_as_drift() {
   unset SETUP_TARGET FAKE_CWD_SLUG
 }
 
+# --- (j) case-mismatched cwd slug is still the SAME target → seed proceeds (P2 round-2) ---
+# End-to-end guard: the fake gh reports the cwd slug in gh's CANONICAL casing (Acme/MyRepo)
+# while the user passes the arg lowercase (acme/myrepo). setup-target-repo.sh's cwd-guard must
+# treat these as the same target (via ns_slug_eq) and SEED the star — a case-exact `=` would
+# skip the seed with the "cwd is not the target" note.
+test_setup_seeds_on_case_mismatched_slug() {
+  local target; target="$(make_repo "setup-case-target")"
+  local seeded="$target/.fabrica/north-star.md"
+  SETUP_TARGET="acme/setup-case-target"          # user arg — lowercase
+  FAKE_CWD_SLUG="Acme/Setup-Case-Target"         # gh's canonical casing for the same repo
+  export SETUP_TARGET FAKE_CWD_SLUG
+  local out; out="$( cd "$target" && run_setup )"
+  local exists="no"; [ -f "$seeded" ] && exists="yes"
+  assert_eq "(j) case-mismatched cwd slug is the SAME target → star seeded" "yes" "$exists"
+  # And it must NOT have taken the skip path.
+  local skipped="no"
+  if printf '%s' "$out" | grep -q "cwd is not the target checkout"; then skipped="yes"; fi
+  assert_eq "(j) case-mismatched slug does NOT trigger the 'not the target' skip" "no" "$skipped"
+  unset SETUP_TARGET FAKE_CWD_SLUG
+}
+
+# --- (k) doctor survives a MISSING resolver lib: reports it + prints summary (P3 round-2) ---
+# Under `set -euo pipefail`, doctor.sh previously sourced scripts/lib/north-star.sh at the TOP,
+# so a restored checkout missing that (restore-critical) lib exited AT the source — before the
+# required-files manifest check (f) ran or the summary printed, even though flagging missing
+# restore-critical files is doctor's whole job. After the fix the source is deferred until after
+# (f); a missing lib is REPORTED as a failure and doctor runs to its summary. We reproduce a
+# restored-but-incomplete clone: copy scripts/ + ci/ into a temp root, DELETE the lib, run
+# doctor there (fake gh on PATH, no target arg so it stays offline), and assert it does NOT
+# abort — it prints the summary AND names the missing lib.
+test_doctor_survives_missing_lib() {
+  local fakeroot="$tmproot/doctor-missing-lib"
+  mkdir -p "$fakeroot/scripts" "$fakeroot/ci"
+  cp -R "$fabrica_root/scripts/." "$fakeroot/scripts/"
+  cp "$fabrica_root/ci/required-files.txt" "$fakeroot/ci/required-files.txt"
+  rm -f "$fakeroot/scripts/lib/north-star.sh"     # the missing restore-critical lib
+  # A fake gh so checks (b) don't touch the network; doctor with no target arg won't need much.
+  local out rc
+  set +e
+  # shellcheck disable=SC2030,SC2031  # intentional single-command PATH prefix, not a leaked mod.
+  out="$( PATH="$fake_gh_dir:$PATH" bash "$fakeroot/scripts/doctor.sh" 2>&1 )"; rc=$?
+  set -e
+  # It must have RUN to the end — the summary line is the proof it didn't abort at the source.
+  local printed_summary="no"
+  if printf '%s' "$out" | grep -qE '^doctor: [0-9]+ passed, [0-9]+ warned, [0-9]+ failed'; then printed_summary="yes"; fi
+  assert_eq "(k) doctor prints its summary even with the resolver lib missing (no abort at source)" "yes" "$printed_summary"
+  # It must REPORT the missing lib (either the specific lib line or the (f) manifest line names it).
+  local flagged_lib="no"
+  if printf '%s' "$out" | grep -qE 'north-star resolver lib missing|missing restore-critical file.*north-star.sh'; then flagged_lib="yes"; fi
+  assert_eq "(k) doctor reports the missing north-star resolver lib as a failure" "yes" "$flagged_lib"
+  # A missing restore-critical file is a real blocker → non-zero exit (fail flips the code).
+  local nonzero="no"; [ "$rc" -ne 0 ] && nonzero="yes"
+  assert_eq "(k) doctor exits non-zero when a restore-critical lib is missing" "yes" "$nonzero"
+}
+
 # Install the fake gh once, shared by the setup tests above.
 fake_gh_dir="$tmproot/fake-gh-setup"
 make_fake_gh "$fake_gh_dir"
@@ -386,9 +472,12 @@ test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
 test_slug_ignores_gh_repo
+test_slug_eq_case_insensitive
 test_setup_seeds_when_cwd_is_target
 test_setup_skips_seed_when_cwd_not_target
 test_check_reports_missing_north_star_as_drift
+test_setup_seeds_on_case_mismatched_slug
+test_doctor_survives_missing_lib
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

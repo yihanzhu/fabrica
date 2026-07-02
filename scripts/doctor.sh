@@ -5,6 +5,12 @@ set -euo pipefail
 # north-star resolver from a fixed, install-location-independent path (it lives at
 # <control-plane>/scripts/lib/north-star.sh alongside doctor.sh). Deriving from $0 (not the
 # cwd) means it is found whether doctor is run from a target subdir or via a PATH symlink.
+#
+# We compute the path here but DEFER the actual `source` until AFTER the required-files
+# manifest check (f) below — detecting a missing restore-critical file (this resolver lib IS
+# one; it's in ci/required-files.txt) is doctor's whole job, so a missing lib must be REPORTED
+# as a failure and let the summary print, not hard-exit at the `source` under `set -euo
+# pipefail` before check (f) even runs. See the "(defer the resolver source)" block below.
 _dr_self="$0"
 while [ -L "$_dr_self" ]; do
   _dr_link="$(readlink "$_dr_self")"
@@ -14,8 +20,7 @@ while [ -L "$_dr_self" ]; do
   esac
 done
 _dr_dir="$(cd "$(dirname "$_dr_self")" && pwd -P)"
-# shellcheck source=scripts/lib/north-star.sh
-. "$_dr_dir/lib/north-star.sh"
+ns_lib="$_dr_dir/lib/north-star.sh"
 
 # doctor.sh — read-only restore self-check for Fabrica.
 #
@@ -250,6 +255,26 @@ else
   fi
 fi
 
+# (defer the resolver source) -----------------------------------------------------
+# Now — AFTER (f) has already reported any missing restore-critical file — source the shared
+# north-star resolver, which check (h) needs. Guard the source so a MISSING lib (e.g. an
+# incomplete restore) doesn't hard-exit doctor at the `.` under `set -euo pipefail` before the
+# summary prints: instead we record it as a check failure and let (h) degrade to a warn. (f)
+# above already names the missing file specifically; this line keeps the exit code correct and
+# doctor's normal flow intact. A lib that EXISTS but fails to source (syntax error) is a real
+# breakage we surface the same way rather than aborting silently.
+ns_lib_loaded=0
+if [ -f "$ns_lib" ]; then
+  # shellcheck source=scripts/lib/north-star.sh
+  if . "$ns_lib"; then
+    ns_lib_loaded=1
+  else
+    report 1 "(f) north-star resolver lib present but failed to source ($ns_lib)"
+  fi
+else
+  report 1 "(f) north-star resolver lib missing ($ns_lib) — restore it (in ci/required-files.txt)"
+fi
+
 # (h) north star not still the shipped default -----------------------------------
 # The shipped north star aims at Fabrica's OWN control-plane goal. If an adopter never
 # replaces it, manager-review.sh debates proposals against the wrong goal. WARN (not
@@ -299,7 +324,14 @@ shipped_default_marker='<!-- fabrica-shipped-default -->'
 ns_content=""
 ns_source=".fabrica/north-star.md"
 ns_missing=0
-if [ -z "$target_repo" ]; then
+if [ "$ns_lib_loaded" -ne 1 ]; then
+  # The resolver lib didn't load (missing/failed source — already reported as a (f) failure
+  # above). Without ns_resolve/ns_repo_slug we can't resolve the star, so (h) can only note
+  # that and WARN. Guarding here keeps the calls below from hitting an undefined function and
+  # aborting under `set -euo pipefail` — doctor's summary must still print.
+  ns_source="north-star resolver lib unavailable"
+  ns_missing=1
+elif [ -z "$target_repo" ]; then
   # Clone-local run: resolve against this clone (Fabrica-self falls back to root NORTH_STAR.md).
   ns_result="$(ns_resolve "$repo_root")"
   ns_kind="${ns_result%% *}"
@@ -311,9 +343,12 @@ if [ -z "$target_repo" ]; then
   esac
 else
   # Target-repo run: use the LOCAL file only if the cwd's slug matches the target argument;
-  # otherwise the cwd is a different checkout — fetch the target's star from the remote.
+  # otherwise the cwd is a different checkout — fetch the target's star from the remote. The
+  # match is CASE-INSENSITIVE (ns_slug_eq, not a bare `=`): GitHub slugs are case-insensitive,
+  # so `acme/myrepo` (arg) and gh's canonical `Acme/MyRepo` (cwd) are the same target and must
+  # read the local star, not fall through to a remote fetch.
   cwd_slug="$(ns_repo_slug "$PWD")"
-  if [ -n "$cwd_slug" ] && [ "$cwd_slug" = "$target_repo" ]; then
+  if [ -n "$cwd_slug" ] && ns_slug_eq "$cwd_slug" "$target_repo"; then
     ns_result="$(ns_resolve "$PWD")"
     ns_kind="${ns_result%% *}"
     ns_star_path="${ns_result#"$ns_kind"}"; ns_star_path="${ns_star_path# }"

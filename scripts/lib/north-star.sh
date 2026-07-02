@@ -48,6 +48,20 @@ ns_repo_slug() {
   ( cd "$dir" 2>/dev/null && env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null ) || true
 }
 
+# ns_slug_eq <a> <b> — return 0 (true) when two <owner>/<repo> slugs name the SAME repo,
+# compared CASE-INSENSITIVELY. GitHub owner/repo names are case-insensitive, so a user-typed
+# arg (`acme/myrepo`) and `gh repo view`'s canonical casing (`Acme/MyRepo`) are the same
+# target — a case-exact `=` would treat them as different and silently skip the north-star
+# seeding / --check drift / doctor's local-vs-remote guard. Callers use THIS helper (never a
+# bare `=`) so the case-insensitivity rule lives in one place. Two EMPTY slugs are NOT equal
+# (an unresolved cwd must never match a target), so callers should still guard on non-emptiness.
+ns_slug_eq() {
+  local a b
+  a="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  b="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+  [ "$a" = "$b" ]
+}
+
 # ns_fabrica_slug — print Fabrica's OWN control-plane repo slug (the repo that ships THIS
 # resolver), or nothing. Derived from the resolver file's own location (this sourced file
 # lives at <control-plane>/scripts/lib/north-star.sh), following symlinks, so it identifies

@@ -63,6 +63,12 @@ done
 repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 target_claude_template="$repo_root/templates/target-CLAUDE.md"
 
+# Source the shared north-star helpers for ns_slug_eq (case-insensitive slug compare used by
+# the cwd-guard below). It lives at <repo_root>/scripts/lib/north-star.sh — the same fixed,
+# install-location-independent path doctor.sh sources it from.
+# shellcheck source=scripts/lib/north-star.sh
+. "$repo_root/scripts/lib/north-star.sh"
+
 # Preflight — fail honestly and early, BEFORE creating any label, so a misconfigured
 # run surfaces an actionable pointer instead of an opaque mid-loop gh error and a
 # half-bootstrapped repo (see QUICKSTART.md > Prerequisites).
@@ -113,14 +119,16 @@ labels=(
 # to report a missing-star as drift) when $PWD actually IS the target's checkout — otherwise
 # we'd write the target's star into some UNRELATED repo the user happens to be sitting in.
 # We compare SLUGS, not paths: `gh repo view` on the cwd yields the cwd's <owner>/<repo>, and
-# we seed only when it equals the "$repo" argument. `env -u GH_REPO`: gh honors an exported
-# GH_REPO OVER the cwd's remote, so a set GH_REPO would make this print the ENV repo's slug
-# and could spoof a non-target cwd into looking like the target — clear it for this one probe
-# so the slug always reflects the repo at $PWD. `|| true` so a non-repo cwd yields an empty
-# slug (⇒ not the target) instead of aborting under `set -e`.
+# we seed only when it equals the "$repo" argument. GitHub slugs are CASE-INSENSITIVE, so the
+# compare goes through ns_slug_eq (not a bare `=`): a user-typed `acme/myrepo` and gh's
+# canonical `Acme/MyRepo` are the SAME target and must both seed. `env -u GH_REPO`: gh honors
+# an exported GH_REPO OVER the cwd's remote, so a set GH_REPO would make this print the ENV
+# repo's slug and could spoof a non-target cwd into looking like the target — clear it for this
+# one probe so the slug always reflects the repo at $PWD. `|| true` so a non-repo cwd yields an
+# empty slug (⇒ not the target) instead of aborting under `set -e`.
 cwd_slug="$(env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
 cwd_is_target=0
-if [ -n "$cwd_slug" ] && [ "$cwd_slug" = "$repo" ]; then
+if [ -n "$cwd_slug" ] && ns_slug_eq "$cwd_slug" "$repo"; then
   cwd_is_target=1
 fi
 
