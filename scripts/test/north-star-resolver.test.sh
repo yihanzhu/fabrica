@@ -376,17 +376,27 @@ test_relative_source_cd_away() {
   assert_eq "(g) decoy cwd NORTH_STAR.md is NOT read as Fabrica's root (external → UNSET)" "UNSET" "$dkind"
 }
 
-# --- (h) offline (gh unavailable) still resolves Fabrica-self via the PATH check (P2) ---
+# --- (h) offline resolve of the control plane is truly gh-FREE via the PATH short-circuit (P2) ---
 # When gh is unavailable/unauthenticated, ns_repo_slug/ns_fabrica_slug return empty, so the
-# slug-based identity match can't fire. Pre-fix, Fabrica's own repo then resolved UNSET (read
-# nothing). Fix 2 adds a gh-free PATH identity (target toplevel == ns_fabrica_root), so Fabrica-
-# self still resolves FABRICA_SELF offline. We stub a `gh` on PATH that exits non-zero and resolve
-# the real control-plane root (its git toplevel equals ns_fabrica_root); assert FABRICA_SELF.
+# slug-based identity match can't fire. The gh-free PATH identity (target toplevel ==
+# ns_fabrica_root) resolves Fabrica-self offline — AND, per the round-3 [P2], it must SHORT-CIRCUIT
+# before any slug derivation, so resolving the shipped control-plane checkout never calls `gh` at
+# all. We stub a `gh` on PATH that RECORDS every invocation (and fails), resolve the real control-
+# plane root (its git toplevel equals ns_fabrica_root), and assert FABRICA_SELF with the gh-call
+# count at ZERO — proving the path check answered without touching gh.
 test_offline_fabrica_self_via_path() {
   local repo_root; repo_root="$(cd "$test_dir/../.." && pwd -P)"
   local fakebin; fakebin="$tmproot/offline-fakebin"
   mkdir -p "$fakebin"
-  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/gh"   # gh always fails → no slug
+  local ghlog="$tmproot/offline-gh-invocations.log"
+  : > "$ghlog"
+  # Fake gh: append a marker on EVERY invocation, then fail. If the path check short-circuits, this
+  # is never run and the log stays empty; if any slug derivation fires, the log gains a line.
+  cat >"$fakebin/gh" <<GH
+#!/usr/bin/env bash
+echo "gh-called" >> "$ghlog"
+exit 1
+GH
   chmod +x "$fakebin/gh"
   local out kind rc
   out="$(bash -c '
@@ -396,8 +406,11 @@ test_offline_fabrica_self_via_path() {
     ns_resolve "$1"
   ' _ "$repo_root" "$fakebin" 2>/dev/null)" && rc=0 || rc=$?
   kind="${out%% *}"
-  assert_eq "(h) offline (gh fails) still resolves FABRICA_SELF via the path check" "FABRICA_SELF" "$kind"
+  assert_eq "(h) offline (gh unavailable) still resolves FABRICA_SELF via the path check" "FABRICA_SELF" "$kind"
   assert_eq "(h) offline resolve does not abort under set -e (exit 0)" "0" "$rc"
+  # The load-bearing round-3 [P2] assert: the path short-circuit means gh was NEVER invoked.
+  local ghcalls; ghcalls="$(wc -l < "$ghlog" | tr -d ' ')"
+  assert_eq "(h) control-plane self-resolve is gh-FREE — path check short-circuits (0 gh calls)" "0" "$ghcalls"
 }
 
 # --- (i) ns_repo_slug neutralizes CDPATH (no wrong-dir landing / no path leak) (P3) ---

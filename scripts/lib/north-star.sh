@@ -184,14 +184,32 @@ ns_resolve() {
   #       compare, immune to symlink/`/var`→`/private/var` skew).
   #   (b) SLUG: the target's repo slug equals Fabrica's own (case-insensitive via ns_slug_eq).
   #       Catches a SEPARATE Fabrica clone whose path differs from this shipped copy's root.
-  local fabrica_root target_slug fabrica_slug
-  # All three helpers degrade to empty; the `|| true` is defense-in-depth so this `set -e` call
-  # site can never abort before the `-n` emptiness checks decide.
+  #
+  # The gh-free PATH check (a) is tried FIRST and SHORT-CIRCUITS: resolving the shipped control-
+  # plane checkout is the common case, and it must not block on `gh` (two slug derivations, each a
+  # network/auth round-trip) when a path compare already answers. Only when the path does NOT match
+  # do we derive slugs for the (b) fallback — the SEPARATE-clone case where the target IS Fabrica but
+  # its local path differs from this copy's root. So the offline path stays truly gh-free.
+  local fabrica_root
+  # `|| true`: ns_fabrica_root degrades to empty (rc may be non-zero); guard so this `set -e` call
+  # site can never abort before the `-n` emptiness check decides.
   fabrica_root="$(ns_fabrica_root || true)"
+  if [ -n "$fabrica_root" ] && [ "$toplevel" = "$fabrica_root" ]; then
+    local root_star
+    root_star="$fabrica_root/NORTH_STAR.md"
+    if [ -f "$root_star" ]; then
+      echo "FABRICA_SELF $root_star"
+      return 0
+    fi
+  fi
+  # (b) SLUG fallback — only reached when the PATH check did not match. Derive the slugs now (this
+  # is the sole place we may call `gh`), so a plain offline control-plane resolve never gets here.
+  local target_slug fabrica_slug
+  # Both helpers degrade to empty; the `|| true` is defense-in-depth so this `set -e` call site can
+  # never abort before the `-n` emptiness checks decide.
   target_slug="$(ns_repo_slug "$toplevel" || true)"
   fabrica_slug="$(ns_fabrica_slug || true)"
-  if { [ -n "$fabrica_root" ] && [ "$toplevel" = "$fabrica_root" ]; } \
-     || { [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; }; then
+  if [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; then
     local root_star
     root_star="$fabrica_root/NORTH_STAR.md"
     if [ -f "$root_star" ]; then
