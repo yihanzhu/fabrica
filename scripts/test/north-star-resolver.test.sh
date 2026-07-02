@@ -31,6 +31,19 @@ set -euo pipefail
 #   (f) `ns_repo_slug` clears a set GH_REPO so the slug reflects the repo at <dir>.
 #   (f2) `ns_slug_eq` compares slugs CASE-INSENSITIVELY (acme/myrepo == Acme/MyRepo), keeps
 #       genuinely different repos different (P2, round-2).
+#   (g) relative-source + cd-away still resolves FABRICA_SELF, and a decoy cwd NORTH_STAR.md is
+#       not mistaken for Fabrica's root — the __ns_self absolutize-at-source-time fix (P1, round-3).
+#   (h) offline (gh stubbed to fail) still resolves Fabrica-self via the gh-free PATH identity
+#       check (P2, round-3).
+#   (i) `ns_repo_slug` neutralizes a set CDPATH — no wrong-dir landing, no leaked path on stdout
+#       (P3, round-3).
+#   (j) `ns_repo_slug ""` returns non-zero/empty — an empty arg never falls through to the cwd's
+#       slug (P3, round-3).
+#   (k) `ns_fabrica_root` under `set -euo pipefail` from a deleted sourced tree yields rc 0, empty
+#       stdout, and no stderr leak — matching the sibling value-helpers (P3, round-3).
+#
+# Cases (g)–(k) were surfaced by an adversarial audit; each reproduces a bug the prior suite
+# MASKED because it sourced via an ABSOLUTE path and never cd'd away / never stubbed gh-missing.
 #
 # Note: doctor.sh, setup-target-repo.sh, and manager-review.sh are intentionally NOT asserted
 # here — PR #99 leaves all three on the control-plane NORTH_STAR.md source (consumers switch to
@@ -312,6 +325,147 @@ test_slug_eq_case_insensitive() {
   assert_eq "(f2) ns_slug_eq of two empty strings is equal (callers guard non-emptiness)" "same" "$both_empty"
 }
 
+# --- (g) relative-source + cd-away still resolves the control plane (P1, round-3) --
+# The pre-fix ns_fabrica_root re-read `${BASH_SOURCE[0]}` lazily. When a consumer sources the lib
+# via a RELATIVE path (`. scripts/lib/north-star.sh`) and then cd's into a target, that relative
+# self-path resolves against the caller's NEW cwd → the control-plane root derives wrong/empty →
+# Fabrica-self mis-resolves to UNSET (or a decoy `<cwd>/NORTH_STAR.md` is misread as Fabrica's).
+# Fix 1 absolutizes __ns_self ONCE at source time, so a later cd can't move the root.
+# This suite's OTHER tests mask this: they source via an ABSOLUTE $lib and never cd away. Here we
+# reproduce the real consumer shape — source relatively from the repo root, cd to /, then resolve
+# the repo root itself (which IS the control plane) — and assert FABRICA_SELF, not UNSET. The
+# path-identity check (Fix 2) makes this gh-free. A separate DECOY assert proves a cd'd-to dir
+# that merely CONTAINS a NORTH_STAR.md is not mistaken for Fabrica's root.
+test_relative_source_cd_away() {
+  # $repo_root: the control plane this test file lives in (repo-root/scripts/test → up two).
+  local repo_root; repo_root="$(cd "$test_dir/../.." && pwd -P)"
+  local out kind rc
+  out="$(bash -c '
+    set -euo pipefail
+    cd "$1"
+    . scripts/lib/north-star.sh   # RELATIVE source, as a real consumer would
+    cd /                          # …then cd far away; the pre-fix root derivation breaks here
+    ns_resolve "$2"
+  ' _ "$repo_root" "$repo_root" 2>/dev/null)" && rc=0 || rc=$?
+  kind="${out%% *}"
+  assert_eq "(g) relative-source + cd-away still resolves FABRICA_SELF (not UNSET)" "FABRICA_SELF" "$kind"
+  assert_eq "(g) relative-source + cd-away does not abort under set -e (exit 0)" "0" "$rc"
+
+  # Decoy: cd into a NON-Fabrica dir that happens to hold a NORTH_STAR.md, sourced relatively,
+  # then resolve a plain external target. The resolver must NOT treat the decoy cwd as Fabrica's
+  # root (which pre-fix could happen when the relative self-path collapsed to $PWD). With gh
+  # unavailable (stubbed to fail) the external target has no slug and no path match → UNSET.
+  local decoy; decoy="$tmproot/decoy-cwd"
+  mkdir -p "$decoy"
+  echo "decoy root star" > "$decoy/NORTH_STAR.md"
+  local ext; ext="$(make_repo "relsrc-external")"
+  local fakebin; fakebin="$tmproot/relsrc-fakebin"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/gh"
+  chmod +x "$fakebin/gh"
+  local dout dkind
+  dout="$(bash -c '
+    set -euo pipefail
+    export PATH="$3:$PATH"
+    cd "$1"
+    . scripts/lib/north-star.sh
+    cd "$4"                       # cwd now holds a decoy NORTH_STAR.md
+    ns_resolve "$2"
+  ' _ "$repo_root" "$ext" "$fakebin" "$decoy" 2>/dev/null)"
+  dkind="${dout%% *}"
+  assert_eq "(g) decoy cwd NORTH_STAR.md is NOT read as Fabrica's root (external → UNSET)" "UNSET" "$dkind"
+}
+
+# --- (h) offline (gh unavailable) still resolves Fabrica-self via the PATH check (P2) ---
+# When gh is unavailable/unauthenticated, ns_repo_slug/ns_fabrica_slug return empty, so the
+# slug-based identity match can't fire. Pre-fix, Fabrica's own repo then resolved UNSET (read
+# nothing). Fix 2 adds a gh-free PATH identity (target toplevel == ns_fabrica_root), so Fabrica-
+# self still resolves FABRICA_SELF offline. We stub a `gh` on PATH that exits non-zero and resolve
+# the real control-plane root (its git toplevel equals ns_fabrica_root); assert FABRICA_SELF.
+test_offline_fabrica_self_via_path() {
+  local repo_root; repo_root="$(cd "$test_dir/../.." && pwd -P)"
+  local fakebin; fakebin="$tmproot/offline-fakebin"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/gh"   # gh always fails → no slug
+  chmod +x "$fakebin/gh"
+  local out kind rc
+  out="$(bash -c '
+    set -euo pipefail
+    export PATH="$2:$PATH"
+    . "$1/scripts/lib/north-star.sh"
+    ns_resolve "$1"
+  ' _ "$repo_root" "$fakebin" 2>/dev/null)" && rc=0 || rc=$?
+  kind="${out%% *}"
+  assert_eq "(h) offline (gh fails) still resolves FABRICA_SELF via the path check" "FABRICA_SELF" "$kind"
+  assert_eq "(h) offline resolve does not abort under set -e (exit 0)" "0" "$rc"
+}
+
+# --- (i) ns_repo_slug neutralizes CDPATH (no wrong-dir landing / no path leak) (P3) ---
+# With CDPATH set, a bare `cd <relative>` can resolve <dir> against a CDPATH entry (landing in the
+# WRONG directory) AND echo the chosen path to stdout — which would be captured as part of the
+# slug. Fix 3 does `( unset CDPATH; cd -P -- "$dir" … )`. We set CDPATH to a dir containing a
+# `child` sibling, run ns_repo_slug with the relative arg `child` from a cwd that also has `child`,
+# and use a fake gh that prints a FIXED slug — so the ONLY way the output changes is a leaked cd
+# path prefix. Assert the output is EXACTLY the slug (no extra path line).
+test_slug_ignores_cdpath() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"   # restore the real ns_repo_slug (earlier tests unset -f their stub)
+  local base; base="$tmproot/cdpath-base"
+  mkdir -p "$base/here/child" "$base/elsewhere/child"
+  local fakebin; fakebin="$tmproot/cdpath-fakebin"
+  mkdir -p "$fakebin"
+  # Fixed slug regardless of cwd/env — the assertion catches a leaked path line, not a wrong slug.
+  printf '#!/usr/bin/env bash\necho "fixed/slug"\n' > "$fakebin/gh"
+  chmod +x "$fakebin/gh"
+  local out
+  # shellcheck disable=SC2030,SC2031  # PATH/CDPATH scoped to this $()-subshell on purpose (no leak).
+  out="$( cd "$base/here"; export PATH="$fakebin:$PATH" CDPATH="$base/elsewhere"; ns_repo_slug "child" )"
+  assert_eq "(i) ns_repo_slug with CDPATH set returns EXACTLY the slug (no leaked path)" "fixed/slug" "$out"
+}
+
+# --- (j) ns_repo_slug rejects an empty arg (does NOT query the cwd) (P3) -----------
+# An empty <dir> made `cd ""` a silent no-op, so gh ran in the caller's INHERITED cwd and returned
+# the WRONG repo's slug instead of nothing. Fix 4 guards with `[ -n "$dir" ] || return 1`. We stub
+# a fake gh that WOULD print a cwd slug if reached; assert ns_repo_slug "" returns non-zero and
+# empty — proving the empty arg never falls through to a gh query.
+test_slug_empty_arg() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"   # restore the real ns_repo_slug
+  local fakebin; fakebin="$tmproot/emptyarg-fakebin"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\necho "cwd/should-not-appear"\n' > "$fakebin/gh"
+  chmod +x "$fakebin/gh"
+  local out rc
+  # shellcheck disable=SC2030,SC2031  # PATH scoped to this $()-subshell on purpose (no leak).
+  out="$( export PATH="$fakebin:$PATH"; ns_repo_slug "" )" && rc=0 || rc=$?
+  assert_eq "(j) ns_repo_slug \"\" returns empty (does NOT query the cwd's slug)" "" "$out"
+  assert_eq "(j) ns_repo_slug \"\" returns non-zero" "1" "$rc"
+}
+
+# --- (k) ns_fabrica_root under set -e from a deleted sourced tree → rc 0, empty (P3) --
+# ns_fabrica_root's final `( cd … && pwd -P )` lacked `2>/dev/null`/`|| true` (unlike its sibling
+# value-helpers). If the sourced tree is deleted out from under a long-running `set -euo pipefail`
+# consumer, the `cd` fails, aborting the caller AND leaking a `cd: … No such file` warning. Fix 5
+# adds `2>/dev/null` + `|| true`. We source a COPY of the lib in a temp tree, delete the tree, then
+# call ns_fabrica_root as a TOP-LEVEL command under set -e; assert rc 0, empty stdout, empty stderr.
+test_fabrica_root_errexit_deleted_tree() {
+  local sandbox; sandbox="$tmproot/deleted-tree-sandbox"
+  mkdir -p "$sandbox/scripts/lib"
+  cp "$lib" "$sandbox/scripts/lib/north-star.sh"
+  local out rc err
+  # Capture stdout and stderr separately: assert no stderr leak AND rc 0 AND empty stdout.
+  err="$tmproot/deleted-tree-stderr.log"
+  out="$(bash -c '
+    set -euo pipefail
+    . "$1/scripts/lib/north-star.sh"
+    rm -rf "$1"                 # yank the sourced tree out from under us
+    ns_fabrica_root             # TOP-LEVEL command — a $() wrapper could mask the abort
+  ' _ "$sandbox" 2>"$err")" && rc=0 || rc=$?
+  assert_eq "(k) ns_fabrica_root under set -e from a deleted tree does NOT abort (exit 0)" "0" "$rc"
+  assert_eq "(k) ns_fabrica_root under set -e from a deleted tree prints nothing" "" "$out"
+  assert_eq "(k) ns_fabrica_root under set -e from a deleted tree leaks no stderr" "" "$(cat "$err")"
+}
+
 echo "== north-star resolver tests =="
 test_local_wins
 test_subdir_resolves_toplevel
@@ -323,6 +477,11 @@ test_unset_and_empty
 test_resolve_errexit_safe_non_git
 test_slug_ignores_gh_repo
 test_slug_eq_case_insensitive
+test_relative_source_cd_away
+test_offline_fabrica_self_via_path
+test_slug_ignores_cdpath
+test_slug_empty_arg
+test_fabrica_root_errexit_deleted_tree
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

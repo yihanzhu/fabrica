@@ -23,6 +23,20 @@
 # The functions here are pure resolution/derivation — they print a result and never post
 # comments, edit files, or mutate any checkout. Callers own the side effects.
 
+# __ns_self — this file's OWN path, absolutized ONCE at source time. `${BASH_SOURCE[0]}` reflects
+# HOW the caller sourced us: a relative `. scripts/lib/north-star.sh` leaves it relative, so a lazy
+# `dirname`-based root derivation inside ns_fabrica_root would later resolve against the CALLER's
+# cwd (which may have cd'd into a target repo) — mis-locating the control plane. Capturing and
+# absolutizing here, at source time (cwd is still the caller's source-time cwd, which is where the
+# relative path is valid), pins the self-path regardless of any later cd. ns_fabrica_root then uses
+# this instead of re-reading BASH_SOURCE, and its symlink loop's relative-target branch resolves
+# against the symlink's real dir rather than $PWD.
+__ns_self="${BASH_SOURCE[0]}"
+case "$__ns_self" in
+  /*) ;;
+  *) __ns_self="$(cd "$(dirname "$__ns_self")" && pwd -P)/$(basename "$__ns_self")" ;;
+esac
+
 # ns_git_toplevel <dir> — print the git top-level directory that contains <dir>, or nothing.
 # `git -C <dir> rev-parse --show-toplevel` walks UP from <dir>, so a nested subdirectory of a
 # clone resolves to the clone root (the subdirectory-invocation regression guard). Prints
@@ -48,7 +62,17 @@ ns_git_toplevel() {
 # this one invocation forces the slug to reflect the actual repo at <dir>, always.
 ns_repo_slug() {
   local dir="$1"
-  ( cd "$dir" 2>/dev/null && env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null ) || true
+  # Reject an empty/missing arg: `cd ""` is a silent no-op that leaves the subshell in the
+  # caller's INHERITED cwd, so `gh repo view` would then report the CALLER's repo slug instead
+  # of "nothing" — a wrong-repo identity, not the empty result the contract promises. Return
+  # non-zero (no stdout) so an empty arg can never fall through to the cwd's slug.
+  [ -n "$dir" ] || return 1
+  # `unset CDPATH`: with CDPATH set, `cd <relative>` may resolve <dir> against a CDPATH entry
+  # (landing in the WRONG directory) AND echo the chosen path to stdout — which would be captured
+  # as part of the slug. `cd -P -- "$dir"`: `-P` uses the physical dir (no symlink games), `--`
+  # stops a dir starting with `-` being read as an option. `2>/dev/null` + `|| true` keep the
+  # helper degrade-to-empty (never abort a `set -e` caller).
+  ( unset CDPATH; cd -P -- "$dir" 2>/dev/null && env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null ) || true
 }
 
 # ns_slug_eq <a> <b> — return 0 (true) when two <owner>/<repo> slugs name the SAME repo,
@@ -85,7 +109,12 @@ ns_fabrica_slug() {
 # is the path of the sourced file (not $0, which is the CALLER's path) — that is what lets a
 # sourced helper locate the control plane independent of the caller's cwd or invocation.
 ns_fabrica_root() {
-  local self="${BASH_SOURCE[0]}"
+  # `$__ns_self` (absolutized once at source time), NOT a fresh `${BASH_SOURCE[0]}`: a lazily
+  # re-read BASH_SOURCE could still be the relative path the caller sourced us with, which would
+  # resolve against the caller's (possibly cd'd) cwd. The pinned absolute self keeps root
+  # derivation cwd-independent, and the relative-target symlink branch below resolves against
+  # the (now absolute) symlink dir.
+  local self="$__ns_self"
   while [ -L "$self" ]; do
     local link_target
     link_target="$(readlink "$self")"
@@ -94,8 +123,11 @@ ns_fabrica_root() {
       *)  self="$(dirname "$self")/$link_target" ;;
     esac
   done
-  # <root>/scripts/lib/north-star.sh -> up three levels is <root>.
-  ( cd "$(dirname "$self")/../.." && pwd -P )
+  # <root>/scripts/lib/north-star.sh -> up three levels is <root>. `2>/dev/null` + `|| true`
+  # (matching the sibling value-helpers): an unreachable root — e.g. the sourced tree was
+  # deleted out from under a long-running process — degrades to empty output (rc 0, no stderr
+  # leak) instead of aborting a top-level `set -e` consumer with a `cd: … No such file` warning.
+  ( cd "$(dirname "$self")/../.." 2>/dev/null && pwd -P ) || true
 }
 
 # ns_dir_is_empty_repo <dir> — return 0 (true) when the git repo containing <dir> has NO
@@ -142,17 +174,26 @@ ns_resolve() {
     return 0
   fi
 
-  # Order 2 — Fabrica-self fallback: root NORTH_STAR.md, ONLY on an identity match (the
-  # target's repo slug equals Fabrica's own). Not "file exists" — an external target must
-  # never inherit Fabrica's star just because this clone happens to sit alongside it.
-  local target_slug fabrica_slug
-  # Both helpers are internally guarded to degrade to empty; the `|| true` here is defense-in-
-  # depth so this `set -e` call site can never abort before the `-n` emptiness checks decide.
+  # Order 2 — Fabrica-self fallback: root NORTH_STAR.md, ONLY on an identity match (the target
+  # IS the Fabrica control-plane repo). Not "file exists" — an external target must never inherit
+  # Fabrica's star just because this clone happens to sit alongside it. Two independent identity
+  # signals, either sufficient:
+  #   (a) PATH: the target's git top-level equals Fabrica's own root. gh-free, so Fabrica-self
+  #       still resolves OFFLINE / when gh is unavailable or unauthenticated (both toplevels are
+  #       `pwd -P`-canonical — ns_git_toplevel and ns_fabrica_root — so this is a like-for-like
+  #       compare, immune to symlink/`/var`→`/private/var` skew).
+  #   (b) SLUG: the target's repo slug equals Fabrica's own (case-insensitive via ns_slug_eq).
+  #       Catches a SEPARATE Fabrica clone whose path differs from this shipped copy's root.
+  local fabrica_root target_slug fabrica_slug
+  # All three helpers degrade to empty; the `|| true` is defense-in-depth so this `set -e` call
+  # site can never abort before the `-n` emptiness checks decide.
+  fabrica_root="$(ns_fabrica_root || true)"
   target_slug="$(ns_repo_slug "$toplevel" || true)"
   fabrica_slug="$(ns_fabrica_slug || true)"
-  if [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; then
+  if { [ -n "$fabrica_root" ] && [ "$toplevel" = "$fabrica_root" ]; } \
+     || { [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; }; then
     local root_star
-    root_star="$(ns_fabrica_root || true)/NORTH_STAR.md"
+    root_star="$fabrica_root/NORTH_STAR.md"
     if [ -f "$root_star" ]; then
       echo "FABRICA_SELF $root_star"
       return 0
