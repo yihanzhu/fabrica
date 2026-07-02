@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Resolve THIS script's own directory (following symlinks) so we can source the shared
+# north-star resolver from a fixed, install-location-independent path. The resolver lives at
+# <control-plane>/scripts/lib/north-star.sh alongside this script; deriving from $0 (not the
+# cwd) means it is found whether invoked from a target subdir or via a PATH symlink.
+_mr_self="$0"
+while [ -L "$_mr_self" ]; do
+  _mr_link="$(readlink "$_mr_self")"
+  case "$_mr_link" in
+    /*) _mr_self="$_mr_link" ;;
+    *)  _mr_self="$(dirname "$_mr_self")/$_mr_link" ;;
+  esac
+done
+_mr_dir="$(cd "$(dirname "$_mr_self")" && pwd -P)"
+# shellcheck source=scripts/lib/north-star.sh
+. "$_mr_dir/lib/north-star.sh"
+
 # manager-review.sh — the Codex cross-vendor MANAGER reviewer harness.
 #
 # The mirror of codex-review.sh, one layer up: where codex-review.sh debates a *diff*
@@ -102,35 +118,9 @@ if ! [[ "$issue" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# The north star lives in NORTH_STAR.md in the fabrica CONTROL-PLANE repo, NOT in each
-# target repo (target repos only get the labels from setup-target-repo.sh; they never get a
-# NORTH_STAR.md). The script also lives only in the control plane, so resolve NORTH_STAR.md
-# from the SCRIPT'S OWN location — follow symlinks, then dirname/.. — the same derivation
-# install.sh/doctor.sh use, so the script reads the control plane's north star regardless of
-# which target repo's cwd it is invoked from. If the file is missing, fail with an actionable
-# pointer rather than debating against an empty goal.
-script_path="$0"
-while [ -L "$script_path" ]; do
-  link_target="$(readlink "$script_path")"
-  case "$link_target" in
-    /*) script_path="$link_target" ;;
-    *)  script_path="$(dirname "$script_path")/$link_target" ;;
-  esac
-done
-control_plane_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
-north_star_file="${control_plane_root}/NORTH_STAR.md"
-if [ ! -f "$north_star_file" ]; then
-  echo "error: NORTH_STAR.md not found in the control-plane repo (${north_star_file})" >&2
-  echo "       the manager-review debates the issue against the current north star;" >&2
-  echo "       it lives in the fabrica control-plane repo, alongside this script;" >&2
-  echo "       see reviewer/manager-review.md > NORTH_STAR.md" >&2
-  exit 1
-fi
-north_star="$(cat "$north_star_file")"
-
 # Pin gh to the cwd's checkout, not whatever GH_REPO points at. If GH_REPO is set in the
 # environment, every `gh repo view` / `gh issue view/comment` would target THAT repo
-# instead of the cwd's git remote — so the script could read the cwd's NORTH_STAR.md but
+# instead of the cwd's git remote — so the script could resolve the cwd's north star but
 # post the verdict to an issue in a DIFFERENT repo. Unset it (so gh falls back to the
 # cwd's remote) AND derive the repo from the cwd to pass an explicit --repo to each gh
 # call (belt-and-suspenders).
@@ -154,6 +144,34 @@ if ! head_commit="$(git rev-parse HEAD 2>/dev/null)" || [ -z "$head_commit" ]; t
   echo "       run this from within the target repo's clone" >&2
   exit 1
 fi
+
+# Resolve the north star for THIS target via the shared resolver (scripts/lib/north-star.sh).
+# We resolve from the LIVE CHECKOUT (the cwd's git top-level), NOT the detached HEAD worktree
+# below: the north star is *current steering* — possibly just set or still uncommitted — while
+# the detached worktree exists only to review committed code in isolation. Resolution order:
+# the target's own <toplevel>/.fabrica/north-star.md, else the control-plane root NORTH_STAR.md
+# ONLY when this target IS Fabrica itself (identity match), else UNSET. On UNSET we FAIL with an
+# actionable pointer BEFORE posting any verdict — the manager-review must not debate against an
+# absent goal (and must never silently inherit another repo's star). The `gh repo view` inside
+# the resolver's identity check runs AFTER `unset GH_REPO`, so it uses the cwd's remote.
+ns_result="$(ns_resolve "$PWD")"
+ns_kind="${ns_result%% *}"
+ns_path="${ns_result#"$ns_kind"}"
+ns_path="${ns_path# }"
+case "$ns_kind" in
+  LOCAL|FABRICA_SELF)
+    north_star="$(cat "$ns_path")"
+    ;;
+  *)
+    # UNSET (non-empty target, no star), EMPTY (no commits yet), or NOREPO — in every case
+    # there is no current north star to debate against. FAIL before any Codex run or verdict.
+    echo "error: no north star set for ${repo} — cannot run the manager-review debate" >&2
+    echo "       set + approve a north star in .fabrica/north-star.md at the repo root," >&2
+    echo "       then re-run (the manager-review debates the proposed issue against it)" >&2
+    echo "       see reviewer/manager-review.md > NORTH_STAR / .fabrica/north-star.md" >&2
+    exit 1
+    ;;
+esac
 
 # Pull the issue title + body + the comment thread — the proposal Codex debates, PLUS the
 # prior debate. On a REFINE rerun, Faber edits the issue and replies in an issue comment
@@ -222,7 +240,7 @@ the issue, or merge anything; you only give a verdict that Faber weighs. The tea
 ONLY on consensus (you and Faber both agree), and DEFAULT-DROPS on no consensus, so do not
 invent busywork: if the issue does not clearly serve the north star, say so.
 
-== CURRENT NORTH STAR (from NORTH_STAR.md) ==
+== CURRENT NORTH STAR (this repo's active north star) ==
 %s
 
 == PROPOSED ISSUE #%s ==

@@ -31,6 +31,7 @@ reviewer/manager-review.md
 templates/target-CLAUDE.md
 templates/repo-setup.md
 templates/faber-command.md
+templates/.fabrica/north-star.md
 
 # Scripts (must also be executable — see ci.yml)
 scripts/install.sh
@@ -39,3 +40,6 @@ scripts/manager-review.sh
 scripts/merge-pr.sh
 scripts/setup-target-repo.sh
 scripts/doctor.sh
+
+# Sourced library (not executed directly; sourced by the scripts above)
+scripts/lib/north-star.sh

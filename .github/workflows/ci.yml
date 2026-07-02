@@ -51,8 +51,19 @@ jobs:
           if [ -n "$scripts" ]; then
             # -S style = shellcheck's default floor; pinned explicitly so the
             # policy is visible and a future default change can't silently relax
-            # it. No -x: no script sources another today.
-            echo "$scripts" | xargs shellcheck -S style
+            # it. -x follows `source`d files so the `# shellcheck source=...`
+            # directives (e.g. scripts/lib/north-star.sh) resolve cleanly.
+            echo "$scripts" | xargs shellcheck -x -S style
           else
             echo "no shell scripts yet"
           fi
+
+      - name: North-star resolver tests
+        run: |
+          # Hermetic bash asserts for scripts/lib/north-star.sh (issue #97). The test
+          # builds throwaway git repos and stubs the gh-backed slug helpers, so it needs
+          # no network/gh auth. Give git an identity for the temp-repo commits (the runner
+          # has no global git user); the test also exports GIT_*_NAME/EMAIL as a backstop.
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          bash scripts/test/north-star-resolver.test.sh
