@@ -23,6 +23,12 @@ set -euo pipefail
 #       fabrica_root is NOT FABRICA_SELF — the attacker-settable slug fallback is dropped → UNSET.
 #   (c-prec) [#98a] the Fabrica-self PATH identity has PRECEDENCE over the LOCAL branch, so a stray
 #       committed `.fabrica/north-star.md` in the control-plane checkout can't shadow the root star.
+#   (c-committed) [round-2 regression] committed root NORTH_STAR.md whose worktree copy is DELETED
+#       still resolves FABRICA_SELF (classification never stats the working tree).
+#   (c-no-committed-root) [P2, round-3] the control-plane checkout with NO committed NORTH_STAR.md
+#       and a STRAY committed `.fabrica/north-star.md` still classifies FABRICA_SELF (not LOCAL):
+#       classification is PATH-only and UNCONDITIONAL, so `.fabrica` can never shadow Fabrica-self;
+#       AUTHORIZATION (root actually committed) is the gate's job (it FAILs on the missing root).
 #   (c') a NON-Fabrica repo with no local star does NOT inherit the root fallback (PATH identity,
 #       not "file exists") → UNSET.
 #   (m) [FIX A] the shared shipped-default marker matcher is active-region-SCOPED and
@@ -148,9 +154,9 @@ test_fabrica_self_fallback() {
   local repo; repo="$(make_repo "fabrica-clone")"
   # No .fabrica/north-star.md here — force the identity/fallback path.
   local top; top="$(ns_git_toplevel "$repo")"   # canonical top-level (matches what ns_resolve derives)
-  # COMMIT the root star (round-2 FIX 1): the resolver's FABRICA_SELF branch now keys off COMMITTED
-  # existence (git cat-file -e HEAD:NORTH_STAR.md), matching the gate — an uncommitted worktree copy
-  # no longer resolves FABRICA_SELF. So commit it, not just write it.
+  # Commit the root star (the normal control-plane state). CLASSIFICATION is PATH-only now
+  # (round-3 [P2]) and does NOT require a committed root — see (c-no-committed-root) for the
+  # uncommitted case — but this test asserts the ordinary path with a committed root present.
   echo "root fabrica star" > "$top/NORTH_STAR.md"
   git -C "$top" add NORTH_STAR.md
   git -C "$top" commit -q -m "root star"
@@ -203,8 +209,8 @@ test_fabrica_self_precedence_over_local() {
   . "$lib"
   local repo; repo="$(make_repo "fabrica-self-with-stray-local")"
   local top; top="$(ns_git_toplevel "$repo")"
-  # COMMIT the root star (round-2 FIX 1: FABRICA_SELF now keys off committed existence). A STRAY
-  # local star ALSO committed inside the control-plane checkout (must NOT shadow the root star).
+  # Commit the root star (the normal state) PLUS a STRAY local star also committed inside the
+  # control-plane checkout — which must NOT shadow the root star (PATH identity has precedence).
   echo "fabrica root star" > "$top/NORTH_STAR.md"
   mkdir -p "$top/.fabrica"
   echo "stray local star that must not shadow root" > "$top/.fabrica/north-star.md"
@@ -219,12 +225,12 @@ test_fabrica_self_precedence_over_local() {
   unset -f ns_fabrica_root
 }
 
-# --- (c-committed) FABRICA_SELF off COMMITTED state, even if the worktree copy is DELETED [FIX 1, round-2] ---
-# The resolver's FABRICA_SELF branch keys off COMMITTED existence (git cat-file -e
-# HEAD:NORTH_STAR.md), NOT a working-tree `[ -f ]` stat — so it AGREES with the gate, which
-# authorizes Fabrica-self off `git show HEAD:NORTH_STAR.md`. A control-plane whose NORTH_STAR.md is
-# COMMITTED but whose working-tree copy was deleted must STILL resolve FABRICA_SELF (the pre-fix
-# `[ -f ]` stat would report UNSET/LOCAL and the gate would then disagree with the resolver).
+# --- (c-committed) FABRICA_SELF even if the worktree copy is DELETED (committed root present) ---
+# Classification is PATH-only now (round-3 [P2]) — it does not stat the working tree at all — so a
+# control-plane whose NORTH_STAR.md is COMMITTED but whose working-tree copy was deleted STILL
+# resolves FABRICA_SELF. This is the case the gate authorizes: path→FABRICA_SELF here, and the gate's
+# `git show HEAD:NORTH_STAR.md` succeeds off the committed blob. (Regression from round-2 FIX 1;
+# still green under the path-only classification.)
 test_fabrica_self_committed_worktree_deleted() {
   # shellcheck source=scripts/lib/north-star.sh
   . "$lib"
@@ -240,6 +246,33 @@ test_fabrica_self_committed_worktree_deleted() {
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
   assert_eq "(c-committed) committed NORTH_STAR.md, worktree copy DELETED → still FABRICA_SELF (not UNSET)" "FABRICA_SELF" "$kind"
   assert_eq "(c-committed) FABRICA_SELF path is the root NORTH_STAR.md" "$top/NORTH_STAR.md" "$path"
+  unset -f ns_fabrica_root
+}
+
+# --- (c-no-committed-root) PATH identity classifies FABRICA_SELF even with NO committed root [P2, round-3] ---
+# The core round-3 [P2] fix: CLASSIFICATION is PATH-only and UNCONDITIONAL — it must NOT be gated on
+# whether NORTH_STAR.md is committed. Here the cwd IS the control-plane checkout but NORTH_STAR.md is
+# NOT committed, AND a stray `.fabrica/north-star.md` IS committed. Round-2's committed-existence gate
+# would have fallen THROUGH to the LOCAL branch and authorized off the stray `.fabrica` star. The
+# resolver must instead classify FABRICA_SELF (root NORTH_STAR.md), so `.fabrica/north-star.md` can
+# NEVER shadow Fabrica-self; the AUTHORIZATION (root actually committed) is then the gate's job (it
+# FAILs cleanly on the missing committed root — asserted in the gate suite's (fs-no-root) case).
+test_fabrica_self_no_committed_root_ignores_stray_local() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local repo; repo="$(make_repo "fabrica-self-no-committed-root")"
+  local top; top="$(ns_git_toplevel "$repo")"
+  # NO NORTH_STAR.md committed (and none in the worktree). A STRAY .fabrica/north-star.md IS committed.
+  mkdir -p "$top/.fabrica"
+  echo "stray local star that must NOT be authorized as Fabrica-self" > "$top/.fabrica/north-star.md"
+  git -C "$top" add .fabrica/north-star.md
+  git -C "$top" commit -q -m "stray local star, no root star"
+  ns_fabrica_root() { echo "$top"; }                # PATH identity: this IS fabrica root
+  local out kind path
+  out="$(ns_resolve "$repo")"
+  kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
+  assert_eq "(c-no-committed-root) no committed root + stray committed .fabrica → still FABRICA_SELF (not LOCAL)" "FABRICA_SELF" "$kind"
+  assert_eq "(c-no-committed-root) FABRICA_SELF path is the root NORTH_STAR.md (not the stray local star)" "$top/NORTH_STAR.md" "$path"
   unset -f ns_fabrica_root
 }
 
@@ -725,6 +758,7 @@ test_fabrica_self_fallback
 test_slug_spoof_not_fabrica_self
 test_fabrica_self_precedence_over_local
 test_fabrica_self_committed_worktree_deleted
+test_fabrica_self_no_committed_root_ignores_stray_local
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty

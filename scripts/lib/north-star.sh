@@ -10,11 +10,15 @@
 # `#!/usr/bin/env bash` line is only so shellcheck picks the right dialect.
 #
 # Resolution order (see issue #97, hardened in #98a):
-#   1. Fabrica-self:   the control-plane root NORTH_STAR.md — used ONLY when the resolved repo
-#      IS the Fabrica control-plane repo itself, decided by a PATH identity check (the target's
-#      git top-level equals THIS lib's own control-plane root), never a slug and never merely
-#      "a file happens to exist." Checked FIRST so a stray/committed `.fabrica/north-star.md`
-#      accidentally sitting in the control-plane checkout cannot shadow Fabrica's own root star.
+#   1. Fabrica-self:   the control-plane root NORTH_STAR.md — CLASSIFIED (as the SOURCE) whenever
+#      the resolved repo IS the Fabrica control-plane repo itself, decided by a PATH identity check
+#      (the target's git top-level equals THIS lib's own control-plane root), never a slug. This
+#      classification is PATH-ONLY and UNCONDITIONAL — it does NOT depend on whether NORTH_STAR.md
+#      exists (round-3 [P2]): CLASSIFICATION (which source applies) is the resolver's job; whether
+#      that source carries a real committed star (AUTHORIZATION) is the gate's job. Checked FIRST,
+#      and returned unconditionally on a path match, so a stray/committed `.fabrica/north-star.md`
+#      accidentally sitting in the control-plane checkout can NEVER shadow Fabrica-self (the gate
+#      then FAILs cleanly if the root star is not committed — it does NOT fall back to `.fabrica`).
 #   2. Target-local:   <target-toplevel>/.fabrica/north-star.md, where target-toplevel is the
 #      target repo's GIT TOP-LEVEL (`git -C <dir> rev-parse --show-toplevel`), NOT literal
 #      $PWD — so a run from ANY subdirectory of the target clone resolves the top-level file.
@@ -363,20 +367,25 @@ ns_resolve() {
   # site can never abort before the `-n` emptiness check decides.
   fabrica_root="$(ns_fabrica_root || true)"
   if [ -n "$fabrica_root" ] && [ "$toplevel" = "$fabrica_root" ]; then
-    local root_star
-    root_star="$fabrica_root/NORTH_STAR.md"
-    # COMMITTED existence, NOT a working-tree `[ -f ]` stat (round-2, FIX 1). The gate authorizes
-    # Fabrica-self off `git show HEAD:NORTH_STAR.md` (committed state), so the resolver's self
-    # identity must be equally worktree-independent: a control-plane whose NORTH_STAR.md is
-    # COMMITTED but whose working-tree copy is deleted must STILL resolve FABRICA_SELF (else the
-    # resolver reports UNSET/LOCAL and the gate's committed read disagrees with it). `cat-file -e
-    # HEAD:NORTH_STAR.md` tests committed existence at the top-level regardless of the cwd
-    # (subdir vs. root); its non-zero (uncommitted / no HEAD) falls through to the LOCAL/UNSET
-    # branches. `2>/dev/null` keeps a commit-less repo from leaking a git error.
-    if git -C "$toplevel" cat-file -e "HEAD:NORTH_STAR.md" 2>/dev/null; then
-      echo "FABRICA_SELF $root_star"
-      return 0
-    fi
+    # CLASSIFICATION is PATH-ONLY, UNCONDITIONAL (round-3, [P2]). Classification (which SOURCE
+    # applies) and AUTHORIZATION (whether that source has a real committed star) are SEPARATE
+    # concerns: classification belongs to the resolver, authorization belongs to the gate. Once the
+    # PATH identity matches (this checkout IS the Fabrica control plane), the resolved SOURCE is the
+    # root NORTH_STAR.md — FULL STOP. We do NOT gate this on whether NORTH_STAR.md exists (committed
+    # OR working-tree): round-2 keyed the branch on `git cat-file -e HEAD:NORTH_STAR.md`, so a
+    # control-plane cwd whose root star was NOT committed would FALL THROUGH to the LOCAL branch and
+    # a stray committed `.fabrica/north-star.md` there would be authorized as if it were Fabrica's
+    # star — contradicting the precedence rule (path identity → FABRICA_SELF; `.fabrica` must never
+    # shadow Fabrica-self). Returning FABRICA_SELF unconditionally here makes `.fabrica/north-star.md`
+    # incapable of ever shadowing Fabrica-self. The AUTHORIZATION that a real committed root star
+    # exists is the gate's job: manager-review.sh's FABRICA_SELF branch reads `git show
+    # HEAD:NORTH_STAR.md` and FAILs cleanly ("NORTH_STAR.md is not committed at HEAD") if the root is
+    # not committed — a missing committed root FAILs, it does NOT fall back to `.fabrica`. doctor.sh
+    # likewise diagnoses the uncommitted-root FABRICA_SELF case as a WARN (it never gated the kind on
+    # committed existence). So a worktree-deleted-but-committed root still authorizes (path→FABRICA_SELF
+    # here, `git show HEAD:` succeeds at the gate).
+    echo "FABRICA_SELF $fabrica_root/NORTH_STAR.md"
+    return 0
   fi
 
   # Order 2 — target-local .fabrica/north-star.md at the git top-level (reached only when the

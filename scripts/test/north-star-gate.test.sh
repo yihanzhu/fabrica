@@ -285,6 +285,42 @@ test_fabrica_self_committed_worktree_deleted_proceeds() {
 }
 
 # ---------------------------------------------------------------------------------
+# (2d) [P2, round-3] Fabrica-self is CLASSIFIED by PATH identity UNCONDITIONALLY — a missing
+# committed root NORTH_STAR.md FAILs at the GATE (authorization), it does NOT fall through to a
+# stray `.fabrica/north-star.md`. We build a throwaway control-plane clone (contains the lib +
+# manager-review.sh, so ns_fabrica_root == its git top-level → the resolver classifies FABRICA_SELF),
+# but commit NO root NORTH_STAR.md and DO commit a stray `.fabrica/north-star.md`. Under round-2 the
+# resolver's committed-existence gate would have fallen through to the LOCAL branch and the gate
+# would have PROCEEDED against `.fabrica`. Now the resolver returns FABRICA_SELF (path-only), the gate
+# takes the FABRICA_SELF branch, its `git show HEAD:NORTH_STAR.md` read FAILs cleanly (root not
+# committed) with an actionable message, and it NEVER authorizes off the stray `.fabrica` star.
+# ---------------------------------------------------------------------------------
+test_fabrica_self_no_committed_root_fails_not_local() {
+  local cp_root="$tmproot/gate-fabrica-self-no-root"
+  mkdir -p "$cp_root/scripts/lib"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
+  git -C "$cp_root" init -q
+  # NO root NORTH_STAR.md. A STRAY .fabrica/north-star.md IS committed (must NOT be authorized).
+  mkdir -p "$cp_root/.fabrica"
+  printf '### Stray goal · status: **active** — must NOT authorize Fabrica-self\nbody\n' > "$cp_root/.fabrica/north-star.md"
+  git -C "$cp_root" add scripts/lib/north-star.sh scripts/manager-review.sh .fabrica/north-star.md
+  git -C "$cp_root" commit -q -m "cp init: stray local star, NO root star"
+  local rc out
+  out="$(
+    cd "$cp_root"
+    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
+  )" && rc=0 || rc=$?
+  assert_eq "(2d) FABRICA_SELF with no committed root NORTH_STAR.md → gate FAILs (does NOT fall back to .fabrica)" "1" "$rc"
+  assert_contains "(2d) FABRICA_SELF missing-root FAIL cites NORTH_STAR.md not committed at HEAD" "NORTH_STAR.md is not committed at HEAD" "$out"
+  # And it must NOT have proceeded against the stray .fabrica star.
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (2d) gate must NOT reach a verdict off the stray .fabrica star"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (2d) gate did NOT authorize off the stray .fabrica star" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------------
 # (3) LOCAL committed → debates; LOCAL + marker → FAIL; UNSET → FAIL.
 # ---------------------------------------------------------------------------------
 
@@ -776,6 +812,7 @@ test_worktree_only_does_not_authorize
 test_committed_authorizes_even_if_worktree_deleted
 test_committed_authorizes_even_if_worktree_modified
 test_fabrica_self_committed_worktree_deleted_proceeds
+test_fabrica_self_no_committed_root_fails_not_local
 test_local_committed_debates
 test_local_marker_fails
 test_unset_fails

@@ -231,21 +231,32 @@ if [ "$ns_kind" = "FABRICA_SELF" ]; then
   # placeholder-FAIL). cwd IS the control-plane checkout, so read the root star COMMITTED at the
   # same $head_commit for the same committed-state guarantee.
   #
-  # SYMLINK guard (round-2 FIX 4): reject a committed NORTH_STAR.md stored as a SYMLINK before
-  # reading it. `git show <commit>:NORTH_STAR.md` on a symlink returns the link TARGET-PATH string,
-  # not file content — the gate would then authorize off a meaningless string and diverge from the
-  # real file Codex reviews. Assert the committed entry is a regular blob (100644/100755).
+  # AUTHORIZATION lives HERE (round-3 [P2]): ns_resolve classifies FABRICA_SELF by PATH identity
+  # UNCONDITIONALLY — it does NOT check whether NORTH_STAR.md is committed — so this branch is the
+  # authorization gate. It must require a COMMITTED root star and FAIL cleanly if there is none: a
+  # missing committed root FAILs, it does NOT fall back to `.fabrica/north-star.md` (that fallback
+  # would let a stray committed `.fabrica` star mis-steer Fabrica-self). Do the committed read
+  # FIRST so an ABSENT root gives the accurate "not committed at HEAD" message — not the symlink
+  # message. `if ! …="$(git show …)"` (a condition context) never trips `set -e`: an absent path
+  # makes `git show` exit non-zero → the FAIL branch runs cleanly.
+  if ! north_star="$(git show "${head_commit}:NORTH_STAR.md" 2>/dev/null)" || [ -z "$north_star" ]; then
+    echo "error: NORTH_STAR.md is not committed at HEAD (${head_commit}) in the control plane" >&2
+    echo "       ns_resolve classified this run as Fabrica-self by PATH identity; the manager-debate" >&2
+    echo "       gate reads COMMITTED state and does NOT fall back to .fabrica/north-star.md. Commit" >&2
+    echo "       the root north star (or restore it), then re-run" >&2
+    exit 1
+  fi
+  # SYMLINK guard (round-2 FIX 4): reject a committed NORTH_STAR.md stored as a SYMLINK. `git show
+  # <commit>:NORTH_STAR.md` on a symlink returns the link TARGET-PATH string (which the `[ -n ]`
+  # above accepts), not file content — the gate would then authorize off a meaningless string and
+  # diverge from the real file Codex reviews. Assert the committed entry is a regular blob
+  # (100644/100755). Checked AFTER the committed read so an ABSENT root FAILs with the accurate
+  # "not committed" message above rather than this symlink message.
   if ! ns_committed_is_regular_file "$PWD" "$head_commit" "NORTH_STAR.md"; then
     echo "error: the control plane's committed NORTH_STAR.md at HEAD (${head_commit}) is a SYMLINK —" >&2
     echo "       the committed north star must be a regular file, not a symlink (a symlink makes the" >&2
     echo "       gate read the link's target-path string, not the star's content). Replace it with a" >&2
     echo "       regular file, commit it, and re-run" >&2
-    exit 1
-  fi
-  if ! north_star="$(git show "${head_commit}:NORTH_STAR.md" 2>/dev/null)" || [ -z "$north_star" ]; then
-    echo "error: NORTH_STAR.md is not committed at HEAD (${head_commit}) in the control plane" >&2
-    echo "       the manager-debate gate reads COMMITTED state; commit the root north star" >&2
-    echo "       (or restore it), then re-run" >&2
     exit 1
   fi
 elif north_star="$(git show "${head_commit}:.fabrica/north-star.md" 2>/dev/null)" && [ -n "$north_star" ]; then
