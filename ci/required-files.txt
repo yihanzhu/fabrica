@@ -43,3 +43,6 @@ scripts/doctor.sh
 
 # Sourced library (not executed directly; sourced by the scripts above)
 scripts/lib/north-star.sh
+
+# Tests (run by CI; also executable — see ci.yml)
+scripts/test/north-star-resolver.test.sh
