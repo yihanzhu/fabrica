@@ -81,7 +81,7 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      commands, still proceeds. The gate is about **PR-CI presence**, not command source.
    - If **no** PR-triggered CI is detectable at all (no PR-triggered workflow, no external
      PR-CI config, no PR check-runs) → do NOT proceed and do NOT open a PR: comment (lead
-     with the SHORT reason `ambiguous-spec`, or a `needs-human`-appropriate reason) — "no
+     with the SHORT reason `failure`) — "no
      PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" —
      add label `needs-human`, and stop **before creating a branch or making any edit**.
      (Push-only CI does not satisfy this gate — a PR gets no checks, so `merge-pr.sh` refuses.)
@@ -125,7 +125,7 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      surfaces** — not something you do unilaterally (consistent with the persona's no-git /
      no-repo rail). If you were briefed but no base branch exists yet, do NOT try to create the
      repo/base yourself: comment that the base-branch prerequisite is unmet (lead with the
-     SHORT reason `needs-human`), add label `needs-human`, and stop — Faber surfaces it to the
+     SHORT reason `failure`), add label `needs-human`, and stop — Faber surfaces it to the
      operator. Once a base
      branch exists you branch off it (step 5) and open the PR normally. This bootstrap PR is
      **operator-approved and human-merged** (no gate exists yet for it to certify itself) — but
