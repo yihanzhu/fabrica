@@ -108,6 +108,34 @@ labels=(
   "merge-ready|5319e7|Current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge"
 )
 
+# Resolve whether the CURRENT WORKING DIRECTORY is a checkout OF THE TARGET repo. Seeding
+# .fabrica/north-star.md writes into $PWD's git top-level, so it is only correct to seed (or
+# to report a missing-star as drift) when $PWD actually IS the target's checkout — otherwise
+# we'd write the target's star into some UNRELATED repo the user happens to be sitting in.
+# We compare SLUGS, not paths: `gh repo view` on the cwd yields the cwd's <owner>/<repo>, and
+# we seed only when it equals the "$repo" argument. `env -u GH_REPO`: gh honors an exported
+# GH_REPO OVER the cwd's remote, so a set GH_REPO would make this print the ENV repo's slug
+# and could spoof a non-target cwd into looking like the target — clear it for this one probe
+# so the slug always reflects the repo at $PWD. `|| true` so a non-repo cwd yields an empty
+# slug (⇒ not the target) instead of aborting under `set -e`.
+cwd_slug="$(env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+cwd_is_target=0
+if [ -n "$cwd_slug" ] && [ "$cwd_slug" = "$repo" ]; then
+  cwd_is_target=1
+fi
+
+# The target-local north star lives at the cwd's git top-level (only meaningful when the cwd
+# IS the target checkout). Resolve it once here so both --check (drift on a missing file) and
+# the mutating path (seed the file) agree on the same location.
+ns_template="$repo_root/templates/.fabrica/north-star.md"
+ns_target=""
+if [ "$cwd_is_target" -eq 1 ]; then
+  target_toplevel="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$target_toplevel" ]; then
+    ns_target="$target_toplevel/.fabrica/north-star.md"
+  fi
+fi
+
 if [ "$check_mode" -eq 1 ]; then
   # Read-only drift report. Pull the live labels once (name/color/description) and
   # compare each script-defined label against the live state. Mutate nothing.
@@ -165,9 +193,21 @@ if [ "$check_mode" -eq 1 ]; then
     fi
   done
 
+  # North-star drift: a target whose labels all match but which has NO .fabrica/north-star.md
+  # still needs setup — the seed block runs only in the mutating path, so if --check reported
+  # "all good" here the file would never get seeded (Faber's bootstrap mutates ONLY on drift).
+  # So report a missing star as drift, which makes --check exit non-zero and triggers the
+  # mutating re-run that seeds it. We can only observe the LOCAL file when the cwd IS the target
+  # checkout (Task 2's cwd-guard) — a missing star is reportable only then; from a non-target
+  # cwd we can't see the target's tree, so we stay silent and let the label check speak.
+  if [ "$cwd_is_target" -eq 1 ] && [ -n "$ns_target" ] && [ ! -f "$ns_target" ]; then
+    echo "  north star: missing ${ns_target}"
+    drift=1
+  fi
+
   if [ "$drift" -ne 0 ]; then
     echo ""
-    echo "drift detected — run '$0 ${repo}' to reconcile (force-edits live labels to this script's definitions)" >&2
+    echo "drift detected — run '$0 ${repo}' to reconcile (force-edits live labels to this script's definitions; seeds a missing .fabrica/north-star.md when run from the target checkout)" >&2
     exit 1
   fi
   echo ""
@@ -201,26 +241,31 @@ done
 # Seed the target's per-target north star (.fabrica/north-star.md) from the shipped template
 # so the per-target north-star RESOLVER (scripts/lib/north-star.sh, issue #97) finds a file to
 # read. Without it a set-up target has only Fabrica's control-plane NORTH_STAR.md and the
-# resolver FAILs UNSET for manager-review. This script is run BY ABSOLUTE PATH from the target
-# repo (per QUICKSTART/install.sh), so $PWD is the target working tree; seed at ITS git
-# top-level. Idempotent: NEVER overwrite an existing north star — a target that already set its
-# own goal keeps it. Non-fatal if $PWD is not a git work tree (e.g. a pre-flight run from
-# elsewhere): the seeding is skipped with a note, the label bootstrap above still stands.
-ns_template="$repo_root/templates/.fabrica/north-star.md"
-target_toplevel="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$target_toplevel" ]; then
-  echo "  north star: skipped — cwd is not inside a git work tree (run from the target repo to seed .fabrica/north-star.md)"
+# resolver FAILs UNSET for manager-review.
+#
+# ONLY seed when the cwd IS the target checkout (cwd_slug == "$repo"; resolved up top). The
+# seed writes into $PWD's git top-level, so seeding from a NON-target cwd would drop the
+# target's star into an unrelated repo the user happens to be sitting in. So we gate on the
+# slug match, not merely "is $PWD a git work tree." When the cwd is not the target, skip with a
+# clear note; the label bootstrap above still stands (labels are addressed by the "$repo" arg,
+# not the cwd).
+#
+# Idempotent: NEVER overwrite an existing north star — a target that already set its own goal
+# keeps it.
+if [ "$cwd_is_target" -ne 1 ]; then
+  echo "  north star: skipped — cwd is not the target checkout (${cwd_slug:-<no repo>} != ${repo}); run from the ${repo} checkout to seed .fabrica/north-star.md"
+elif [ -z "$ns_target" ]; then
+  # cwd_is_target but no git top-level resolved (shouldn't normally happen once the slug
+  # matches, since a slug implies a repo) — skip defensively rather than seed at an unknown path.
+  echo "  north star: skipped — could not resolve the target's git top-level for the seed"
 elif [ ! -f "$ns_template" ]; then
   echo "  north star: skipped — template not found at ${ns_template}" >&2
+elif [ -f "$ns_target" ]; then
+  echo "  north star: kept existing ${ns_target} (not overwritten)"
 else
-  ns_target="$target_toplevel/.fabrica/north-star.md"
-  if [ -f "$ns_target" ]; then
-    echo "  north star: kept existing ${ns_target} (not overwritten)"
-  else
-    mkdir -p "$target_toplevel/.fabrica"
-    cp "$ns_template" "$ns_target"
-    echo "  north star: seeded ${ns_target} from the shipped template (replace the placeholder with your goal)"
-  fi
+  mkdir -p "$(dirname "$ns_target")"
+  cp "$ns_template" "$ns_target"
+  echo "  north star: seeded ${ns_target} from the shipped template (replace the placeholder with your goal)"
 fi
 
 cat <<EOF
