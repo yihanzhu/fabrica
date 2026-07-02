@@ -344,9 +344,19 @@ if [ -n "$target_repo" ]; then
   # from since-removed CI (on old closed PRs) don't false-pass. 90 days balances catching
   # slow-but-real PR activity against not honoring CI that was removed months ago. The
   # cutoff comparison runs inside jq (fromdateiso8601 vs now - window) to stay portable
-  # across BSD/GNU `date`. `gh pr list` returns most-recently-updated PRs first.
+  # across BSD/GNU `date`.
+  #
+  # ORDER BY UPDATED TIME BEFORE LIMITING: `gh pr list` defaults to ordering by CREATION
+  # time, so `--limit 5` alone fetches the 5 newest-CREATED PRs. A long-lived PR updated
+  # within the window (and showing CI) but with >5 newer-created PRs would then never enter
+  # the fetched set, and the recency filter would wrongly report "no recent PR-triggered CI."
+  # We instead ask for PRs ordered most-recently-UPDATED first (`--search "sort:updated-desc"`)
+  # so the `--limit` window is the N most-recently-updated PRs — exactly the ones the recency
+  # filter is meant to see. The 90-day `updatedAt` `select` stays as the correctness backstop
+  # (independent of ordering), and if nothing recent qualifies we still WARN (never hard FAIL).
   ci_recency_days=90
-  pr_head_shas="$(gh pr list --repo "$target_repo" --state all --limit 5 \
+  pr_head_shas="$(gh pr list --repo "$target_repo" --state all \
+    --search "sort:updated-desc" --limit 5 \
     --json headRefOid,updatedAt \
     --jq "[.[] | select((.updatedAt | fromdateiso8601) > (now - ($ci_recency_days * 86400)))] | .[].headRefOid" \
     2>/dev/null || true)"
