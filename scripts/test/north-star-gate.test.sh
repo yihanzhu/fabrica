@@ -148,6 +148,16 @@ commit_star() {
   git -C "$repo" commit -q -m "set north star"
 }
 
+# commit_star_raw <repo> — read EXACT .fabrica/north-star.md bytes from stdin and COMMIT (so a
+# test can pin whitespace/tab/multiline-split marker variants that `commit_star`'s printf can't).
+commit_star_raw() {
+  local repo="$1"
+  mkdir -p "$repo/.fabrica"
+  cat > "$repo/.fabrica/north-star.md"
+  git -C "$repo" add .fabrica/north-star.md
+  git -C "$repo" commit -q -m "set north star"
+}
+
 # ---------------------------------------------------------------------------------
 # (1) SOURCE IDENTITY — approval source == gate source. Operator approval is not
 # machine-readable, so we pin the SOURCE identity: manager-review.sh's gate, the persona, and
@@ -264,6 +274,94 @@ test_unset_fails() {
 }
 
 # ---------------------------------------------------------------------------------
+# (3d) FIX A at the GATE — the placeholder check is active-region-SCOPED and whitespace/case-
+# insensitive. Two bugs the adversarial sweep found:
+#   - FALSE-PASS: a spacing/casing/reflow-split marker variant on the active heading must still
+#     FAIL the gate (a byte-exact grep would let it AUTHORIZE).
+#   - FALSE-FAIL: a correctly-replaced star (marker cleared from the active heading, still named
+#     in prose) must PROCEED (a whole-file grep would wrongly FAIL it).
+# ---------------------------------------------------------------------------------
+
+# (3d-i) A committed star carrying a WHITESPACE/CASE/SPLIT marker variant on the active heading
+# → gate FAILs (the un-replaced placeholder does NOT slip through and authorize).
+test_gate_marker_variants_fail() {
+  # no-space + UPPERCASE on the active heading
+  local r1; r1="$(make_target "marker-nospace-upper")"
+  printf '### Goal · status: **active** · <!--FABRICA-SHIPPED-DEFAULT--> replace me\nbody\n' \
+    | commit_star_raw "$r1"
+  local res rc out
+  res="$(run_gate "$r1")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(3d-i) no-space+UPPERCASE marker variant → gate FAILs" "1" "$rc"
+  assert_contains "(3d-i) variant FAIL cites the shipped placeholder" "shipped placeholder" "$out"
+
+  # reflow-SPLIT: marker on the line just below the active heading
+  local r2; r2="$(make_target "marker-split")"
+  printf '### Goal · status: **active**\n<!-- fabrica-shipped-default -->\nbody\n' \
+    | commit_star_raw "$r2"
+  res="$(run_gate "$r2")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(3d-i) reflow-split marker (line below active heading) → gate FAILs" "1" "$rc"
+
+  # TAB-separated marker on the active heading
+  local r3; r3="$(make_target "marker-tab")"
+  printf '### Goal status: active\t<!--\tfabrica-shipped-default\t-->\nbody\n' \
+    | commit_star_raw "$r3"
+  res="$(run_gate "$r3")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(3d-i) tab-separated marker variant → gate FAILs" "1" "$rc"
+}
+
+# (3d-ii) A CORRECTLY-REPLACED star: the marker is only in the explanatory PROSE, CLEARED from the
+# active heading → gate PROCEEDs (the prose mention must not false-FAIL a valid adopter star).
+test_gate_correctly_replaced_proceeds() {
+  local repo; repo="$(make_target "marker-prose-only")"
+  # Mirrors the shipped template shape: prose NAMES the marker, but the active heading is clean.
+  printf 'Intro: the shipped default carries a <!-- fabrica-shipped-default --> marker; remove it when you set your own.\n\n### Ship widget v2 by Q3 · status: **active** — our real approved goal\nbody\n' \
+    | commit_star_raw "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(3d-ii) correctly-replaced star (marker only in prose) → gate PROCEEDs (no false FAIL)" "0" "$rc"
+  assert_contains "(3d-ii) gate reached the verdict" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (6) FIX F — the gate refuses to authorize off a north star in a SEPARATE git repo NESTED inside
+# ANOTHER git work tree (confused deputy). A linked worktree (same repo) is NOT rejected.
+# ---------------------------------------------------------------------------------
+
+# (6a) Gate run from a SEPARATE embedded repo (its own committed star) inside an outer work tree
+# → FAIL with the nested/embedded message (before any verdict).
+test_gate_nested_repo_fails() {
+  # Outer target repo with its OWN committed star.
+  local outer; outer="$(make_target "nested-outer")"
+  commit_star "$outer" "the OUTER target's real committed north star"
+  # A SEPARATE embedded repo nested inside the outer work tree, with its own committed star.
+  local inner="$outer/embedded/inner"
+  mkdir -p "$inner"
+  git -C "$inner" init -q
+  git -C "$inner" commit -q --allow-empty -m "inner init"
+  commit_star "$inner" "the embedded repo's DIFFERENT star"
+  local res rc out
+  res="$(run_gate "$inner")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(6a) gate run from a nested/embedded repo → FAILs" "1" "$rc"
+  assert_contains "(6a) nested FAIL tells the operator to run from the target's own top-level clone" "nested/embedded checkout" "$out"
+}
+
+# (6b) A LINKED WORKTREE (git worktree add — SAME repo, shares the common dir) is NOT the
+# confused-deputy case: it must NOT be rejected as nested. We add a linked worktree of a normal
+# target (committed real star) and assert the gate PROCEEDs from it.
+test_gate_linked_worktree_ok() {
+  local repo; repo="$(make_target "wt-main")"
+  commit_star "$repo" "the target's real committed north star"
+  # Create a linked worktree UNDER the repo's tree (same shape as this project's .claude/worktrees).
+  local wt="$repo/.wts/feature"
+  git -C "$repo" worktree add -q --detach "$wt" HEAD 2>/dev/null
+  local res rc out
+  res="$(run_gate "$wt")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(6b) linked worktree (same repo) is NOT treated as nested → gate PROCEEDs" "0" "$rc"
+  assert_contains "(6b) linked-worktree run reached the verdict" "PROCEED" "$out"
+  git -C "$repo" worktree remove --force "$wt" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------------
 # (4) doctor.sh check (h) — consistent with the gate, but WARN (not FAIL) since doctor only
 # diagnoses. UNSET → WARN; a LOCAL committed real star → pass.
 # ---------------------------------------------------------------------------------
@@ -301,6 +399,50 @@ test_doctor_local_marker_warns() {
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4c) doctor (h) on a still-shipped-default LOCAL star WARNs" "warn:" "$line"
   assert_contains "(4c) doctor (h) shipped-default WARN cites the marker" "fabrica-shipped-default" "$line"
+}
+
+# (4d) FIX E — doctor (h) drives its verdict off the COMMITTED star, matching the gate. A star
+# committed at HEAD but DELETED in the working tree must still be diagnosed as the committed
+# (real) star → PASS, not "no star" — the same committed source the gate authorizes on.
+test_doctor_h_committed_worktree_deleted() {
+  local repo; repo="$(make_target "doctor-committed-del")"
+  commit_star "$repo" "### Ship v2 · status: **active** — our real committed goal"
+  rm -f "$repo/.fabrica/north-star.md"   # worktree copy gone; HEAD still has it
+  local line; line="$(run_doctor_h "$repo")"
+  assert_contains "(4d) doctor (h) reads the COMMITTED star even when the worktree copy is deleted → pass" "pass:" "$line"
+}
+
+# (4d') FIX E, other direction — a star committed at HEAD but MODIFIED in the working tree to a
+# placeholder must be diagnosed off the COMMITTED (clean) content → PASS, and NOTE the drift.
+test_doctor_h_committed_worktree_modified() {
+  local repo; repo="$(make_target "doctor-committed-mod")"
+  commit_star "$repo" "### Ship v2 · status: **active** — our real committed goal"
+  printf 'placeholder <!-- fabrica-shipped-default -->\n' > "$repo/.fabrica/north-star.md"
+  local line; line="$(run_doctor_h "$repo")"
+  assert_contains "(4d') doctor (h) reads the COMMITTED (clean) star despite a dirty placeholder worktree edit → pass" "pass:" "$line"
+  assert_contains "(4d') doctor (h) notes the working-tree copy differs from HEAD" "differs from HEAD" "$line"
+}
+
+# (4e) FIX D — doctor with a MISSING resolver lib must still print its summary and REPORT the
+# missing lib (as a fail: line), not crash at the top-of-file source. We run a COPY of the repo
+# tree with scripts/lib/north-star.sh removed, so `. "$ns_lib"` would abort the old doctor.
+test_doctor_missing_lib_reports_and_summarizes() {
+  # Build a throwaway clone of the control-plane tree with the lib removed. Copy only what doctor
+  # needs to run past its early checks; the point is the MISSING lib, so remove it after copying.
+  local fake_root="$tmproot/doctor-nolib-root"
+  mkdir -p "$fake_root/scripts/lib" "$fake_root/scripts/test" "$fake_root/ci" "$fake_root/templates/.fabrica"
+  cp "$doctor" "$fake_root/scripts/doctor.sh"; chmod +x "$fake_root/scripts/doctor.sh"
+  cp "$setup_script" "$fake_root/scripts/setup-target-repo.sh"; chmod +x "$fake_root/scripts/setup-target-repo.sh"
+  cp "$repo_root/ci/required-files.txt" "$fake_root/ci/required-files.txt"
+  # Deliberately do NOT copy scripts/lib/north-star.sh → the lib is missing.
+  local out rc
+  out="$(
+    cd "$fake_root"
+    PATH="$fakebin:$PATH" bash "$fake_root/scripts/doctor.sh" 2>&1
+  )" && rc=0 || rc=$?
+  assert_contains "(4e) doctor with a missing resolver lib still prints its summary (no crash)" "doctor:" "$out"
+  assert_contains "(4e) doctor (h) reports the missing resolver lib as a fail line" "resolver lib missing" "$out"
+  assert_eq "(4e) doctor exits non-zero when the lib (a fail) is missing" "1" "$rc"
 }
 
 # ---------------------------------------------------------------------------------
@@ -394,6 +536,47 @@ test_setup_seed_cwd_guard_and_idempotency() {
   assert_contains "(5c) re-seed keeps the operator's star (never overwrites)" "my own committed goal" "$(cat "$star")"
 }
 
+# (5d) FIX C — setup on the Fabrica control-plane repo ITSELF must NOT seed .fabrica/north-star.md
+# (it steers by the root NORTH_STAR.md; a seed would pollute the control plane). Detection is
+# PATH-based: the cwd's git top-level == ns_fabrica_root (derived from the lib's own location). We
+# build a throwaway "control-plane" clone that CONTAINS a copy of the resolver lib + setup script +
+# template, init it as git, and run setup from its root. ns_fabrica_root then resolves to THIS
+# clone's root (== cwd toplevel) → Fabrica-self → the seed is skipped with a note, AND no
+# .fabrica/north-star.md is written. The fake gh reports the cwd slug == target arg too, so this
+# proves the Fabrica-self exemption WINS even when cwd_is_target would otherwise be true.
+test_setup_fabrica_self_no_seed() {
+  local cp_root="$tmproot/fabrica-self-cp"
+  mkdir -p "$cp_root/scripts/lib" "$cp_root/templates/.fabrica"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$setup_script" "$cp_root/scripts/setup-target-repo.sh"; chmod +x "$cp_root/scripts/setup-target-repo.sh"
+  cp "$ns_template" "$cp_root/templates/.fabrica/north-star.md"
+  git -C "$cp_root" init -q
+  git -C "$cp_root" commit -q --allow-empty -m "cp init"
+  local self_fakebin="$tmproot/self-fakebin"
+  mkdir -p "$self_fakebin"
+  # repo view → a slug that also equals the target arg (so cwd_is_target would be 1); label list
+  # → empty (labels aren't the point here).
+  cat >"$self_fakebin/gh" <<'GH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "repo view") echo "acme/fabrica" ;;
+  "label create") exit 0 ;;
+  "label edit") exit 0 ;;
+  "label list") echo "[]" ;;
+  *) exit 0 ;;
+esac
+GH
+  chmod +x "$self_fakebin/gh"
+  local out
+  out="$(
+    cd "$cp_root"
+    PATH="$self_fakebin:$PATH" bash "$cp_root/scripts/setup-target-repo.sh" "acme/fabrica" 2>&1 || true
+  )"
+  assert_contains "(5d) setup on Fabrica-self skips the seed with a control-plane note" "cwd is the Fabrica control-plane repo itself" "$out"
+  assert_eq "(5d) setup on Fabrica-self does NOT create .fabrica/north-star.md" "1" \
+    "$([ -f "$cp_root/.fabrica/north-star.md" ] && echo 0 || echo 1)"
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -402,12 +585,20 @@ test_committed_authorizes_even_if_worktree_modified
 test_local_committed_debates
 test_local_marker_fails
 test_unset_fails
+test_gate_marker_variants_fail
+test_gate_correctly_replaced_proceeds
+test_gate_nested_repo_fails
+test_gate_linked_worktree_ok
 test_doctor_unset_warns
 test_doctor_local_committed_passes
 test_doctor_local_marker_warns
+test_doctor_h_committed_worktree_deleted
+test_doctor_h_committed_worktree_modified
+test_doctor_missing_lib_reports_and_summarizes
 test_setup_check_missing_star_is_drift
 test_setup_check_nontarget_cwd_no_star_drift
 test_setup_seed_cwd_guard_and_idempotency
+test_setup_fabrica_self_no_seed
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

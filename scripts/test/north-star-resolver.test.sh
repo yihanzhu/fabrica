@@ -15,13 +15,19 @@ set -euo pipefail
 # builds throwaway git repos in temp dirs.
 #
 # Resolver (scripts/lib/north-star.sh):
-#   (a) `.fabrica/north-star.md` is chosen over the root fallback when both exist.
+#   (a) a non-Fabrica target's local `.fabrica/north-star.md` resolves LOCAL.
 #   (b) a SUBDIRECTORY invocation still resolves the top-level `.fabrica/north-star.md`.
-#   (c) Fabrica-self (repo slug == Fabrica's own) falls back to root NORTH_STAR.md.
-#   (c2) Fabrica-self identity survives a CASING-ONLY slug difference (routes through
-#       ns_slug_eq) → still FABRICA_SELF, not UNSET (P2, round-3).
-#   (c') a NON-Fabrica repo with no local star does NOT inherit the root fallback (identity,
+#   (c) Fabrica-self by PATH identity (target toplevel == ns_fabrica_root) falls back to root
+#       NORTH_STAR.md (#98a: PATH-only, no slug).
+#   (c-spoof) [P1 SECURITY, #98a] a target whose SLUG spoofs Fabrica's own but whose PATH is NOT
+#       fabrica_root is NOT FABRICA_SELF — the attacker-settable slug fallback is dropped → UNSET.
+#   (c-prec) [#98a] the Fabrica-self PATH identity has PRECEDENCE over the LOCAL branch, so a stray
+#       committed `.fabrica/north-star.md` in the control-plane checkout can't shadow the root star.
+#   (c') a NON-Fabrica repo with no local star does NOT inherit the root fallback (PATH identity,
 #       not "file exists") → UNSET.
+#   (m) [FIX A] the shared shipped-default marker matcher is active-region-SCOPED and
+#       whitespace/case-insensitive: every spacing/casing/reflow-split variant on the active
+#       heading matches, while a marker only in prose (correctly-replaced star) does not.
 #   (d) a doctor-style cwd/slug MISMATCH does NOT read the local file (the resolver reports
 #       the local star only for the matching repo; a mismatched cwd is handled by doctor.sh
 #       fetching remote — asserted here at the slug-comparison level the caller relies on).
@@ -95,14 +101,14 @@ make_repo() {
 }
 
 # --- (a) local .fabrica/north-star.md wins over the root fallback ------------------
-# A non-Fabrica target with BOTH a local star AND (hypothetically) a root fallback must pick
-# the local one. We stub ns_repo_slug so this repo is NOT Fabrica (identity check would fail),
-# proving the LOCAL branch is what wins — not the fallback.
+# A non-Fabrica target with a local star must resolve LOCAL. Identity is PATH-based now, so we
+# stub ns_fabrica_root to a NON-matching path (this throwaway repo is not the control plane),
+# proving the LOCAL branch — not the Fabrica-self fallback — is what wins.
 test_local_wins() {
   local repo; repo="$(make_repo "target-a")"
   mkdir -p "$repo/.fabrica"
   echo "local star A" > "$repo/.fabrica/north-star.md"
-  ns_repo_slug() { echo "someone/target-a"; }   # not Fabrica
+  ns_fabrica_root() { echo "$tmproot/not-the-fabrica-root"; }   # not Fabrica-self (PATH differs)
   # Canonicalize the expected path through git's own top-level (macOS resolves /var ->
   # /private/var); the resolver returns the canonical top-level, so compare like-for-like.
   local expect; expect="$(ns_git_toplevel "$repo")/.fabrica/north-star.md"
@@ -111,7 +117,7 @@ test_local_wins() {
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
   assert_eq "(a) kind is LOCAL when .fabrica/north-star.md exists" "LOCAL" "$kind"
   assert_eq "(a) resolved path is the local star" "$expect" "$path"
-  unset -f ns_repo_slug
+  unset -f ns_fabrica_root
 }
 
 # --- (b) subdirectory invocation resolves the top-level file ----------------------
@@ -122,74 +128,103 @@ test_subdir_resolves_toplevel() {
   mkdir -p "$repo/.fabrica"
   echo "local star B" > "$repo/.fabrica/north-star.md"
   mkdir -p "$repo/deeply/nested/dir"
-  ns_repo_slug() { echo "someone/target-b"; }   # not Fabrica
+  ns_fabrica_root() { echo "$tmproot/not-the-fabrica-root"; }   # not Fabrica-self (PATH differs)
   local expect; expect="$(ns_git_toplevel "$repo")/.fabrica/north-star.md"
   local out kind path
   out="$(ns_resolve "$repo/deeply/nested/dir")"
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
   assert_eq "(b) subdir invocation resolves LOCAL" "LOCAL" "$kind"
   assert_eq "(b) subdir invocation resolves the TOP-LEVEL star" "$expect" "$path"
-  unset -f ns_repo_slug
+  unset -f ns_fabrica_root
 }
 
-# --- (c) Fabrica-self identity → root NORTH_STAR.md fallback -----------------------
-# A repo with NO local .fabrica/north-star.md whose slug equals Fabrica's own must fall back
-# to the control-plane root NORTH_STAR.md. We stub the slug helpers so the identity match is
-# deterministic and offline, and point the fabrica-root/root-star at a throwaway root file so
-# the assert doesn't depend on the live repo's NORTH_STAR.md contents.
+# --- (c) Fabrica-self identity → root NORTH_STAR.md fallback (PATH-only, #98a) ------
+# A repo with NO local .fabrica/north-star.md whose PATH is Fabrica's own control-plane root
+# must fall back to the control-plane root NORTH_STAR.md. Identity is decided by PATH now (the
+# target's git top-level == ns_fabrica_root), NOT a slug (see (c-spoof) below). We stub
+# ns_fabrica_root to the target's OWN canonical top-level so the path check matches, and place a
+# throwaway NORTH_STAR.md there.
 test_fabrica_self_fallback() {
   local repo; repo="$(make_repo "fabrica-clone")"
-  # No .fabrica/north-star.md here — force the fallback path.
-  local fake_root="$tmproot/fake-fabrica-root"
-  mkdir -p "$fake_root"
-  echo "root fabrica star" > "$fake_root/NORTH_STAR.md"
-  ns_repo_slug() { echo "acme/fabrica"; }        # both target + fabrica resolve to this
-  ns_fabrica_slug() { echo "acme/fabrica"; }     # identity match
-  ns_fabrica_root() { echo "$fake_root"; }       # root NORTH_STAR.md lives here
-  local out kind path
-  out="$(ns_resolve "$repo")"
-  kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
-  assert_eq "(c) Fabrica-self identity falls back to FABRICA_SELF" "FABRICA_SELF" "$kind"
-  assert_eq "(c) fallback path is root NORTH_STAR.md" "$fake_root/NORTH_STAR.md" "$path"
-  unset -f ns_repo_slug ns_fabrica_slug ns_fabrica_root
-}
-
-# --- (c2) Fabrica-self identity survives a CASING-ONLY slug difference (P2, round-3) --
-# GitHub owner/repo slugs are case-insensitive, so a Fabrica clone whose target slug differs
-# from Fabrica's own only in casing (yihanzhu/Fabrica vs yihanzhu/fabrica) is STILL Fabrica.
-# ns_resolve's identity check routes through ns_slug_eq, so the casing-only difference must
-# still fall back to the root NORTH_STAR.md — not skip to UNSET.
-test_fabrica_self_case_insensitive() {
-  local repo; repo="$(make_repo "fabrica-clone-cased")"
   # No .fabrica/north-star.md here — force the identity/fallback path.
-  local fake_root="$tmproot/fake-fabrica-root-cased"
-  mkdir -p "$fake_root"
-  echo "root fabrica star" > "$fake_root/NORTH_STAR.md"
-  ns_repo_slug() { echo "yihanzhu/Fabrica"; }    # target slug: canonical casing
-  ns_fabrica_slug() { echo "yihanzhu/fabrica"; } # fabrica's own slug: lowercase — same repo
-  ns_fabrica_root() { echo "$fake_root"; }
+  local top; top="$(ns_git_toplevel "$repo")"   # canonical top-level (matches what ns_resolve derives)
+  echo "root fabrica star" > "$top/NORTH_STAR.md"
+  ns_fabrica_root() { echo "$top"; }             # PATH identity: target toplevel == fabrica root
   local out kind path
   out="$(ns_resolve "$repo")"
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
-  assert_eq "(c2) casing-only self slug still matches Fabrica → FABRICA_SELF (not UNSET)" "FABRICA_SELF" "$kind"
-  assert_eq "(c2) casing-only self fallback path is root NORTH_STAR.md" "$fake_root/NORTH_STAR.md" "$path"
+  assert_eq "(c) Fabrica-self PATH identity falls back to FABRICA_SELF" "FABRICA_SELF" "$kind"
+  assert_eq "(c) fallback path is root NORTH_STAR.md" "$top/NORTH_STAR.md" "$path"
+  unset -f ns_fabrica_root
+}
+
+# --- (c-spoof) SLUG-SPOOF must NOT be FABRICA_SELF [P1 SECURITY, #98a] --------------
+# The old resolver had a slug-based Fabrica-self fallback: target slug == Fabrica's slug →
+# FABRICA_SELF. The slug derives from the git REMOTE URL, which ANY clone owner can set, so a
+# hostile target pointing origin at Fabrica's slug would be authorized against Fabrica's root
+# star, bypassing its own star AND the placeholder-FAIL. #98a DROPS the slug fallback: identity
+# is PATH-only. Here the target's slug EQUALS Fabrica's own, but its PATH is NOT fabrica_root —
+# so it must resolve as its OWN repo (UNSET, no local star), NEVER FABRICA_SELF.
+test_slug_spoof_not_fabrica_self() {
+  # Re-source in case an earlier test's `unset -f` removed a helper we rely on.
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local repo; repo="$(make_repo "slug-spoof-target")"   # non-empty, NO local star
+  local fake_root="$tmproot/real-fabrica-root"
+  mkdir -p "$fake_root"
+  echo "fabrica root star" > "$fake_root/NORTH_STAR.md"
+  # Attacker sets the target's slug to match Fabrica's own — but the PATH differs. These two slug
+  # stubs are deliberately NEVER invoked by ns_resolve: that is the FIX — the resolver no longer
+  # consults ANY slug for identity, so the spoofed slug can't authorize. (SC2329: intentionally
+  # uninvoked; they model the attacker-controlled slug the resolver now ignores.)
+  # shellcheck disable=SC2329
+  ns_repo_slug()    { echo "yihanzhu/fabrica"; }   # spoofed: same slug as Fabrica (IGNORED now)
+  # shellcheck disable=SC2329
+  ns_fabrica_slug() { echo "yihanzhu/fabrica"; }   # Fabrica's own slug (IGNORED now)
+  ns_fabrica_root() { echo "$fake_root"; }          # PATH: fabrica root != the target's toplevel
+  local out kind
+  out="$(ns_resolve "$repo")"; kind="${out%% *}"
+  assert_eq "(c-spoof) target whose SLUG spoofs Fabrica but whose PATH differs → NOT FABRICA_SELF (UNSET)" "UNSET" "$kind"
   unset -f ns_repo_slug ns_fabrica_slug ns_fabrica_root
 }
 
-# A NON-Fabrica repo with no local star must NOT inherit the root fallback (identity, not
-# "file exists"): the fallback is skipped and, being non-empty, it resolves to UNSET.
+# --- (c-prec) Fabrica-self PATH identity has PRECEDENCE over a stray LOCAL star [#98a] ---
+# A stray/committed .fabrica/north-star.md accidentally sitting in the control-plane checkout must
+# NOT shadow Fabrica's own root star: the PATH identity is checked BEFORE the LOCAL branch, so the
+# control-plane checkout still resolves FABRICA_SELF (root NORTH_STAR.md), not LOCAL.
+test_fabrica_self_precedence_over_local() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local repo; repo="$(make_repo "fabrica-self-with-stray-local")"
+  local top; top="$(ns_git_toplevel "$repo")"
+  echo "fabrica root star" > "$top/NORTH_STAR.md"
+  # A STRAY local star committed inside the control-plane checkout (should NOT win).
+  mkdir -p "$top/.fabrica"
+  echo "stray local star that must not shadow root" > "$top/.fabrica/north-star.md"
+  ns_fabrica_root() { echo "$top"; }               # PATH identity: this IS fabrica root
+  local out kind path
+  out="$(ns_resolve "$repo")"
+  kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
+  assert_eq "(c-prec) stray .fabrica/north-star.md in Fabrica-self does NOT shadow root → FABRICA_SELF" "FABRICA_SELF" "$kind"
+  assert_eq "(c-prec) FABRICA_SELF path is the ROOT NORTH_STAR.md (not the stray local star)" "$top/NORTH_STAR.md" "$path"
+  unset -f ns_fabrica_root
+}
+
+# A NON-Fabrica repo with no local star must NOT inherit the root fallback (PATH identity, not
+# "file exists"): its top-level != fabrica_root, so the fallback is skipped and, being non-empty,
+# it resolves to UNSET.
 test_non_fabrica_no_fallback() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
   local repo; repo="$(make_repo "external-target")"
   local fake_root="$tmproot/fake-fabrica-root2"
   mkdir -p "$fake_root"
   echo "root fabrica star" > "$fake_root/NORTH_STAR.md"
-  ns_repo_slug() { echo "someone/external"; }    # target is NOT fabrica
-  ns_fabrica_slug() { echo "acme/fabrica"; }     # fabrica is a different slug
-  ns_fabrica_root() { echo "$fake_root"; }
+  ns_fabrica_root() { echo "$fake_root"; }         # fabrica root != the target's toplevel (PATH differs)
   local out kind
   out="$(ns_resolve "$repo")"; kind="${out%% *}"
   assert_eq "(c') non-Fabrica repo with no local star does NOT use root fallback (UNSET)" "UNSET" "$kind"
-  unset -f ns_repo_slug ns_fabrica_slug ns_fabrica_root
+  unset -f ns_fabrica_root
 }
 
 # --- (d) doctor-style cwd/slug mismatch does NOT read the local file --------------
@@ -217,24 +252,25 @@ test_doctor_slug_mismatch() {
 
 # --- (e) non-empty target with neither → UNSET; empty target → EMPTY --------------
 test_unset_and_empty() {
+  # Re-source so the real ns_fabrica_root is present (identity is PATH-based now); stub it to a
+  # non-matching path so these throwaway repos are never mistaken for Fabrica-self.
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  ns_fabrica_root() { echo "$tmproot/not-the-fabrica-root"; }
+
   # Non-empty repo (has a commit), no local star, not Fabrica → UNSET.
   local repo; repo="$(make_repo "target-e")"
-  ns_repo_slug() { echo "someone/target-e"; }
-  ns_fabrica_slug() { echo "acme/fabrica"; }
   local out kind
   out="$(ns_resolve "$repo")"; kind="${out%% *}"
   assert_eq "(e) non-empty target, no star → UNSET (manager-review FAIL / doctor WARN)" "UNSET" "$kind"
-  unset -f ns_repo_slug ns_fabrica_slug
 
   # Empty repo (git init, NO commits), no local star → EMPTY (benign, not UNSET).
   local empty="$tmproot/target-empty"
   mkdir -p "$empty"
   git -C "$empty" init -q
-  ns_repo_slug() { echo "someone/target-empty"; }
-  ns_fabrica_slug() { echo "acme/fabrica"; }
   out="$(ns_resolve "$empty")"; kind="${out%% *}"
   assert_eq "(e) empty (commit-less) target → EMPTY, not UNSET" "EMPTY" "$kind"
-  unset -f ns_repo_slug ns_fabrica_slug
+  unset -f ns_fabrica_root
 
   # A path that is not a git repo at all → NOREPO.
   local nonrepo="$tmproot/not-a-repo"
@@ -479,11 +515,52 @@ test_fabrica_root_errexit_deleted_tree() {
   assert_eq "(k) ns_fabrica_root under set -e from a deleted tree leaks no stderr" "" "$(cat "$err")"
 }
 
+# --- (m) shared shipped-default marker matcher: scoped + whitespace/case-insensitive (FIX A) ---
+# ns_has_shipped_default_marker underpins BOTH the gate's placeholder-FAIL and doctor (h)'s WARN,
+# so the two never disagree. Two bugs the adversarial sweep found, asserted together:
+#   - FALSE-PASS: a byte-exact `grep -F` on `<!-- fabrica-shipped-default -->` lets a spacing/
+#     casing/reflow-split variant of the marker slip through and wrongly AUTHORIZE. The helper
+#     strips whitespace + lowercases the active region, so EVERY variant matches.
+#   - FALSE-FAIL: a whole-file grep trips on the marker's mentions in the template PROSE, wrongly
+#     FAILing a correctly-replaced star. The helper SCOPES to the active-entry region, so a star
+#     whose active heading is clean (marker only in prose) does NOT match.
+test_marker_matcher_variants() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  # Helper: run the matcher on a here-doc'd document via stdin; echo "yes"/"no".
+  _marker() { if printf '%s' "$1" | ns_has_shipped_default_marker -; then echo yes; else echo no; fi; }
+
+  # Un-replaced placeholder variants on the ACTIVE heading → MUST match (FALSE-PASS guard).
+  assert_eq "(m) byte-exact marker on active heading → matches" "yes" \
+    "$(_marker '### Goal · status: **active** · <!-- fabrica-shipped-default --> shipped')"
+  assert_eq "(m) NO-SPACE marker variant → matches" "yes" \
+    "$(_marker '### Goal status: active <!--fabrica-shipped-default-->')"
+  assert_eq "(m) UPPERCASE marker variant → matches" "yes" \
+    "$(_marker '### Goal status: active <!-- FABRICA-SHIPPED-DEFAULT -->')"
+  assert_eq "(m) PADDED marker variant → matches" "yes" \
+    "$(_marker '### Goal status: active <!--    fabrica-shipped-default    -->')"
+  assert_eq "(m) TAB-separated marker variant → matches" "yes" \
+    "$(printf '### Goal status: active\t<!--\tfabrica-shipped-default\t-->' | { if ns_has_shipped_default_marker -; then echo yes; else echo no; fi; })"
+  assert_eq "(m) MULTILINE-SPLIT marker (on the line below the active heading) → matches" "yes" \
+    "$(printf '### Goal status: **active**\n<!-- fabrica-shipped-default -->\nbody\n' | { if ns_has_shipped_default_marker -; then echo yes; else echo no; fi; })"
+
+  # Correctly-replaced star: marker only in PROSE, cleared from the active heading → MUST NOT match.
+  assert_eq "(m) correctly-replaced star (marker only in prose, active heading clean) → no match" "no" \
+    "$(printf 'Intro prose names <!-- fabrica-shipped-default --> as a token.\n\n### Ship v2 · status: **active** — our real goal\nbody\n' | { if ns_has_shipped_default_marker -; then echo yes; else echo no; fi; })"
+  # No active heading at all (e.g. the entry is `achieved`) → MUST NOT match (region is empty).
+  assert_eq "(m) marker on a NON-active (achieved) heading → no match (not the active entry)" "no" \
+    "$(_marker '### Goal status: achieved <!-- fabrica-shipped-default -->')"
+  # The shipped TEMPLATE (a real placeholder) → MUST match; a real file, not a synthetic string.
+  assert_eq "(m) shipped template .fabrica/north-star.md (placeholder) → matches" "yes" \
+    "$(if ns_has_shipped_default_marker "$test_dir/../../templates/.fabrica/north-star.md"; then echo yes; else echo no; fi)"
+}
+
 echo "== north-star resolver tests =="
 test_local_wins
 test_subdir_resolves_toplevel
 test_fabrica_self_fallback
-test_fabrica_self_case_insensitive
+test_slug_spoof_not_fabrica_self
+test_fabrica_self_precedence_over_local
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
@@ -495,6 +572,7 @@ test_offline_fabrica_self_via_path
 test_slug_ignores_cdpath
 test_slug_empty_arg
 test_fabrica_root_errexit_deleted_tree
+test_marker_matcher_variants
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

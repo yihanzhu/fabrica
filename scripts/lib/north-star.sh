@@ -9,16 +9,25 @@
 # target owns its own steering. It is `source`d by the callers (no shebang execution) — the
 # `#!/usr/bin/env bash` line is only so shellcheck picks the right dialect.
 #
-# Resolution order (see issue #97):
-#   1. Target-local:   <target-toplevel>/.fabrica/north-star.md, where target-toplevel is the
+# Resolution order (see issue #97, hardened in #98a):
+#   1. Fabrica-self:   the control-plane root NORTH_STAR.md — used ONLY when the resolved repo
+#      IS the Fabrica control-plane repo itself, decided by a PATH identity check (the target's
+#      git top-level equals THIS lib's own control-plane root), never a slug and never merely
+#      "a file happens to exist." Checked FIRST so a stray/committed `.fabrica/north-star.md`
+#      accidentally sitting in the control-plane checkout cannot shadow Fabrica's own root star.
+#   2. Target-local:   <target-toplevel>/.fabrica/north-star.md, where target-toplevel is the
 #      target repo's GIT TOP-LEVEL (`git -C <dir> rev-parse --show-toplevel`), NOT literal
 #      $PWD — so a run from ANY subdirectory of the target clone resolves the top-level file.
-#   2. Fabrica-self:   the control-plane root NORTH_STAR.md — used ONLY when the resolved repo
-#      is the Fabrica control-plane repo itself (IDENTITY check: the target's repo slug equals
-#      Fabrica's own nameWithOwner), never merely "the file happens to exist."
 #   3. Unset:          neither resolves and the target is NON-EMPTY -> UNSET; the caller
 #      decides how to react (manager-review FAILs; doctor WARNs). Never silently read another
 #      repo's star.
+#
+# SECURITY (#98a): the Fabrica-self identity is PATH-only. An earlier slug-based fallback
+# (target slug == Fabrica's slug -> FABRICA_SELF) rested on the git REMOTE URL, which any clone
+# owner can set — so a hostile target pointing origin at Fabrica's slug would be authorized
+# against Fabrica's root star, bypassing its own star AND the placeholder-FAIL. The remote URL
+# is attacker-settable and thus NOT a trustworthy identity signal; only the path (the target IS
+# the clone that ships this very lib) is trustworthy. The slug fallback is removed.
 #
 # The functions here are pure resolution/derivation — they print a result and never post
 # comments, edit files, or mutate any checkout. Callers own the side effects.
@@ -92,8 +101,12 @@ ns_slug_eq() {
 # ns_fabrica_slug — print Fabrica's OWN control-plane repo slug (the repo that ships THIS
 # resolver), or nothing. Derived from the resolver file's own location (this sourced file
 # lives at <control-plane>/scripts/lib/north-star.sh), following symlinks, so it identifies
-# Fabrica regardless of which target's cwd the caller runs from. Used for the identity check
-# in ns_resolve: fall back to root NORTH_STAR.md ONLY when the target IS Fabrica itself.
+# Fabrica regardless of which target's cwd the caller runs from.
+#
+# NOTE (#98a): this is NO LONGER used for the Fabrica-self IDENTITY decision in ns_resolve —
+# that is now PATH-only, because a slug (from the git remote URL) is attacker-settable and thus
+# untrustworthy for authorization. Retained as a general-purpose derivation helper for callers
+# that legitimately need Fabrica's own slug for a NON-authorization comparison (e.g. diagnostics).
 ns_fabrica_slug() {
   # `|| true` on the inner substitution: ns_fabrica_root ends in `( cd … && pwd -P )`, which
   # exits non-zero if the derived root is unreachable — under `set -e` that would abort the
@@ -146,10 +159,83 @@ ns_dir_is_empty_repo() {
   return 0
 }
 
+# The stable shipped-default marker (an HTML comment) that rides on the ACTIVE heading of a
+# still-unreplaced shipped template. Both the gate (manager-review.sh) and doctor.sh (h) key
+# their placeholder detection off THIS token, via ns_has_shipped_default_marker below, so the
+# two never disagree on what counts as an un-replaced placeholder.
+NS_SHIPPED_DEFAULT_TOKEN='fabrica-shipped-default'
+
+# ns_active_region <file-or-"-"> — print the ACTIVE-entry region of a north-star document read
+# from a file path (or, with `-`, from stdin): the first heading line carrying `status: active`
+# through the lines up to (but not including) the NEXT heading (`#`…) or horizontal rule
+# (`---`/`***`/`___`). Prints nothing when there is no `status: active` heading.
+#
+# Scoping to the active-entry region (not the whole file) is what stops the marker's mentions in
+# the template's explanatory PROSE (and in NORTH_STAR.md's own docs) from tripping the check —
+# those live OUTSIDE any active heading, so a correctly-replaced star (marker cleared from the
+# active heading, still named in prose) is NOT flagged. Including the continuation lines up to
+# the next heading/rule (not just the single heading line) catches a marker that a markdown
+# reflow split onto the line just below the heading.
+ns_active_region() {
+  local src="$1"
+  # awk over the document: once we hit a `status: active` heading line (case-insensitive, the
+  # `active` possibly wrapped in markdown emphasis `*`/`_`), print from there until the next
+  # heading line or horizontal rule. `IGNORECASE=1` is a gawk-ism; be portable by lowercasing in
+  # a match on tolower(). Recognize the active heading the SAME way doctor historically did
+  # (`status:` then optional non-alpha then `active`), so scoping is consistent.
+  awk '
+    {
+      line = $0
+      low = tolower(line)
+    }
+    in_region {
+      # A new heading (line starting with #) or a horizontal rule ends the active region.
+      if (line ~ /^[[:space:]]*#/ || low ~ /^[[:space:]]*(-{3,}|\*{3,}|_{3,})[[:space:]]*$/) {
+        exit
+      }
+      print line
+      next
+    }
+    # Detect the active-entry heading: a `status:` followed (after any non-letters, e.g. `**`)
+    # by `active`. Match on the lowercased line so casing never matters.
+    low ~ /status:[^a-z]*active/ {
+      in_region = 1
+      print line
+      next
+    }
+  ' "$src"
+}
+
+# ns_has_shipped_default_marker <file-or-"-"> — return 0 (true) when the north-star document's
+# ACTIVE-entry region still carries the shipped-default marker, matched WHITESPACE- and
+# CASE-INSENSITIVELY. Return non-zero otherwise (including when there is no active heading).
+#
+# Robust match (both bugs the adversarial sweep found, fixed together):
+#   - SCOPED to the active region (ns_active_region) → the marker's prose/doc mentions elsewhere
+#     do NOT false-trip a correctly-replaced star.
+#   - WHITESPACE/CASE-insensitive → an un-replaced placeholder whose marker is written as
+#     `<!--fabrica-shipped-default-->`, padded, UPPERCASE, tab-separated, or reflow-split across
+#     the heading + next line still MATCHES (a byte-exact `grep -F` on `<!-- … -->` would let all
+#     those variants slip through and wrongly AUTHORIZE). We strip ALL whitespace from the region
+#     and grep the token case-insensitively.
+ns_has_shipped_default_marker() {
+  local src="$1"
+  local region
+  # `|| true`: ns_active_region / the pipe may exit non-zero (e.g. no active heading, or grep's
+  # no-match downstream); guard so a `set -e` caller never aborts here — the emptiness/grep result
+  # is what decides. Strip ALL whitespace (spaces, tabs, and — via the region being one blob —
+  # newlines) so any spacing/line-split variant of the marker collapses to a matchable run.
+  region="$(ns_active_region "$src" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)"
+  case "$region" in
+    *"$NS_SHIPPED_DEFAULT_TOKEN"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ns_resolve <target_dir> — resolve the active north star for the repo containing <target_dir>.
 # Prints ONE result line to stdout; the caller reads the first token:
-#   LOCAL <path>          the target's own <toplevel>/.fabrica/north-star.md (order 1)
-#   FABRICA_SELF <path>   the control-plane root NORTH_STAR.md, target IS Fabrica (order 2)
+#   FABRICA_SELF <path>   the control-plane root NORTH_STAR.md, target IS Fabrica (order 1)
+#   LOCAL <path>          the target's own <toplevel>/.fabrica/north-star.md (order 2)
 #   UNSET                 non-empty target, no star resolved (order 3) — caller decides
 #   EMPTY                 target repo has no commits yet (benign; no star expected)
 #   NOREPO                <target_dir> is not inside a git work tree (caller-specific handling)
@@ -167,29 +253,19 @@ ns_resolve() {
     return 0
   fi
 
-  # Order 1 — target-local .fabrica/north-star.md at the git top-level.
-  local local_star="$toplevel/.fabrica/north-star.md"
-  if [ -f "$local_star" ]; then
-    echo "LOCAL $local_star"
-    return 0
-  fi
-
-  # Order 2 — Fabrica-self fallback: root NORTH_STAR.md, ONLY on an identity match (the target
-  # IS the Fabrica control-plane repo). Not "file exists" — an external target must never inherit
-  # Fabrica's star just because this clone happens to sit alongside it. Two independent identity
-  # signals, either sufficient:
-  #   (a) PATH: the target's git top-level equals Fabrica's own root. gh-free, so Fabrica-self
-  #       still resolves OFFLINE / when gh is unavailable or unauthenticated (both toplevels are
-  #       `pwd -P`-canonical — ns_git_toplevel and ns_fabrica_root — so this is a like-for-like
-  #       compare, immune to symlink/`/var`→`/private/var` skew).
-  #   (b) SLUG: the target's repo slug equals Fabrica's own (case-insensitive via ns_slug_eq).
-  #       Catches a SEPARATE Fabrica clone whose path differs from this shipped copy's root.
+  # Order 1 — Fabrica-self: root NORTH_STAR.md, ONLY on a PATH identity match (the target IS the
+  # Fabrica control-plane repo — i.e. the clone that ships THIS very lib). Checked BEFORE the
+  # target-local file so a stray/committed `.fabrica/north-star.md` accidentally sitting in the
+  # control-plane checkout can NOT shadow Fabrica's own root star (that file would otherwise win
+  # the LOCAL branch and mis-steer Fabrica-self).
   #
-  # The gh-free PATH check (a) is tried FIRST and SHORT-CIRCUITS: resolving the shipped control-
-  # plane checkout is the common case, and it must not block on `gh` (two slug derivations, each a
-  # network/auth round-trip) when a path compare already answers. Only when the path does NOT match
-  # do we derive slugs for the (b) fallback — the SEPARATE-clone case where the target IS Fabrica but
-  # its local path differs from this copy's root. So the offline path stays truly gh-free.
+  # PATH identity only (NO slug): the target's git top-level equals Fabrica's own root (both
+  # `pwd -P`-canonical — ns_git_toplevel and ns_fabrica_root — so this is a like-for-like compare,
+  # immune to symlink/`/var`→`/private/var` skew). This is gh-free, so Fabrica-self still resolves
+  # OFFLINE / when gh is unavailable. The old slug fallback (target slug == Fabrica slug) is
+  # REMOVED: the slug derives from the git REMOTE URL, which any clone owner can set, so it let a
+  # hostile target pointing origin at Fabrica's slug authorize against Fabrica's root star and
+  # bypass the placeholder-FAIL. Only the path (the target IS this shipped copy) is trustworthy.
   local fabrica_root
   # `|| true`: ns_fabrica_root degrades to empty (rc may be non-zero); guard so this `set -e` call
   # site can never abort before the `-n` emptiness check decides.
@@ -202,20 +278,13 @@ ns_resolve() {
       return 0
     fi
   fi
-  # (b) SLUG fallback — only reached when the PATH check did not match. Derive the slugs now (this
-  # is the sole place we may call `gh`), so a plain offline control-plane resolve never gets here.
-  local target_slug fabrica_slug
-  # Both helpers degrade to empty; the `|| true` is defense-in-depth so this `set -e` call site can
-  # never abort before the `-n` emptiness checks decide.
-  target_slug="$(ns_repo_slug "$toplevel" || true)"
-  fabrica_slug="$(ns_fabrica_slug || true)"
-  if [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; then
-    local root_star
-    root_star="$fabrica_root/NORTH_STAR.md"
-    if [ -f "$root_star" ]; then
-      echo "FABRICA_SELF $root_star"
-      return 0
-    fi
+
+  # Order 2 — target-local .fabrica/north-star.md at the git top-level (reached only when the
+  # target is NOT Fabrica-self, so a real external target's own star is what wins here).
+  local local_star="$toplevel/.fabrica/north-star.md"
+  if [ -f "$local_star" ]; then
+    echo "LOCAL $local_star"
+    return 0
   fi
 
   # Order 3 — nothing resolved. An empty target (no commits) is benign; a non-empty one is a

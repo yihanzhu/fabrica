@@ -166,6 +166,46 @@ if ! head_commit="$(git rev-parse HEAD 2>/dev/null)" || [ -z "$head_commit" ]; t
   exit 1
 fi
 
+# NESTED/EMBEDDED-REPO guard (#98a, confused-deputy) — refuse to authorize off a north star that
+# lives in a SEPARATE git repo NESTED inside ANOTHER git work tree. Running the gate from inside
+# an untracked/embedded git repo (with its own committed .fabrica/north-star.md) makes `git
+# rev-parse HEAD` / ns_resolve resolve to the NESTED repo, so the gate would authorize against a
+# star that was never committed to the REAL (outer) target — a confused deputy. The operator must
+# run from the target's OWN top-level clone.
+#
+# Detection: is the PARENT directory of this repo's top-level itself inside a git work tree, AND
+# is that outer work tree a DIFFERENT repository? `--is-inside-work-tree` alone would also flag a
+# legitimate LINKED WORKTREE (git worktrees live under another repo's tree yet ARE the same repo),
+# so we additionally require the two to have DIFFERENT `--git-common-dir`s — a linked worktree
+# SHARES its parent repo's common dir, while a genuinely separate embedded clone has its own. We
+# compare the common dirs canonicalized to absolute paths (`cd … && pwd -P`) so a relative
+# `--git-common-dir` (git prints `.git` / `../.git` depending on cwd) and any `/var`→`/private/var`
+# symlink skew never cause a false compare. `--show-superproject-working-tree` would catch only a
+# registered submodule, not an arbitrary untracked nested clone; this probe catches BOTH. Every
+# git call is guarded (`|| true` / `2>/dev/null`) so the not-nested case never aborts this `set -e`
+# script — the emptiness/inequality checks decide.
+gate_toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$gate_toplevel" ]; then
+  gate_parent="$(dirname "$gate_toplevel")"
+  if [ "$gate_parent" != "$gate_toplevel" ] \
+     && git -C "$gate_parent" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # Canonical absolute common dirs for the inner repo (cwd) and the outer parent's repo. A
+    # linked worktree shares the inner==outer common dir (allowed); a separate embedded clone
+    # differs (the confused-deputy case → FAIL).
+    inner_common="$( cd "$gate_toplevel" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P || true )"
+    outer_common="$( cd "$gate_parent" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P || true )"
+    if [ -n "$inner_common" ] && [ -n "$outer_common" ] && [ "$inner_common" != "$outer_common" ]; then
+      outer_toplevel="$(git -C "$gate_parent" rev-parse --show-toplevel 2>/dev/null || true)"
+      echo "error: this checkout ($gate_toplevel) is a SEPARATE git repo NESTED inside another" >&2
+      echo "       git work tree${outer_toplevel:+ ($outer_toplevel)} — the manager-debate gate refuses to authorize off a" >&2
+      echo "       north star in a nested/embedded checkout (its HEAD/.fabrica/north-star.md is not" >&2
+      echo "       the real target's). Run this from the target's OWN top-level clone, not a" >&2
+      echo "       nested/embedded checkout." >&2
+      exit 1
+    fi
+  fi
+fi
+
 # Resolve the north star FOR THE TARGET, then read its COMMITTED content pinned to the SAME
 # commit ($head_commit) the review operates on — NEVER a free-floating later HEAD re-lookup
 # (debate GAP, #98a). The north star is an autonomy-authorization artifact: an unreviewed
@@ -205,7 +245,15 @@ elif north_star="$(git show "${head_commit}:.fabrica/north-star.md" 2>/dev/null)
   # A LOCAL committed star still carrying the shipped-default placeholder marker is an
   # un-replaced template — NOT a real approved goal — so FAIL before any verdict. (FABRICA_SELF
   # above is exempt; the marker-FAIL is keyed to LOCAL only.)
-  if printf '%s' "$north_star" | grep -qF -- '<!-- fabrica-shipped-default -->'; then
+  #
+  # The check goes through ns_has_shipped_default_marker (shared with doctor.sh (h)), which
+  # SCOPES the match to the ACTIVE-entry region and matches the marker WHITESPACE/CASE-
+  # INSENSITIVELY. Scoping stops the marker's mentions in the template PROSE from wrongly FAILing
+  # a correctly-replaced star (marker cleared from the active heading, still named in prose);
+  # the insensitive match stops an un-replaced placeholder whose marker is spaced/cased/split
+  # differently (`<!--fabrica-shipped-default-->`, UPPERCASE, tab, reflow-split) from wrongly
+  # AUTHORIZING. Feed the committed content over stdin (`-`) so we never touch a working-tree file.
+  if printf '%s' "$north_star" | ns_has_shipped_default_marker -; then
     echo "error: ${repo}'s .fabrica/north-star.md is still the shipped placeholder (carries the" >&2
     echo "       '<!-- fabrica-shipped-default -->' marker) — the manager-debate gate will not" >&2
     echo "       debate against an un-replaced template. Replace it with your own north star," >&2

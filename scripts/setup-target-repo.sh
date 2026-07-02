@@ -135,12 +135,26 @@ if [ -n "$cwd_slug" ] && ns_slug_eq "$cwd_slug" "$repo"; then
   cwd_is_target=1
 fi
 
+# FIX C (#98a) — is the cwd the FABRICA CONTROL-PLANE repo itself? Detected by PATH IDENTITY (the
+# same trustworthy signal ns_resolve uses, NOT a slug): the cwd's git top-level equals THIS lib's
+# own control-plane root (both `pwd -P`-canonical). We must NEVER seed .fabrica/north-star.md into
+# the control plane — Fabrica-self's north star is the root NORTH_STAR.md, and a seeded
+# .fabrica/north-star.md would pollute the control plane AND (pre-precedence-fix) could shadow the
+# root star. `|| true` keeps the derivations from aborting under `set -e`.
+cwd_is_fabrica_self=0
+cwd_toplevel="$(ns_git_toplevel "$PWD" || true)"
+fabrica_root="$(ns_fabrica_root || true)"
+if [ -n "$cwd_toplevel" ] && [ -n "$fabrica_root" ] && [ "$cwd_toplevel" = "$fabrica_root" ]; then
+  cwd_is_fabrica_self=1
+fi
+
 # The target-local north star lives at the cwd's git top-level (only meaningful when the cwd
-# IS the target checkout). Resolve it once here so both --check (drift on a missing file) and
-# the mutating path (seed the file) agree on the same location.
+# IS the target checkout AND it is not Fabrica-self). Resolve it once here so both --check (drift
+# on a missing file) and the mutating path (seed the file) agree on the same location. When the
+# cwd is Fabrica-self we leave ns_target empty so NEITHER path seeds or drift-reports a star there.
 ns_template="$repo_root/templates/.fabrica/north-star.md"
 ns_target=""
-if [ "$cwd_is_target" -eq 1 ]; then
+if [ "$cwd_is_target" -eq 1 ] && [ "$cwd_is_fabrica_self" -ne 1 ]; then
   target_toplevel="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
   if [ -n "$target_toplevel" ]; then
     ns_target="$target_toplevel/.fabrica/north-star.md"
@@ -263,7 +277,14 @@ done
 #
 # Idempotent: NEVER overwrite an existing north star — a target that already set its own goal
 # keeps it.
-if [ "$cwd_is_target" -ne 1 ]; then
+#
+# FIX C (#98a): NEVER seed into the Fabrica control-plane repo itself (path-identity detected up
+# top). Fabrica-self steers by the root NORTH_STAR.md, so a seeded .fabrica/north-star.md would
+# pollute the control plane (and shadow the root star). Skip it explicitly with a note. Checked
+# FIRST so it wins even when the cwd's slug also equals the "$repo" arg (a Fabrica-on-Fabrica run).
+if [ "$cwd_is_fabrica_self" -eq 1 ]; then
+  echo "  north star: skipped — cwd is the Fabrica control-plane repo itself; it steers by the root NORTH_STAR.md, so .fabrica/north-star.md is intentionally NOT seeded here"
+elif [ "$cwd_is_target" -ne 1 ]; then
   echo "  north star: skipped — cwd is not the target checkout (${cwd_slug:-<no repo>} != ${repo}); run from the ${repo} checkout to seed .fabrica/north-star.md"
 elif [ -z "$ns_target" ]; then
   # cwd_is_target but no git top-level resolved (shouldn't normally happen once the slug

@@ -120,9 +120,19 @@ repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 # `.fabrica/north-star.md`, or the control-plane root NORTH_STAR.md on a Fabrica-self run —
 # rather than always reading the control plane's own NORTH_STAR.md. It lives at the fixed,
 # install-location-independent path under this clone.
+#
+# GUARD the source (#98a robustness): doctor is a restore self-check, so the lib may be exactly
+# what's MISSING on a partial restore. An unconditional `. "$ns_lib"` would abort doctor under
+# `set -e` BEFORE check (f) can report the missing restore-critical file and before the summary
+# prints — the opposite of a self-check's job. So we source it only if present, record whether we
+# did, and have check (h) report a missing lib as a `fail:` line (the resolver-backed check can't
+# run without it) while (f) independently flags it in the manifest and the summary still prints.
 ns_lib="$repo_root/scripts/lib/north-star.sh"
-# shellcheck source=scripts/lib/north-star.sh
-. "$ns_lib"
+ns_lib_ok=0
+if [ -f "$ns_lib" ]; then
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$ns_lib" && ns_lib_ok=1
+fi
 
 passed=0
 warned=0
@@ -262,17 +272,32 @@ fi
 # the working-tree copy differs from HEAD, so an operator sees an uncommitted edit that the
 # gate would ignore.
 #
-# Detection is MARKER-BASED, not phrase-based, and SCOPED to the ACTIVE ENTRY. The
-# shipped-default entry carries a stable marker — `<!-- fabrica-shipped-default -->` — meaning
-# "this is Fabrica's own shipped default." doctor greps for that marker on the active-entry
-# heading line (the one carrying `status: active`, where the marker rides), so a north-star
+# Detection is MARKER-BASED, not phrase-based, and SCOPED to the ACTIVE ENTRY, via the SHARED
+# helper ns_has_shipped_default_marker (so doctor and the gate never disagree on what counts as
+# an un-replaced placeholder). The shipped-default entry carries a stable marker —
+# `fabrica-shipped-default` (as an HTML comment) — on the active-entry heading, so a north-star
 # transition never needs a matching edit here (the transition carries the marker onto the new
-# active/shipped-default entry), and an adopter who sets their own star REMOVES the marker and
-# the warning clears. Scoping to the active heading + matching only the HTML-COMMENT form keeps
-# the mechanism clearable: NORTH_STAR.md / the template also NAME the token in prose (and in
-# backticks), so a whole-file bare-token grep would warn forever. We also WARN when there is no
-# `status: active` entry at all (a malformed/active-less file) — an independent readiness gap.
-shipped_default_marker='<!-- fabrica-shipped-default -->'
+# active/shipped-default entry), and an adopter who sets their own star REMOVES the marker and the
+# warning clears. Scoping to the active-entry region keeps the mechanism clearable: NORTH_STAR.md /
+# the template also NAME the token in prose, so a whole-file bare-token grep would warn forever;
+# the helper's whitespace/case-insensitive match also catches a spacing/casing/reflow-split marker
+# variant. We also WARN when there is no `status: active` entry at all (a malformed/active-less
+# file) — an independent readiness gap.
+#
+# (#98a) doctor (h) now diagnoses the SAME COMMITTED source the gate authorizes on — for a LOCAL
+# target, `HEAD:.fabrica/north-star.md`; for a Fabrica-self run, `HEAD:NORTH_STAR.md` — read via
+# `git show`. Previously it read the WORKING-TREE copy, so it could disagree with the gate on a
+# committed-but-worktree-modified/deleted star. The working-tree copy is now only a SUPPLEMENTARY
+# note (does it differ from / is it committed at HEAD?). UNSET/EMPTY/NOREPO still WARN.
+
+# FIX D — if the resolver lib could not be sourced (a partial restore where
+# scripts/lib/north-star.sh is exactly what's missing), (h) cannot run its resolver-backed logic.
+# Report it as a FAIL line here (check (f) independently flags it in the manifest) and skip the
+# rest of (h), so the summary still prints instead of doctor having crashed at the top-of-file
+# source. Guarded so this is the ONLY resolver-dependent code that runs when the lib is absent.
+if [ "$ns_lib_ok" -ne 1 ]; then
+  report 1 "(h) north-star resolver lib missing ($ns_lib) — cannot check the target's north star; restore scripts/lib/north-star.sh (see (f))"
+else
 
 # Resolve the target's north star from the cwd, the same source the gate reads. `|| true` so a
 # non-git / resolver hiccup degrades to an empty result (handled as the no-star case below)
@@ -295,44 +320,65 @@ if [ -n "$target_repo" ]; then
   fi
 fi
 
+# FIX E — drive (h)'s verdict off the COMMITTED star (the same source the gate authorizes on),
+# NOT the resolver's working-tree LOCAL/UNSET result. ns_resolve stats the WORKING-TREE file, so a
+# committed-but-worktree-deleted star reads UNSET there while the gate still authorizes off HEAD —
+# doctor must not disagree. So we check COMMITTED existence directly (git cat-file -e HEAD:<relpath>)
+# and diagnose the committed content when present; the resolver's kind only tells us WHICH source
+# applies (Fabrica-self root NORTH_STAR.md vs. a normal target's .fabrica/north-star.md) and gives
+# us the EMPTY/NOREPO cases. The working-tree copy is a SUPPLEMENTARY head-vs-worktree note only.
+toplevel="$(ns_git_toplevel "$PWD" || true)"
+if [ "$ns_h_kind" = "FABRICA_SELF" ]; then
+  committed_relpath="NORTH_STAR.md"
+else
+  committed_relpath=".fabrica/north-star.md"
+fi
+# Committed existence + content at HEAD (the gate's authoritative source). `|| true` so a
+# not-committed path (git exits non-zero) flows through rather than aborting under `set -e`.
+committed_present=0
+committed_star=""
+if [ -n "$toplevel" ] && git -C "$toplevel" cat-file -e "HEAD:$committed_relpath" 2>/dev/null; then
+  committed_present=1
+  committed_star="$(git -C "$toplevel" show "HEAD:$committed_relpath" 2>/dev/null || true)"
+fi
+
 if [ -n "$target_repo" ] && [ "$ns_h_cwd_is_target" -ne 1 ]; then
   report_warn "(h) north star not checked for $target_repo — the cwd (${ns_h_cwd_slug:-<no repo>}) is not $target_repo's checkout; run doctor from the target's clone to check its .fabrica/north-star.md"
-elif [ "$ns_h_kind" = "LOCAL" ] || [ "$ns_h_kind" = "FABRICA_SELF" ]; then
-  # Isolate the active-entry heading line (first line carrying `status: active`); the marker,
-  # by convention, rides on that heading. `|| true`: grep exits non-zero when the file has no
-  # `status: active` line, which under pipefail would abort — guard so the empty result flows
-  # through to the no-active WARN below.
-  active_entry_line="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$ns_h_path" 2>/dev/null | head -n1 || true)"
-  # Diagnostic-only HEAD-vs-worktree note for a LOCAL target star: the gate reads COMMITTED
-  # state, so surface (advisory) when the on-disk copy doctor just read differs from HEAD.
+elif [ "$committed_present" -eq 1 ]; then
+  # A committed star at HEAD — the gate's authoritative source. Diagnose IT (not the working tree).
+  # Supplementary head-vs-worktree note: surface when the on-disk copy differs from the committed
+  # version (an uncommitted edit the gate would ignore) — advisory only.
   head_note=""
-  if [ "$ns_h_kind" = "LOCAL" ]; then
-    toplevel="$(ns_git_toplevel "$PWD" || true)"
-    if [ -n "$toplevel" ]; then
-      if ! git -C "$toplevel" cat-file -e "HEAD:.fabrica/north-star.md" 2>/dev/null; then
-        head_note=" (note: this star is not committed at HEAD — the gate reads committed state and would treat it as UNSET)"
-      elif ! git -C "$toplevel" diff --quiet HEAD -- .fabrica/north-star.md 2>/dev/null; then
-        head_note=" (note: the working-tree copy differs from HEAD — the gate reads the committed version)"
-      fi
-    fi
+  if [ -n "$toplevel" ] && [ "$committed_relpath" = ".fabrica/north-star.md" ] \
+     && ! git -C "$toplevel" diff --quiet HEAD -- .fabrica/north-star.md 2>/dev/null; then
+    head_note=" (note: the working-tree copy differs from HEAD — the gate reads the committed version)"
   fi
+  # Isolate the active-entry heading from the COMMITTED content (shared region helper), to WARN on
+  # a missing `status: active` entry; the marker check goes through the shared insensitive matcher.
+  active_entry_line="$(printf '%s' "$committed_star" | ns_active_region - | head -n1 || true)"
   if [ -z "$active_entry_line" ]; then
-    report_warn "(h) the target's north star ($ns_h_path) has no 'status: active' entry — set an active north star before enabling proactive mode$head_note"
-  elif printf '%s' "$active_entry_line" | grep -qF -- "$shipped_default_marker"; then
-    report_warn "(h) the target's north star ($ns_h_path) still carries the shipped Fabrica-self default (marker '$shipped_default_marker' present) — replace it with your own direction (and remove the marker) before enabling proactive mode$head_note"
+    report_warn "(h) the target's committed north star ($committed_relpath) has no 'status: active' entry — set an active north star before enabling proactive mode$head_note"
+  elif printf '%s' "$committed_star" | ns_has_shipped_default_marker -; then
+    report_warn "(h) the target's committed north star ($committed_relpath) still carries the shipped Fabrica-self default (marker '$NS_SHIPPED_DEFAULT_TOKEN' on the active entry) — replace it with your own direction (and remove the marker) before enabling proactive mode$head_note"
   else
-    report 0 "(h) the target's north star ($ns_h_path) is set and not the shipped default$head_note"
+    report 0 "(h) the target's committed north star ($committed_relpath) is set and not the shipped default$head_note"
   fi
+elif [ "$ns_h_kind" = "LOCAL" ]; then
+  # A working-tree-only star (resolver saw the on-disk file) that is NOT committed at HEAD: the gate
+  # reads committed state and would treat it as UNSET. WARN (doctor only diagnoses).
+  report_warn "(h) the target's north star (.fabrica/north-star.md) is not committed at HEAD — the gate reads committed state and would treat it as UNSET; commit your north star before enabling proactive mode"
 else
-  # UNSET (non-empty target, no committed/local star), EMPTY (commit-less), or NOREPO (cwd not
-  # a git work tree). None has a north star to check — WARN (not FAIL): the gate FAILs, doctor
-  # only flags the readiness gap.
+  # No committed star and no working-tree star. UNSET (non-empty target), EMPTY (commit-less), or
+  # NOREPO (cwd not a git work tree) — WARN (not FAIL): the gate FAILs, doctor only flags the gap.
   case "$ns_h_kind" in
     UNSET) report_warn "(h) no north star set for the target — .fabrica/north-star.md is absent; set + commit one before enabling proactive mode (manager-review.sh's gate FAILs without it)" ;;
     EMPTY) report_warn "(h) target repo has no commits yet — no north star expected; set + commit .fabrica/north-star.md before enabling proactive mode" ;;
+    FABRICA_SELF) report_warn "(h) the Fabrica control-plane root NORTH_STAR.md is not committed at HEAD — commit it before enabling proactive mode" ;;
     *)     report_warn "(h) could not resolve a north star from the cwd (resolver: ${ns_h_kind:-none}) — run doctor from the target repo's checkout to check its .fabrica/north-star.md" ;;
   esac
 fi
+
+fi  # end ns_lib_ok guard (FIX D)
 
 # (g) optional loop-label check --------------------------------------------------
 # Delegate to setup-target-repo.sh --check, which is read-only and reports per-label
