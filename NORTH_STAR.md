@@ -9,6 +9,18 @@ serves it (see [`reviewer/manager-review.md`](reviewer/manager-review.md)).
 transition: mark the achieved one `achieved` and promote (or add) the next as `active`.
 Keep the log below so the human can see where the team has been.
 
+**Shipped-default marker.** The active entry below carries a stable marker —
+`<!-- fabrica-shipped-default -->` — meaning *"this is Fabrica's own shipped default
+direction, not the adopter's."* `scripts/doctor.sh` check (h) greps for this marker (not
+for any north-star phrase) to warn that the shipped default is still in place, so
+detection never has to be re-hardcoded per transition. Two rules keep it accurate:
+- **Adopters remove this marker** when they set (and approve) their own north star. Once
+  it's gone, doctor stops warning — the active star is genuinely theirs.
+- **On a Fabrica-internal north-star transition, carry the marker onto the new
+  shipped/active default entry** (and strip it from the one being retired). It always sits
+  on exactly the one entry that is Fabrica's own shipped default, so doctor's marker-based
+  detection keeps working without any code edit.
+
 **Approval gates proactive autonomy.** The active north star is the user's authorization for
 *all* proactive work: Faber may consensus-gate and self-apply `ready` to a proactive issue
 **only when the operator has explicitly approved the *active* north star** (Faber knows this
@@ -24,7 +36,7 @@ user's approval of the spec Faber drafts from their one-liner is its own gate.)
 
 ## Current north star
 
-### B — "Pick up any project at any stage"  ·  status: **active** · history: set + approved by the **operator** (2026-06-28). **Adopters:** this is Fabrica's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo. This history line is **not** a token that auto-approves a clone.
+### B — "Pick up any project at any stage"  ·  status: **active** · <!-- fabrica-shipped-default --> history: set + approved by the **operator** (2026-06-28). **Adopters:** this is Fabrica's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo (and remove the `fabrica-shipped-default` marker on this line when you do). This history line is **not** a token that auto-approves a clone.
 
 Fabrica can adopt a project wherever it is and drive it toward the operator's goal — whether
 that project is an empty folder or an existing codebase with history.

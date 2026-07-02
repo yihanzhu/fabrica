@@ -36,22 +36,30 @@ set -euo pipefail
 #   (f) every file in ci/required-files.txt is present on disk (the manifest is
 #       read live — the list is never duplicated here).
 #   (h) NORTH_STAR.md's ACTIVE entry is not still the shipped Fabrica-self default
-#       (WARN). Scoped to the `status: active` designation, so a kept historical log
-#       entry doesn't keep warning once the active star is replaced. Also WARNs if there
-#       is no `status: active` entry at all (a malformed/active-less file).
+#       (WARN). Detected by a stable MARKER (`<!-- fabrica-shipped-default -->`) that sits
+#       on Fabrica's own shipped-default entry, NOT by grepping for a north-star phrase —
+#       so no north-star transition needs a doctor edit (the marker rides along to the new
+#       default; adopters remove it when they set their own star). Detection is SCOPED to
+#       the active-entry heading line (where the marker rides) and matched in its
+#       HTML-comment form, so NORTH_STAR.md's own explanatory mentions of the token don't
+#       keep it warning after an adopter strips the real marker. Also WARNs if there is
+#       no `status: active` entry at all (a malformed/active-less file).
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate).
-#       Detected from the OBSERVED checks on recent PRs (ground truth): check-runs /
-#       commit statuses on a recent PR's HEAD. This covers GitHub Actions AND external
+#       Detected from the OBSERVED checks on RECENTLY-UPDATED PRs (ground truth): check-runs
+#       / commit statuses on a recent PR's HEAD. This covers GitHub Actions AND external
 #       CI (CircleCI/Buildkite/Jenkins) uniformly — anything that posts a check on a PR
 #       head — with no false pass from disabled/inactive workflow files. It is
 #       PR-SPECIFIC: a repo whose CI runs only on pushes to the default branch — never on
 #       PRs — has no gate for merge-pr.sh, so doctor must NOT count default-branch checks.
-#       No checks (or no PRs) → WARN, not FAIL: merge-pr.sh's `gh pr checks` is the real
-#       enforcement, so doctor flags the risk rather than hard-failing a valid
-#       external-CI repo (or one with no PRs yet). Enumerating *active* Actions workflows
-#       via the Actions API is a deferred enhancement (a follow-up issue).
+#       It is also RECENCY-SCOPED: only PRs updated within the last ~90 days count, so a
+#       repo that HAD CI but since removed it (old closed PRs still carry check-runs) no
+#       longer false-passes on those stale historical checks. No checks (or no recent PRs)
+#       → WARN, not FAIL: merge-pr.sh's `gh pr checks` is the real enforcement, so doctor
+#       flags the risk rather than hard-failing a valid external-CI repo (or one with no
+#       recent PRs). Enumerating *active* Actions workflows via the Actions API is a
+#       deferred enhancement (a follow-up issue).
 #   (j) [target-repo path] ADVISORY: whether the target has a filled-in CLAUDE.md
 #       "Stack & commands" override (exists, no `<cmd>` placeholders, AND has the section).
 #       Informational only — the coder auto-discovers install/test/build commands from the
@@ -224,31 +232,57 @@ else
 fi
 
 # (h) NORTH_STAR.md not still the shipped default --------------------------------
-# The shipped NORTH_STAR.md aims at Fabrica's OWN control-plane goal ("Pick up any
-# project at any stage"). If an adopter never replaces it, manager-review.sh debates proposals
-# against the wrong goal. WARN (not FAIL): a stale north star doesn't block restore,
-# but it must be replaced before proactive mode is meaningful for the adopter's repo.
+# The shipped NORTH_STAR.md aims at Fabrica's OWN control-plane goal. If an adopter never
+# replaces it, manager-review.sh debates proposals against the wrong goal. WARN (not
+# FAIL): a stale north star doesn't block restore, but it must be replaced before proactive
+# mode is meaningful for the adopter's repo.
 #
-# Scope this to the ACTIVE entry only, not the whole file. NORTH_STAR.md instructs
-# keeping a historical log ("## North-star log"), so once an adopter promotes their own
-# active star the shipped name legitimately survives in the log — grepping the whole
-# file would keep warning forever. The active north star is designated by a `status:
-# active` marker on its heading line (the `status:` field, distinct from the log's
-# descriptive `*active; ...*` prose), so we isolate THAT line and only warn if it still
-# carries the shipped default name. Replace the active star and the warning clears even
-# if the old name remains logged.
+# Detection is MARKER-BASED, not phrase-based. NORTH_STAR.md's shipped-default entry
+# carries a stable marker — `<!-- fabrica-shipped-default -->` — meaning "this is Fabrica's
+# own shipped default." doctor greps for that marker, so a north-star transition never
+# needs a matching edit here: the transition process carries the marker onto the new
+# active/shipped default entry (documented in NORTH_STAR.md + manager/CLAUDE.md). An
+# adopter who sets their own north star REMOVES the marker, and the warning clears.
+# (Previously this grepped the active entry for the literal shipped phrase, which coupled
+# doctor to every north-star rename — the exact recurring edit this replaces.)
+#
+# Detection is SCOPED to the ACTIVE ENTRY, not the whole file, and matches the marker in
+# its HTML-COMMENT form (`<!-- fabrica-shipped-default -->`) — two safeguards that keep the
+# marker mechanism clearable. NORTH_STAR.md's explanatory text ALSO names the token (the
+# "Shipped-default marker" note, and the active line's own "remove the `fabrica-shipped-default`
+# marker" instruction), so a whole-file grep for the bare token would keep matching that doc
+# text even after an adopter strips the real marker — warning forever, never clearing. So we
+# isolate the active-entry heading line (the one carrying `status: active`, where the marker
+# rides) and test only THAT line, and only for the comment form: the doc note lives elsewhere
+# (out of scope) or references the token in backticks (not the comment form), so neither
+# false-triggers. After an adopter removes the `<!-- ... -->` marker from their active heading,
+# (h) clears even if surrounding prose still mentions the token.
+#
+# We still WARN when there is no `status: active` entry at all (a malformed/active-less
+# file): that's an independent readiness gap regardless of the marker. The marker itself
+# rides on Fabrica's shipped-default entry (currently also the active one), so a kept
+# historical log line does not falsely warn — adopters strip the marker when they promote
+# their own star, per NORTH_STAR.md's "Shipped-default marker" note.
 north_star="$repo_root/NORTH_STAR.md"
+shipped_default_marker='<!-- fabrica-shipped-default -->'
+# Isolate the active-entry heading line (first line carrying `status: active`); the marker,
+# by convention, rides on that heading. Scoping detection here — not the whole file — is what
+# stops the explanatory doc text (which names the token) from warning forever.
+active_entry_line=""
+if [ -f "$north_star" ]; then
+  # `|| true`: grep exits non-zero when the file has no `status: active` line, which under
+  # `set -euo pipefail` (pipefail) would abort the whole script — never reaching the intended
+  # no-active WARN branch below. Guarding it lets the empty result flow through to that branch.
+  active_entry_line="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" | head -n1 || true)"
+fi
 if [ ! -f "$north_star" ]; then
   report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
+elif [ -z "$active_entry_line" ]; then
+  report_warn "(h) NORTH_STAR.md has no 'status: active' entry — set an active north star before enabling proactive mode"
+elif printf '%s' "$active_entry_line" | grep -qF -- "$shipped_default_marker"; then
+  report_warn "(h) NORTH_STAR.md's active entry still carries the shipped Fabrica-self default (marker '$shipped_default_marker' present) — replace it with your own direction (and remove the marker) before enabling proactive mode"
 else
-  active_designation="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" || true)"
-  if [ -z "$active_designation" ]; then
-    report_warn "(h) NORTH_STAR.md has no 'status: active' entry — set an active north star before enabling proactive mode"
-  elif printf '%s\n' "$active_designation" | grep -qF -- 'Pick up any project at any stage'; then
-    report_warn "(h) NORTH_STAR.md's active entry is still the shipped Fabrica-self default ('Pick up any project at any stage') — replace it with your own direction before enabling proactive mode"
-  else
-    report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
-  fi
+  report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
 fi
 
 # (g) optional loop-label check --------------------------------------------------
@@ -290,6 +324,15 @@ fi
 # (each call is `|| true`, defaulting the count to 0); the PR list is buffered into a
 # variable and looped via a here-string (no `… | grep` pipe).
 #
+# It must ALSO be recency-scoped (issue #66): counting check-runs across ALL PRs
+# (`--state all`) false-passes a repo that HAD CI but since removed it — old closed PRs
+# still carry historical check-runs, overstating readiness. So we restrict the signal to
+# PRs updated within a RECENCY WINDOW (90 days — long enough to cover a repo with slow but
+# real PR activity, short enough that CI removed months ago no longer counts) by asking
+# `gh pr list` for each PR's `updatedAt` and skipping any older than the cutoff. Ancient
+# checks from since-removed CI therefore no longer register as "PR CI present." If nothing
+# recent qualifies we fall through to the same WARN (no hard FAIL) as before.
+#
 # DEFERRED ENHANCEMENT (follow-up issue): enumerating the *active* Actions workflows via
 # the Actions API (`repos/<repo>/actions/workflows`, which reports each workflow's
 # state) would let doctor pass a freshly-set-up repo that has a valid PR workflow but no
@@ -297,8 +340,26 @@ fi
 if [ -n "$target_repo" ]; then
   ci_seen=0
 
-  pr_head_shas="$(gh pr list --repo "$target_repo" --state all --limit 5 \
-    --json headRefOid --jq '.[].headRefOid' 2>/dev/null || true)"
+  # Recency window: only PRs updated within the last N days count, so stale check-runs
+  # from since-removed CI (on old closed PRs) don't false-pass. 90 days balances catching
+  # slow-but-real PR activity against not honoring CI that was removed months ago. The
+  # cutoff comparison runs inside jq (fromdateiso8601 vs now - window) to stay portable
+  # across BSD/GNU `date`.
+  #
+  # ORDER BY UPDATED TIME BEFORE LIMITING: `gh pr list` defaults to ordering by CREATION
+  # time, so `--limit 5` alone fetches the 5 newest-CREATED PRs. A long-lived PR updated
+  # within the window (and showing CI) but with >5 newer-created PRs would then never enter
+  # the fetched set, and the recency filter would wrongly report "no recent PR-triggered CI."
+  # We instead ask for PRs ordered most-recently-UPDATED first (`--search "sort:updated-desc"`)
+  # so the `--limit` window is the N most-recently-updated PRs — exactly the ones the recency
+  # filter is meant to see. The 90-day `updatedAt` `select` stays as the correctness backstop
+  # (independent of ordering), and if nothing recent qualifies we still WARN (never hard FAIL).
+  ci_recency_days=90
+  pr_head_shas="$(gh pr list --repo "$target_repo" --state all \
+    --search "sort:updated-desc" --limit 5 \
+    --json headRefOid,updatedAt \
+    --jq "[.[] | select((.updatedAt | fromdateiso8601) > (now - ($ci_recency_days * 86400)))] | .[].headRefOid" \
+    2>/dev/null || true)"
   while IFS= read -r pr_sha; do
     [ -n "$pr_sha" ] || continue
     check_runs="$(gh api "repos/$target_repo/commits/$pr_sha/check-runs" \
@@ -312,9 +373,9 @@ if [ -n "$target_repo" ]; then
   done <<< "$pr_head_shas"
 
   if [ "$ci_seen" -eq 1 ]; then
-    report 0 "(i) PR-triggered CI detected on $target_repo (checks observed on a recent PR)"
+    report 0 "(i) PR-triggered CI detected on $target_repo (checks observed on a PR updated within ${ci_recency_days}d)"
   else
-    report_warn "(i) no PR-triggered CI detected on $target_repo — CI is the hard merge gate; confirm the repo runs checks on PRs (Actions workflow or external CI as required status checks)"
+    report_warn "(i) no recent PR-triggered CI detected on $target_repo — CI is the hard merge gate; confirm the repo runs checks on PRs (within the last ${ci_recency_days}d; Actions workflow or external CI as required status checks)"
   fi
 fi
 
