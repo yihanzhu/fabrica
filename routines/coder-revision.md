@@ -17,7 +17,7 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    follow-up issue Faber opens, not more rounds). This scoped-down change is TERMINAL and is
    still subject to the **step-3 command discovery, the step-3.5 PR-CI-presence gate, and
    step-5 verify-locally-before-push**: run the step-3 discovery and the step-3.5 gate first
-   (escalate `ambiguous-spec` / `needs-human` and stop only if no source yields runnable
+   (escalate with the SHORT reason `ambiguous-spec` / `failure` and add label `needs-human`, and stop only if no source yields runnable
    commands, or if no PR-triggered CI is detectable), make exactly that change, verify
    locally, then
    push the green result (step 5) so the scoped core lands on
@@ -71,7 +71,7 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    exists** (external-CI-with-manifest-commands, or PR CI whose config wasn't
    machine-parseable, still proceeds) — the gate is about **PR-CI presence**, not command
    source. If **no** PR-triggered CI is detectable at all → do NOT push: comment (lead with
-   the SHORT reason `ambiguous-spec`, or a `needs-human`-appropriate reason) — "no
+   the SHORT reason `failure`) — "no
    PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" — add
    label `needs-human`, and stop before editing or pushing. (Push-only CI does not satisfy
    this gate — a PR gets no checks, so `merge-pr.sh` refuses.) **SOLE-PURPOSE ADD-CI
