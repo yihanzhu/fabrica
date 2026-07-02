@@ -192,8 +192,8 @@ if [ -n "$gate_toplevel" ]; then
     # Canonical absolute common dirs for the inner repo (cwd) and the outer parent's repo. A
     # linked worktree shares the inner==outer common dir (allowed); a separate embedded clone
     # differs (the confused-deputy case → FAIL).
-    inner_common="$( cd "$gate_toplevel" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P || true )"
-    outer_common="$( cd "$gate_parent" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P || true )"
+    inner_common="$( cd "$gate_toplevel" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P )" || true
+    outer_common="$( cd "$gate_parent" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P )" || true
     if [ -n "$inner_common" ] && [ -n "$outer_common" ] && [ "$inner_common" != "$outer_common" ]; then
       outer_toplevel="$(git -C "$gate_parent" rev-parse --show-toplevel 2>/dev/null || true)"
       echo "error: this checkout ($gate_toplevel) is a SEPARATE git repo NESTED inside another" >&2

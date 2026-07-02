@@ -180,11 +180,12 @@ test_slug_spoof_not_fabrica_self() {
   echo "fabrica root star" > "$fake_root/NORTH_STAR.md"
   # Attacker sets the target's slug to match Fabrica's own — but the PATH differs. These two slug
   # stubs are deliberately NEVER invoked by ns_resolve: that is the FIX — the resolver no longer
-  # consults ANY slug for identity, so the spoofed slug can't authorize. (SC2329: intentionally
-  # uninvoked; they model the attacker-controlled slug the resolver now ignores.)
-  # shellcheck disable=SC2329
+  # consults ANY slug for identity, so the spoofed slug can't authorize. (Intentionally uninvoked;
+  # they model the attacker-controlled slug the resolver now ignores. shellcheck flags this as
+  # SC2317 on 0.9.0 and SC2329 on 0.11.0 — disable both so either version stays clean.)
+  # shellcheck disable=SC2317,SC2329
   ns_repo_slug()    { echo "yihanzhu/fabrica"; }   # spoofed: same slug as Fabrica (IGNORED now)
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   ns_fabrica_slug() { echo "yihanzhu/fabrica"; }   # Fabrica's own slug (IGNORED now)
   ns_fabrica_root() { echo "$fake_root"; }          # PATH: fabrica root != the target's toplevel
   local out kind
