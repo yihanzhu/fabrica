@@ -593,6 +593,79 @@ test_fabrica_root_case_canonical() {
   fi
 }
 
+# --- (o) ns_committed_is_regular_file resolves the pathspec from the git TOP-LEVEL [FIX 1, round-3] ---
+# <relpath> is ROOT-relative, but pre-fix the helper ran `git -C "$dir" ls-tree "$commit" -- "$relpath"`
+# with dir=$PWD. When the gate is invoked from a SUBDIRECTORY of the target (documented as supported),
+# the ls-tree pathspec was interpreted relative to the subdir → the mode lookup returned EMPTY for a
+# valid regular committed file → the round-2 symlink guard FALSELY reported "not a regular file". The
+# fix resolves <dir> to its git top-level before ls-tree, so the root-relative pathspec is correct
+# from ANY subdir. We assert: a regular committed star is recognized (rc 0) from BOTH the top-level
+# AND a nested subdir; and a committed SYMLINK is still rejected (rc non-zero) from a subdir too.
+test_committed_regular_file_from_subdir() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local repo; repo="$(make_repo "committed-regfile-subdir")"
+  mkdir -p "$repo/.fabrica"
+  printf '### Ship v2 · status: **active** — real goal\nbody\n' > "$repo/.fabrica/north-star.md"
+  git -C "$repo" add .fabrica/north-star.md
+  git -C "$repo" commit -q -m "commit regular star"
+  local sub="$repo/deeply/nested/dir"
+  mkdir -p "$sub"
+
+  # (o-i) From the TOP-LEVEL: a regular committed file is recognized (rc 0) — baseline.
+  local rc; if ns_committed_is_regular_file "$repo" "HEAD" ".fabrica/north-star.md"; then rc=0; else rc=1; fi
+  assert_eq "(o) regular committed star from the TOP-LEVEL → regular file (rc 0)" "0" "$rc"
+
+  # (o-ii) From a SUBDIRECTORY: the root-relative pathspec must still resolve (the FIX) — rc 0.
+  if ns_committed_is_regular_file "$sub" "HEAD" ".fabrica/north-star.md"; then rc=0; else rc=1; fi
+  assert_eq "(o) regular committed star from a SUBDIR → regular file (rc 0), not falsely rejected" "0" "$rc"
+
+  # (o-iii) A committed SYMLINK is still rejected (rc non-zero) even when checked from a SUBDIR.
+  local symrepo; symrepo="$(make_repo "committed-symlink-subdir")"
+  mkdir -p "$symrepo/.fabrica"
+  printf '### decoy · status: **active** — content\nbody\n' > "$symrepo/.fabrica/decoy.md"
+  ( cd "$symrepo/.fabrica" && ln -s "decoy.md" "north-star.md" )
+  git -C "$symrepo" add -A
+  git -C "$symrepo" commit -q -m "commit symlink star"
+  local symsub="$symrepo/nested/here"
+  mkdir -p "$symsub"
+  if ns_committed_is_regular_file "$symsub" "HEAD" ".fabrica/north-star.md"; then rc=0; else rc=1; fi
+  assert_eq "(o) committed SYMLINK from a SUBDIR → still rejected (rc non-zero)" "1" "$rc"
+}
+
+# --- (p) ns_active_region starts ONLY on a HEADING line carrying the active marker [FIX 2, round-3] ---
+# Pre-fix, the region opened on ANY line containing `status: active`. A north-star file with PROSE or
+# front-matter mentioning `status: active` BEFORE the real active heading would start the region there
+# and END it at the next heading — so the shipped-default marker on the ACTUAL placeholder heading fell
+# OUTSIDE the region and was never scanned → placeholder bypass (gate proceeds against a template). The
+# fix anchors the region-start to a Markdown HEADING line (`^#{1,6}[[:space:]]`) that ALSO carries the
+# marker. We assert: a prose `status: active` mention before the real (marked) active heading is STILL
+# detected as a placeholder; and a normal single-heading active entry still works both ways.
+test_active_region_heading_anchored() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local _m
+  _m() { if printf '%s' "$1" | ns_has_shipped_default_marker -; then echo yes; else echo no; fi; }
+
+  # (p-i) Prose line mentioning `status: active` BEFORE the real active heading that carries the
+  # marker → still a placeholder (the marker on the true active heading is scanned, not skipped).
+  assert_eq "(p) prose 'status: active' before the marked active HEADING → still placeholder (match)" "yes" \
+    "$(printf 'Front-matter: default status: active until you set one.\n\n### Placeholder · status: **active** · <!-- fabrica-shipped-default --> shipped default\nbody\n' | { if ns_has_shipped_default_marker -; then echo yes; else echo no; fi; })"
+
+  # (p-ii) The active region STARTS on the heading, not the prose line: the first region line is the
+  # HEADING (proving the prose `status: active` did not open the region early).
+  local first; first="$(printf 'Front-matter: default status: active until you set one.\n\n### Placeholder · status: **active** · <!-- fabrica-shipped-default --> shipped\nbody\n' | ns_active_region - | head -n1)"
+  assert_eq "(p) active region starts on the HEADING, not the earlier prose 'status: active' line" \
+    "### Placeholder · status: **active** · <!-- fabrica-shipped-default --> shipped" "$first"
+
+  # (p-iii) A normal single-heading active entry (no marker) is NOT a placeholder — still works.
+  assert_eq "(p) normal single-heading active entry (no marker) → not a placeholder (no match)" "no" \
+    "$(_m '### Ship v2 by Q3 · status: **active** — our real approved goal')"
+  # (p-iv) …and the same heading WITH the marker IS a placeholder — the anchored start still catches it.
+  assert_eq "(p) single-heading active entry WITH the marker → placeholder (match)" "yes" \
+    "$(_m '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> shipped')"
+}
+
 # --- (m) shared shipped-default marker matcher: scoped + whitespace/case-insensitive (FIX A) ---
 # ns_has_shipped_default_marker underpins BOTH the gate's placeholder-FAIL and doctor (h)'s WARN,
 # so the two never disagree. Two bugs the adversarial sweep found, asserted together:
@@ -664,6 +737,8 @@ test_slug_ignores_cdpath
 test_slug_empty_arg
 test_fabrica_root_errexit_deleted_tree
 test_fabrica_root_case_canonical
+test_committed_regular_file_from_subdir
+test_active_region_heading_anchored
 test_marker_matcher_variants
 
 echo "-- $passed passed, $failed failed --"

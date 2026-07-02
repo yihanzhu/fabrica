@@ -196,10 +196,25 @@ ns_dir_is_empty_repo() {
 # check and FAIL a symlink north star ("must be a regular file, not a symlink"). `git ls-tree` prints
 # `<mode> <type> <oid>\t<path>`; we read the first field. `2>/dev/null` + explicit rc keep it
 # degrade-to-non-zero under a `set -e` caller (an absent path prints nothing → non-zero).
+#
+# TOP-LEVEL pathspec resolution (round-3 FIX 1): <relpath> is ROOT-relative (`.fabrica/north-star.md`
+# / `NORTH_STAR.md`), but `git -C "$dir" ls-tree "$commit" -- "$relpath"` interprets the pathspec
+# relative to `-C "$dir"`. When a caller passes `$PWD` and the gate is invoked from a SUBDIRECTORY of
+# the target (documented as supported — the companion `git show <commit>:<relpath>` reads root
+# relative regardless of cwd), the ls-tree pathspec then points at `<subdir>/<relpath>` → the mode
+# lookup returns EMPTY for a valid regular committed file → this helper falsely reports "not a regular
+# file" and the round-2 symlink guard wrongly REJECTS the run. So resolve <dir> to its git TOP-LEVEL
+# first and run ls-tree there, making the root-relative pathspec correct from ANY subdirectory. `||
+# true` on the rev-parse keeps this degrade-to-non-zero under a `set -e` caller when <dir> is not a
+# work tree; an empty top (not a work tree) short-circuits to rc 1 (we must NOT `git -C "" ls-tree`,
+# which git treats as a no-op that stays in the CURRENT dir — possibly a DIFFERENT repo).
 ns_committed_is_regular_file() {
   local dir="$1" commit="$2" relpath="$3"
+  local top
+  top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$top" ] || return 1
   local mode
-  mode="$(git -C "$dir" ls-tree "$commit" -- "$relpath" 2>/dev/null | awk '{print $1; exit}')"
+  mode="$(git -C "$top" ls-tree "$commit" -- "$relpath" 2>/dev/null | awk '{print $1; exit}')"
   case "$mode" in
     100644|100755) return 0 ;;
     *) return 1 ;;
@@ -213,7 +228,7 @@ ns_committed_is_regular_file() {
 NS_SHIPPED_DEFAULT_TOKEN='fabrica-shipped-default'
 
 # ns_active_region <file-or-"-"> — print the ACTIVE-entry region of a north-star document read
-# from a file path (or, with `-`, from stdin): the first heading line carrying `status: active`
+# from a file path (or, with `-`, from stdin): the first HEADING line carrying `status: active`
 # through the lines up to (but not including) the NEXT heading (`#`…) or horizontal rule
 # (`---`/`***`/`___`). Prints nothing when there is no `status: active` heading.
 #
@@ -223,13 +238,26 @@ NS_SHIPPED_DEFAULT_TOKEN='fabrica-shipped-default'
 # active heading, still named in prose) is NOT flagged. Including the continuation lines up to
 # the next heading/rule (not just the single heading line) catches a marker that a markdown
 # reflow split onto the line just below the heading.
+#
+# HEADING-ANCHORED start (round-3 FIX 2): the region must START on a Markdown HEADING line
+# (`^#{1,6}[[:space:]]`) that ALSO carries the `status: … active` marker — NOT any line mentioning
+# `status: active`. If a north-star file has PROSE or front-matter that mentions `status: active`
+# BEFORE the real active heading, a start-on-any-line scan would open the region on that prose line
+# and END it at the very next heading — so the shipped-default marker on the ACTUAL (placeholder)
+# active heading would fall OUTSIDE the scanned region and never be seen → the gate would proceed
+# against an unreplaced template (placeholder bypass). Anchoring the start to a heading line makes
+# the region begin on the real active-entry heading. The shipped `NORTH_STAR.md` /
+# `.fabrica/north-star.md` active entries ARE headings (e.g. `### B — "…" · status: **active** · …`),
+# so this matches the real format.
 ns_active_region() {
   local src="$1"
-  # awk over the document: once we hit a `status: active` heading line (case-insensitive, the
+  # awk over the document: once we hit a `status: active` HEADING line (case-insensitive, the
   # `active` possibly wrapped in markdown emphasis `*`/`_`), print from there until the next
   # heading line or horizontal rule. `IGNORECASE=1` is a gawk-ism; be portable by lowercasing in
   # a match on tolower(). Recognize the active heading the SAME way doctor historically did
-  # (`status:` then optional non-alpha then `active`), so scoping is consistent.
+  # (`status:` then optional non-alpha then `active`), so scoping is consistent — but ONLY on a
+  # heading line, so a prose/front-matter mention of `status: active` before the real heading
+  # cannot open the region early and hide the marker on the actual placeholder heading.
   awk '
     {
       line = $0
@@ -243,9 +271,12 @@ ns_active_region() {
       print line
       next
     }
-    # Detect the active-entry heading: a `status:` followed (after any non-letters, e.g. `**`)
-    # by `active`. Match on the lowercased line so casing never matters.
-    low ~ /status:[^a-z]*active/ {
+    # Detect the active-entry HEADING: a Markdown heading line (`#`…`###### ` with a following
+    # space) whose text has a `status:` followed (after any non-letters, e.g. `**`) by `active`.
+    # Both conditions are tested on the lowercased line so casing never matters. Requiring the
+    # heading form is the FIX — a bare prose line mentioning `status: active` no longer starts the
+    # region, so the marker on the true active heading is always scanned.
+    low ~ /^[[:space:]]*#{1,6}[[:space:]]/ && low ~ /status:[^a-z]*active/ {
       in_region = 1
       print line
       next

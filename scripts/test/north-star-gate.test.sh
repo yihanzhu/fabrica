@@ -302,7 +302,9 @@ test_local_committed_debates() {
 # → FAIL before any verdict, with an actionable "replace + commit + approve" message.
 test_local_marker_fails() {
   local repo; repo="$(make_target "local-marker")"
-  commit_star "$repo" "Placeholder status: active <!-- fabrica-shipped-default --> replace me"
+  # The marker rides on the active HEADING (as in the shipped template), so the heading-anchored
+  # active-region scan (round-3 FIX 2) opens on it and the placeholder is detected.
+  commit_star "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(3b) LOCAL committed star with shipped-default marker → gate FAILs" "1" "$rc"
@@ -464,6 +466,82 @@ test_gate_fabrica_self_symlink_fails() {
 }
 
 # ---------------------------------------------------------------------------------
+# (8) FIX 1 (round-3) — the gate authorizes correctly when run from a SUBDIRECTORY of the target.
+# The round-2 symlink guard calls ns_committed_is_regular_file "$PWD" ... with a ROOT-relative
+# relpath; pre-fix, from a subdir the `git ls-tree` pathspec was interpreted relative to the subdir
+# → the mode lookup returned EMPTY for a valid regular committed star → the guard FALSELY rejected
+# the run. The fix resolves the top-level before ls-tree. Assert: a subdir run with a regular
+# committed star PROCEEDs (not rejected as a symlink); and a committed SYMLINK is STILL rejected
+# from a subdir.
+# ---------------------------------------------------------------------------------
+
+# run_gate_from <dir> — like run_gate but runs the REAL manager-review.sh from an arbitrary <dir>
+# (typically a subdirectory of the target), so we exercise the subdir-invocation code path.
+run_gate_from() {
+  local dir="$1" rc out
+  out="$(
+    cd "$dir"
+    PATH="$fakebin:$PATH" bash "$manager_review" 1 2>&1
+  )" && rc=0 || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+# (8a) A regular committed star, gate run from a nested SUBDIRECTORY of the target → PROCEEDs (the
+# symlink guard's mode lookup resolves the root-relative pathspec from the top-level, not the subdir).
+test_gate_subdir_regular_star_proceeds() {
+  local repo; repo="$(make_target "subdir-regular")"
+  commit_star "$repo" "### Ship v2 by Q3 · status: **active** — our real committed goal"
+  local sub="$repo/deeply/nested/dir"
+  mkdir -p "$sub"
+  local res rc out
+  res="$(run_gate_from "$sub")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(8a) gate from a SUBDIR with a regular committed star → PROCEEDs (not falsely symlink-rejected)" "0" "$rc"
+  assert_contains "(8a) subdir gate reached the verdict" "PROCEED" "$out"
+}
+
+# (8b) A committed SYMLINK north star, gate run from a SUBDIR → STILL FAILs with the symlink message
+# (the top-level pathspec resolution correctly finds the symlink mode from the subdir too).
+test_gate_subdir_symlink_still_fails() {
+  local repo; repo="$(make_target "subdir-symlink")"
+  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  local sub="$repo/deeply/nested/dir"
+  mkdir -p "$sub"
+  local res rc out
+  res="$(run_gate_from "$sub")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(8b) committed SYMLINK star, gate from a SUBDIR → STILL FAILs" "1" "$rc"
+  assert_contains "(8b) subdir symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (9) FIX 2 (round-3) — the active-region scan STARTS on a HEADING line. A committed star with a
+# PROSE/front-matter line mentioning `status: active` BEFORE the real active heading (which carries
+# the shipped-default marker) must STILL be detected as a placeholder → gate FAILs (no placeholder
+# bypass). And a normal single-heading active entry still PROCEEDs.
+# ---------------------------------------------------------------------------------
+
+# (9a) Prose `status: active` before the real marked active heading → gate STILL FAILs (placeholder
+# is not bypassed by an early prose region-start).
+test_gate_prose_active_before_heading_still_fails() {
+  local repo; repo="$(make_target "prose-before-heading")"
+  printf 'Front-matter: shipped default status: active until you set your own.\n\n### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
+    | commit_star_raw "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(9a) prose 'status: active' before the marked active HEADING → gate STILL FAILs (no bypass)" "1" "$rc"
+  assert_contains "(9a) FAIL still cites the shipped placeholder" "shipped placeholder" "$out"
+}
+
+# (9b) A normal single-heading active entry (no prose decoy, no marker) still PROCEEDs.
+test_gate_single_heading_active_proceeds() {
+  local repo; repo="$(make_target "single-heading-active")"
+  commit_star "$repo" "### Ship widget v2 by Q3 · status: **active** — our real approved goal"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(9b) normal single-heading active entry → gate PROCEEDs" "0" "$rc"
+  assert_contains "(9b) single-heading gate reached the verdict" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
 # (4) doctor.sh check (h) — consistent with the gate, but WARN (not FAIL) since doctor only
 # diagnoses. UNSET → WARN; a LOCAL committed real star → pass.
 # ---------------------------------------------------------------------------------
@@ -497,7 +575,9 @@ test_doctor_local_committed_passes() {
 
 test_doctor_local_marker_warns() {
   local repo; repo="$(make_target "doctor-marker")"
-  commit_star "$repo" "Placeholder status: active <!-- fabrica-shipped-default --> replace me"
+  # Marker on the active HEADING (shipped-template shape) so the heading-anchored region scan
+  # (round-3 FIX 2) opens on it and doctor (h) WARNs on the still-shipped-default placeholder.
+  commit_star "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4c) doctor (h) on a still-shipped-default LOCAL star WARNs" "warn:" "$line"
   assert_contains "(4c) doctor (h) shipped-default WARN cites the marker" "fabrica-shipped-default" "$line"
@@ -706,6 +786,10 @@ test_gate_nested_repo_fails
 test_gate_linked_worktree_ok
 test_gate_local_symlink_fails
 test_gate_fabrica_self_symlink_fails
+test_gate_subdir_regular_star_proceeds
+test_gate_subdir_symlink_still_fails
+test_gate_prose_active_before_heading_still_fails
+test_gate_single_heading_active_proceeds
 test_doctor_unset_warns
 test_doctor_local_committed_passes
 test_doctor_local_marker_warns
