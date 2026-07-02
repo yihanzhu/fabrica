@@ -39,7 +39,10 @@ set -euo pipefail
 #       (WARN). Detected by a stable MARKER (`<!-- fabrica-shipped-default -->`) that sits
 #       on Fabrica's own shipped-default entry, NOT by grepping for a north-star phrase —
 #       so no north-star transition needs a doctor edit (the marker rides along to the new
-#       default; adopters remove it when they set their own star). Also WARNs if there is
+#       default; adopters remove it when they set their own star). Detection is SCOPED to
+#       the active-entry heading line (where the marker rides) and matched in its
+#       HTML-comment form, so NORTH_STAR.md's own explanatory mentions of the token don't
+#       keep it warning after an adopter strips the real marker. Also WARNs if there is
 #       no `status: active` entry at all (a malformed/active-less file).
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
@@ -243,19 +246,38 @@ fi
 # (Previously this grepped the active entry for the literal shipped phrase, which coupled
 # doctor to every north-star rename — the exact recurring edit this replaces.)
 #
+# Detection is SCOPED to the ACTIVE ENTRY, not the whole file, and matches the marker in
+# its HTML-COMMENT form (`<!-- fabrica-shipped-default -->`) — two safeguards that keep the
+# marker mechanism clearable. NORTH_STAR.md's explanatory text ALSO names the token (the
+# "Shipped-default marker" note, and the active line's own "remove the `fabrica-shipped-default`
+# marker" instruction), so a whole-file grep for the bare token would keep matching that doc
+# text even after an adopter strips the real marker — warning forever, never clearing. So we
+# isolate the active-entry heading line (the one carrying `status: active`, where the marker
+# rides) and test only THAT line, and only for the comment form: the doc note lives elsewhere
+# (out of scope) or references the token in backticks (not the comment form), so neither
+# false-triggers. After an adopter removes the `<!-- ... -->` marker from their active heading,
+# (h) clears even if surrounding prose still mentions the token.
+#
 # We still WARN when there is no `status: active` entry at all (a malformed/active-less
 # file): that's an independent readiness gap regardless of the marker. The marker itself
 # rides on Fabrica's shipped-default entry (currently also the active one), so a kept
 # historical log line does not falsely warn — adopters strip the marker when they promote
 # their own star, per NORTH_STAR.md's "Shipped-default marker" note.
 north_star="$repo_root/NORTH_STAR.md"
-shipped_default_marker='fabrica-shipped-default'
+shipped_default_marker='<!-- fabrica-shipped-default -->'
+# Isolate the active-entry heading line (first line carrying `status: active`); the marker,
+# by convention, rides on that heading. Scoping detection here — not the whole file — is what
+# stops the explanatory doc text (which names the token) from warning forever.
+active_entry_line=""
+if [ -f "$north_star" ]; then
+  active_entry_line="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" | head -n1)"
+fi
 if [ ! -f "$north_star" ]; then
   report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
-elif ! grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" >/dev/null; then
+elif [ -z "$active_entry_line" ]; then
   report_warn "(h) NORTH_STAR.md has no 'status: active' entry — set an active north star before enabling proactive mode"
-elif grep -qF -- "$shipped_default_marker" "$north_star"; then
-  report_warn "(h) NORTH_STAR.md still carries the shipped Fabrica-self default (marker '$shipped_default_marker' present) — replace it with your own direction (and remove the marker) before enabling proactive mode"
+elif printf '%s' "$active_entry_line" | grep -qF -- "$shipped_default_marker"; then
+  report_warn "(h) NORTH_STAR.md's active entry still carries the shipped Fabrica-self default (marker '$shipped_default_marker' present) — replace it with your own direction (and remove the marker) before enabling proactive mode"
 else
   report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
 fi
