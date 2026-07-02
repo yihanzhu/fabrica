@@ -137,10 +137,15 @@ fi
 
 # FIX C (#98a) — is the cwd the FABRICA CONTROL-PLANE repo itself? Detected by PATH IDENTITY (the
 # same trustworthy signal ns_resolve uses, NOT a slug): the cwd's git top-level equals THIS lib's
-# own control-plane root (both `pwd -P`-canonical). We must NEVER seed .fabrica/north-star.md into
-# the control plane — Fabrica-self's north star is the root NORTH_STAR.md, and a seeded
-# .fabrica/north-star.md would pollute the control plane AND (pre-precedence-fix) could shadow the
-# root star. `|| true` keeps the derivations from aborting under `set -e`.
+# own control-plane root. BOTH operands are GIT-CANONICAL — ns_git_toplevel is `git rev-parse
+# --show-toplevel`, and ns_fabrica_root canonicalizes its physical root through git too (round-2
+# regression fix) — so the compare is immune to case-only differences on a case-insensitive
+# filesystem (a `pwd -P` fabrica_root would preserve the caller's casing and falsely differ from
+# git's stored casing → setup would then pollute the control plane by seeding .fabrica/north-star.md
+# into it). We must NEVER seed .fabrica/north-star.md into the control plane — Fabrica-self's north
+# star is the root NORTH_STAR.md, and a seeded .fabrica/north-star.md would pollute the control
+# plane AND (pre-precedence-fix) could shadow the root star. `|| true` keeps the derivations from
+# aborting under `set -e`.
 cwd_is_fabrica_self=0
 cwd_toplevel="$(ns_git_toplevel "$PWD" || true)"
 fabrica_root="$(ns_fabrica_root || true)"

@@ -158,6 +158,20 @@ commit_star_raw() {
   git -C "$repo" commit -q -m "set north star"
 }
 
+# commit_symlink_star <repo> <relpath> — commit <relpath> as a SYMLINK pointing at a sibling
+# regular file (the symlink attack: `git show <commit>:<relpath>` then returns the link's
+# target-path string, not content). The link target file has REAL non-placeholder content, so a
+# gate that followed the symlink would wrongly PROCEED — the FIX 4 guard must FAIL on the symlink
+# mode (120000) before ever reading it.
+commit_symlink_star() {
+  local repo="$1" relpath="$2"
+  mkdir -p "$repo/$(dirname "$relpath")"
+  printf '### Real goal · status: **active** — content the symlink points at\nbody\n' > "$repo/decoy-target.md"
+  ( cd "$repo" && ln -s "decoy-target.md" "$relpath" )
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "commit symlink north star"
+}
+
 # ---------------------------------------------------------------------------------
 # (1) SOURCE IDENTITY — approval source == gate source. Operator approval is not
 # machine-readable, so we pin the SOURCE identity: manager-review.sh's gate, the persona, and
@@ -237,6 +251,37 @@ test_committed_authorizes_even_if_worktree_modified() {
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(2b') committed star authorizes even with the worktree copy MODIFIED to a placeholder" "0" "$rc"
   assert_contains "(2b') gate read the committed (clean) star and proceeded" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (2c) FIX 1 (round-2) — FABRICA_SELF authorizes off the COMMITTED root NORTH_STAR.md even when
+# the working-tree copy is DELETED. We build a throwaway control-plane clone that CONTAINS a copy
+# of the resolver lib + manager-review.sh, init it as git, COMMIT a root NORTH_STAR.md, then delete
+# the worktree copy. ns_fabrica_root derives from the lib's own location, so run FROM this clone
+# and its git top-level == ns_fabrica_root → the resolver reports FABRICA_SELF off committed state
+# and the gate reads `git show HEAD:NORTH_STAR.md` — proceeding despite the deleted worktree copy.
+# The gate's FABRICA_SELF branch is EXEMPT from the placeholder-FAIL, so a marker in the committed
+# root star does not block it (Fabrica's own root star legitimately carries the shipped-default
+# marker). This is the self analogue of (2b) and directly exercises the resolver/gate agreement.
+# ---------------------------------------------------------------------------------
+test_fabrica_self_committed_worktree_deleted_proceeds() {
+  local cp_root="$tmproot/gate-fabrica-self-committed-del"
+  mkdir -p "$cp_root/scripts/lib"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
+  git -C "$cp_root" init -q
+  # Commit a root NORTH_STAR.md, then delete the worktree copy: the gate must read HEAD.
+  printf '### Fabrica goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
+  git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/manager-review.sh
+  git -C "$cp_root" commit -q -m "cp init with committed root star"
+  rm -f "$cp_root/NORTH_STAR.md"   # worktree copy gone; HEAD still has it
+  local rc out
+  out="$(
+    cd "$cp_root"
+    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
+  )" && rc=0 || rc=$?
+  assert_eq "(2c) FABRICA_SELF authorizes off COMMITTED root star with the worktree copy DELETED (gate proceeds)" "0" "$rc"
+  assert_contains "(2c) Fabrica-self gate reached the verdict" "PROCEED" "$out"
 }
 
 # ---------------------------------------------------------------------------------
@@ -322,6 +367,21 @@ test_gate_correctly_replaced_proceeds() {
   assert_contains "(3d-ii) gate reached the verdict" "PROCEED" "$out"
 }
 
+# (3d-iii) FIX 2 (round-2) — a DELIMITER-FREE prose mention of the token WITHIN THE ACTIVE REGION
+# (the operator removed the real `<!-- … -->` comment but the active heading/body still SAYS
+# "fabrica-shipped-default" in prose) must PROCEED. Round-1's bare-token-anywhere match wrongly
+# FAILed this valid star; the comment-form match requires the `<!-- … -->` delimiters, so a
+# delimiter-free prose token in the active region does NOT trip the placeholder-FAIL.
+test_gate_prose_token_in_active_region_proceeds() {
+  local repo; repo="$(make_target "marker-prose-in-active")"
+  printf '### Ship widget v2 by Q3 · status: **active** — our real goal; we removed the fabrica-shipped-default marker from this line.\nbody\n' \
+    | commit_star_raw "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(3d-iii) bare-token PROSE in the ACTIVE region (no <!-- -->) → gate PROCEEDs (FIX 2)" "0" "$rc"
+  assert_contains "(3d-iii) gate reached the verdict" "PROCEED" "$out"
+}
+
 # ---------------------------------------------------------------------------------
 # (6) FIX F — the gate refuses to authorize off a north star in a SEPARATE git repo NESTED inside
 # ANOTHER git work tree (confused deputy). A linked worktree (same repo) is NOT rejected.
@@ -359,6 +419,48 @@ test_gate_linked_worktree_ok() {
   assert_eq "(6b) linked worktree (same repo) is NOT treated as nested → gate PROCEEDs" "0" "$rc"
   assert_contains "(6b) linked-worktree run reached the verdict" "PROCEED" "$out"
   git -C "$repo" worktree remove --force "$wt" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------------
+# (7) FIX 4 (round-2) — the gate REJECTS a committed SYMLINK north star (git mode 120000) BEFORE
+# the marker check, in BOTH the LOCAL and the FABRICA_SELF branches. A committed symlink makes
+# `git show <commit>:<path>` return the link's target-path string, not content, so it would bypass
+# the marker check and let the gate authorize off a meaningless string (and diverge from the file
+# Codex reviews). The decoy target the link points at has REAL non-placeholder content, so a
+# symlink-following gate would wrongly PROCEED — the guard must FAIL with the symlink message.
+# ---------------------------------------------------------------------------------
+
+# (7a) LOCAL committed symlink .fabrica/north-star.md → gate FAILs with the symlink message.
+test_gate_local_symlink_fails() {
+  local repo; repo="$(make_target "local-symlink")"
+  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(7a) LOCAL committed symlink north star → gate FAILs" "1" "$rc"
+  assert_contains "(7a) LOCAL symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
+}
+
+# (7b) FABRICA_SELF committed symlink NORTH_STAR.md → gate FAILs with the symlink message. Built
+# like (2c): a throwaway control-plane clone that ships the lib + manager-review.sh, so
+# ns_fabrica_root == the cwd's top-level → the gate takes the FABRICA_SELF branch.
+test_gate_fabrica_self_symlink_fails() {
+  local cp_root="$tmproot/gate-fabrica-self-symlink"
+  mkdir -p "$cp_root/scripts/lib"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
+  git -C "$cp_root" init -q
+  # Commit NORTH_STAR.md as a SYMLINK to a decoy real file.
+  printf '### Real fabrica goal · status: **active** — decoy content\nbody\n' > "$cp_root/decoy-root.md"
+  ( cd "$cp_root" && ln -s "decoy-root.md" "NORTH_STAR.md" )
+  git -C "$cp_root" add -A
+  git -C "$cp_root" commit -q -m "cp init with SYMLINK root star"
+  local rc out
+  out="$(
+    cd "$cp_root"
+    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
+  )" && rc=0 || rc=$?
+  assert_eq "(7b) FABRICA_SELF committed symlink NORTH_STAR.md → gate FAILs" "1" "$rc"
+  assert_contains "(7b) FABRICA_SELF symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
 }
 
 # ---------------------------------------------------------------------------------
@@ -421,6 +523,17 @@ test_doctor_h_committed_worktree_modified() {
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4d') doctor (h) reads the COMMITTED (clean) star despite a dirty placeholder worktree edit → pass" "pass:" "$line"
   assert_contains "(4d') doctor (h) notes the working-tree copy differs from HEAD" "differs from HEAD" "$line"
+}
+
+# (4f) FIX 4 (round-2) — doctor (h) diagnoses a committed SYMLINK north star as a WARN (symmetric
+# with the gate, which FAILs). doctor must not read the link's target-path string as if it were the
+# star; it WARNs that a regular file is required.
+test_doctor_h_committed_symlink_warns() {
+  local repo; repo="$(make_target "doctor-symlink")"
+  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  local line; line="$(run_doctor_h "$repo")"
+  assert_contains "(4f) doctor (h) on a committed SYMLINK north star WARNs" "warn:" "$line"
+  assert_contains "(4f) doctor (h) symlink WARN says a regular file is required (not a symlink)" "SYMLINK" "$line"
 }
 
 # (4e) FIX D — doctor with a MISSING resolver lib must still print its summary and REPORT the
@@ -582,18 +695,23 @@ test_source_identity
 test_worktree_only_does_not_authorize
 test_committed_authorizes_even_if_worktree_deleted
 test_committed_authorizes_even_if_worktree_modified
+test_fabrica_self_committed_worktree_deleted_proceeds
 test_local_committed_debates
 test_local_marker_fails
 test_unset_fails
 test_gate_marker_variants_fail
 test_gate_correctly_replaced_proceeds
+test_gate_prose_token_in_active_region_proceeds
 test_gate_nested_repo_fails
 test_gate_linked_worktree_ok
+test_gate_local_symlink_fails
+test_gate_fabrica_self_symlink_fails
 test_doctor_unset_warns
 test_doctor_local_committed_passes
 test_doctor_local_marker_warns
 test_doctor_h_committed_worktree_deleted
 test_doctor_h_committed_worktree_modified
+test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
 test_setup_check_missing_star_is_drift
 test_setup_check_nontarget_cwd_no_star_drift

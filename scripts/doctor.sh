@@ -344,6 +344,13 @@ fi
 
 if [ -n "$target_repo" ] && [ "$ns_h_cwd_is_target" -ne 1 ]; then
   report_warn "(h) north star not checked for $target_repo — the cwd (${ns_h_cwd_slug:-<no repo>}) is not $target_repo's checkout; run doctor from the target's clone to check its .fabrica/north-star.md"
+elif [ -n "$toplevel" ] && ! ns_committed_is_regular_file "$toplevel" "HEAD" "$committed_relpath" && [ "$committed_present" -eq 1 ]; then
+  # SYMLINK guard (round-2 FIX 4), symmetric with the gate: a committed north star stored as a
+  # SYMLINK makes `git show HEAD:<path>` return the link's target-path string, not content — the
+  # gate FAILs on this, so doctor diagnoses it as a WARN (a readiness gap) rather than reading the
+  # meaningless path string as if it were the star. Only fires when the entry exists but is a
+  # symlink (regular blobs pass the guard and fall through to the normal diagnosis below).
+  report_warn "(h) the target's committed north star ($committed_relpath) is a SYMLINK — the gate requires a regular file (a symlink makes the gate read the link's target-path string, not the star's content); replace it with a regular file and commit before enabling proactive mode"
 elif [ "$committed_present" -eq 1 ]; then
   # A committed star at HEAD — the gate's authoritative source. Diagnose IT (not the working tree).
   # Supplementary head-vs-worktree note: surface when the on-disk copy differs from the committed

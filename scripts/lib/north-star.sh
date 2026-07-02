@@ -121,6 +121,17 @@ ns_fabrica_slug() {
 # location (following symlinks: <root>/scripts/lib/north-star.sh -> dirname x3). BASH_SOURCE[0]
 # is the path of the sourced file (not $0, which is the CALLER's path) — that is what lets a
 # sourced helper locate the control plane independent of the caller's cwd or invocation.
+#
+# GIT-CANONICAL casing (#98a round-2 regression fix): the Fabrica-self IDENTITY compare in
+# ns_resolve (and the same guard in setup-target-repo.sh) tests `toplevel == fabrica_root`, where
+# `toplevel` comes from `git rev-parse --show-toplevel` (git-canonical casing) while this root is
+# a filesystem `pwd -P` (case-PRESERVING). On a case-insensitive filesystem a case-variant path
+# (`/Users/x/Fabrica` vs git's stored `/Users/x/fabrica`) makes the two operands differ ONLY in
+# case, so the identity compare falsely FAILs → Fabrica-self's own debate FAILs and setup would
+# pollute the control plane. So, once we have the physical root, canonicalize it THROUGH GIT too
+# (`git -C <root> rev-parse --show-toplevel`) so both sides of the compare are produced the same
+# way; fall back to the physical `pwd -P` value when the root is not a git work tree (e.g. a
+# tarball restore before `git init`), where a bare-path compare is the best we can do.
 ns_fabrica_root() {
   # `$__ns_self` (absolutized once at source time), NOT a fresh `${BASH_SOURCE[0]}`: a lazily
   # re-read BASH_SOURCE could still be the relative path the caller sourced us with, which would
@@ -140,7 +151,21 @@ ns_fabrica_root() {
   # (matching the sibling value-helpers): an unreachable root — e.g. the sourced tree was
   # deleted out from under a long-running process — degrades to empty output (rc 0, no stderr
   # leak) instead of aborting a top-level `set -e` consumer with a `cd: … No such file` warning.
-  ( cd "$(dirname "$self")/../.." 2>/dev/null && pwd -P ) || true
+  local phys_root
+  phys_root="$( cd "$(dirname "$self")/../.." 2>/dev/null && pwd -P )" || true
+  if [ -z "$phys_root" ]; then
+    return 0
+  fi
+  # Prefer git's canonical top-level so this operand matches ns_git_toplevel's casing exactly
+  # (the identity compare); fall back to the physical root when not a work tree. `|| true` /
+  # 2>/dev/null keep this degrade-to-empty under a `set -e` caller.
+  local git_root
+  git_root="$( git -C "$phys_root" rev-parse --show-toplevel 2>/dev/null || true )"
+  if [ -n "$git_root" ]; then
+    printf '%s\n' "$git_root"
+  else
+    printf '%s\n' "$phys_root"
+  fi
 }
 
 # ns_dir_is_empty_repo <dir> — return 0 (true) when the git repo containing <dir> has NO
@@ -157,6 +182,28 @@ ns_dir_is_empty_repo() {
     return 1
   fi
   return 0
+}
+
+# ns_committed_is_regular_file <repo_dir> <commit-ish> <relpath> — return 0 (true) when the tree
+# entry at <relpath> in <commit-ish> is a REGULAR FILE blob (git mode 100644 or 100755), non-zero
+# for a SYMLINK (mode 120000), a gitlink/tree, or an absent path. Shared by the gate and doctor
+# (round-2 FIX 4) so they agree on what counts as a real committed north star.
+#
+# WHY (#98a, symlink attack): a committed north star stored as a SYMLINK makes `git show
+# <commit>:<relpath>` return the link's TARGET-PATH STRING, not file content — so the marker check
+# would run against a meaningless path string and could AUTHORIZE off it, and the gate's goal would
+# diverge from the real file Codex reviews in the worktree. Callers assert this BEFORE the marker
+# check and FAIL a symlink north star ("must be a regular file, not a symlink"). `git ls-tree` prints
+# `<mode> <type> <oid>\t<path>`; we read the first field. `2>/dev/null` + explicit rc keep it
+# degrade-to-non-zero under a `set -e` caller (an absent path prints nothing → non-zero).
+ns_committed_is_regular_file() {
+  local dir="$1" commit="$2" relpath="$3"
+  local mode
+  mode="$(git -C "$dir" ls-tree "$commit" -- "$relpath" 2>/dev/null | awk '{print $1; exit}')"
+  case "$mode" in
+    100644|100755) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # The stable shipped-default marker (an HTML comment) that rides on the ACTIVE heading of a
@@ -207,29 +254,40 @@ ns_active_region() {
 }
 
 # ns_has_shipped_default_marker <file-or-"-"> — return 0 (true) when the north-star document's
-# ACTIVE-entry region still carries the shipped-default marker, matched WHITESPACE- and
-# CASE-INSENSITIVELY. Return non-zero otherwise (including when there is no active heading).
+# ACTIVE-entry region still carries the shipped-default marker AS AN HTML COMMENT, matched
+# WHITESPACE- and CASE-INSENSITIVELY. Return non-zero otherwise (including when there is no active
+# heading).
 #
-# Robust match (both bugs the adversarial sweep found, fixed together):
-#   - SCOPED to the active region (ns_active_region) → the marker's prose/doc mentions elsewhere
-#     do NOT false-trip a correctly-replaced star.
+# Robust match — three bugs the adversarial sweeps found, fixed together:
+#   - SCOPED to the active region (ns_active_region) → the marker's prose/doc mentions elsewhere in
+#     the file do NOT false-trip a correctly-replaced star.
 #   - WHITESPACE/CASE-insensitive → an un-replaced placeholder whose marker is written as
-#     `<!--fabrica-shipped-default-->`, padded, UPPERCASE, tab-separated, or reflow-split across
-#     the heading + next line still MATCHES (a byte-exact `grep -F` on `<!-- … -->` would let all
-#     those variants slip through and wrongly AUTHORIZE). We strip ALL whitespace from the region
-#     and grep the token case-insensitively.
+#     `<!--fabrica-shipped-default-->`, padded, UPPERCASE, tab-separated, or reflow-split across the
+#     heading + next line still MATCHES (a byte-exact `grep -F` on `<!-- … -->` would let all those
+#     variants slip through and wrongly AUTHORIZE).
+#   - COMMENT-FORM, not a bare token (round-2 FIX 2): match the `<!-- … fabrica-shipped-default … -->`
+#     HTML-COMMENT delimiters, NOT a bare token ANYWHERE in the active region. The round-1 bare-token
+#     match FALSE-FAILed a valid star when the operator removed the real `<!-- … -->` comment but the
+#     active region still mentioned `fabrica-shipped-default` in PROSE (e.g. "remove the
+#     fabrica-shipped-default marker") — a delimiter-free prose mention must NOT count as the marker.
+#
+# Implementation: strip ALL whitespace (spaces/tabs, and — the region being one blob — newlines) and
+# lowercase, so every spacing/line-split/casing variant of the comment collapses to a matchable run
+# with `<!--`/`-->` adjacent to the token; then require the COMMENT FORM via an ERE. The `[^>]*`
+# before the token and `[^<]*` after it are boundary guards: `[^>]*` cannot cross a preceding `-->`
+# (it contains `>`) and `[^<]*` cannot cross into a following `<!--` (it contains `<`), so the token
+# must sit INSIDE one `<!-- … -->` comment — a prose token between/outside comments never matches,
+# while a comment carrying extra interior text (e.g. `<!-- fabrica-shipped-default: keep -->`) still does.
 ns_has_shipped_default_marker() {
   local src="$1"
   local region
-  # `|| true`: ns_active_region / the pipe may exit non-zero (e.g. no active heading, or grep's
-  # no-match downstream); guard so a `set -e` caller never aborts here — the emptiness/grep result
-  # is what decides. Strip ALL whitespace (spaces, tabs, and — via the region being one blob —
-  # newlines) so any spacing/line-split variant of the marker collapses to a matchable run.
+  # `|| true`: ns_active_region / the pipe may exit non-zero (e.g. no active heading); guard so a
+  # `set -e` caller never aborts here — the grep result below is what decides.
   region="$(ns_active_region "$src" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)"
-  case "$region" in
-    *"$NS_SHIPPED_DEFAULT_TOKEN"*) return 0 ;;
-    *) return 1 ;;
-  esac
+  # Match the collapsed COMMENT form: <!-- (up to, no `>`) TOKEN (up to, no `<`) -->. `grep -Eq`
+  # returns non-zero on no-match; `-F`-unsafe chars (`<`, `-`, `>`) are ERE-safe here (none are ERE
+  # metacharacters except none that change meaning in this pattern). The token is a fixed literal.
+  printf '%s' "$region" | grep -Eq "<!--[^>]*${NS_SHIPPED_DEFAULT_TOKEN}[^<]*-->"
 }
 
 # ns_resolve <target_dir> — resolve the active north star for the repo containing <target_dir>.
@@ -259,9 +317,12 @@ ns_resolve() {
   # control-plane checkout can NOT shadow Fabrica's own root star (that file would otherwise win
   # the LOCAL branch and mis-steer Fabrica-self).
   #
-  # PATH identity only (NO slug): the target's git top-level equals Fabrica's own root (both
-  # `pwd -P`-canonical — ns_git_toplevel and ns_fabrica_root — so this is a like-for-like compare,
-  # immune to symlink/`/var`→`/private/var` skew). This is gh-free, so Fabrica-self still resolves
+  # PATH identity only (NO slug): the target's git top-level equals Fabrica's own root. BOTH sides
+  # are GIT-CANONICAL — ns_git_toplevel is `git rev-parse --show-toplevel`, and ns_fabrica_root now
+  # canonicalizes its physical root through git too (round-2) — so this is a like-for-like compare,
+  # immune to symlink/`/var`→`/private/var` skew AND to case-only differences on a case-insensitive
+  # filesystem (a `pwd -P` operand would preserve the caller's casing and falsely differ from git's
+  # stored casing). This is gh-free, so Fabrica-self still resolves
   # OFFLINE / when gh is unavailable. The old slug fallback (target slug == Fabrica slug) is
   # REMOVED: the slug derives from the git REMOTE URL, which any clone owner can set, so it let a
   # hostile target pointing origin at Fabrica's slug authorize against Fabrica's root star and
@@ -273,7 +334,15 @@ ns_resolve() {
   if [ -n "$fabrica_root" ] && [ "$toplevel" = "$fabrica_root" ]; then
     local root_star
     root_star="$fabrica_root/NORTH_STAR.md"
-    if [ -f "$root_star" ]; then
+    # COMMITTED existence, NOT a working-tree `[ -f ]` stat (round-2, FIX 1). The gate authorizes
+    # Fabrica-self off `git show HEAD:NORTH_STAR.md` (committed state), so the resolver's self
+    # identity must be equally worktree-independent: a control-plane whose NORTH_STAR.md is
+    # COMMITTED but whose working-tree copy is deleted must STILL resolve FABRICA_SELF (else the
+    # resolver reports UNSET/LOCAL and the gate's committed read disagrees with it). `cat-file -e
+    # HEAD:NORTH_STAR.md` tests committed existence at the top-level regardless of the cwd
+    # (subdir vs. root); its non-zero (uncommitted / no HEAD) falls through to the LOCAL/UNSET
+    # branches. `2>/dev/null` keeps a commit-less repo from leaking a git error.
+    if git -C "$toplevel" cat-file -e "HEAD:NORTH_STAR.md" 2>/dev/null; then
       echo "FABRICA_SELF $root_star"
       return 0
     fi

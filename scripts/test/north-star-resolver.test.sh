@@ -148,7 +148,12 @@ test_fabrica_self_fallback() {
   local repo; repo="$(make_repo "fabrica-clone")"
   # No .fabrica/north-star.md here — force the identity/fallback path.
   local top; top="$(ns_git_toplevel "$repo")"   # canonical top-level (matches what ns_resolve derives)
+  # COMMIT the root star (round-2 FIX 1): the resolver's FABRICA_SELF branch now keys off COMMITTED
+  # existence (git cat-file -e HEAD:NORTH_STAR.md), matching the gate — an uncommitted worktree copy
+  # no longer resolves FABRICA_SELF. So commit it, not just write it.
   echo "root fabrica star" > "$top/NORTH_STAR.md"
+  git -C "$top" add NORTH_STAR.md
+  git -C "$top" commit -q -m "root star"
   ns_fabrica_root() { echo "$top"; }             # PATH identity: target toplevel == fabrica root
   local out kind path
   out="$(ns_resolve "$repo")"
@@ -197,16 +202,43 @@ test_fabrica_self_precedence_over_local() {
   . "$lib"
   local repo; repo="$(make_repo "fabrica-self-with-stray-local")"
   local top; top="$(ns_git_toplevel "$repo")"
+  # COMMIT the root star (round-2 FIX 1: FABRICA_SELF now keys off committed existence). A STRAY
+  # local star ALSO committed inside the control-plane checkout (must NOT shadow the root star).
   echo "fabrica root star" > "$top/NORTH_STAR.md"
-  # A STRAY local star committed inside the control-plane checkout (should NOT win).
   mkdir -p "$top/.fabrica"
   echo "stray local star that must not shadow root" > "$top/.fabrica/north-star.md"
+  git -C "$top" add NORTH_STAR.md .fabrica/north-star.md
+  git -C "$top" commit -q -m "root star + stray local"
   ns_fabrica_root() { echo "$top"; }               # PATH identity: this IS fabrica root
   local out kind path
   out="$(ns_resolve "$repo")"
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
   assert_eq "(c-prec) stray .fabrica/north-star.md in Fabrica-self does NOT shadow root → FABRICA_SELF" "FABRICA_SELF" "$kind"
   assert_eq "(c-prec) FABRICA_SELF path is the ROOT NORTH_STAR.md (not the stray local star)" "$top/NORTH_STAR.md" "$path"
+  unset -f ns_fabrica_root
+}
+
+# --- (c-committed) FABRICA_SELF off COMMITTED state, even if the worktree copy is DELETED [FIX 1, round-2] ---
+# The resolver's FABRICA_SELF branch keys off COMMITTED existence (git cat-file -e
+# HEAD:NORTH_STAR.md), NOT a working-tree `[ -f ]` stat — so it AGREES with the gate, which
+# authorizes Fabrica-self off `git show HEAD:NORTH_STAR.md`. A control-plane whose NORTH_STAR.md is
+# COMMITTED but whose working-tree copy was deleted must STILL resolve FABRICA_SELF (the pre-fix
+# `[ -f ]` stat would report UNSET/LOCAL and the gate would then disagree with the resolver).
+test_fabrica_self_committed_worktree_deleted() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local repo; repo="$(make_repo "fabrica-self-committed-del")"
+  local top; top="$(ns_git_toplevel "$repo")"
+  echo "committed fabrica root star" > "$top/NORTH_STAR.md"
+  git -C "$top" add NORTH_STAR.md
+  git -C "$top" commit -q -m "commit root star"
+  rm -f "$top/NORTH_STAR.md"                        # worktree copy gone; HEAD still has it
+  ns_fabrica_root() { echo "$top"; }                # PATH identity: this IS fabrica root
+  local out kind path
+  out="$(ns_resolve "$repo")"
+  kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
+  assert_eq "(c-committed) committed NORTH_STAR.md, worktree copy DELETED → still FABRICA_SELF (not UNSET)" "FABRICA_SELF" "$kind"
+  assert_eq "(c-committed) FABRICA_SELF path is the root NORTH_STAR.md" "$top/NORTH_STAR.md" "$path"
   unset -f ns_fabrica_root
 }
 
@@ -515,6 +547,51 @@ test_fabrica_root_errexit_deleted_tree() {
   assert_eq "(k) ns_fabrica_root under set -e from a deleted tree leaks no stderr" "" "$(cat "$err")"
 }
 
+# --- (n) Fabrica-self path compare is CASE-CANONICAL: both operands git-derived [FIX 3, round-2] ---
+# ns_resolve's Fabrica-self identity test is `toplevel == fabrica_root`. `toplevel` is
+# git-canonical (`git rev-parse --show-toplevel`) but pre-fix `fabrica_root` was a `pwd -P`
+# (case-PRESERVING) — so on a case-insensitive filesystem a case-variant path made the two differ
+# only in case → Fabrica-self's own debate FAILed / setup polluted the control plane. Round-2
+# canonicalizes fabrica_root through git too. We assert the load-bearing INVARIANT (portable on
+# both case-sensitive Linux CI and case-insensitive macOS): ns_fabrica_root's output equals git's
+# own top-level for that root — i.e. both sides of the identity compare are produced the SAME way.
+# On a case-INSENSITIVE filesystem we ALSO source the lib via an UPPER-cased path component and
+# confirm ns_fabrica_root STILL returns the git-canonical (lower) casing (so the compare holds) —
+# the exact regression; on a case-sensitive FS that variant path can't exist, so we skip it.
+test_fabrica_root_case_canonical() {
+  # A throwaway "control-plane" clone that ships a copy of the lib at scripts/lib/north-star.sh.
+  local cp; cp="$tmproot/case-cp"
+  mkdir -p "$cp/scripts/lib"
+  cp "$lib" "$cp/scripts/lib/north-star.sh"
+  git -C "$cp" init -q
+  git -C "$cp" commit -q --allow-empty -m "cp init"
+  # Git-canonical top-level of this clone — what ns_git_toplevel yields for the identity compare.
+  local canonical; canonical="$(git -C "$cp" rev-parse --show-toplevel)"
+
+  # Invariant (portable): sourcing the lib via its REAL path, ns_fabrica_root == the git-canonical
+  # top-level, so `toplevel == fabrica_root` is a like-for-like compare.
+  local got; got="$(bash -c '. "$1/scripts/lib/north-star.sh"; ns_fabrica_root' _ "$cp")"
+  assert_eq "(n) ns_fabrica_root is git-canonical (== git rev-parse --show-toplevel)" "$canonical" "$got"
+
+  # Case-variant probe — only where the filesystem is case-insensitive (macOS): reach the SAME
+  # clone through an upper-cased path component and confirm ns_fabrica_root still returns the
+  # git-canonical casing (NOT the upper-cased pwd), so the identity compare does not falsely differ.
+  local probe; probe="$tmproot/CaseProbe"
+  touch "$probe" 2>/dev/null || true
+  if [ -e "$tmproot/caseprobe" ]; then
+    rm -f "$probe"
+    # Build an upper-cased spelling of the clone path's last component and source through it.
+    local upper; upper="$tmproot/CASE-CP"
+    # $upper and $cp are the SAME directory on a case-insensitive FS; source via the upper spelling.
+    local got_upper; got_upper="$(bash -c '. "$1/scripts/lib/north-star.sh"; ns_fabrica_root' _ "$upper")"
+    assert_eq "(n) case-variant source path → ns_fabrica_root still git-canonical (compare holds)" "$canonical" "$got_upper"
+  else
+    rm -f "$probe"
+    passed=$((passed + 1))
+    echo "pass: (n) case-variant probe skipped (case-sensitive filesystem — regression cannot occur here)"
+  fi
+}
+
 # --- (m) shared shipped-default marker matcher: scoped + whitespace/case-insensitive (FIX A) ---
 # ns_has_shipped_default_marker underpins BOTH the gate's placeholder-FAIL and doctor (h)'s WARN,
 # so the two never disagree. Two bugs the adversarial sweep found, asserted together:
@@ -547,6 +624,18 @@ test_marker_matcher_variants() {
   # Correctly-replaced star: marker only in PROSE, cleared from the active heading → MUST NOT match.
   assert_eq "(m) correctly-replaced star (marker only in prose, active heading clean) → no match" "no" \
     "$(printf 'Intro prose names <!-- fabrica-shipped-default --> as a token.\n\n### Ship v2 · status: **active** — our real goal\nbody\n' | { if ns_has_shipped_default_marker -; then echo yes; else echo no; fi; })"
+  # FIX 2 (round-2): a DELIMITER-FREE prose mention of the token INSIDE the active region — the
+  # operator removed the real `<!-- … -->` comment but the region still SAYS "fabrica-shipped-default"
+  # in prose. Round-1's bare-token match false-FAILed this valid star; the comment-form match must
+  # NOT treat a delimiter-free prose token as the marker → no match (PROCEED).
+  assert_eq "(m) FIX 2: bare-token PROSE in the ACTIVE region (no <!-- -->) → NOT the marker (no match)" "no" \
+    "$(printf '### Ship v2 · status: **active** — our real goal; we removed the fabrica-shipped-default marker.\nbody\n' | { if ns_has_shipped_default_marker -; then echo yes; else echo no; fi; })"
+  # FIX 2 counterpart: a comment carrying EXTRA interior text still matches (it is the comment form).
+  assert_eq "(m) FIX 2: comment with extra interior text (<!-- fabrica-shipped-default: keep -->) → matches" "yes" \
+    "$(_marker '### Goal · status: **active** · <!-- fabrica-shipped-default: keep until you replace it --> shipped')"
+  # FIX 2 boundary guard: the token sitting BETWEEN two unrelated comments (prose) → NOT the marker.
+  assert_eq "(m) FIX 2: token between two unrelated comments (prose, not inside one) → no match" "no" \
+    "$(_marker '### Goal · status: **active** · <!--a--> fabrica-shipped-default <!--b-->')"
   # No active heading at all (e.g. the entry is `achieved`) → MUST NOT match (region is empty).
   assert_eq "(m) marker on a NON-active (achieved) heading → no match (not the active entry)" "no" \
     "$(_marker '### Goal status: achieved <!-- fabrica-shipped-default -->')"
@@ -561,6 +650,7 @@ test_subdir_resolves_toplevel
 test_fabrica_self_fallback
 test_slug_spoof_not_fabrica_self
 test_fabrica_self_precedence_over_local
+test_fabrica_self_committed_worktree_deleted
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
@@ -572,6 +662,7 @@ test_offline_fabrica_self_via_path
 test_slug_ignores_cdpath
 test_slug_empty_arg
 test_fabrica_root_errexit_deleted_tree
+test_fabrica_root_case_canonical
 test_marker_matcher_variants
 
 echo "-- $passed passed, $failed failed --"
