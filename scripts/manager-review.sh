@@ -11,6 +11,16 @@ set -euo pipefail
 # split honest). Run by Faber in-session on a *proactive* (Faber-generated) issue before
 # it gets the `ready` label (see reviewer/manager-review.md).
 #
+# NORTH-STAR SOURCE (#98a) — the debate is against the TARGET's own north star, resolved via
+# scripts/lib/north-star.sh from the cwd's checkout: the target's committed
+# `.fabrica/north-star.md`, or (on a Fabrica-self run) the control-plane root NORTH_STAR.md.
+# The content is read COMMITTED at the SAME commit the review worktree is pinned to (never a
+# free-floating later HEAD): the north star is an autonomy-authorization artifact, so an
+# uncommitted local edit must not silently redirect the gate. A target with no committed star
+# (UNSET), or a LOCAL star still carrying the shipped-default placeholder marker, FAILs before
+# any Codex verdict. This gate source is IDENTICAL to Faber's approval source (persona +
+# /faber) — they flip together so the gate never reads a source the operator did not approve.
+#
 # The debate is over ROUNDS, on the issue: this script posts ONE Codex verdict comment;
 # Faber reads it and either advances (consensus to proceed), refines (edit the issue +
 # reply + re-run — another round), or drops (close with rationale). Consensus-only: the
@@ -102,13 +112,14 @@ if ! [[ "$issue" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# The north star lives in NORTH_STAR.md in the fabrica CONTROL-PLANE repo, NOT in each
-# target repo (target repos only get the labels from setup-target-repo.sh; they never get a
-# NORTH_STAR.md). The script also lives only in the control plane, so resolve NORTH_STAR.md
-# from the SCRIPT'S OWN location — follow symlinks, then dirname/.. — the same derivation
-# install.sh/doctor.sh use, so the script reads the control plane's north star regardless of
-# which target repo's cwd it is invoked from. If the file is missing, fail with an actionable
-# pointer rather than debating against an empty goal.
+# The north star is resolved FOR THE TARGET this run operates on, via the shared resolver
+# (scripts/lib/north-star.sh). Historically this script read the control-plane NORTH_STAR.md
+# directly; #98a flips it to the per-target star so the consensus gate debates against the
+# TARGET's own approved goal (and, for a Fabrica-self run, still against Fabrica's own root
+# NORTH_STAR.md). Locate the resolver from the SCRIPT'S OWN location — follow symlinks, then
+# dirname/.. — so it is found regardless of which target repo's cwd this is invoked from; the
+# actual content read is deferred until after HEAD is pinned (below), because the gate MUST
+# read COMMITTED target state at a single captured commit, never a free-floating later HEAD.
 script_path="$0"
 while [ -L "$script_path" ]; do
   link_target="$(readlink "$script_path")"
@@ -118,22 +129,22 @@ while [ -L "$script_path" ]; do
   esac
 done
 control_plane_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
-north_star_file="${control_plane_root}/NORTH_STAR.md"
-if [ ! -f "$north_star_file" ]; then
-  echo "error: NORTH_STAR.md not found in the control-plane repo (${north_star_file})" >&2
-  echo "       the manager-review debates the issue against the current north star;" >&2
-  echo "       it lives in the fabrica control-plane repo, alongside this script;" >&2
-  echo "       see reviewer/manager-review.md > NORTH_STAR.md" >&2
+ns_lib="${control_plane_root}/scripts/lib/north-star.sh"
+if [ ! -f "$ns_lib" ]; then
+  echo "error: north-star resolver not found (${ns_lib})" >&2
+  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       restore scripts/lib/north-star.sh, then re-run" >&2
   exit 1
 fi
-north_star="$(cat "$north_star_file")"
+# shellcheck source=scripts/lib/north-star.sh
+. "$ns_lib"
 
 # Pin gh to the cwd's checkout, not whatever GH_REPO points at. If GH_REPO is set in the
 # environment, every `gh repo view` / `gh issue view/comment` would target THAT repo
-# instead of the cwd's git remote — so the script could read the cwd's NORTH_STAR.md but
-# post the verdict to an issue in a DIFFERENT repo. Unset it (so gh falls back to the
+# instead of the cwd's git remote — so the script could debate the cwd target's north star
+# but post the verdict to an issue in a DIFFERENT repo. Unset it (so gh falls back to the
 # cwd's remote) AND derive the repo from the cwd to pass an explicit --repo to each gh
-# call (belt-and-suspenders).
+# call (belt-and-suspenders). (The resolver's own gh calls clear GH_REPO per-invocation too.)
 unset GH_REPO
 
 # Guard: must run from within a git repo that gh recognizes (has a remote gh can resolve
@@ -152,6 +163,68 @@ fi
 if ! head_commit="$(git rev-parse HEAD 2>/dev/null)" || [ -z "$head_commit" ]; then
   echo "error: cannot resolve HEAD of the current repo" >&2
   echo "       run this from within the target repo's clone" >&2
+  exit 1
+fi
+
+# Resolve the north star FOR THE TARGET, then read its COMMITTED content pinned to the SAME
+# commit ($head_commit) the review operates on — NEVER a free-floating later HEAD re-lookup
+# (debate GAP, #98a). The north star is an autonomy-authorization artifact: an unreviewed
+# LOCAL worktree edit to .fabrica/north-star.md must NOT silently redirect the proactive gate,
+# so a star that exists ONLY as an uncommitted working-tree edit does NOT authorize — while a
+# star COMMITTED at $head_commit STILL authorizes even if the working-tree copy is later
+# deleted or modified. We read `git show "$head_commit:<path>"`, which resolves <path> relative
+# to the repo ROOT regardless of the cwd (subdir vs. root) and reads only committed content, so
+# the gate's goal matches the clean detached worktree Codex reviews at the same commit and is
+# immune to the dirty working tree.
+#
+# ns_resolve tells us WHICH source applies via its IDENTITY logic — is this a Fabrica-self run
+# (root NORTH_STAR.md) or a normal target (.fabrica/north-star.md)? We do NOT use its
+# LOCAL-vs-UNSET result to gate authorization, because ns_resolve stats the WORKING-TREE file,
+# so a committed-but-worktree-deleted star would read UNSET there. Instead, for a normal target
+# the authoritative authorize test is whether .fabrica/north-star.md exists AT $head_commit.
+ns_result="$(ns_resolve "$PWD" || true)"
+ns_kind="${ns_result%% *}"
+north_star=""
+if [ "$ns_kind" = "FABRICA_SELF" ]; then
+  # Fabrica-self run: the control-plane root NORTH_STAR.md is Fabrica's own real approved goal
+  # (it legitimately carries the shipped-default marker — this branch is EXEMPT from the
+  # placeholder-FAIL). cwd IS the control-plane checkout, so read the root star COMMITTED at the
+  # same $head_commit for the same committed-state guarantee.
+  if ! north_star="$(git show "${head_commit}:NORTH_STAR.md" 2>/dev/null)" || [ -z "$north_star" ]; then
+    echo "error: NORTH_STAR.md is not committed at HEAD (${head_commit}) in the control plane" >&2
+    echo "       the manager-debate gate reads COMMITTED state; commit the root north star" >&2
+    echo "       (or restore it), then re-run" >&2
+    exit 1
+  fi
+elif north_star="$(git show "${head_commit}:.fabrica/north-star.md" 2>/dev/null)" && [ -n "$north_star" ]; then
+  # A normal target with .fabrica/north-star.md COMMITTED at $head_commit → LOCAL. This is the
+  # authorize test (committed existence), independent of the working tree: a committed star
+  # authorizes even if the worktree copy was deleted/modified, and a worktree-only edit that is
+  # NOT committed here falls through to the UNSET FAIL below (it does not reach this branch).
+  #
+  # A LOCAL committed star still carrying the shipped-default placeholder marker is an
+  # un-replaced template — NOT a real approved goal — so FAIL before any verdict. (FABRICA_SELF
+  # above is exempt; the marker-FAIL is keyed to LOCAL only.)
+  if printf '%s' "$north_star" | grep -qF -- '<!-- fabrica-shipped-default -->'; then
+    echo "error: ${repo}'s .fabrica/north-star.md is still the shipped placeholder (carries the" >&2
+    echo "       '<!-- fabrica-shipped-default -->' marker) — the manager-debate gate will not" >&2
+    echo "       debate against an un-replaced template. Replace it with your own north star," >&2
+    echo "       remove the marker from the active heading line, commit it, and approve it," >&2
+    echo "       then re-run. See reviewer/manager-review.md > north star" >&2
+    exit 1
+  fi
+else
+  # No committed north star for this target: either UNSET/EMPTY/NOREPO from the resolver, or a
+  # .fabrica/north-star.md that exists ONLY as an uncommitted working-tree edit (not at
+  # $head_commit). None authorizes proactive work — FAIL with an actionable pointer BEFORE
+  # invoking Codex, so the operator sets and COMMITS a north star rather than debating an empty
+  # (or uncommitted, unreviewed) goal.
+  echo "error: no committed north star resolved for ${repo} (resolver: ${ns_kind}) — .fabrica/north-star.md is" >&2
+  echo "       not committed at HEAD (${head_commit}). The manager-debate gate reads COMMITTED" >&2
+  echo "       target state — an uncommitted local edit does not authorize proactive work. Set one up:" >&2
+  echo "         run '\"${control_plane_root}/scripts/setup-target-repo.sh\" ${repo}' from this" >&2
+  echo "         checkout to seed .fabrica/north-star.md, then replace the placeholder, commit," >&2
+  echo "         and approve it — see reviewer/manager-review.md > north star" >&2
   exit 1
 fi
 
@@ -222,7 +295,7 @@ the issue, or merge anything; you only give a verdict that Faber weighs. The tea
 ONLY on consensus (you and Faber both agree), and DEFAULT-DROPS on no consensus, so do not
 invent busywork: if the issue does not clearly serve the north star, say so.
 
-== CURRENT NORTH STAR (from NORTH_STAR.md) ==
+== CURRENT NORTH STAR (the target's committed north star) ==
 %s
 
 == PROPOSED ISSUE #%s ==

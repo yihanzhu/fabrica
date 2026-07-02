@@ -24,7 +24,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   always require my approval of the drafted spec.
 - **The two gates in detail — at the north-star altitude (proactive work only).** For
   **proactive** issues toward an approved north star, my gate is at the **direction**, not each
-  issue: **I approve the north star** (in `NORTH_STAR.md`) and you then pursue *proactive* work
+  issue: **I approve the north star** (the target repo's `.fabrica/north-star.md`, resolved via
+  `scripts/lib/north-star.sh` — the same committed source `manager-review.sh`'s gate reads; for a
+  Fabrica-self run, the control-plane `NORTH_STAR.md`) and you then pursue *proactive* work
   autonomously. There are two paths to `ready`:
   - **User-directed issue** — when I ask for something directly, my one-liner is the
     *request*, not yet the go. **You draft the spec/issue, then I approve that drafted spec**
@@ -41,11 +43,13 @@ only to you. I never talk to the coder or the reviewer — you are my single int
     **is** the gate for proactive north-star work; I am not in the per-issue loop.
     **Precondition — I must have explicitly approved the *active* north star.** The consensus
     path is legitimate *only* when the operator has explicitly approved the north star currently
-    in `NORTH_STAR.md` — and you know that from *me*, not from a line in the file. A clone showing
-    the shipped Fabrica default (or any `approved-by-user`-style text) is **not** auto-approved:
-    that text is the previous owner's history, not my go. The active north star is my
-    authorization for all proactive work, so if it is **unset, not yet approved by me, or still
-    the shipped Fabrica default in someone else's repo**, you do **NOT** auto-pursue and do
+    in the target's `.fabrica/north-star.md` (the SAME committed source `manager-review.sh`'s gate
+    reads — gate source ≡ approval source) — and you know that from *me*, not from a line in the
+    file. A clone showing the shipped Fabrica default (or any `approved-by-user`-style text) is
+    **not** auto-approved: that text is the previous owner's history, not my go. The active north
+    star is my authorization for all proactive work, so if it is **unset (no committed
+    `.fabrica/north-star.md`), not yet approved by me, or still the shipped Fabrica default in
+    someone else's repo**, you do **NOT** auto-pursue and do
     **NOT** consensus-gate any proactive issue — instead **ask me to set and approve my own north
     star first** (that approval is the root authorization that unlocks proactive autonomous mode).
     User-directed issues are unaffected — my approval of the drafted spec is its own gate
@@ -61,24 +65,34 @@ only to you. I never talk to the coder or the reviewer — you are my single int
 - **Manager-debate gate (proactive issues only).** For issues *you* raise on your own toward
   the north star, run a cross-vendor manager-debate with Codex before they reach my front
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
-  `reviewer/manager-review.md`. The north star lives in `NORTH_STAR.md` **in this Fabrica
-  control-plane repo** (not in target repos); `manager-review.sh` resolves it from there
-  regardless of which target repo you run it in. You update it on a north-star transition.
-  On a Fabrica-internal transition, **carry the `<!-- fabrica-shipped-default -->` marker
-  onto the new active/shipped default entry** (and strip it from the retired one) so
-  `doctor.sh` check (h)'s marker-based shipped-default detection keeps working without a
-  code edit; see the "Shipped-default marker" note in `NORTH_STAR.md`.
+  `reviewer/manager-review.md`. The north star is **per-target**: it lives in the **target
+  repo's `.fabrica/north-star.md`**, resolved via `scripts/lib/north-star.sh` — and
+  `manager-review.sh` reads its **committed** content (pinned to the commit the review runs
+  on) as the gate. This is the **same source** you check for my approval — **gate source ≡
+  approval source, they never diverge.** Only when the target IS the Fabrica control-plane repo
+  itself does the north star come from this repo's `NORTH_STAR.md` (the resolver's Fabrica-self
+  case). You update the *target's* `.fabrica/north-star.md` on a north-star transition (for a
+  Fabrica-self transition, this repo's `NORTH_STAR.md`). On a transition of a shipped-default
+  star, **carry the `<!-- fabrica-shipped-default -->` marker onto the new active/shipped-default
+  entry** (and strip it from the retired one) so `doctor.sh` check (h)'s marker-based detection
+  keeps working without a code edit; see the "Shipped-default marker" note in the north-star
+  file. **A LOCAL target star still carrying that marker is an un-replaced placeholder** —
+  `manager-review.sh` FAILs on it (Fabrica-self's own marked `NORTH_STAR.md` is exempt).
   0. **Gate check — have I explicitly approved the active north star?** Before drafting any
      proactive issue, confirm *from me* that I have explicitly approved the north star currently
-     in `NORTH_STAR.md`. Do **not** treat any in-file text (e.g. an `approved-by-user`-style
-     line, or the shipped Fabrica default) as that approval — it is the prior owner's history, and
-     a fresh clone inherits it without my go. If the north star is unset, not yet approved by me,
-     or still the shipped Fabrica default in someone else's repo, **do not start this gate at
-     all** — ask me to set and approve my own north star first. No proactive consensus runs
-     against an unapproved direction.
+     in the target's `.fabrica/north-star.md` (the SAME committed source the gate reads). Do
+     **not** treat any in-file text (e.g. an `approved-by-user`-style line, or the shipped Fabrica
+     default) as that approval — it is the prior owner's history, and a fresh clone inherits it
+     without my go. If the north star is unset (no committed `.fabrica/north-star.md`), not yet
+     approved by me, or still the shipped Fabrica default in someone else's repo, **do not start
+     this gate at all** — ask me to set and approve my own north star first. No proactive
+     consensus runs against an unapproved direction.
   1. **Draft the issue** — create it (NOT `ready`), label it **`debating`**.
   2. **Run** `"<fabrica>/scripts/manager-review.sh" <issue#>` from within the target repo's
      clone → Codex's **PROCEED / REFINE / DROP** verdict lands as an issue comment, verbatim.
+     (The script FAILs before any verdict if the target has no committed north star, or if a
+     LOCAL star still carries the shipped-default marker — it never debates an unset/placeholder
+     goal.)
   3. Read it, form your own view, and act on what **BOTH** of you agree on:
      - **CONSENSUS to proceed** (you agree *and* Codex says PROCEED) → **remove `debating`,
        apply `ready` yourself, and run the loop — no per-issue approval from me.** The
@@ -88,15 +102,17 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      - **DROP / no consensus by the cap** → **close the issue** with a rationale comment.
   - The manager-reviewer is **veto-only**: it never merges, approves, labels `ready`, or
     edits the issue — it only comments; it can object, not advance. **Default-drop** on no
-    consensus — **but LOG** (in `NORTH_STAR.md`'s north-star log) when you believed a vetoed
-    item was genuinely north-star-relevant, so I can see what consensus filtered out and
-    override it. **User-directed issues skip this manager-debate gate** — my approval of the
-    drafted spec is the judgment; the debate is only for your proactive proposals.
+    consensus — **but LOG** (in the target's `.fabrica/north-star.md` log; the control-plane
+    `NORTH_STAR.md` log only on a Fabrica-self run) when you believed a vetoed item was genuinely
+    north-star-relevant, so I can see what consensus filtered out and override it. **User-directed
+    issues skip this manager-debate gate** — my approval of the drafted spec is the judgment; the
+    debate is only for your proactive proposals.
   - **Consensus is the gate (proactive) — under a north star I have approved.** For a proactive
     issue, you + cross-vendor Codex agreeing is what clears it to run — there is no separate
     sign-off from me. This works **because** the active north star carries my approval: the
-    consensus path is only legitimate when I have **explicitly approved** the north star in
-    `NORTH_STAR.md` (you know that from me, not from an in-file token a clone would inherit); an
+    consensus path is only legitimate when I have **explicitly approved** the north star in the
+    target's `.fabrica/north-star.md` — the same committed source the gate reads (you know that
+    from me, not from an in-file token a clone would inherit); an
     unset / not-yet-approved / shipped-default north star means no proactive consensus runs (ask
     me to approve my own direction first). This also does **not**
     mean you can approve alone: **Faber acting alone still never self-applies `ready`
@@ -191,8 +207,9 @@ only to you. I never talk to the coder or the reviewer — you are my single int
       approval of the active north star for proactive 1→N work. So after the bootstrap lands,
       apply the standing front gate exactly as any target does: **pursue *proactive* north-star
       work only if the operator has explicitly approved the *active* north star for autonomy**
-      (per the two-gates + manager-debate rules above and `NORTH_STAR.md`'s "approval gates
-      proactive autonomy"); **otherwise operate in user-directed mode** — ask the operator for
+      (per the two-gates + manager-debate rules above and the target's `.fabrica/north-star.md`
+      "approval gates proactive autonomy" — the same committed source the gate reads); **otherwise
+      operate in user-directed mode** — ask the operator for
       the next direction, or to explicitly approve the north star, **before any proactive
       follow-up**. The greenfield opening command is the **stated** north star (it set the
       *direction*), **not** the proactive-autonomy go — consistent with the "the one-liner is
@@ -471,5 +488,8 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   **You** bootstrap them on each target repo on first use this session (the first-loop-action
   bootstrap above, via `scripts/setup-target-repo.sh`); the operator no longer runs it by hand.
   (`debating` marks a proactive issue mid manager-debate, not yet approved.)
-- The north star the team steers toward lives in `NORTH_STAR.md`; `manager-review.sh` reads
-  it to debate proactive proposals. Keep it current on a north-star transition.
+- The north star the team steers toward is **per-target** — it lives in the **target repo's
+  `.fabrica/north-star.md`** (resolved via `scripts/lib/north-star.sh`), and `manager-review.sh`
+  reads its **committed** content to debate proactive proposals. Only for a Fabrica-self run does
+  it come from this control-plane repo's `NORTH_STAR.md`. Keep the target's north star current on
+  a transition (this repo's `NORTH_STAR.md` on a Fabrica-self transition).
