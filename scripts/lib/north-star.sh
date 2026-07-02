@@ -29,7 +29,10 @@
 # nothing (and returns non-zero) when <dir> is not inside a git work tree.
 ns_git_toplevel() {
   local dir="$1"
-  git -C "$dir" rev-parse --show-toplevel 2>/dev/null
+  # `|| true`: a non-work-tree dir makes `git rev-parse` exit non-zero; without the guard this
+  # (as the function's last command, and inside a caller's `x="$(ns_git_toplevel …)"`) would
+  # abort a `set -e` consumer instead of degrading to empty output for the caller's own check.
+  git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true
 }
 
 # ns_repo_slug <dir> — print the <owner>/<repo> (gh nameWithOwner) for the repo containing
@@ -68,7 +71,13 @@ ns_slug_eq() {
 # Fabrica regardless of which target's cwd the caller runs from. Used for the identity check
 # in ns_resolve: fall back to root NORTH_STAR.md ONLY when the target IS Fabrica itself.
 ns_fabrica_slug() {
-  ns_repo_slug "$(ns_fabrica_root)"
+  # `|| true` on the inner substitution: ns_fabrica_root ends in `( cd … && pwd -P )`, which
+  # exits non-zero if the derived root is unreachable — under `set -e` that would abort the
+  # caller before ns_repo_slug (itself guarded) can degrade to empty. Guarding here keeps the
+  # whole helper degrade-to-empty.
+  local root
+  root="$(ns_fabrica_root || true)"
+  ns_repo_slug "$root"
 }
 
 # ns_fabrica_root — print the Fabrica control-plane repo root, derived from THIS file's own
@@ -117,7 +126,10 @@ ns_dir_is_empty_repo() {
 ns_resolve() {
   local target_dir="$1"
   local toplevel
-  toplevel="$(ns_git_toplevel "$target_dir")"
+  # `|| true` so a non-git <target_dir> yields empty and falls through to the NOREPO branch
+  # below, rather than aborting a `set -e` caller here (belt-and-suspenders with the guard
+  # inside ns_git_toplevel — protects this call site even if that helper's guard changes).
+  toplevel="$(ns_git_toplevel "$target_dir" || true)"
   if [ -z "$toplevel" ]; then
     echo "NOREPO"
     return 0
@@ -134,11 +146,13 @@ ns_resolve() {
   # target's repo slug equals Fabrica's own). Not "file exists" — an external target must
   # never inherit Fabrica's star just because this clone happens to sit alongside it.
   local target_slug fabrica_slug
-  target_slug="$(ns_repo_slug "$toplevel")"
-  fabrica_slug="$(ns_fabrica_slug)"
+  # Both helpers are internally guarded to degrade to empty; the `|| true` here is defense-in-
+  # depth so this `set -e` call site can never abort before the `-n` emptiness checks decide.
+  target_slug="$(ns_repo_slug "$toplevel" || true)"
+  fabrica_slug="$(ns_fabrica_slug || true)"
   if [ -n "$target_slug" ] && [ -n "$fabrica_slug" ] && ns_slug_eq "$target_slug" "$fabrica_slug"; then
     local root_star
-    root_star="$(ns_fabrica_root)/NORTH_STAR.md"
+    root_star="$(ns_fabrica_root || true)/NORTH_STAR.md"
     if [ -f "$root_star" ]; then
       echo "FABRICA_SELF $root_star"
       return 0

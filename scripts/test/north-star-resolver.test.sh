@@ -230,6 +230,30 @@ test_unset_and_empty() {
   assert_eq "(e) non-repo path → NOREPO" "NOREPO" "$kind"
 }
 
+# --- (e2) ns_resolve is errexit-safe from a non-git dir (P2, round-3) --------------
+# Regression guard for the [P2]: ns_resolve's `toplevel="$(ns_git_toplevel …)"` used to run an
+# UNGUARDED `git rev-parse --show-toplevel`, which exits non-zero outside a work tree. Under a
+# `set -e` consumer calling `ns_resolve` as a simple command (as this repo's scripts do — all
+# use `set -euo pipefail`), that abort fires BEFORE the documented NOREPO branch, so the caller
+# dies with the git exit status instead of seeing NOREPO. (The existing (e) assert wraps the
+# call in `out="$(ns_resolve …)"`, whose command-substitution nesting masks the abort — so it
+# did NOT catch this.) Here we invoke ns_resolve as a TOP-LEVEL command inside a fresh
+# `bash -c 'set -euo pipefail; …'` subshell and assert it both PRINTS NOREPO and EXITS 0.
+test_resolve_errexit_safe_non_git() {
+  local nonrepo="$tmproot/errexit-non-git"
+  mkdir -p "$nonrepo"
+  # Run in a clean subshell that sources the lib fresh and calls ns_resolve as a simple command
+  # under errexit — the unguarded lib aborts here (empty output, rc=128).
+  local out rc
+  out="$(bash -c '
+    set -euo pipefail
+    . "$1"
+    ns_resolve "$2"
+  ' _ "$lib" "$nonrepo" 2>/dev/null)" && rc=0 || rc=$?
+  assert_eq "(e2) ns_resolve under set -e from a non-git dir prints NOREPO" "NOREPO" "$out"
+  assert_eq "(e2) ns_resolve under set -e from a non-git dir does NOT abort (exit 0)" "0" "$rc"
+}
+
 # --- (f) resolver slug derivation ignores a set GH_REPO (P2 regression) -----------
 # `gh repo view` honors an exported GH_REPO over the repo at the cwd, so if ns_repo_slug did
 # not clear it, a set GH_REPO would make the helper print the ENV repo's slug instead of the
@@ -296,6 +320,7 @@ test_fabrica_self_case_insensitive
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
+test_resolve_errexit_safe_non_git
 test_slug_ignores_gh_repo
 test_slug_eq_case_insensitive
 
