@@ -198,6 +198,31 @@ for entry in "${labels[@]}"; do
   fi
 done
 
+# Seed the target's per-target north star (.fabrica/north-star.md) from the shipped template
+# so the per-target north-star RESOLVER (scripts/lib/north-star.sh, issue #97) finds a file to
+# read. Without it a set-up target has only Fabrica's control-plane NORTH_STAR.md and the
+# resolver FAILs UNSET for manager-review. This script is run BY ABSOLUTE PATH from the target
+# repo (per QUICKSTART/install.sh), so $PWD is the target working tree; seed at ITS git
+# top-level. Idempotent: NEVER overwrite an existing north star — a target that already set its
+# own goal keeps it. Non-fatal if $PWD is not a git work tree (e.g. a pre-flight run from
+# elsewhere): the seeding is skipped with a note, the label bootstrap above still stands.
+ns_template="$repo_root/templates/.fabrica/north-star.md"
+target_toplevel="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$target_toplevel" ]; then
+  echo "  north star: skipped — cwd is not inside a git work tree (run from the target repo to seed .fabrica/north-star.md)"
+elif [ ! -f "$ns_template" ]; then
+  echo "  north star: skipped — template not found at ${ns_template}" >&2
+else
+  ns_target="$target_toplevel/.fabrica/north-star.md"
+  if [ -f "$ns_target" ]; then
+    echo "  north star: kept existing ${ns_target} (not overwritten)"
+  else
+    mkdir -p "$target_toplevel/.fabrica"
+    cp "$ns_template" "$ns_target"
+    echo "  north star: seeded ${ns_target} from the shipped template (replace the placeholder with your goal)"
+  fi
+fi
+
 cat <<EOF
 
 Labels done. Note: running this by hand is OPTIONAL — Faber creates/reconciles these labels

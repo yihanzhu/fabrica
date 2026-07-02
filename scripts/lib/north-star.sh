@@ -37,9 +37,15 @@ ns_git_toplevel() {
 # cwd/slug match — a slug, not a path, so two different clones of the same repo compare equal
 # and a clone whose path is a prefix of another's cannot false-match. Returns non-zero (and
 # prints nothing) when <dir> is not a gh-recognized repo.
+#
+# `env -u GH_REPO`: `gh repo view` honors an exported GH_REPO OVER the repo at the cwd, so a
+# set GH_REPO would make this print the ENV repo's slug instead of the repo at <dir> — which
+# would let doctor.sh's cwd/slug match falsely pass (spoofing an external checkout into looking
+# like the target and reading the wrong local .fabrica/north-star.md). Clearing GH_REPO for
+# this one invocation forces the slug to reflect the actual repo at <dir>, always.
 ns_repo_slug() {
   local dir="$1"
-  ( cd "$dir" 2>/dev/null && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null ) || true
+  ( cd "$dir" 2>/dev/null && env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null ) || true
 }
 
 # ns_fabrica_slug — print Fabrica's OWN control-plane repo slug (the repo that ships THIS

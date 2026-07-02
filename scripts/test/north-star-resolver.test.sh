@@ -189,6 +189,72 @@ test_unset_and_empty() {
   assert_eq "(e) non-repo path → NOREPO" "NOREPO" "$kind"
 }
 
+# --- (f) resolver slug derivation ignores a set GH_REPO (P2 regression) -----------
+# `gh repo view` honors an exported GH_REPO over the repo at the cwd, so if ns_repo_slug did
+# not clear it, a set GH_REPO would make the helper print the ENV repo's slug instead of the
+# repo at <dir> — spoofing doctor.sh's cwd/slug match into reading the wrong local star. This
+# uses the REAL ns_repo_slug (not the stub) against a fake `gh` on PATH that reports whether
+# GH_REPO was set in its own environment when invoked. Hermetic and offline (no network/auth).
+test_slug_ignores_gh_repo() {
+  # Restore the REAL ns_repo_slug — earlier tests `unset -f` their stub, which removes the
+  # sourced function too. This test exercises the real derivation, so re-source the lib.
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local repo; repo="$(make_repo "gh-repo-spoof")"
+  local fakebin="$tmproot/fakebin-gh"
+  mkdir -p "$fakebin"
+  # Fake gh: if GH_REPO is set in ITS environment, print the env slug (the spoof); otherwise
+  # print a fixed real slug for the repo at cwd. ns_repo_slug must clear GH_REPO so this fake
+  # never sees it — proving the slug reflects the repo at <dir>, not the env override.
+  cat >"$fakebin/gh" <<'GH'
+#!/usr/bin/env bash
+if [ -n "${GH_REPO:-}" ]; then
+  echo "spoofed/${GH_REPO}"
+else
+  echo "real/at-cwd"
+fi
+GH
+  chmod +x "$fakebin/gh"
+  local out
+  # Prepend the fake gh to PATH and export a GH_REPO that WOULD spoof the slug if not cleared.
+  # Set the env in a subshell (a `VAR=val funcname` prefix can't invoke a shell function), so
+  # the export is scoped to this call and does not leak into later tests.
+  out="$( export PATH="$fakebin:$PATH" GH_REPO="attacker/other-repo"; ns_repo_slug "$repo" )"
+  assert_eq "(f) ns_repo_slug ignores a set GH_REPO (slug reflects the repo at <dir>)" "real/at-cwd" "$out"
+}
+
+# --- (g) setup-target-repo.sh seeds .fabrica/north-star.md, idempotently ----------
+# The setup path must seed the target's .fabrica/north-star.md from the shipped template when
+# absent (so the resolver has a file to read) and must NEVER clobber an existing one. We invoke
+# ONLY the seeding block by extracting it, rather than running the whole script (which requires
+# gh + a real remote). We run the extracted block from a temp target repo as cwd, with repo_root
+# pointed at the fabrica root under test (whose templates/.fabrica/north-star.md ships the file).
+run_setup_seed_block() {
+  # Extract the seeding block from setup-target-repo.sh: from the `ns_template=` assignment up to
+  # (but not including) the closing follow-ups heredoc. Runs with $repo_root and $PWD set by the
+  # caller. Keeps the test coupled to the SHIPPED block, so drift in the script is caught here.
+  local script="$fabrica_root/scripts/setup-target-repo.sh"
+  local block
+  block="$(awk '/^ns_template=/{f=1} /^cat <<EOF/{f=0} f' "$script")"
+  bash -c "set -euo pipefail; repo_root='$fabrica_root'; $block"
+}
+test_setup_seeds_north_star() {
+  local target; target="$(make_repo "setup-seed-target")"
+  local seeded="$target/.fabrica/north-star.md"
+  # Absent → seeded from the template.
+  ( cd "$target" && run_setup_seed_block >/dev/null )
+  local exists="no"; [ -f "$seeded" ] && exists="yes"
+  assert_eq "(g) setup seeds .fabrica/north-star.md when absent" "yes" "$exists"
+  # Content matches the shipped template byte-for-byte.
+  local same="no"
+  if cmp -s "$seeded" "$fabrica_root/templates/.fabrica/north-star.md"; then same="yes"; fi
+  assert_eq "(g) seeded file matches the shipped template" "yes" "$same"
+  # Idempotent: a second run must NOT clobber a target that already set its own goal.
+  echo "MY OWN GOAL" > "$seeded"
+  ( cd "$target" && run_setup_seed_block >/dev/null )
+  assert_eq "(g) second run does NOT overwrite an existing north star" "MY OWN GOAL" "$(cat "$seeded")"
+}
+
 echo "== north-star resolver tests =="
 echo "(fabrica root under test: $fabrica_root)"
 test_local_wins
@@ -197,6 +263,8 @@ test_fabrica_self_fallback
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
+test_slug_ignores_gh_repo
+test_setup_seeds_north_star
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then
