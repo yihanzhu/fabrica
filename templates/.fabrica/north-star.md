@@ -1,8 +1,10 @@
 # North star
 
-The single goal your team is currently steering toward. Faber pushes *proactive* issues
-toward this; the manager-reviewer (`scripts/manager-review.sh`) reads the **current** north
-star below and debates whether a proposed issue genuinely serves it.
+The single goal your team is currently steering toward. This file is where your project's
+north star lives, and Fabrica's setup/doctor tooling (`scripts/setup-target-repo.sh`,
+`scripts/doctor.sh`) reads it here. The proactive manager-debate
+(`scripts/manager-review.sh`) adopts this file as its source once the source switch lands
+(issue #98); until then it still debates proposals against the control-plane north star.
 
 **This file lives in your repo, at `.fabrica/north-star.md`.** It is *your* project's
 steering, owned by your repo — not Fabrica's. Each target repo carries its own north star
@@ -14,9 +16,9 @@ the project has been.
 
 **This is a placeholder — replace it.** The entry below is Fabrica's shipped default, carrying
 the marker `<!-- fabrica-shipped-default -->`. While that marker is present, `scripts/doctor.sh`
-WARNs that the north star is still the shipped default and `scripts/manager-review.sh` treats
-proactive work as ungated. **Write your own north star, then remove the marker from the active
-heading line** — the warning clears and proactive autonomy applies to your repo.
+WARNs that the north star is still the shipped default. **Write your own north star, then remove
+the marker from the active heading line** — the warning clears, and once the manager-debate
+adopts this file (issue #98) proactive autonomy applies to your repo.
 
 **Approval gates proactive autonomy.** The active north star is your authorization for *all*
 proactive work: Faber may consensus-gate and self-apply the `ready` label to a proactive issue
