@@ -102,7 +102,6 @@ if ! [[ "$issue" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-# North-star source-switch to the per-target resolver is deferred to #98, where it flips atomically with the Faber approval/logging source (avoids a mismatched consensus gate).
 # The north star lives in NORTH_STAR.md in the fabrica CONTROL-PLANE repo, NOT in each
 # target repo (target repos only get the labels from setup-target-repo.sh; they never get a
 # NORTH_STAR.md). The script also lives only in the control plane, so resolve NORTH_STAR.md

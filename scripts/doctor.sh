@@ -1,27 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve THIS script's own directory (following symlinks) so we can source the shared
-# north-star resolver from a fixed, install-location-independent path (it lives at
-# <control-plane>/scripts/lib/north-star.sh alongside doctor.sh). Deriving from $0 (not the
-# cwd) means it is found whether doctor is run from a target subdir or via a PATH symlink.
-#
-# We compute the path here but DEFER the actual `source` until AFTER the required-files
-# manifest check (f) below — detecting a missing restore-critical file (this resolver lib IS
-# one; it's in ci/required-files.txt) is doctor's whole job, so a missing lib must be REPORTED
-# as a failure and let the summary print, not hard-exit at the `source` under `set -euo
-# pipefail` before check (f) even runs. See the "(defer the resolver source)" block below.
-_dr_self="$0"
-while [ -L "$_dr_self" ]; do
-  _dr_link="$(readlink "$_dr_self")"
-  case "$_dr_link" in
-    /*) _dr_self="$_dr_link" ;;
-    *)  _dr_self="$(dirname "$_dr_self")/$_dr_link" ;;
-  esac
-done
-_dr_dir="$(cd "$(dirname "$_dr_self")" && pwd -P)"
-ns_lib="$_dr_dir/lib/north-star.sh"
-
 # doctor.sh — read-only restore self-check for Fabrica.
 #
 # RESTORE.md only proves a rebuild by running a full live loop; this answers the
@@ -56,18 +35,15 @@ ns_lib="$_dr_dir/lib/north-star.sh"
 #   (e) jq is on PATH — required by scripts/merge-pr.sh to parse gh's CI-check JSON.
 #   (f) every file in ci/required-files.txt is present on disk (the manifest is
 #       read live — the list is never duplicated here).
-#   (h) the TARGET's north star (`.fabrica/north-star.md`) ACTIVE entry is not still the
-#       shipped Fabrica-self default (WARN). Resolved per issue #97: with no <owner>/<repo>
-#       arg, against THIS clone (Fabrica-self falls back to root NORTH_STAR.md); with an arg,
-#       the target's `.fabrica/north-star.md` — the LOCAL file only when the cwd's slug matches
-#       the arg, else FETCHED REMOTE via `gh api …/contents/.fabrica/north-star.md`. Detected by
-#       a stable MARKER (`<!-- fabrica-shipped-default -->`) on the shipped-default entry, NOT
-#       by grepping for a north-star phrase — so no north-star transition needs a doctor edit
-#       (the marker rides along to the new default; adopters remove it when they set their own
-#       star). Detection is SCOPED to the active-entry heading line (where the marker rides) and
-#       matched in its HTML-comment form, so the star's own explanatory mentions of the token
-#       don't keep it warning after an adopter strips the real marker. Also WARNs on UNSET (no
-#       star resolved) or no `status: active` entry — all warning-level (never a hard fail).
+#   (h) NORTH_STAR.md's ACTIVE entry is not still the shipped Fabrica-self default
+#       (WARN). Detected by a stable MARKER (`<!-- fabrica-shipped-default -->`) that sits
+#       on Fabrica's own shipped-default entry, NOT by grepping for a north-star phrase —
+#       so no north-star transition needs a doctor edit (the marker rides along to the new
+#       default; adopters remove it when they set their own star). Detection is SCOPED to
+#       the active-entry heading line (where the marker rides) and matched in its
+#       HTML-comment form, so NORTH_STAR.md's own explanatory mentions of the token don't
+#       keep it warning after an adopter strips the real marker. Also WARNs if there is
+#       no `status: active` entry at all (a malformed/active-less file).
 #   (g) optional <owner>/<repo> arg → delegate to setup-target-repo.sh --check to
 #       verify the loop labels exist and match.
 #   (i) [target-repo path] the target has PR-triggered CI (the hard merge gate).
@@ -255,139 +231,58 @@ else
   fi
 fi
 
-# (defer the resolver source) -----------------------------------------------------
-# Now — AFTER (f) has already reported any missing restore-critical file — source the shared
-# north-star resolver, which check (h) needs. Guard the source so a MISSING lib (e.g. an
-# incomplete restore) doesn't hard-exit doctor at the `.` under `set -euo pipefail` before the
-# summary prints: instead we record it as a check failure and let (h) degrade to a warn. (f)
-# above already names the missing file specifically; this line keeps the exit code correct and
-# doctor's normal flow intact. A lib that EXISTS but fails to source (syntax error) is a real
-# breakage we surface the same way rather than aborting silently.
-ns_lib_loaded=0
-if [ -f "$ns_lib" ]; then
-  # shellcheck source=scripts/lib/north-star.sh
-  if . "$ns_lib"; then
-    ns_lib_loaded=1
-  else
-    report 1 "(f) north-star resolver lib present but failed to source ($ns_lib)"
-  fi
-else
-  report 1 "(f) north-star resolver lib missing ($ns_lib) — restore it (in ci/required-files.txt)"
-fi
-
-# (h) north star not still the shipped default -----------------------------------
-# The shipped north star aims at Fabrica's OWN control-plane goal. If an adopter never
+# (h) NORTH_STAR.md not still the shipped default --------------------------------
+# The shipped NORTH_STAR.md aims at Fabrica's OWN control-plane goal. If an adopter never
 # replaces it, manager-review.sh debates proposals against the wrong goal. WARN (not
 # FAIL): a stale north star doesn't block restore, but it must be replaced before proactive
 # mode is meaningful for the adopter's repo.
 #
-# The north star is now PER-TARGET (issue #97): a target repo owns its star in
-# `<repo-root>/.fabrica/north-star.md`, while Fabrica-self keeps its own root NORTH_STAR.md.
-# So this check reads the TARGET's star, resolved as follows:
-#   - No <owner>/<repo> arg → clone-local run: resolve against THIS clone (the shared resolver
-#     falls back to Fabrica-self's root NORTH_STAR.md via the identity match).
-#   - With a <owner>/<repo> arg → read the target's `.fabrica/north-star.md`, but use the LOCAL
-#     file ONLY when the cwd's resolved repo slug MATCHES the argument (else the cwd is a
-#     DIFFERENT checkout and its star must not be misattributed to the target). Otherwise FETCH
-#     REMOTE via `gh api repos/<owner>/<repo>/contents/.fabrica/north-star.md` (base64 `.content`).
-# On UNSET (a non-empty target with neither a local nor a remote star) → WARN, not FAIL:
-# consistent with (h)'s warning-level — north-star state gates *proactive* mode, but
-# user-directed work stays valid. Every gh/decode step is `|| true`-guarded so a 404 / empty
-# repo / no-content case flows through to the WARN branch instead of aborting under `set -e`.
+# Detection is MARKER-BASED, not phrase-based. NORTH_STAR.md's shipped-default entry
+# carries a stable marker — `<!-- fabrica-shipped-default -->` — meaning "this is Fabrica's
+# own shipped default." doctor greps for that marker, so a north-star transition never
+# needs a matching edit here: the transition process carries the marker onto the new
+# active/shipped default entry (documented in NORTH_STAR.md + manager/CLAUDE.md). An
+# adopter who sets their own north star REMOVES the marker, and the warning clears.
+# (Previously this grepped the active entry for the literal shipped phrase, which coupled
+# doctor to every north-star rename — the exact recurring edit this replaces.)
 #
-# Detection of the shipped default is MARKER-BASED, not phrase-based. The shipped-default entry
-# carries a stable marker — `<!-- fabrica-shipped-default -->` — meaning "this is Fabrica's own
-# shipped default." doctor greps for that marker, so a north-star transition never needs a
-# matching edit here: the transition process carries the marker onto the new active/shipped
-# default entry (documented in NORTH_STAR.md + manager/CLAUDE.md). An adopter who sets their
-# own north star REMOVES the marker, and the warning clears. (Previously this grepped the
-# active entry for the literal shipped phrase, which coupled doctor to every north-star rename.)
-#
-# Detection is SCOPED to the ACTIVE ENTRY, not the whole file, and matches the marker in its
-# HTML-COMMENT form (`<!-- fabrica-shipped-default -->`) — two safeguards that keep the marker
-# mechanism clearable. The shipped north star's explanatory text ALSO names the token (the
+# Detection is SCOPED to the ACTIVE ENTRY, not the whole file, and matches the marker in
+# its HTML-COMMENT form (`<!-- fabrica-shipped-default -->`) — two safeguards that keep the
+# marker mechanism clearable. NORTH_STAR.md's explanatory text ALSO names the token (the
 # "Shipped-default marker" note, and the active line's own "remove the `fabrica-shipped-default`
 # marker" instruction), so a whole-file grep for the bare token would keep matching that doc
 # text even after an adopter strips the real marker — warning forever, never clearing. So we
 # isolate the active-entry heading line (the one carrying `status: active`, where the marker
-# rides) and test only THAT line, and only for the comment form. After an adopter removes the
-# `<!-- ... -->` marker from their active heading, (h) clears even if surrounding prose still
-# mentions the token.
+# rides) and test only THAT line, and only for the comment form: the doc note lives elsewhere
+# (out of scope) or references the token in backticks (not the comment form), so neither
+# false-triggers. After an adopter removes the `<!-- ... -->` marker from their active heading,
+# (h) clears even if surrounding prose still mentions the token.
 #
-# We still WARN when there is no `status: active` entry at all (a malformed/active-less file):
-# that's an independent readiness gap regardless of the marker.
+# We still WARN when there is no `status: active` entry at all (a malformed/active-less
+# file): that's an independent readiness gap regardless of the marker. The marker itself
+# rides on Fabrica's shipped-default entry (currently also the active one), so a kept
+# historical log line does not falsely warn — adopters strip the marker when they promote
+# their own star, per NORTH_STAR.md's "Shipped-default marker" note.
+north_star="$repo_root/NORTH_STAR.md"
 shipped_default_marker='<!-- fabrica-shipped-default -->'
-
-# Load the target's north-star CONTENT into $ns_content (empty = UNSET / unresolved). We work
-# on content, not a fixed file path, because the star may come from a local file OR a remote
-# fetch. $ns_source is a human-readable label for the report line, $ns_missing signals UNSET.
-ns_content=""
-ns_source=".fabrica/north-star.md"
-ns_missing=0
-if [ "$ns_lib_loaded" -ne 1 ]; then
-  # The resolver lib didn't load (missing/failed source — already reported as a (f) failure
-  # above). Without ns_resolve/ns_repo_slug we can't resolve the star, so (h) can only note
-  # that and WARN. Guarding here keeps the calls below from hitting an undefined function and
-  # aborting under `set -euo pipefail` — doctor's summary must still print.
-  ns_source="north-star resolver lib unavailable"
-  ns_missing=1
-elif [ -z "$target_repo" ]; then
-  # Clone-local run: resolve against this clone (Fabrica-self falls back to root NORTH_STAR.md).
-  ns_result="$(ns_resolve "$repo_root")"
-  ns_kind="${ns_result%% *}"
-  ns_star_path="${ns_result#"$ns_kind"}"; ns_star_path="${ns_star_path# }"
-  case "$ns_kind" in
-    LOCAL) ns_source=".fabrica/north-star.md"; ns_content="$(cat "$ns_star_path" 2>/dev/null || true)" ;;
-    FABRICA_SELF) ns_source="NORTH_STAR.md (Fabrica-self)"; ns_content="$(cat "$ns_star_path" 2>/dev/null || true)" ;;
-    *) ns_missing=1 ;;
-  esac
-else
-  # Target-repo run: use the LOCAL file only if the cwd's slug matches the target argument;
-  # otherwise the cwd is a different checkout — fetch the target's star from the remote. The
-  # match is CASE-INSENSITIVE (ns_slug_eq, not a bare `=`): GitHub slugs are case-insensitive,
-  # so `acme/myrepo` (arg) and gh's canonical `Acme/MyRepo` (cwd) are the same target and must
-  # read the local star, not fall through to a remote fetch.
-  cwd_slug="$(ns_repo_slug "$PWD")"
-  if [ -n "$cwd_slug" ] && ns_slug_eq "$cwd_slug" "$target_repo"; then
-    ns_result="$(ns_resolve "$PWD")"
-    ns_kind="${ns_result%% *}"
-    ns_star_path="${ns_result#"$ns_kind"}"; ns_star_path="${ns_star_path# }"
-    case "$ns_kind" in
-      LOCAL) ns_source=".fabrica/north-star.md (local $target_repo checkout)"; ns_content="$(cat "$ns_star_path" 2>/dev/null || true)" ;;
-      FABRICA_SELF) ns_source="NORTH_STAR.md (Fabrica-self)"; ns_content="$(cat "$ns_star_path" 2>/dev/null || true)" ;;
-      *) ns_missing=1 ;;
-    esac
-  else
-    # Remote fetch: GET the file's contents and base64-decode `.content`. gh returns non-zero
-    # (and no output) on a 404 (no `.fabrica/north-star.md`), which the `|| true` swallows so
-    # an absent star becomes the WARN path, not a hard abort. `base64 -d` decodes GitHub's
-    # base64-with-newlines `.content` on both GNU and BSD `base64`.
-    ns_source=".fabrica/north-star.md (remote $target_repo)"
-    ns_b64="$(gh api "repos/$target_repo/contents/.fabrica/north-star.md" --jq '.content' 2>/dev/null || true)"
-    if [ -n "$ns_b64" ]; then
-      ns_content="$(printf '%s' "$ns_b64" | base64 -d 2>/dev/null || true)"
-    fi
-    [ -z "$ns_content" ] && ns_missing=1
-  fi
-fi
-
-# Isolate the active-entry heading line (first line carrying `status: active`); the marker, by
-# convention, rides on that heading. Scoping detection here — not the whole content — is what
+# Isolate the active-entry heading line (first line carrying `status: active`); the marker,
+# by convention, rides on that heading. Scoping detection here — not the whole file — is what
 # stops the explanatory doc text (which names the token) from warning forever.
-# `|| true`: grep exits non-zero when there is no `status: active` line, which under
-# `set -euo pipefail` (pipefail) would abort the script before the no-active WARN branch.
 active_entry_line=""
-if [ "$ns_missing" -eq 0 ] && [ -n "$ns_content" ]; then
-  active_entry_line="$(printf '%s' "$ns_content" | grep -iE 'status:[^A-Za-z]*\**active\**' | head -n1 || true)"
+if [ -f "$north_star" ]; then
+  # `|| true`: grep exits non-zero when the file has no `status: active` line, which under
+  # `set -euo pipefail` (pipefail) would abort the whole script — never reaching the intended
+  # no-active WARN branch below. Guarding it lets the empty result flow through to that branch.
+  active_entry_line="$(grep -iE 'status:[^A-Za-z]*\**active\**' "$north_star" | head -n1 || true)"
 fi
-if [ "$ns_missing" -ne 0 ] || [ -z "$ns_content" ]; then
-  report_warn "(h) no north star resolved for the target ($ns_source) — set + approve a north star in .fabrica/north-star.md before enabling proactive mode"
+if [ ! -f "$north_star" ]; then
+  report 1 "(h) NORTH_STAR.md present ($north_star missing — restore it; it gates proactive mode)"
 elif [ -z "$active_entry_line" ]; then
-  report_warn "(h) north star ($ns_source) has no 'status: active' entry — set an active north star before enabling proactive mode"
+  report_warn "(h) NORTH_STAR.md has no 'status: active' entry — set an active north star before enabling proactive mode"
 elif printf '%s' "$active_entry_line" | grep -qF -- "$shipped_default_marker"; then
-  report_warn "(h) north star ($ns_source) still carries the shipped Fabrica-self default (marker '$shipped_default_marker' present) — replace it with your own direction (and remove the marker) before enabling proactive mode"
+  report_warn "(h) NORTH_STAR.md's active entry still carries the shipped Fabrica-self default (marker '$shipped_default_marker' present) — replace it with your own direction (and remove the marker) before enabling proactive mode"
 else
-  report 0 "(h) north star ($ns_source) active entry is not the shipped default"
+  report 0 "(h) NORTH_STAR.md's active entry is not the shipped default"
 fi
 
 # (g) optional loop-label check --------------------------------------------------

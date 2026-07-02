@@ -1,31 +1,35 @@
 # North star
 
-The single goal your team is currently steering toward. This file is where your project's
-north star lives, and Fabrica's setup/doctor tooling (`scripts/setup-target-repo.sh`,
-`scripts/doctor.sh`) reads it here. The proactive manager-debate
-(`scripts/manager-review.sh`) adopts this file as its source once the source switch lands
-(issue #98); until then it still debates proposals against the control-plane north star.
+The single goal your team is steering toward. **This file is where your project's north
+star will live** — at `.fabrica/north-star.md`, in your repo, owned by your repo (not
+Fabrica's). It is the foundation for per-target steering: once per-target support is wired
+in (issue #98), Fabrica's tooling begins reading your north star from here, so running
+Fabrica against your repo debates proposals against *your* goal rather than a shared one.
 
-**This file lives in your repo, at `.fabrica/north-star.md`.** It is *your* project's
-steering, owned by your repo — not Fabrica's. Each target repo carries its own north star
-here, so running Fabrica against your repo debates proposals against *your* goal.
+**Status today: dormant.** Shipping this template is step one. No Fabrica script reads or
+gates on this file yet — `scripts/setup-target-repo.sh`, `scripts/doctor.sh`, and the
+proactive manager-debate (`scripts/manager-review.sh`) all still use Fabrica's control-plane
+north star. That does not change until issue #98 wires the consumers to this resolver. So
+filling this in now records your intended goal, but does not yet alter Fabrica's behavior.
 
 **One north star is active at a time.** On a north-star transition, mark the achieved one
 `achieved` and promote (or add) the next as `active`. Keep the log below so you can see where
 the project has been.
 
 **This is a placeholder — replace it.** The entry below is Fabrica's shipped default, carrying
-the marker `<!-- fabrica-shipped-default -->`. While that marker is present, `scripts/doctor.sh`
-WARNs that the north star is still the shipped default. **Write your own north star, then remove
-the marker from the active heading line** — the warning clears, and once the manager-debate
-adopts this file (issue #98) proactive autonomy applies to your repo.
+the stable marker `<!-- fabrica-shipped-default -->`. **Write your own north star, then remove
+that marker from the active heading line.** The marker exists so that, once #98 lands, Fabrica's
+tooling can tell a still-default placeholder from a real, adopter-set north star without
+re-hardcoding any phrase — but until then it drives no behavior. Keep the marker on the shipped
+entry until you replace it.
 
-**Approval gates proactive autonomy.** The active north star is your authorization for *all*
-proactive work: Faber may consensus-gate and self-apply the `ready` label to a proactive issue
-**only when you have explicitly approved the *active* north star**. Until you approve it, Faber
-does **not** auto-pursue — it asks you to set and approve the north star first. (User-directed
-issues are unaffected — your approval of the spec Faber drafts from your one-liner is its own
-gate.)
+**Approval will gate proactive autonomy (once #98 lands).** The active north star is intended to
+be your authorization for proactive work: after the consumer switch, Faber may consensus-gate and
+self-apply the `ready` label to a proactive issue **only when you have explicitly approved the
+*active* north star**. Until you approve it, Faber will not auto-pursue — it asks you to set and
+approve the north star first. (User-directed issues are unaffected — your approval of the spec
+Faber drafts from your one-liner is its own gate. And none of this applies until #98 wires the
+consumers to this file.)
 
 ---
 
