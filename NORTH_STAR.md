@@ -44,13 +44,20 @@ that project is an empty folder or an existing codebase with history.
 - **Two modes:**
   - **Empty (0→1):** the operator's first command *becomes* the first north star; Fabrica
     scaffolds the skeleton + a **real PR-CI gate (the operator confirms that initial gate)**
-    + a first commit, then runs the loop.
+    + a first commit + a **committed `.fabrica/north-star.md`** (Faber drafts the exact
+    north-star text + done-signal from the operator's command as part of the approved bootstrap
+    plan; the bootstrap coder commits THAT text into the target), then runs the loop.
   - **Existing (1→N):** Fabrica **understands the whole project first** (structure, stack,
     conventions, current state), then pursues the operator's north star.
 - **Done-signal:** from BOTH starting points — (a) an empty folder/repo, and (b) an existing
   repo with no prior Fabrica setup — a first `/faber` session drives one real change to a
   **merged, CI-gated PR** toward the operator's stated goal, with the CI gate present
-  (**operator-approved when Fabrica bootstrapped it**) before any autonomous merge.
+  (**operator-approved when Fabrica bootstrapped it**) before any autonomous merge. On the
+  empty (0→1) path the bootstrap PR also lands a **committed `.fabrica/north-star.md`** (active
+  non-placeholder entry, no `fabrica-shipped-default` marker) so the 0→1 target ends with the
+  committed north star the shipped gate (`manager-review.sh`) requires — a `doctor.sh`
+  north-star WARN *before* that bootstrap PR lands is advisory in greenfield (like missing
+  PR CI), not a blocker.
 - **Why it's the north star:** the team is only *"pick up my work"* useful if it meets a
   project where it is, instead of requiring a pre-wired repo.
 - **Safety note:** Fabrica's autonomy rests on CI + cross-vendor review; on an empty project
@@ -74,6 +81,14 @@ trajectory and override anything consensus dropped.
   but **not** independently proven on a real fresh clone, so folded into B rather than marked
   *achieved*. Original done-signal: `doctor.sh` exits 0 + an accurate fresh-clone
   `QUICKSTART.md` walkthrough.
+- **C — "Numbers I can trust" (MapleFolio)** — *Fabrica's **first real external run**; set +
+  approved by the operator (2026-07-01, in-session `/faber`); **achieved 2026-07-02**. Logged
+  here as a completed external run — Fabrica-self's active star stays B.* Goal: MapleFolio's
+  Canadian room/cash/FX calculation engine verified by an automated test suite run as the hard
+  CI gate, so real-money contribution decisions rest on correct math. This run motivated the
+  **per-target north-star architecture** (#97 resolver, #98/98a atomic flip, 98b adoption) — a
+  target's goal must live in the target's `.fabrica/north-star.md`, not Fabrica's control-plane
+  file.
 
 ### Vetoed-but-Faber-thought-relevant (manager-debate filtered these out)
 
