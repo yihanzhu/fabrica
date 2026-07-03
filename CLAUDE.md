@@ -21,6 +21,14 @@ the backlog:
   still to come.
 - CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
   it is the hard merge gate.** Add real tests as code lands.
+  - **Shellcheck is pinned to `0.9.0`** (the `SHELLCHECK_VERSION` constant in
+    `ci.yml` is the single source of truth). CI downloads that exact static release and
+    asserts the version before linting, so a runner-image bump can't silently drift it.
+    **Lint locally against 0.9.0** — not whatever your local install happens to be — with
+    `shellcheck -x -S style` over `find . -name '*.sh' -not -path './.git/*'`; a newer
+    shellcheck reports different findings/codes (e.g. SC2317 vs SC2329) and can disagree
+    with CI. Grab the pinned binary from the shellcheck GitHub releases if your local
+    version differs.
   - The **structure check** reads `ci/required-files.txt` — the manifest of every
     restore-critical file — and fails if any listed path is missing (and if a listed
     `scripts/*.sh` isn't executable). This is what makes the full-backup goal enforceable:

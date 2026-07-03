@@ -106,7 +106,13 @@ Faber has briefed you with the PR, the latest review comments, and the current r
 5. Verify locally, THEN push — never push a red commit. Run **Install first** when
    discovery (step 3) yielded an Install command, then run the lint / build / test checks
    **locally** and make them green. Only once local checks pass, push your changes to the
-   same branch.
+   same branch. **Match CI's pinned tool versions:** when CI pins a linter/formatter/toolchain
+   to a specific version, lint with **that exact version** locally — a different local
+   version reports different findings/codes for the same code (e.g. shellcheck SC2317 vs
+   SC2329) and can be "clean locally" yet land CI-red. In **this repo (Fabrica itself)**
+   shellcheck is pinned to **`0.9.0`** (`SHELLCHECK_VERSION` in `.github/workflows/ci.yml`);
+   lint with `shellcheck -x -S style` over `find . -name '*.sh' -not -path './.git/*'` using
+   0.9.0, grabbing that static release if your local version differs.
    Local green is necessary but not sufficient — the PR's own CI is the ultimate gate,
    but you don't wait on it: **Faber enforces PR CI at merge** (`merge-pr.sh` refuses
    unless CI is green). Your job is the local green, then the push — then continue with
