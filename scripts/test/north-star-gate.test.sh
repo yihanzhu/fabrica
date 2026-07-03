@@ -1269,6 +1269,61 @@ test_normalize_repo_id_authority_and_schemes() {
   else
     failed=$((failed + 1)); echo "FAIL: (17z-v) scp-style (no port) must equal portless https"; echo "      s=[$s] t=[$t]"
   fi
+
+  # (17z-vi) CASE-INSENSITIVE SCHEME + HOST (#102 round-3 [P3]). git accepts URL schemes
+  # case-insensitively and DNS hostnames are case-insensitive, so an UPPERCASE scheme and/or a
+  # mixed-case host must normalize to the SAME identity as their lowercase forms — else the round-3
+  # lowercase-only allowlist returned EMPTY (regression: `ghr_select_remote` couldn't match the
+  # gh-bound repo → a spurious FAIL). The owner/repo PATH is left AS-IS (display-sensitive).
+  # Regression reproducers: an uppercase scheme must NOT normalize to empty.
+  assert_eq "(17z-vi) UPPERCASE scheme https → same id as lowercase" "github.com/org/repo" "$(norm "HTTPS://github.com/org/repo.git")"
+  assert_eq "(17z-vi) UPPERCASE scheme ssh:// → same id as lowercase" "github.com/org/repo" "$(norm "SSH://git@github.com/org/repo.git")"
+  assert_eq "(17z-vi) mixed-case scheme (HttpS://) → normalized" "github.com/o/r" "$(norm "HttpS://github.com/o/r.git")"
+  # Mixed-case HOST is lowercased (DNS is case-insensitive), in the scheme and scp-style forms alike.
+  assert_eq "(17z-vi) mixed-case host scp-style git@GitHub.com → github.com" "github.com/o/r" "$(norm "git@GitHub.com:o/r.git")"
+  assert_eq "(17z-vi) mixed-case host https://GitHub.com → github.com" "github.com/o/r" "$(norm "https://GitHub.com/o/r.git")"
+  # An uppercase-scheme URL normalizes EQUAL to its exact lowercase counterpart (the selection
+  # property: they must compare equal so a gh-bound match still holds).
+  local u l
+  u="$(norm "HTTPS://GitHub.com/org/repo.git")"; l="$(norm "https://github.com/org/repo.git")"
+  if [ -n "$u" ] && [ "$u" = "$l" ]; then
+    passed=$((passed + 1)); echo "pass: (17z-vi) uppercase scheme+host normalizes equal to lowercase ([$u])"
+  else
+    failed=$((failed + 1)); echo "FAIL: (17z-vi) uppercase scheme+host must normalize equal to lowercase"; echo "      u=[$u] l=[$l]"
+  fi
+  # The owner/repo PATH is preserved AS-IS (NOT case-folded) — only scheme + host are normalized.
+  assert_eq "(17z-vi) owner/repo path case preserved (Org/Repo stays Org/Repo)" "github.com/Org/Repo" "$(norm "https://github.com/Org/Repo.git")"
+}
+
+# (17z-vii) END-TO-END SELECTION — a configured remote with an UPPERCASE URL scheme still SELECTS
+# (#102 round-3 [P3]). Before the fix the lowercase-only scheme allowlist normalized `HTTPS://…` to
+# EMPTY, so ghr_select_remote could NOT match the gh-bound repo and the caller FAILed CLOSED before
+# fetching — an availability regression, not a bypass. This drives the real selection + authorization
+# path (no git network): ghr_select_remote matches the gh id, and ghr_assert_effective_identity
+# authorizes (rc 0). No insteadOf, so the effective url == the configured uppercase-scheme url — the
+# ENTIRE decision rests on the scheme being case-normalized. sel <repo_dir> <gh_id> — source the lib
+# in a subshell cd'd into <repo_dir> and print ghr_select_remote's output (a standalone helper so the
+# subshell reads only its own positional args — no outer var crossing the boundary for SC2030/2031).
+sel() {
+  # shellcheck source=scripts/lib/gh-remote.sh
+  ( cd "$1" && . "$ghr_lib" && ghr_select_remote "$2" )
+}
+
+test_gate_uppercase_scheme_remote_selected() {
+  local repo="$tmproot/uppercase-scheme-select"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  # origin's CONFIGURED url uses an UPPERCASE scheme (git accepts schemes case-insensitively). It
+  # resolves to the gh-bound repo github.com/someone/widget — so it MUST be selected + authorized.
+  git -C "$repo" remote add origin "HTTPS://github.com/someone/widget.git"
+  local gh_id="github.com/someone/widget"
+  # SELECTION: the uppercase-scheme remote is matched (was EMPTY → unmatched before the fix).
+  assert_eq "(17z-vii) uppercase-scheme configured remote is SELECTED (not a spurious no-match)" "origin" "$(sel "$repo" "$gh_id")"
+  # AUTHORIZATION: the effective identity (== the configured uppercase url, no insteadOf) equals gh's
+  # → the gate proceeds (rc 0), NOT the fail-closed path. No local-mirror opt-in needed.
+  local res rc
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"
+  assert_eq "(17z-vii) uppercase-scheme remote AUTHORIZEs (rc 0) → gate proceeds, no spurious FAIL" "0" "$rc"
 }
 
 # (17a) UNIT — ghr_assert_effective_identity directly, FAIL-CLOSED (#102 round-2 FIX 1). Deterministic
@@ -1905,6 +1960,7 @@ test_doctor_h_anchor_logs_ghbound
 test_doctor_h_fetches_fresh_not_stale_cache
 test_doctor_h_local_fallback_visible
 test_normalize_repo_id_authority_and_schemes
+test_gate_uppercase_scheme_remote_selected
 test_effective_identity_helper_unit
 test_gate_insteadof_cross_repo_fails
 test_gate_insteadof_same_identity_transport_works

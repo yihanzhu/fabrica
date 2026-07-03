@@ -20,7 +20,7 @@
 # local anchor). See codex-review.sh / manager-review.sh for the per-consumer refusal policy.
 
 # ghr_normalize_repo_id <url> — normalize a git remote URL (or gh web URL) to
-# "<host[:port]>/<owner>/<repo>", lowercased, with any trailing `.git` stripped. Handles the three
+# "<host[:port]>/<owner>/<repo>", with any trailing `.git` stripped. Handles the three
 # common transports without fragile regex (pure parameter expansion + `case`):
 #   git@host:owner/repo(.git)         (scp-style SSH)
 #   ssh://git@host/owner/repo(.git)   (ssh:// URL, optional user@)
@@ -35,6 +35,14 @@
 # no port at all (default). Thus `https://github.com/o/r` and `git@github.com:o/r.git` both have no
 # port and stay equal; `https://github.com:443/o/r` == `https://github.com/o/r`; but
 # `https://ghe.example:8443/o/r` keeps `:8443` and is NOT equal to `ghe.example/o/r`.
+#
+# CASE-INSENSITIVE SCHEME + HOST (#102 round-3, [P3]). git accepts URL SCHEMES case-insensitively
+# (`HTTPS://…`, `SSH://…` are valid), and DNS HOSTNAMES are case-insensitive (`GitHub.com` ==
+# `github.com`) — so both are case-NORMALIZED to lowercase: the scheme BEFORE the allowlist check
+# below (else an uppercase-scheme remote fell through to empty and `ghr_select_remote` could not
+# match the gh-bound repo — a spurious FAIL, not a bypass), and the host in the RETURNED identity so
+# same-repo comparisons across host casings still hold. The OWNER/REPO path is left AS-IS: GitHub
+# treats it case-insensitively for access, but it is display-sensitive, so we do not fold its case.
 #
 # IDENTITY-CRITICAL PARSING (#102 round-3, [P1]). The host must come from the URL AUTHORITY, never
 # from anything embedded in the PATH — the whole fail-closed guard rests on this. Two bypasses the
@@ -62,13 +70,17 @@ ghr_normalize_repo_id() {
   case "$url" in
     *://*)
       # scheme://[userinfo@]host[:port]/owner/repo... — accept ONLY genuine git URL schemes; any
-      # other scheme is unsupported and unprovable → empty (fail closed). Record the scheme's
-      # DEFAULT port so a matching explicit ':port' below is normalized away (kept otherwise).
-      case "$url" in
-        https://*) default_port=443 ;;
-        http://*)  default_port=80 ;;
-        ssh://*)   default_port=22 ;;
-        git://*)   default_port=9418 ;;
+      # other scheme is unsupported and unprovable → empty (fail closed). git treats schemes
+      # CASE-INSENSITIVELY, so lowercase the scheme BEFORE the allowlist check (else `HTTPS://…` /
+      # `SSH://…` fell through to empty). Record the scheme's DEFAULT port so a matching explicit
+      # ':port' below is normalized away (kept otherwise).
+      local scheme="${url%%://*}"
+      scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+      case "$scheme" in
+        https) default_port=443 ;;
+        http)  default_port=80 ;;
+        ssh)   default_port=22 ;;
+        git)   default_port=9418 ;;
         *) return 0 ;;
       esac
       rest="${url#*://}"
@@ -114,9 +126,12 @@ ghr_normalize_repo_id() {
   local name="${rest%%/*}"
   name="${name%.git}"
   [ -n "$host" ] && [ -n "$owner" ] && [ -n "$name" ] || return 0
+  # DNS hostnames are case-insensitive → lowercase the host so `GitHub.com` == `github.com`. The
+  # owner/repo path is left AS-IS (display-sensitive; see header). The port is numeric (no case).
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
   local host_id="$host"
   [ -n "$port" ] && host_id="${host}:${port}"
-  printf '%s/%s/%s' "$host_id" "$owner" "$name" | tr '[:upper:]' '[:lower:]'
+  printf '%s/%s/%s' "$host_id" "$owner" "$name"
 }
 
 # ghr_gh_repo_id <repo> — compute gh's normalized identity (host + owner/repo) for the repo
