@@ -33,15 +33,23 @@ silently redirect the gate. A target with **no committed** north star on that de
 (or one still carrying the shipped Fabrica default marker) does **not** authorize proactive
 work: the gate FAILs before invoking Codex, with a pointer back here.
 
-The anchor is also hardened against three transport/identity attacks (an adversarial sweep):
-(1) the **default-branch NAME** is read *authoritatively* from the remote (`git ls-remote
---symref … HEAD`), never the stale/locally-spoofable local tracking `HEAD` symref, so a repoint
-or a spoofed local symref can't anchor to a non-default branch; (2) before fetching, the gate
-asserts the remote's **effective** fetch URL (after any `url.<base>.insteadOf` rewrite) still
-resolves to the **same** GitHub identity `gh` bound the verdict to — a `url.<other>.insteadOf`
-that would silently redirect the fetch to a *different* repo FAILs (read repo A / post to repo B
-is refused); (3) the anchor fetch uses `--refmap=` so it writes **only** its private per-run ref
-and never mutates the operator's remote-tracking refs.
+The anchor is **gh-authoritative and fail-closed** (an adversarial sweep, #102 round-2): every
+input that decides *what* the gate reads is proven against the **same `gh` binding the verdict
+posts to**, and any step not provable → **FAIL**. (1) The **default-branch NAME** comes from
+gh's `defaultBranchRef` (`gh repo view --json defaultBranchRef`), *not* the stale/locally-
+spoofable local `refs/remotes/<remote>/HEAD` symref and *not* `ls-remote` off a remote an
+insteadOf could redirect — so a repoint or a spoofed local symref can't anchor to a non-default
+branch, and if gh can't resolve the default on a gh-bound run the gate FAILs. (2) Before
+fetching, the gate asserts the selected remote's **effective** fetch URL (after any
+`url.<base>.insteadOf` rewrite) is a **non-empty GitHub identity equal to** the one `gh` bound
+the verdict to — a cross-repo `url.<other>.insteadOf` (read repo A / post to repo B) FAILs, and
+so does a rewrite to a **local path / `file://` / `ext::`** or any transport the gate cannot
+*prove* is gh's repo (round-2 closed the earlier "empty ⇒ trusted" hole; a deliberate local
+mirror is an explicit `FABRICA_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). Remote
+*selection* stays available (it matches the configured URL first, then falls back to the
+effective URL, so an SSH-alias/shorthand remote still selects — safety is still enforced by the
+effective-identity assert before any fetch). (3) The anchor fetch uses `--refmap=` so it writes
+**only** its private per-run ref and never mutates the operator's remote-tracking refs.
 
 **Fail vs. fallback (gh-bound).** `manager-review.sh` reads *and posts* a GitHub issue, so its
 anchor must bind to the **same repo identity** it comments on. If `gh` resolves a repo but **no

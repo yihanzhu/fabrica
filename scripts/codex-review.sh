@@ -166,12 +166,13 @@ if [ -z "$selected_remote" ]; then
   exit 1
 fi
 
-# EFFECTIVE-URL IDENTITY GATE (#102 fix A, insteadOf repo-substitution guard). Selection matched the
-# CONFIGURED url, but the fetch below goes BY NAME — which applies any `url.<other>.insteadOf`, so the
-# URL git actually contacts can be a DIFFERENT repo. Before fetching the PR head + base (and reviewing
-# off them), assert the EFFECTIVE fetch URL still resolves to the SAME GitHub identity gh bound the
-# review to; the helper FAILs (with an actionable message) on a cross-repo-substitution rewrite, so the
-# reviewer never fetches one repo's diff while posting the review to another's PR.
+# EFFECTIVE-URL IDENTITY GATE (#102 fix A, FAIL-CLOSED). Selection matched the remote by URL, but the
+# fetch below goes BY NAME — which applies any `url.<other>.insteadOf`, so the URL git actually
+# contacts can be a DIFFERENT repo. Before fetching the PR head + base (and reviewing off them), assert
+# the EFFECTIVE fetch URL is a NON-EMPTY GitHub identity EQUAL to the one gh bound the review to: a
+# cross-repo substitution, a local-path/file://-substitution, or any transport we can't PROVE is gh's
+# repo all FAIL closed (round-2 — empty is no longer trusted; a deliberate local mirror needs
+# FABRICA_ALLOW_LOCAL_MIRROR=1). So the reviewer never fetches a source it can't prove is the PR's repo.
 if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
   exit 1
 fi

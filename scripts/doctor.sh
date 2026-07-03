@@ -372,17 +372,30 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ]; then
     # remotes) via a subshell that `cd`s in; the helpers themselves degrade to empty output, so we
     # capture stdout regardless. `|| true` guards the whole substitution under `set -e`.
     ns_h_remote="$( { cd "$toplevel" && ghr_select_remote "$ns_h_gh_id"; } 2>/dev/null || true )"
-    # EFFECTIVE-URL IDENTITY GATE (#102 fix A), mirroring the gate: if a `url.<other>.insteadOf`
-    # rewrite redirects the selected remote's FETCH to a DIFFERENT repo identity than gh's, the gate
-    # FAILs. doctor only diagnoses, so it WARNs and falls back to the visible local-HEAD anchor
-    # (never fetching from the substituted repo). Suppress the helper's own stderr; emit a WARN.
+    # EFFECTIVE-URL IDENTITY GATE (#102 fix A, FAIL-CLOSED), mirroring the gate: the gate FAILs
+    # unless the selected remote's EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's. That
+    # covers a `url.<other-gh-repo>.insteadOf` cross-repo substitution AND — round-2 — a
+    # local-path/file://-substitution or any transport it can't PROVE is gh's repo. doctor only
+    # diagnoses, so it WARNs and falls back to the visible local-HEAD anchor (never fetching from the
+    # substituted/unprovable source). Suppress the helper's own stderr; emit a WARN.
     if [ -n "$ns_h_remote" ] \
        && ! ( cd "$toplevel" && ghr_assert_effective_identity "$ns_h_remote" "$ns_h_gh_id" ) 2>/dev/null; then
-      report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT repo identity than gh's (${ns_h_gh_id}) — the gate FAILs on this; diagnosing against LOCAL HEAD instead. Remove the cross-repo insteadOf rewrite before enabling proactive mode"
+      report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT or unprovable repo identity than gh's (${ns_h_gh_id}) — the gate FAILs closed on this; diagnosing against LOCAL HEAD instead. Point the remote at gh's real transport (or, for a deliberate local mirror, export FABRICA_ALLOW_LOCAL_MIRROR=1) before enabling proactive mode"
       ns_h_remote=""
     fi
     if [ -n "$ns_h_remote" ]; then
-      ns_h_default="$( { cd "$toplevel" && ghr_remote_default_branch "$ns_h_remote"; } 2>/dev/null || true )"
+      # Default-branch NAME: mirror the gate's gh-authoritative source (#102 round-2 fix B) —
+      # `gh repo view --json defaultBranchRef`, the SAME binding the verdict posts to, NOT the
+      # stale/spoofable local symref. doctor is a DIAGNOSTIC, so if gh can't resolve it, WARN and
+      # degrade VISIBLY to the local `ghr_remote_default_branch` fallback (the gate FAILs closed there
+      # — doctor only diagnoses, so it flags the gap and still names a plausible default).
+      ns_h_default="$(ghr_gh_default_branch "$ns_h_gh_repo" 2>/dev/null || true)"
+      if [ -z "$ns_h_default" ]; then
+        ns_h_default="$( { cd "$toplevel" && ghr_remote_default_branch "$ns_h_remote"; } 2>/dev/null || true )"
+        if [ -n "$ns_h_default" ]; then
+          report_warn "(h) gh could not resolve ${ns_h_gh_repo}'s default branch (gh repo view --json defaultBranchRef) — the gate takes the default-branch NAME from gh and FAILs closed here; doctor degraded to the LOCAL symref default '${ns_h_default}' for this diagnosis (confirm 'gh repo view ${ns_h_gh_repo}' auth + network before enabling proactive mode)"
+        fi
+      fi
       if [ -n "$ns_h_default" ]; then
         doctor_anchor_ref="refs/doctor/$$/anchor"
         ns_h_fetched="$( { cd "$toplevel" && ghr_fetch_default_commit "$ns_h_remote" "$ns_h_default" "$doctor_anchor_ref"; } 2>/dev/null || true )"

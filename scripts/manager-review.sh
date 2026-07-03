@@ -271,25 +271,31 @@ if [ -n "$repo" ]; then
     echo "       'origin' at ${repo}), then re-run." >&2
     exit 1
   fi
-  # EFFECTIVE-URL IDENTITY GATE (#102 fix A, insteadOf repo-substitution guard). Selection above
-  # matched the CONFIGURED url, but the fetch below goes BY NAME — which applies any
-  # `url.<other>.insteadOf`, so the URL git actually contacts can be a DIFFERENT repo. Before
-  # fetching (and anchoring the gate off it), assert the EFFECTIVE fetch URL still resolves to the
-  # SAME GitHub identity gh bound the verdict to; the helper FAILs (with an actionable message) on a
-  # cross-repo-substitution rewrite, so the gate never reads one repo while posting to another's.
+  # EFFECTIVE-URL IDENTITY GATE (#102 fix A, FAIL-CLOSED). Selection matched the remote by URL, but
+  # the fetch below goes BY NAME — which applies any `url.<other>.insteadOf`, so the URL git actually
+  # contacts can be a DIFFERENT repo. Before fetching (and anchoring the gate off it), assert the
+  # EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's: a cross-repo GitHub substitution, a
+  # local-path/file://-substitution, or any transport we can't PROVE is gh's repo all FAIL closed
+  # (round-2 — empty is no longer trusted; a deliberate local mirror needs FABRICA_ALLOW_LOCAL_MIRROR=1).
+  # So the gate never reads a source it can't prove is the repo the verdict posts to.
   if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
     exit 1
   fi
-  # Resolve the selected remote's default branch NAME — AUTHORITATIVELY, from the remote's own HEAD
-  # (`git ls-remote --symref`), not the stale/spoofable local tracking HEAD (#102 fix B). We use only
-  # the NAME here — never a stale commit — and FETCH FRESH below.
-  default_branch="$(ghr_remote_default_branch "$selected_remote")"
+  # Resolve the default branch NAME AUTHORITATIVELY from gh — the SAME binding the verdict posts to
+  # (#102 round-2 fix B): `gh repo view "$repo" --json defaultBranchRef`. NOT the stale/spoofable
+  # local `refs/remotes/<remote>/HEAD` symref, and NOT `ls-remote` off the selected remote (which an
+  # insteadOf could redirect) — the default-branch NAME is an AUTHORIZATION input (which branch's
+  # committed north star authorizes the gate), so it must be as authoritative as the repo identity.
+  # We use only the NAME here — never a commit — and FETCH FRESH from the validated remote below.
+  # If gh can't resolve it on this gh-bound run, FAIL closed (no local-symref authorization).
+  default_branch="$(ghr_gh_default_branch "$repo")"
   if [ -z "$default_branch" ]; then
-    echo "error: could not resolve the default branch of remote '${selected_remote}' (${repo})." >&2
-    echo "       'git ls-remote --symref ${selected_remote} HEAD' returned nothing and no local" >&2
-    echo "       refs/remotes/${selected_remote}/HEAD offline fallback is set. Confirm network access" >&2
-    echo "       to the remote (or 'git remote set-head ${selected_remote} --auto' for offline use)," >&2
-    echo "       then re-run." >&2
+    echo "error: gh could not resolve the default branch of ${repo} (gh repo view --json defaultBranchRef)." >&2
+    echo "       The manager-debate gate anchors its authorization to that branch's freshly-fetched" >&2
+    echo "       commit and takes the branch NAME from gh — the SAME binding the verdict posts to —" >&2
+    echo "       never a stale/spoofable local refs/remotes/${selected_remote}/HEAD symref. It will" >&2
+    echo "       NOT fall back to a local source on a gh-bound run. Confirm 'gh repo view ${repo}'" >&2
+    echo "       works (auth + network), then re-run." >&2
     exit 1
   fi
   # FETCH FRESH into a PRIVATE, PER-RUN-UNIQUE ref we own (under refs/manager-review/<PID>/), via the

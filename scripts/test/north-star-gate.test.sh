@@ -102,6 +102,29 @@ case "$cmd $sub" in
       *)
         top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; name="$(basename "$top")" ;;
     esac
+    # #102 round-2 (FIX 2): `repo view <repo> --json defaultBranchRef -q .defaultBranchRef.name`.
+    # A REAL gh reports the repo's CURRENT server-side default branch. Hermetically, that server is
+    # the local bare repo the origin's insteadOf transport maps to, so we ask it AUTHORITATIVELY via
+    # `git ls-remote --symref origin HEAD` (the operator's insteadOf makes this hit the bare repo) —
+    # this reflects the CURRENT remote default even after a repoint, and is IMMUNE to the local
+    # `refs/remotes/origin/HEAD` symref (a spoofed/stale local symref does not change it). Fall back
+    # to the local symbolic HEAD only when there is no reachable origin. Emitted `-q` scalar (bare
+    # name), matching `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`.
+    if printf '%s\n' "$@" | grep -q 'defaultBranchRef'; then
+      # FAKE_GH_NO_DEFAULT=1: simulate gh being unable to resolve the default branch (empty output),
+      # so the gh-bound gate FAILs closed (round-2 FIX 2 — no local-symref authorization fallback).
+      if [ "${FAKE_GH_NO_DEFAULT:-0}" = "1" ]; then
+        exit 0
+      fi
+      symref="$(git ls-remote --symref origin HEAD 2>/dev/null | awk '/^ref:/ {print $2; exit}' || true)"
+      if [ -n "$symref" ]; then
+        echo "${symref#refs/heads/}"
+      else
+        # No reachable origin: name the checkout's current branch (bare-init throwaway repos).
+        git symbolic-ref --quiet --short HEAD 2>/dev/null || true
+      fi
+      exit 0
+    fi
     # Return whichever field was requested (nameWithOwner slug, or the web url for #102).
     if printf '%s\n' "$@" | grep -q 'url'; then
       echo "https://github.com/someone/${name}"
@@ -162,11 +185,18 @@ chmod +x "$fakebin/codex"
 # run_gate <repo_dir> — run the REAL manager-review.sh from inside <repo_dir> with the fakes on
 # PATH; echo "<rc>|<combined-output>". codex/gh are faked; git is real. issue# is 1 (validated
 # as a bare integer by the script). FAKE_GH_NO_REPO (if exported by a caller) passes through.
+#
+# FABRICA_ALLOW_LOCAL_MIRROR (#102 round-2 FIX 1): the hermetic harness rewrites each target's https
+# identity url to a local `file://` bare for offline transport, so the EFFECTIVE fetch URL is a local
+# mirror (unprovable GitHub identity). The round-2 effective-identity gate FAILs closed on that
+# UNLESS the operator opts into a local mirror. So the standard runner exports the opt-in — this IS
+# the deliberate-local-mirror case the flag exists for. A caller can DISABLE it (to exercise the
+# fail-closed path) by exporting FABRICA_ALLOW_LOCAL_MIRROR=0 before calling; we honor that override.
 run_gate() {
-  local repo_dir="$1" rc out
+  local repo_dir="$1" rc out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" bash "$manager_review" 1 2>&1
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$manager_review" 1 2>&1
   )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
@@ -306,12 +336,13 @@ make_cp_clone() {
 }
 
 # run_cp_gate <cp_root> — run the clone's OWN copied manager-review.sh from inside it with the
-# fakes on PATH; echo "<rc>|<combined-output>".
+# fakes on PATH; echo "<rc>|<combined-output>". Sets the local-mirror opt-in for the hermetic
+# file:// transport, same as run_gate (#102 round-2 FIX 1).
 run_cp_gate() {
-  local cp_root="$1" rc out
+  local cp_root="$1" rc out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$cp_root"
-    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
   )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
@@ -639,12 +670,13 @@ test_gate_fabrica_self_symlink_fails() {
 # ---------------------------------------------------------------------------------
 
 # run_gate_from <dir> — like run_gate but runs the REAL manager-review.sh from an arbitrary <dir>
-# (typically a subdirectory of the target), so we exercise the subdir-invocation code path.
+# (typically a subdirectory of the target), so we exercise the subdir-invocation code path. Sets
+# the local-mirror opt-in for the hermetic file:// transport, same as run_gate (#102 round-2 FIX 1).
 run_gate_from() {
-  local dir="$1" rc out
+  local dir="$1" rc out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$dir"
-    PATH="$fakebin:$PATH" bash "$manager_review" 1 2>&1
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$manager_review" 1 2>&1
   )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
@@ -739,10 +771,12 @@ test_gate_no_active_entry_fails() {
 # line (#102) that now precedes it. doctor may exit non-zero on unrelated hard fails (no /faber
 # etc.), so capture output regardless of rc.
 run_doctor_h() {
-  local repo_dir="$1" out
+  # Local-mirror opt-in for the hermetic file:// transport, same as run_gate (#102 round-2 FIX 1);
+  # a caller can override to 0 to exercise the doctor fail-closed WARN/degrade path.
+  local repo_dir="$1" out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" bash "$doctor" 2>&1 || true
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
   )"
   printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true
 }
@@ -750,10 +784,10 @@ run_doctor_h() {
 # run_doctor_h_anchor <repo_dir> — like run_doctor_h but echo the informational anchor line
 # (`info: (h) north-star anchor: …`) so a test can assert HOW doctor resolved the anchor.
 run_doctor_h_anchor() {
-  local repo_dir="$1" out
+  local repo_dir="$1" out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" bash "$doctor" 2>&1 || true
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
   )"
   printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true
 }
@@ -830,10 +864,11 @@ test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
   push_default "$cp_root"
   # Now DIRTY the working-tree root copy (uncommitted edit the gate would ignore).
   printf '### Fabrica goal · status: **active** — uncommitted local edit\nbody CHANGED\n' > "$cp_root/NORTH_STAR.md"
-  local line
+  # Local-mirror opt-in for the hermetic file:// transport, same as run_doctor_h (#102 round-2 FIX 1).
+  local line allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
   line="$(
     cd "$cp_root"
-    PATH="$fakebin:$PATH" bash "$cp_root/scripts/doctor.sh" 2>&1 || true
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$cp_root/scripts/doctor.sh" 2>&1 || true
   )"
   line="$(printf '%s' "$line" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true)"
   assert_contains "(4d'') doctor (h) on Fabrica-self reads the COMMITTED root star despite a dirty worktree edit → pass" "pass:" "$line"
@@ -1139,26 +1174,32 @@ test_doctor_h_local_fallback_visible() {
 }
 
 # ---------------------------------------------------------------------------------
-# (17) #102 anchor-security sweep — FIX A: EFFECTIVE-URL IDENTITY GATE (insteadOf repo-substitution).
-# ghr_select_remote matches the CONFIGURED url, but the fetch goes BY NAME and applies
-# `url.<other>.insteadOf`. A rewrite that redirects the fetch to a DIFFERENT GitHub identity must
-# FAIL (the gate would otherwise read repo B while posting the verdict to gh's repo A). A
-# same-identity transport rewrite (normalizes to the same host/owner/repo), or a local mirror that
-# doesn't parse to a GitHub identity, must PASS.
+# (17) #102 anchor-security sweep — FIX A/FIX 1: EFFECTIVE-URL IDENTITY GATE, FAIL-CLOSED. The remote
+# is selected by URL, but the fetch goes BY NAME and applies `url.<other>.insteadOf`. The gate
+# authorizes ONLY when the EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's. A rewrite that
+# redirects the fetch to a DIFFERENT GitHub identity FAILs (read repo B, post to gh's repo A); a
+# rewrite to a local path / file:// / ext:: (unprovable identity, normalizes empty) ALSO FAILs by
+# default (round-2 — "empty ⇒ trusted" was the re-attack hole), and is allowed ONLY under the
+# explicit FABRICA_ALLOW_LOCAL_MIRROR=1 opt-in. A same-identity transport rewrite (https↔ssh for the
+# SAME repo, normalizes to the same id) PASSES.
 # ---------------------------------------------------------------------------------
 
-# (17a) UNIT — ghr_assert_effective_identity directly. Deterministic (no network): we only vary the
-# insteadOf and check the helper's rc + message, since it is a pure derivation over `git remote
-# get-url`. Covers: cross-repo GitHub substitution → FAIL; same-identity https↔ssh rewrite → OK;
-# local file:// mirror (unparseable identity) → OK; no insteadOf at all → OK.
-# run_effid <repo_dir> <gh_id> — source the lib in a subshell cd'd into <repo_dir> and run
-# ghr_assert_effective_identity against `origin`; echo "<rc>|<stderr>". A standalone helper (like
-# run_gate) so the subshell reads only its OWN positional args — no outer `$repo` shared across the
-# subshell boundary, so shellcheck's SC2030/SC2031 subshell-scoping heuristic never fires.
+# (17a) UNIT — ghr_assert_effective_identity directly, FAIL-CLOSED (#102 round-2 FIX 1). Deterministic
+# (no network): we only vary the insteadOf (and the FABRICA_ALLOW_LOCAL_MIRROR opt-in) and check the
+# helper's rc + message, since it is a pure derivation over `git remote get-url`. Covers: no insteadOf
+# → OK; cross-repo GitHub substitution → FAIL (even under the opt-in); same-identity https↔ssh rewrite
+# → OK; local file:// mirror (unprovable identity) → FAIL by default, OK only under the explicit opt-in.
+# run_effid <repo_dir> <gh_id> [allow_local_mirror] — source the lib in a subshell cd'd into
+# <repo_dir> and run ghr_assert_effective_identity against `origin`; echo "<rc>|<stderr>". The
+# optional third arg sets FABRICA_ALLOW_LOCAL_MIRROR for THAT call (default unset → fail-closed). A
+# standalone helper (like run_gate) so the subshell reads only its OWN positional args — no outer
+# `$repo` shared across the subshell boundary, so shellcheck's SC2030/SC2031 heuristic never fires.
 run_effid() {
-  local rd="$1" ghid="$2" rc out
+  local rd="$1" ghid="$2" allow="${3:-}" rc out
+  # A PREFIX assignment on the function call scopes the opt-in to that single invocation (no subshell
+  # var-modification for shellcheck to flag), while still exercising the flag the callers vary.
   # shellcheck source=scripts/lib/gh-remote.sh
-  out="$( cd "$rd" && . "$ghr_lib" && ghr_assert_effective_identity origin "$ghid" 2>&1 )" && rc=0 || rc=$?
+  out="$( cd "$rd" && . "$ghr_lib" && FABRICA_ALLOW_LOCAL_MIRROR="$allow" ghr_assert_effective_identity origin "$ghid" 2>&1 )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
 
@@ -1180,6 +1221,10 @@ test_effective_identity_helper_unit() {
   assert_eq "(17a-ii) cross-repo insteadOf (github.com/attacker/evil) → helper FAILs (rc 1)" "1" "$rc"
   assert_contains "(17a-ii) FAIL cites the different fetch-URL identity" "DIFFERENT repo identity" "$out"
   assert_contains "(17a-ii) FAIL names the substituted identity" "github.com/attacker/evil" "$out"
+  # A cross-repo GitHub substitution FAILs EVEN under the local-mirror opt-in (the opt-in is only for
+  # unprovable local transports, never for redirecting to a different GitHub repo).
+  res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-ii) cross-repo insteadOf FAILs even with FABRICA_ALLOW_LOCAL_MIRROR=1 (rc 1)" "1" "$rc"
   git -C "$repo" config --unset "url.https://github.com/attacker/evil.git.insteadOf"
 
   # (iii) SAME-IDENTITY transport rewrite (https→ssh for the SAME repo) → normalizes to the same id → OK.
@@ -1188,12 +1233,28 @@ test_effective_identity_helper_unit() {
   assert_eq "(17a-iii) same-identity https→ssh insteadOf → helper OK (rc 0)" "0" "$rc"
   git -C "$repo" config --unset "url.git@github.com:someone/widget.git.insteadOf"
 
-  # (iv) LOCAL file:// mirror (unparseable GitHub identity) → NOT the cross-repo attack → OK. This is
-  # exactly the hermetic transport the rest of this suite relies on, so it must stay allowed.
+  # (iv) LOCAL file:// mirror (unprovable GitHub identity) → FAIL-CLOSED BY DEFAULT (round-2 FIX 1:
+  # empty is no longer trusted — an attacker's `url.<local>.insteadOf` could silently redirect the
+  # fetch). It is allowed ONLY under the explicit FABRICA_ALLOW_LOCAL_MIRROR=1 opt-in.
   git -C "$repo" config "url.file:///srv/mirror/widget.git.insteadOf" "https://github.com/someone/widget.git"
   res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(17a-iv) local file:// mirror insteadOf (unparseable id) → helper OK (rc 0)" "0" "$rc"
+  assert_eq "(17a-iv) local file:// mirror insteadOf → FAILs closed by default (rc 1)" "1" "$rc"
+  assert_contains "(17a-iv) FAIL explains the unprovable transport + names the opt-in" "FABRICA_ALLOW_LOCAL_MIRROR=1" "$out"
+  res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-iv) local file:// mirror insteadOf → OK under the explicit opt-in (rc 0)" "0" "$rc"
   git -C "$repo" config --unset "url.file:///srv/mirror/widget.git.insteadOf"
+
+  # (v) LOCAL PATH substitution (a bare absolute path, normalizes empty) → FAIL-CLOSED by default.
+  git -C "$repo" config "url./srv/mirror/widget.git.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-v) local-PATH insteadOf → FAILs closed by default (rc 1)" "1" "$rc"
+  git -C "$repo" config --unset "url./srv/mirror/widget.git.insteadOf"
+
+  # (vi) ext:: exotic transport substitution (normalizes empty) → FAIL-CLOSED by default.
+  git -C "$repo" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-vi) ext:: transport insteadOf → FAILs closed by default (rc 1)" "1" "$rc"
+  git -C "$repo" config --unset "url.ext::sh -c evil.insteadOf"
 }
 
 # (17b) END-TO-END — a cross-repo-substitution insteadOf makes the GATE FAIL (does NOT fetch/anchor
@@ -1226,18 +1287,86 @@ test_gate_insteadof_cross_repo_fails() {
   esac
 }
 
-# (17c) END-TO-END — a SAME-identity/transport insteadOf still WORKS: the hermetic targets (built by
-# make_target) rewrite the configured https identity url to a local file:// bare for transport. The
-# effective url is a local mirror (unparseable GitHub identity) — NOT the cross-repo attack — so the
-# guard passes and the gate PROCEEDs. This is the positive control for FIX A: the guard must not
-# break the legitimate transport rewrite the whole loop depends on.
+# (17c) END-TO-END — a deliberate local-mirror transport insteadOf still WORKS UNDER THE OPT-IN: the
+# hermetic targets (built by make_target) rewrite the configured https identity url to a local file://
+# bare for transport. The effective url is a local mirror (unprovable GitHub identity) — which now
+# FAILs closed by default (round-2 FIX 1) — so the operator opts in with FABRICA_ALLOW_LOCAL_MIRROR=1
+# (set by run_gate for the whole hermetic suite). This is the positive control: the opt-in lets the
+# legitimate local mirror the loop depends on proceed, while the DEFAULT stays fail-closed (17e).
 test_gate_insteadof_same_identity_transport_works() {
   local repo; repo="$(make_target "insteadof-transport-ok")"
   commit_star "$repo" "### Ship v2 · status: **active** — real committed star via transport insteadOf"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(17c) transport insteadOf (local mirror, non-github effective id) → gate PROCEEDs (not falsely FAILed)" "0" "$rc"
-  assert_contains "(17c) gate proceeded under the legitimate transport insteadOf" "PROCEED" "$out"
+  assert_eq "(17c) local-mirror transport insteadOf UNDER the opt-in → gate PROCEEDs (not falsely FAILed)" "0" "$rc"
+  assert_contains "(17c) gate proceeded under the legitimate local-mirror opt-in" "PROCEED" "$out"
+}
+
+# (17e) END-TO-END — WITHOUT the opt-in, the hermetic local-mirror target FAILs CLOSED (round-2
+# FIX 1: "empty ⇒ trusted" is the re-attack hole). Same setup as 17c, but run with
+# FABRICA_ALLOW_LOCAL_MIRROR=0 so the effective file:// url is unprovable → gate FAILs before
+# fetching, never reaching a verdict. This is the security control for FIX 1 (the insteadOf→file://
+# case); 17c is its opt-in counterpart.
+test_gate_insteadof_local_mirror_no_optin_fails() {
+  local repo; repo="$(make_target "insteadof-local-nooptin")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real committed star behind a local mirror"
+  local res rc out
+  res="$( FABRICA_ALLOW_LOCAL_MIRROR=0 run_gate "$repo" )"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17e) local-mirror insteadOf WITHOUT the opt-in → gate FAILs closed (rc 1)" "1" "$rc"
+  assert_contains "(17e) FAIL explains the unprovable transport + names the opt-in" "FABRICA_ALLOW_LOCAL_MIRROR=1" "$out"
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17e) gate must NOT reach a verdict on an unprovable local mirror without the opt-in"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17e) gate did NOT authorize on the unprovable local mirror without the opt-in" ;;
+  esac
+}
+
+# (17f) END-TO-END — insteadOf → ext:: exotic transport WITHOUT the opt-in FAILs closed too (the
+# other unprovable-transport class in FIX 1). The configured origin matches gh's identity (so
+# selection succeeds), but the effective fetch URL is `ext::sh -c …` — normalizes empty → FAIL.
+test_gate_insteadof_ext_transport_no_optin_fails() {
+  local name="insteadof-ext-nooptin"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/${name}.git"
+  local res rc out
+  res="$( FABRICA_ALLOW_LOCAL_MIRROR=0 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17f) ext:: transport insteadOf WITHOUT the opt-in → gate FAILs closed (rc 1)" "1" "$rc"
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17f) gate must NOT reach a verdict on an ext:: transport"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17f) gate did NOT authorize on the ext:: transport" ;;
+  esac
+}
+
+# (17g) END-TO-END — a SAME-repo https→ssh insteadOf (a legit transport swap, NOT a local mirror)
+# PROCEEDs even WITHOUT the local-mirror opt-in: the effective url normalizes to a NON-EMPTY GitHub
+# id EQUAL to gh's, so it is provably the same repo. We can't fetch over real ssh hermetically, so
+# this asserts at the assert-helper level (the gate's authorization decision) — the fetch itself is
+# covered by the file:// transport cases. Uses the ssh→file:// chain so the effective transport is
+# still local (fetchable) while a SEPARATE assertion confirms the ssh identity normalizes equal.
+test_gate_insteadof_https_ssh_same_repo_proceeds() {
+  local name="insteadof-https-ssh"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real star, https↔ssh same-repo swap"
+  # The effective-identity helper must treat a same-repo ssh rewrite as provably-equal (rc 0) with
+  # NO opt-in: point origin's https identity at the ssh form of the SAME repo.
+  local sshrepo="$tmproot/$name-ssh-id"
+  mkdir -p "$sshrepo"
+  git -C "$sshrepo" init -q -b main
+  git -C "$sshrepo" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$sshrepo" config "url.git@github.com:someone/${name}.git.insteadOf" "https://github.com/someone/${name}.git"
+  local res rc
+  res="$(run_effid "$sshrepo" "github.com/someone/${name}")"; rc="${res%%|*}"
+  assert_eq "(17g) https→ssh SAME-repo insteadOf → authorized with NO opt-in (rc 0)" "0" "$rc"
+  # And the full gate PROCEEDs on the hermetic same-repo target (local transport, opt-in via run_gate).
+  res="$(run_gate "$repo")"; rc="${res%%|*}"
+  assert_eq "(17g) same-repo target → gate PROCEEDs" "0" "$rc"
 }
 
 # (17d) doctor (h) mirrors FIX A: a cross-repo-substitution insteadOf → doctor WARNs (the gate FAILs)
@@ -1267,15 +1396,19 @@ test_doctor_h_insteadof_cross_repo_warns() {
 }
 
 # ---------------------------------------------------------------------------------
-# (18) #102 anchor-security sweep — FIX B: the default-branch NAME is resolved AUTHORITATIVELY from
-# `git ls-remote --symref <remote> HEAD`, NOT the stale/spoofable local refs/remotes/<remote>/HEAD.
+# (18) #102 anchor-security sweep — FIX B/FIX 2: the default-branch NAME is resolved AUTHORITATIVELY
+# from gh (`gh repo view --json defaultBranchRef`, the SAME binding the verdict posts to), NOT the
+# stale/spoofable local refs/remotes/<remote>/HEAD and NOT ls-remote off the (insteadOf-redirectable)
+# selected remote. The fake gh reports the CURRENT server-side default (hermetically, the bare repo's
+# HEAD), so a stale/spoofed LOCAL symref never changes the gate's anchor. If gh can't resolve the
+# default on a gh-bound run, the gate FAILs closed (18d) — no local-symref authorization fallback.
 # ---------------------------------------------------------------------------------
 
 # (18a) DEFAULT-BRANCH REPOINT — the remote's default was `develop`, later repointed to `main`
 # (where the real star lives). The target's local refs/remotes/origin/HEAD still names the STALE
 # `develop` (fetch never refreshes it). If the gate trusted the local symref it would anchor to
-# develop (a placeholder star) and FAIL; ls-remote-authoritative anchors to the CURRENT default
-# (main, real star) → PROCEED.
+# develop (a placeholder star) and FAIL; gh's defaultBranchRef names the CURRENT default (main, real
+# star) → PROCEED.
 test_gate_default_repoint_uses_lsremote_not_stale_symref() {
   local name="default-repoint"
   local path="$tmproot/$name"
@@ -1306,17 +1439,17 @@ test_gate_default_repoint_uses_lsremote_not_stale_symref() {
   # The target's local refs/remotes/origin/HEAD still says develop (stale). Confirm (belt-and-suspenders).
   local local_head; local_head="$(git -C "$path" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
   assert_eq "(18a) local origin/HEAD is STALE at develop (fetch never refreshed it)" "refs/remotes/origin/develop" "$local_head"
-  # The gate must anchor to the CURRENT default (main, real star) via ls-remote → PROCEED.
+  # The gate must anchor to the CURRENT default (main, real star) via gh's defaultBranchRef → PROCEED.
   local res rc out
   res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(18a) default repoint develop→main: gate anchors to CURRENT default via ls-remote → PROCEEDs" "0" "$rc"
+  assert_eq "(18a) default repoint develop→main: gate anchors to CURRENT default via gh → PROCEEDs" "0" "$rc"
   assert_contains "(18a) gate debated the current-default (main) real star, not the stale develop placeholder" "PROCEED" "$out"
 }
 
 # (18b) SPOOFED LOCAL SYMREF — the remote default is `main` (real star), but a locally-spoofed
-# refs/remotes/origin/HEAD points at a `sneaky` branch carrying a placeholder. ls-remote-authoritative
-# ignores the spoofed local symref and anchors to the real default → PROCEED (a symref-trusting gate
-# would anchor to `sneaky` and FAIL on its placeholder).
+# refs/remotes/origin/HEAD points at a `sneaky` branch carrying a placeholder. gh's defaultBranchRef
+# (server-side, not the local symref) names the real default → PROCEED (a symref-trusting gate would
+# anchor to `sneaky` and FAIL on its placeholder).
 test_gate_spoofed_local_symref_ignored() {
   local name="spoofed-symref"
   local path="$tmproot/$name"
@@ -1346,8 +1479,27 @@ test_gate_spoofed_local_symref_ignored() {
   git -C "$path" checkout -q main
   local res rc out
   res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(18b) spoofed local origin/HEAD → gate ignores it, anchors to the real default via ls-remote → PROCEEDs" "0" "$rc"
+  assert_eq "(18b) spoofed local origin/HEAD → gate ignores it, anchors to the real default via gh → PROCEEDs" "0" "$rc"
   assert_contains "(18b) gate anchored to the real default (main), not the spoofed sneaky placeholder" "PROCEED" "$out"
+}
+
+# (18d) GH CANNOT RESOLVE THE DEFAULT ON A GH-BOUND RUN → gate FAILs CLOSED (round-2 FIX 2: no
+# local-symref authorization fallback). We build a normal remote-backed target (origin matches gh's
+# identity, real committed star, so ONLY the unresolvable default — not a missing star/remote — can
+# be the FAIL), but make the fake gh return an EMPTY defaultBranchRef via FAKE_GH_NO_DEFAULT=1. The
+# gate must FAIL with the "gh could not resolve the default branch" message and never reach a verdict.
+test_gate_gh_no_default_branch_fails_closed() {
+  local name="gh-no-default"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real committed star (default unresolvable via gh)"
+  local res rc out
+  res="$( FAKE_GH_NO_DEFAULT=1 run_gate "$repo" )"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(18d) gh can't resolve default branch on a gh-bound run → gate FAILs closed (rc 1)" "1" "$rc"
+  assert_contains "(18d) FAIL cites gh's unresolved default branch (no local-symref authorization)" "could not resolve the default branch" "$out"
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (18d) gate must NOT reach a verdict when gh can't resolve the default"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (18d) gate did NOT authorize when gh can't resolve the default branch" ;;
+  esac
 }
 
 # run_default_branch <repo_dir> — source the lib in a subshell cd'd into <repo_dir> and echo
@@ -1359,10 +1511,11 @@ run_default_branch() {
   ( cd "$rd" && . "$ghr_lib" && ghr_remote_default_branch origin )
 }
 
-# (18c) OFFLINE FALLBACK — when the remote read is unavailable, ghr_remote_default_branch falls back
-# to the LOCAL refs/remotes/<remote>/HEAD symref. UNIT-level (deterministic): a repo with a bad
-# remote URL (ls-remote fails) but a populated local symref → the helper returns the local default
-# name; with NEITHER available → empty.
+# (18c) DIAGNOSTIC-ONLY OFFLINE FALLBACK — ghr_remote_default_branch (doctor's local fallback, NOT
+# the gate's authorization source) falls back to the LOCAL refs/remotes/<remote>/HEAD symref when the
+# remote read is unavailable. UNIT-level (deterministic): a repo with a bad remote URL (ls-remote
+# fails) but a populated local symref → the helper returns the local default name; with NEITHER
+# available → empty. (The GATE never uses this — it takes the NAME from gh; see 18a/18b/18d.)
 test_default_branch_offline_local_fallback_unit() {
   local repo="$tmproot/offline-fallback-unit"
   mkdir -p "$repo"
@@ -1380,6 +1533,49 @@ test_default_branch_offline_local_fallback_unit() {
   git -C "$repo" symbolic-ref -d refs/remotes/origin/HEAD
   got="$(run_default_branch "$repo")"
   assert_eq "(18c) offline AND no local symref → helper returns empty" "" "$got"
+}
+
+# ---------------------------------------------------------------------------------
+# (20) #102 anchor-security sweep — FIX 3: SELECTION AVAILABILITY. ghr_select_remote matches the
+# CONFIGURED url first; if it does NOT normalize to a GitHub identity (empty — an SSH host-alias or
+# shorthand), it falls back to the EFFECTIVE url (insteadOf-applied) for SELECTION. This restores the
+# SSH-alias case round-1 broke (configured-url-only selection). Safety is unaffected: the
+# effective-identity guard (FIX 1) still gates the FETCH. UNIT-level on ghr_select_remote directly.
+# ---------------------------------------------------------------------------------
+
+# run_select <repo_dir> <gh_id> — source the lib in a subshell cd'd into <repo_dir> and echo
+# ghr_select_remote's result. Standalone (like run_effid) so no outer var crosses the subshell.
+run_select() {
+  local rd="$1" ghid="$2"
+  # shellcheck source=scripts/lib/gh-remote.sh
+  ( cd "$rd" && . "$ghr_lib" && ghr_select_remote "$ghid" )
+}
+
+test_select_remote_ssh_alias_effective_fallback() {
+  local gh_id="github.com/someone/widget"
+
+  # (20a) CONFIGURED url normalizes to gh's id (the common case) → selected by the configured match.
+  local r1="$tmproot/select-configured"
+  mkdir -p "$r1"; git -C "$r1" init -q -b main
+  git -C "$r1" remote add origin "https://github.com/someone/widget.git"
+  assert_eq "(20a) configured url matches gh id → origin selected" "origin" "$(run_select "$r1" "$gh_id")"
+
+  # (20b) CONFIGURED url is an SSH HOST-ALIAS (`myalias:owner/repo`) that does NOT normalize to a
+  # GitHub id; an insteadOf expands it so the EFFECTIVE url resolves to gh's repo. Round-1
+  # (configured-url-only) would NOT select it; FIX 3 falls back to the effective url → selected.
+  local r2="$tmproot/select-ssh-alias"
+  mkdir -p "$r2"; git -C "$r2" init -q -b main
+  git -C "$r2" remote add origin "myalias:someone/widget.git"
+  # Sanity: the configured alias alone does NOT normalize (empty), so selection MUST use the fallback.
+  git -C "$r2" config "url.https://github.com/someone/widget.git.insteadOf" "myalias:someone/widget.git"
+  assert_eq "(20b) SSH-alias configured url + effective→gh insteadOf → origin selected via effective fallback" "origin" "$(run_select "$r2" "$gh_id")"
+
+  # (20c) NEITHER configured NOR effective url resolves to gh's id → NOT selected (empty), so the
+  # gh-bound caller FAILs closed (no false selection of an unrelated remote).
+  local r3="$tmproot/select-none"
+  mkdir -p "$r3"; git -C "$r3" init -q -b main
+  git -C "$r3" remote add origin "https://github.com/other/thing.git"
+  assert_eq "(20c) no remote resolves to gh id (configured or effective) → nothing selected" "" "$(run_select "$r3" "$gh_id")"
 }
 
 # ---------------------------------------------------------------------------------
@@ -1463,10 +1659,15 @@ test_doctor_h_local_fallback_visible
 test_effective_identity_helper_unit
 test_gate_insteadof_cross_repo_fails
 test_gate_insteadof_same_identity_transport_works
+test_gate_insteadof_local_mirror_no_optin_fails
+test_gate_insteadof_ext_transport_no_optin_fails
+test_gate_insteadof_https_ssh_same_repo_proceeds
 test_doctor_h_insteadof_cross_repo_warns
 test_gate_default_repoint_uses_lsremote_not_stale_symref
 test_gate_spoofed_local_symref_ignored
+test_gate_gh_no_default_branch_fails_closed
 test_default_branch_offline_local_fallback_unit
+test_select_remote_ssh_alias_effective_fallback
 test_gate_no_ref_mutation_after_run
 
 echo "-- $passed passed, $failed failed --"
