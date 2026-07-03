@@ -135,21 +135,30 @@ if [ -n "$cwd_slug" ] && ns_slug_eq "$cwd_slug" "$repo"; then
   cwd_is_target=1
 fi
 
-# FIX C (#98a) — is the cwd the FABRICA CONTROL-PLANE repo itself? Detected by PATH IDENTITY (the
-# same trustworthy signal ns_resolve uses, NOT a slug): the cwd's git top-level equals THIS lib's
-# own control-plane root. BOTH operands are GIT-CANONICAL — ns_git_toplevel is `git rev-parse
-# --show-toplevel`, and ns_fabrica_root canonicalizes its physical root through git too (round-2
-# regression fix) — so the compare is immune to case-only differences on a case-insensitive
-# filesystem (a `pwd -P` fabrica_root would preserve the caller's casing and falsely differ from
-# git's stored casing → setup would then pollute the control plane by seeding .fabrica/north-star.md
-# into it). We must NEVER seed .fabrica/north-star.md into the control plane — Fabrica-self's north
-# star is the root NORTH_STAR.md, and a seeded .fabrica/north-star.md would pollute the control
-# plane AND (pre-precedence-fix) could shadow the root star. `|| true` keeps the derivations from
-# aborting under `set -e`.
+# FIX C (#98a) — is the cwd the FABRICA CONTROL-PLANE repo itself (its main checkout OR a linked
+# worktree of it)? Detected by GIT-STRUCTURAL IDENTITY (the same trustworthy signal ns_resolve
+# uses, NOT a slug): the cwd's git COMMON-DIR equals THIS lib's own control-plane common-dir. This
+# is the SAME shared-common-dir signal the nested-repo guard above (round-1 FIX F) uses — and it is
+# what a bare top-level PATH compare could not do: Faber operates from a LINKED WORKTREE
+# (`.claude/worktrees/*`) whose git top-level is the WORKTREE path, not the main checkout, so the old
+# `cwd_toplevel == fabrica_root` compare FALSELY FAILed → setup would seed .fabrica/north-star.md
+# INTO the Fabrica worktree (polluting the control plane). A linked worktree SHARES its parent repo's
+# common-dir, so the common-dir compare treats the main checkout AND all its worktrees as self; the
+# top-level PATH equality is KEPT as one accepted case (belt-and-suspenders). Both common-dirs are
+# canonicalized to absolute physical paths (ns_git_common_dir), immune to a relative
+# `--git-common-dir` and to `/var`→`/private/var` symlink skew. We must NEVER seed
+# .fabrica/north-star.md into the control plane — Fabrica-self's north star is the root
+# NORTH_STAR.md, and a seeded .fabrica/north-star.md would pollute the control plane AND
+# (pre-precedence-fix) could shadow the root star. `|| true` keeps the derivations from aborting
+# under `set -e`; the emptiness guards below ensure an unresolved common-dir never false-matches.
 cwd_is_fabrica_self=0
 cwd_toplevel="$(ns_git_toplevel "$PWD" || true)"
 fabrica_root="$(ns_fabrica_root || true)"
-if [ -n "$cwd_toplevel" ] && [ -n "$fabrica_root" ] && [ "$cwd_toplevel" = "$fabrica_root" ]; then
+cwd_common="$(ns_git_common_dir "$cwd_toplevel" || true)"
+fab_common="$(ns_git_common_dir "$fabrica_root" || true)"
+if [ -n "$cwd_common" ] && [ -n "$fab_common" ] && [ "$cwd_common" = "$fab_common" ]; then
+  cwd_is_fabrica_self=1
+elif [ -n "$cwd_toplevel" ] && [ -n "$fabrica_root" ] && [ "$cwd_toplevel" = "$fabrica_root" ]; then
   cwd_is_fabrica_self=1
 fi
 

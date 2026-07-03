@@ -11,9 +11,11 @@
 #
 # Resolution order (see issue #97, hardened in #98a):
 #   1. Fabrica-self:   the control-plane root NORTH_STAR.md — CLASSIFIED (as the SOURCE) whenever
-#      the resolved repo IS the Fabrica control-plane repo itself, decided by a PATH identity check
-#      (the target's git top-level equals THIS lib's own control-plane root), never a slug. This
-#      classification is PATH-ONLY and UNCONDITIONAL — it does NOT depend on whether NORTH_STAR.md
+#      the resolved repo IS the Fabrica control-plane repo itself (its main checkout OR any linked
+#      worktree of it), decided by a SHARED-GIT-COMMON-DIR identity check (the target's git
+#      common-dir equals THIS lib's own control-plane common-dir; the top-level PATH equality is
+#      kept as one accepted case), never a slug. This classification is IDENTITY-ONLY (git-structural,
+#      not slug) and UNCONDITIONAL — it does NOT depend on whether NORTH_STAR.md
 #      exists (round-3 [P2]): CLASSIFICATION (which source applies) is the resolver's job; whether
 #      that source carries a real committed star (AUTHORIZATION) is the gate's job. Checked FIRST,
 #      and returned unconditionally on a path match, so a stray/committed `.fabrica/north-star.md`
@@ -26,12 +28,13 @@
 #      decides how to react (manager-review FAILs; doctor WARNs). Never silently read another
 #      repo's star.
 #
-# SECURITY (#98a): the Fabrica-self identity is PATH-only. An earlier slug-based fallback
-# (target slug == Fabrica's slug -> FABRICA_SELF) rested on the git REMOTE URL, which any clone
-# owner can set — so a hostile target pointing origin at Fabrica's slug would be authorized
-# against Fabrica's root star, bypassing its own star AND the placeholder-FAIL. The remote URL
-# is attacker-settable and thus NOT a trustworthy identity signal; only the path (the target IS
-# the clone that ships this very lib) is trustworthy. The slug fallback is removed.
+# SECURITY (#98a): the Fabrica-self identity is GIT-STRUCTURAL (shared common-dir / top-level path),
+# never a slug. An earlier slug-based fallback (target slug == Fabrica's slug -> FABRICA_SELF) rested
+# on the git REMOTE URL, which any clone owner can set — so a hostile target pointing origin at
+# Fabrica's slug would be authorized against Fabrica's root star, bypassing its own star AND the
+# placeholder-FAIL. The remote URL is attacker-settable and thus NOT a trustworthy identity signal;
+# only git-structural identity (the target shares the very repository that ships this lib — its main
+# checkout or a linked worktree of it) is trustworthy. The slug fallback is removed.
 #
 # The functions here are pure resolution/derivation — they print a result and never post
 # comments, edit files, or mutate any checkout. Callers own the side effects.
@@ -170,6 +173,29 @@ ns_fabrica_root() {
   else
     printf '%s\n' "$phys_root"
   fi
+}
+
+# ns_git_common_dir <dir> — print the git COMMON directory for the repo containing <dir>,
+# canonicalized to an ABSOLUTE physical path, or nothing. This is the identity signal that ties
+# a linked WORKTREE to its parent repo: `git rev-parse --git-common-dir` returns the SHARED
+# `.git` of the main checkout for every linked worktree of the same repo (whereas
+# `--git-dir` differs per worktree, and `--show-toplevel` differs per worktree). So comparing
+# canonicalized common-dirs answers "are these the SAME repository?" across the main checkout and
+# all its linked worktrees, which a bare top-level PATH compare cannot (a worktree's top-level is
+# its own path, not the main checkout's).
+#
+# CANONICALIZATION: `--git-common-dir` may print a RELATIVE path (`.git` / `../.git`) depending on
+# the cwd it is asked from, so we resolve it to an absolute physical path by `cd`ing into <dir>
+# first, then into the reported common dir, then `pwd -P` — this also collapses any
+# `/var`→`/private/var` symlink skew, so two spellings of the same dir compare equal. This mirrors
+# the nested-repo guard in manager-review.sh / setup-target-repo.sh (round-1 FIX F), which uses the
+# same `cd … && cd "$(git rev-parse --git-common-dir)" && pwd -P` shape. Every step is guarded
+# (`2>/dev/null` / `|| true`) so a non-work-tree <dir> degrades to empty output (rc 0) instead of
+# aborting a `set -e` caller.
+ns_git_common_dir() {
+  local dir="$1"
+  [ -n "$dir" ] || return 0
+  ( cd "$dir" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P ) || true
 }
 
 # ns_dir_is_empty_repo <dir> — return 0 (true) when the git repo containing <dir> has NO
@@ -346,32 +372,57 @@ ns_resolve() {
     return 0
   fi
 
-  # Order 1 — Fabrica-self: root NORTH_STAR.md, ONLY on a PATH identity match (the target IS the
-  # Fabrica control-plane repo — i.e. the clone that ships THIS very lib). Checked BEFORE the
-  # target-local file so a stray/committed `.fabrica/north-star.md` accidentally sitting in the
-  # control-plane checkout can NOT shadow Fabrica's own root star (that file would otherwise win
-  # the LOCAL branch and mis-steer Fabrica-self).
+  # Order 1 — Fabrica-self: root NORTH_STAR.md, ONLY on a trustworthy identity match (the target IS
+  # the Fabrica control-plane repo — i.e. the clone that ships THIS very lib, OR one of its linked
+  # worktrees). Checked BEFORE the target-local file so a stray/committed `.fabrica/north-star.md`
+  # accidentally sitting in the control-plane checkout can NOT shadow Fabrica's own root star (that
+  # file would otherwise win the LOCAL branch and mis-steer Fabrica-self).
   #
-  # PATH identity only (NO slug): the target's git top-level equals Fabrica's own root. BOTH sides
-  # are GIT-CANONICAL — ns_git_toplevel is `git rev-parse --show-toplevel`, and ns_fabrica_root now
-  # canonicalizes its physical root through git too (round-2) — so this is a like-for-like compare,
-  # immune to symlink/`/var`→`/private/var` skew AND to case-only differences on a case-insensitive
-  # filesystem (a `pwd -P` operand would preserve the caller's casing and falsely differ from git's
-  # stored casing). This is gh-free, so Fabrica-self still resolves
-  # OFFLINE / when gh is unavailable. The old slug fallback (target slug == Fabrica slug) is
-  # REMOVED: the slug derives from the git REMOTE URL, which any clone owner can set, so it let a
-  # hostile target pointing origin at Fabrica's slug authorize against Fabrica's root star and
-  # bypass the placeholder-FAIL. Only the path (the target IS this shipped copy) is trustworthy.
+  # SHARED-GIT-COMMON-DIR identity (NO slug): the target is Fabrica-self iff its git COMMON-DIR
+  # equals Fabrica's own git common-dir. This is the SAME signal round-1's nested-repo guard (FIX F)
+  # uses, and it is what a bare top-level PATH compare could not do: Faber operates from a LINKED
+  # WORKTREE (`.claude/worktrees/*`) whose `git rev-parse --show-toplevel` is the WORKTREE path, not
+  # the main checkout, so `toplevel == fabrica_root` FALSELY FAILed and the Fabrica worktree was
+  # misclassified as an external target (skipping the root NORTH_STAR.md; setup would seed
+  # `.fabrica/north-star.md` into it). A linked worktree SHARES its parent repo's common-dir, so the
+  # common-dir compare makes the main checkout AND all its linked worktrees resolve as Fabrica-self,
+  # while a genuinely SEPARATE repo (different common-dir) does not. The existing top-level PATH
+  # equality is KEPT as one accepted case (belt-and-suspenders: a match either way is self) — but the
+  # common-dir compare is the primary signal.
+  #
+  # BOTH operands are canonicalized to absolute physical paths (ns_git_common_dir `cd`s in and
+  # `pwd -P`s), immune to a relative `--git-common-dir` and to `/var`→`/private/var` symlink skew.
+  # This is gh-free, so Fabrica-self still resolves OFFLINE / when gh is unavailable. The old slug
+  # fallback (target slug == Fabrica slug) is REMOVED: the slug derives from the git REMOTE URL,
+  # which any clone owner can set, so it let a hostile target pointing origin at Fabrica's slug
+  # authorize against Fabrica's root star and bypass the placeholder-FAIL. Only git-structural
+  # identity (the target shares this shipped copy's repository) is trustworthy.
   local fabrica_root
   # `|| true`: ns_fabrica_root degrades to empty (rc may be non-zero); guard so this `set -e` call
   # site can never abort before the `-n` emptiness check decides.
   fabrica_root="$(ns_fabrica_root || true)"
-  if [ -n "$fabrica_root" ] && [ "$toplevel" = "$fabrica_root" ]; then
-    # CLASSIFICATION is PATH-ONLY, UNCONDITIONAL (round-3, [P2]). Classification (which SOURCE
+  # Common-dir identity: does the target share the SAME repository as the Fabrica control plane?
+  # Both canonicalized to absolute physical paths so a linked worktree resolves equal to its main
+  # checkout. `|| true` keeps each derivation from aborting this `set -e` call site; the emptiness
+  # guards below ensure an unresolved common-dir never false-matches.
+  local tgt_common fab_common is_self=0
+  tgt_common="$(ns_git_common_dir "$toplevel" || true)"
+  if [ -n "$fabrica_root" ]; then
+    fab_common="$(ns_git_common_dir "$fabrica_root" || true)"
+    if [ -n "$tgt_common" ] && [ -n "$fab_common" ] && [ "$tgt_common" = "$fab_common" ]; then
+      is_self=1
+    fi
+    # Keep the existing top-level PATH equality as one accepted case (a match either way is self).
+    if [ "$toplevel" = "$fabrica_root" ]; then
+      is_self=1
+    fi
+  fi
+  if [ "$is_self" -eq 1 ]; then
+    # CLASSIFICATION is IDENTITY-ONLY, UNCONDITIONAL (round-3, [P2]). Classification (which SOURCE
     # applies) and AUTHORIZATION (whether that source has a real committed star) are SEPARATE
     # concerns: classification belongs to the resolver, authorization belongs to the gate. Once the
-    # PATH identity matches (this checkout IS the Fabrica control plane), the resolved SOURCE is the
-    # root NORTH_STAR.md — FULL STOP. We do NOT gate this on whether NORTH_STAR.md exists (committed
+    # identity matches (this checkout — or a linked worktree of it — IS the Fabrica control plane),
+    # the resolved SOURCE is the root NORTH_STAR.md — FULL STOP. We do NOT gate this on whether NORTH_STAR.md exists (committed
     # OR working-tree): round-2 keyed the branch on `git cat-file -e HEAD:NORTH_STAR.md`, so a
     # control-plane cwd whose root star was NOT committed would FALL THROUGH to the LOCAL branch and
     # a stray committed `.fabrica/north-star.md` there would be authorized as if it were Fabrica's

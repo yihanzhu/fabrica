@@ -231,8 +231,10 @@ if [ "$ns_kind" = "FABRICA_SELF" ]; then
   # placeholder-FAIL). cwd IS the control-plane checkout, so read the root star COMMITTED at the
   # same $head_commit for the same committed-state guarantee.
   #
-  # AUTHORIZATION lives HERE (round-3 [P2]): ns_resolve classifies FABRICA_SELF by PATH identity
-  # UNCONDITIONALLY — it does NOT check whether NORTH_STAR.md is committed — so this branch is the
+  # AUTHORIZATION lives HERE (round-3 [P2]): ns_resolve classifies FABRICA_SELF by git-structural
+  # identity (shared git common-dir, so a linked worktree of the control plane counts too; a
+  # top-level path match is also accepted) UNCONDITIONALLY — it does NOT check whether NORTH_STAR.md
+  # is committed — so this branch is the
   # authorization gate. It must require a COMMITTED root star and FAIL cleanly if there is none: a
   # missing committed root FAILs, it does NOT fall back to `.fabrica/north-star.md` (that fallback
   # would let a stray committed `.fabrica` star mis-steer Fabrica-self). Do the committed read
@@ -241,7 +243,7 @@ if [ "$ns_kind" = "FABRICA_SELF" ]; then
   # makes `git show` exit non-zero → the FAIL branch runs cleanly.
   if ! north_star="$(git show "${head_commit}:NORTH_STAR.md" 2>/dev/null)" || [ -z "$north_star" ]; then
     echo "error: NORTH_STAR.md is not committed at HEAD (${head_commit}) in the control plane" >&2
-    echo "       ns_resolve classified this run as Fabrica-self by PATH identity; the manager-debate" >&2
+    echo "       ns_resolve classified this run as Fabrica-self by git-structural identity; the manager-debate" >&2
     echo "       gate reads COMMITTED state and does NOT fall back to .fabrica/north-star.md. Commit" >&2
     echo "       the root north star (or restore it), then re-run" >&2
     exit 1

@@ -837,6 +837,51 @@ GH
     "$([ -f "$cp_root/.fabrica/north-star.md" ] && echo 0 || echo 1)"
 }
 
+# (5e) [P2, round-3] setup run from a LINKED WORKTREE of the Fabrica control plane must ALSO treat
+# it as self (no seed). Faber operates from `.claude/worktrees/*`; a linked worktree's git
+# top-level is the WORKTREE path (not the main checkout), so the old strict top-level compare
+# FALSELY missed it and setup would seed .fabrica/north-star.md INTO the Fabrica worktree. The
+# common-dir identity fix classifies the worktree as self. We build a control-plane clone that
+# ships the lib+setup+template, add a linked worktree, and run setup FROM the worktree — asserting
+# the seed is skipped with the control-plane note and no .fabrica/north-star.md is written there.
+test_setup_fabrica_self_linked_worktree_no_seed() {
+  local cp_root="$tmproot/fabrica-self-cp-wt"
+  mkdir -p "$cp_root/scripts/lib" "$cp_root/templates/.fabrica"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$setup_script" "$cp_root/scripts/setup-target-repo.sh"; chmod +x "$cp_root/scripts/setup-target-repo.sh"
+  cp "$ns_template" "$cp_root/templates/.fabrica/north-star.md"
+  git -C "$cp_root" init -q
+  git -C "$cp_root" add -A
+  git -C "$cp_root" commit -q -m "cp init"
+  # Add a linked worktree of the control plane (same shape as .claude/worktrees/*).
+  local wt="$cp_root/.claude/worktrees/feature"
+  git -C "$cp_root" worktree add -q --detach "$wt" HEAD 2>/dev/null
+  local self_fakebin="$tmproot/self-wt-fakebin"
+  mkdir -p "$self_fakebin"
+  # repo view → a slug that also equals the target arg (so cwd_is_target would be 1 for the
+  # worktree too); label list → empty.
+  cat >"$self_fakebin/gh" <<'GH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "repo view") echo "acme/fabrica" ;;
+  "label create") exit 0 ;;
+  "label edit") exit 0 ;;
+  "label list") echo "[]" ;;
+  *) exit 0 ;;
+esac
+GH
+  chmod +x "$self_fakebin/gh"
+  local out
+  out="$(
+    cd "$wt"
+    PATH="$self_fakebin:$PATH" bash "$cp_root/scripts/setup-target-repo.sh" "acme/fabrica" 2>&1 || true
+  )"
+  assert_contains "(5e) setup from a Fabrica LINKED WORKTREE skips the seed with a control-plane note" "cwd is the Fabrica control-plane repo itself" "$out"
+  assert_eq "(5e) setup from a Fabrica linked worktree does NOT create .fabrica/north-star.md in it" "1" \
+    "$([ -f "$wt/.fabrica/north-star.md" ] && echo 0 || echo 1)"
+  git -C "$cp_root" worktree remove --force "$wt" 2>/dev/null || true
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -870,6 +915,7 @@ test_setup_check_missing_star_is_drift
 test_setup_check_nontarget_cwd_no_star_drift
 test_setup_seed_cwd_guard_and_idempotency
 test_setup_fabrica_self_no_seed
+test_setup_fabrica_self_linked_worktree_no_seed
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

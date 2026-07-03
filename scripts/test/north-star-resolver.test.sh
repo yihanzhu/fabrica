@@ -27,8 +27,13 @@ set -euo pipefail
 #       still resolves FABRICA_SELF (classification never stats the working tree).
 #   (c-no-committed-root) [P2, round-3] the control-plane checkout with NO committed NORTH_STAR.md
 #       and a STRAY committed `.fabrica/north-star.md` still classifies FABRICA_SELF (not LOCAL):
-#       classification is PATH-only and UNCONDITIONAL, so `.fabrica` can never shadow Fabrica-self;
+#       classification is identity-only and UNCONDITIONAL, so `.fabrica` can never shadow Fabrica-self;
 #       AUTHORIZATION (root actually committed) is the gate's job (it FAILs on the missing root).
+#   (c-worktree) [P2, round-3] a LINKED WORKTREE of the Fabrica control plane (shares the main
+#       checkout's git common-dir) classifies FABRICA_SELF — the common case (Faber runs from
+#       `.claude/worktrees/*`); the old strict top-level PATH compare misclassified it as external.
+#   (c-worktree-neg) [P2, round-3] a genuinely SEPARATE external repo (different git common-dir) is
+#       NOT falsely classified Fabrica-self by the widened identity check → still UNSET.
 #   (c') a NON-Fabrica repo with no local star does NOT inherit the root fallback (PATH identity,
 #       not "file exists") → UNSET.
 #   (m) [FIX A] the shared shipped-default marker matcher is active-region-SCOPED and
@@ -273,6 +278,61 @@ test_fabrica_self_no_committed_root_ignores_stray_local() {
   kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
   assert_eq "(c-no-committed-root) no committed root + stray committed .fabrica → still FABRICA_SELF (not LOCAL)" "FABRICA_SELF" "$kind"
   assert_eq "(c-no-committed-root) FABRICA_SELF path is the root NORTH_STAR.md (not the stray local star)" "$top/NORTH_STAR.md" "$path"
+  unset -f ns_fabrica_root
+}
+
+# --- (c-worktree) a LINKED WORKTREE of the Fabrica control plane is FABRICA_SELF [P2, round-3] ---
+# The [P2] fix: Faber operates from a linked worktree (`.claude/worktrees/*`) of the Fabrica repo.
+# A linked worktree's `git rev-parse --show-toplevel` is the WORKTREE path, NOT the main checkout,
+# so the old strict `toplevel == fabrica_root` compare FALSELY FAILed → the Fabrica worktree was
+# misclassified as an EXTERNAL target (skipping the root NORTH_STAR.md). A linked worktree SHARES
+# its parent repo's git COMMON-DIR, so classifying by common-dir makes the worktree resolve as
+# Fabrica-self. Here we build a real control-plane clone (committed root star), add a linked
+# worktree with `git worktree add`, stub ns_fabrica_root to the MAIN checkout, and assert the
+# worktree resolves FABRICA_SELF (root NORTH_STAR.md), NOT UNSET/LOCAL.
+test_fabrica_self_linked_worktree() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local main; main="$(make_repo "fabrica-wt-main")"
+  local top; top="$(ns_git_toplevel "$main")"     # git-canonical main checkout top-level
+  echo "root fabrica star" > "$top/NORTH_STAR.md"
+  git -C "$top" add NORTH_STAR.md
+  git -C "$top" commit -q -m "root star"
+  # A linked worktree of the SAME repo — the shape Faber runs from (.claude/worktrees/*).
+  local wt="$top/.claude/worktrees/feature"
+  git -C "$top" worktree add -q --detach "$wt" HEAD 2>/dev/null
+  # ns_fabrica_root points at the MAIN checkout (as it would when the lib ships there). The
+  # worktree's top-level differs, but its git common-dir is the MAIN checkout's — so the
+  # common-dir identity check must classify it Fabrica-self.
+  ns_fabrica_root() { echo "$top"; }
+  local out kind path
+  out="$(ns_resolve "$wt")"
+  kind="${out%% *}"; path="${out#"$kind"}"; path="${path# }"
+  assert_eq "(c-worktree) linked worktree of the Fabrica repo → FABRICA_SELF (not external)" "FABRICA_SELF" "$kind"
+  assert_eq "(c-worktree) FABRICA_SELF path is the MAIN checkout's root NORTH_STAR.md" "$top/NORTH_STAR.md" "$path"
+  unset -f ns_fabrica_root
+  git -C "$top" worktree remove --force "$wt" 2>/dev/null || true
+}
+
+# --- (c-worktree-neg) a SEPARATE external repo (different common-dir) is NOT falsely self [P2] ---
+# The negative guard for the common-dir identity: a genuinely separate repo has its OWN git
+# common-dir, so it must NOT be classified Fabrica-self even though the fix widened the identity
+# check. Here fabrica_root points at one repo; the target is a DIFFERENT repo with no local star →
+# its common-dir differs → NOT FABRICA_SELF → UNSET (non-empty target). This proves the widened
+# check did not over-match.
+test_fabrica_self_worktree_negative_separate_repo() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  local fab; fab="$(make_repo "wt-neg-fabrica")"
+  local fabtop; fabtop="$(ns_git_toplevel "$fab")"
+  echo "root fabrica star" > "$fabtop/NORTH_STAR.md"
+  git -C "$fabtop" add NORTH_STAR.md
+  git -C "$fabtop" commit -q -m "root star"
+  local ext; ext="$(make_repo "wt-neg-external")"   # a genuinely separate repo, no local star
+  ns_fabrica_root() { echo "$fabtop"; }             # Fabrica is a DIFFERENT repo than the target
+  local out kind
+  out="$(ns_resolve "$ext")"; kind="${out%% *}"
+  assert_eq "(c-worktree-neg) separate repo (different git common-dir) → NOT FABRICA_SELF (UNSET)" "UNSET" "$kind"
   unset -f ns_fabrica_root
 }
 
@@ -759,6 +819,8 @@ test_slug_spoof_not_fabrica_self
 test_fabrica_self_precedence_over_local
 test_fabrica_self_committed_worktree_deleted
 test_fabrica_self_no_committed_root_ignores_stray_local
+test_fabrica_self_linked_worktree
+test_fabrica_self_worktree_negative_separate_repo
 test_non_fabrica_no_fallback
 test_doctor_slug_mismatch
 test_unset_and_empty
