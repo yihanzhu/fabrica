@@ -225,6 +225,12 @@ setup_remote() {
   local repo="$1" name="$2"
   local bare="$remotes_root/${name}.git"
   git init -q --bare "$bare"
+  # Pin the bare repo's HEAD to `main` EXPLICITLY. `git init --bare`'s default branch name varies
+  # across git versions (`master` on older CI git, `main` on newer), so without this the SERVER-side
+  # HEAD `git ls-remote --symref origin HEAD` reports (the source the fake gh's defaultBranchRef and
+  # the round-2 gate rely on, #102 FIX 2) could name a branch the targets never push → the gate can't
+  # resolve the default. Setting it here makes the hermetic remote's default deterministic = `main`.
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/main
   git -C "$repo" remote add origin "https://github.com/someone/${name}.git"
   # Transport rewrite: fetch/push of the https identity url actually hit the local bare repo.
   git -C "$repo" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
