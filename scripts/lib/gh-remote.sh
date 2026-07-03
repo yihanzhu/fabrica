@@ -36,13 +36,17 @@
 # port and stay equal; `https://github.com:443/o/r` == `https://github.com/o/r`; but
 # `https://ghe.example:8443/o/r` keeps `:8443` and is NOT equal to `ghe.example/o/r`.
 #
-# CASE-INSENSITIVE SCHEME + HOST (#102 round-3, [P3]). git accepts URL SCHEMES case-insensitively
-# (`HTTPS://…`, `SSH://…` are valid), and DNS HOSTNAMES are case-insensitive (`GitHub.com` ==
-# `github.com`) — so both are case-NORMALIZED to lowercase: the scheme BEFORE the allowlist check
-# below (else an uppercase-scheme remote fell through to empty and `ghr_select_remote` could not
-# match the gh-bound repo — a spurious FAIL, not a bypass), and the host in the RETURNED identity so
-# same-repo comparisons across host casings still hold. The OWNER/REPO path is left AS-IS: GitHub
-# treats it case-insensitively for access, but it is display-sensitive, so we do not fold its case.
+# CASE-INSENSITIVE IDENTITY (#102 round-3 [P3] + round-5 [P2]). git accepts URL SCHEMES
+# case-insensitively (`HTTPS://…`, `SSH://…` are valid), DNS HOSTNAMES are case-insensitive
+# (`GitHub.com` == `github.com`), and GitHub treats OWNER/REPO case-insensitively too
+# (`github.com/Acme/App` IS `github.com/acme/app`). This function's OUTPUT is an IDENTITY used only
+# for comparison/selection (never for display), so the WHOLE id must be case-folded or a remote
+# configured `Acme/App` would falsely mismatch gh's canonical `acme/app` → a spurious FAIL / no
+# selection. So: the scheme is lowercased BEFORE the allowlist check below (else an uppercase-scheme
+# remote fell through to empty and `ghr_select_remote` could not match the gh-bound repo — a spurious
+# FAIL, not a bypass), and the ENTIRE returned id (host + owner/repo) is lowercased at the end. (A
+# round-5 change preserved owner/repo case to be "display-safe"; that was wrong for an identity —
+# reverted here. The port is numeric, so lowercasing is a no-op on it.)
 #
 # IDENTITY-CRITICAL PARSING (#102 round-3, [P1]). The host must come from the URL AUTHORITY, never
 # from anything embedded in the PATH — the whole fail-closed guard rests on this. Two bypasses the
@@ -126,12 +130,14 @@ ghr_normalize_repo_id() {
   local name="${rest%%/*}"
   name="${name%.git}"
   [ -n "$host" ] && [ -n "$owner" ] && [ -n "$name" ] || return 0
-  # DNS hostnames are case-insensitive → lowercase the host so `GitHub.com` == `github.com`. The
-  # owner/repo path is left AS-IS (display-sensitive; see header). The port is numeric (no case).
-  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  # This id is a COMPARISON key (host + owner/repo), never displayed — and every component GitHub
+  # treats case-insensitively: DNS hostnames (`GitHub.com` == `github.com`) AND owner/repo
+  # (`Acme/App` == `acme/app`). So lowercase the WHOLE assembled id (the port is numeric, a no-op)
+  # — see the header. Assemble first (host[:port]/owner/repo), then fold, so a single pass covers
+  # every component.
   local host_id="$host"
   [ -n "$port" ] && host_id="${host}:${port}"
-  printf '%s/%s/%s' "$host_id" "$owner" "$name"
+  printf '%s/%s/%s' "$host_id" "$owner" "$name" | tr '[:upper:]' '[:lower:]'
 }
 
 # ghr_gh_repo_id <repo> — compute gh's normalized identity (host + owner/repo) for the repo
@@ -207,6 +213,37 @@ ghr_select_remote() {
   printf '%s' "$selected_remote"
 }
 
+# ghr_url_is_local <url> — return 0 iff <url> is a genuinely LOCAL git source: a `file://` URL or a
+# local filesystem path (absolute or relative). Return non-zero for a remote/exotic transport — any
+# `<helper>::…` form (`ext::`, `fd::`, `transport::…`) or any `<scheme>://` that is NOT `file://`
+# (https/ssh/git/… and any unknown scheme). This is what constrains the FABRICA_ALLOW_LOCAL_MIRROR
+# opt-in (#102 round-5 [P2]) to the case it exists for: an empty normalized identity is ambiguous
+# between a local mirror (safe to opt into) and an arbitrary remote-helper transport (never), so the
+# opt-in bypass is gated on THIS check. scp-style `host:owner/repo` is a REMOTE ssh form (not local),
+# but it never reaches here: it parses to a non-empty identity, so the opt-in path (empty id only) is
+# unreachable for it. The `file://` match is case-insensitive (git accepts the scheme either case).
+ghr_url_is_local() {
+  local url="$1"
+  # Any transport-helper form runs an arbitrary transport — never local.
+  case "$url" in
+    *::*) return 1 ;;
+  esac
+  case "$url" in
+    *://*)
+      # A scheme:// URL is local ONLY when the scheme is file:// (case-insensitive); every other
+      # scheme (https/ssh/git/unknown) is a remote transport.
+      local scheme="${url%%://*}"
+      scheme="$(printf '%s' "$scheme" | tr '[:upper:]' '[:lower:]')"
+      [ "$scheme" = "file" ] && return 0
+      return 1
+      ;;
+    *)
+      # No `<scheme>://` and no `::` helper → a bare filesystem path (absolute or relative). Local.
+      return 0
+      ;;
+  esac
+}
+
 # ghr_assert_effective_identity <remote> <gh_repo_id> — the FETCH-time identity gate, FAIL-CLOSED
 # (#102 round-2 FIX 1). ghr_select_remote picks the remote by URL, but the caller then FETCHES BY
 # NAME — which applies `url.<base>.insteadOf`, so the URL git actually contacts can differ from the
@@ -230,10 +267,19 @@ ghr_select_remote() {
 # EXPLICIT LOCAL-MIRROR OPT-IN: a genuine local mirror (a `file://` / on-disk clone the operator
 # deliberately fetches from) is unprovable against gh's GitHub identity, so it is refused BY DEFAULT.
 # An operator who really wants it must opt in EXPLICITLY by exporting
-# FABRICA_ALLOW_LOCAL_MIRROR=1 — never the silent default. When set, an EMPTY effective id is
-# allowed through (a cross-repo GitHub substitution — a non-empty DIFFERING id — still FAILs even
-# then, since that is unambiguously the confused-deputy attack). This flag is what the hermetic test
+# FABRICA_ALLOW_LOCAL_MIRROR=1 — never the silent default. This flag is what the hermetic test
 # harness (which rewrites the https identity to a local `file://` bare for offline transport) sets.
+#
+# The opt-in relaxes ONLY the genuinely-LOCAL case (#102 round-5 [P2]). An empty effective id covers
+# TWO very different things: a local mirror (`file://` URL / on-disk path) — the intended case — AND
+# an `ext::`/`fd::`/`<helper>::…` remote-helper or an unsupported remote scheme, which runs an
+# ARBITRARY transport against an arbitrary source. Blessing the latter under the opt-in would let an
+# `insteadOf` to `ext::<cmd>` fetch from anywhere while the verdict still binds to gh's repo. So even
+# WITH the opt-in set we require the effective URL to be genuinely local — a `file://` URL or a local
+# filesystem path (no `<scheme>://` remote, no `::` helper) — via ghr_url_is_local below; an
+# `ext::`/`fd::`/any `::` helper or a non-local remote scheme still FAILs closed. (A cross-repo GitHub
+# substitution — a non-empty DIFFERING id — is handled earlier and still FAILs even under the opt-in,
+# since that is unambiguously the confused-deputy attack.)
 #
 # Returns 0 (OK to fetch) when authorized, non-zero (printing an actionable error to stderr) when
 # not. `|| true` on the get-url substitution so a git hiccup degrades to empty — which now FAILs
@@ -260,8 +306,13 @@ ghr_assert_effective_identity() {
     return 1
   fi
   # EMPTY effective id: unprovable against gh's identity (local path / file:// / ext:: / alias /
-  # unparseable). FAIL closed unless the operator explicitly opted into a local mirror.
-  if [ "${FABRICA_ALLOW_LOCAL_MIRROR:-0}" = "1" ]; then
+  # unparseable). FAIL closed unless the operator explicitly opted into a local mirror AND the
+  # effective URL is GENUINELY LOCAL — a `file://` URL or a local filesystem path. The opt-in must
+  # never bless an `ext::`/`fd::`/`<helper>::…` remote-helper or a non-local remote scheme: those run
+  # an arbitrary transport against an arbitrary source while the verdict still binds to gh's repo
+  # (#102 round-5 [P2]). So the opt-in relaxes ONLY the local case; a non-local empty-id transport
+  # FAILs closed even with FABRICA_ALLOW_LOCAL_MIRROR=1.
+  if [ "${FABRICA_ALLOW_LOCAL_MIRROR:-0}" = "1" ] && ghr_url_is_local "$effective_url"; then
     return 0
   fi
   echo "error: remote '${remote}' resolves (via git remote get-url, applying any insteadOf) to a fetch" >&2
@@ -269,8 +320,9 @@ ghr_assert_effective_identity() {
   echo "       file://, ext::, an SSH alias, or another unprovable transport. The gate/reviewer binds" >&2
   echo "       its verdict to ${gh_repo_id}, so it FAILs closed rather than fetch from a source it" >&2
   echo "       cannot prove is that repo (an 'url.<local>.insteadOf' could silently redirect the fetch)." >&2
-  echo "       Point the remote at the real GitHub transport, or — for a deliberate local mirror —" >&2
-  echo "       export FABRICA_ALLOW_LOCAL_MIRROR=1 to opt in explicitly, then re-run." >&2
+  echo "       Point the remote at the real GitHub transport, or — for a deliberate LOCAL mirror (a" >&2
+  echo "       file:// URL or a local filesystem path only, never an ext::/fd::/remote-helper" >&2
+  echo "       transport) — export FABRICA_ALLOW_LOCAL_MIRROR=1 to opt in explicitly, then re-run." >&2
   return 1
 }
 

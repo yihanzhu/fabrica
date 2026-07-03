@@ -1127,38 +1127,79 @@ test_gate_local_greenfield_visible_fallback_authorizes() {
 }
 
 # ---------------------------------------------------------------------------------
-# (4g) #102 — doctor (h) diagnoses the SAME anchored source the gate authorizes on: the gh-bound
-# remote's default branch, FETCHED FRESH. It logs the anchor source (never silent), and — like the
-# gate — reads the FETCHED integrated commit, not a stale local remote-tracking cache. doctor's
-# fallback (no gh repo / no matching remote) is VISIBLE (logged), not a hard fail.
+# (4g) #102 (READ-ONLY, round-5 [P2]) — doctor (h) is STRICTLY read-only: it names the gh-bound
+# remote's default branch via READ-ONLY probes and reads the north star from the LOCAL committed
+# state (the local default-branch ref, else HEAD) — it NEVER `git fetch`es (no .git/FETCH_HEAD, no
+# object download). The anchor line names the local source AND states the GATE fetches fresh (so the
+# read is advisory). doctor's fallback (no gh repo / no matching remote) is VISIBLE (logged), never
+# a hard fail. The GATE (manager-review.sh) still fetches fresh — only DOCTOR is read-only.
 # ---------------------------------------------------------------------------------
 
-# (4g-i) doctor (h) on a remote-backed target LOGS the gh-bound fetched-fresh anchor line and
-# PASSES on the real committed default-branch star.
+# (4g-i) doctor (h) on a remote-backed target LOGS the READ-ONLY local anchor line (naming the local
+# committed default branch AND noting the gate fetches fresh) and PASSES on the committed star.
 test_doctor_h_anchor_logs_ghbound() {
   local repo; repo="$(make_target "doctor-anchor-ghbound")"
   commit_star "$repo" "### Ship v2 · status: **active** — real integrated star"
   local anchor; anchor="$(run_doctor_h_anchor "$repo")"
-  assert_contains "(4g-i) doctor (h) logs the gh-bound fetched-fresh anchor (never silent)" "fetched fresh" "$anchor"
+  assert_contains "(4g-i) doctor (h) logs a READ-ONLY local anchor (never silent)" "read-only" "$anchor"
+  assert_contains "(4g-i) doctor (h) anchor line notes the GATE fetches the remote default fresh" "the gate fetches the remote default fresh" "$anchor"
+  # doctor must NOT claim to have fetched — the anchor is the LOCAL committed default branch.
+  case "$anchor" in
+    *"LOCAL committed default branch"*|*"local HEAD"*) passed=$((passed + 1)); echo "pass: (4g-i) doctor (h) anchor is the LOCAL committed source (not a doctor fetch)" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (4g-i) doctor (h) anchor must name a LOCAL source"; echo "      actual: [$anchor]" ;;
+  esac
   local line; line="$(run_doctor_h "$repo")"
-  assert_contains "(4g-i) doctor (h) PASSES on the anchored default-branch star" "pass:" "$line"
+  assert_contains "(4g-i) doctor (h) PASSES on the local committed default-branch star" "pass:" "$line"
 }
 
-# (4g-ii) doctor (h) fetches fresh, not the stale cache: same setup as gate (12). Stale cache =
-# placeholder; fresh remote = real star. doctor must diagnose the FRESH real star → PASS (a
-# stale-cache read would WARN on the placeholder).
-test_doctor_h_fetches_fresh_not_stale_cache() {
-  local name="doctor-anchor-stale"
+# (4g-ii) READ-ONLY / no-fetch (#102 round-5 [P2]) — doctor (h) must NOT `git fetch`: it must not
+# create/update .git/FETCH_HEAD and must not download objects. Setup exercises the gh-bound remote
+# anchor path (a matching remote + a fetchable default), the SAME path that fetched before the fix.
+# We snapshot .git/FETCH_HEAD presence + the object count before/after and assert neither changed;
+# doctor still reports a sensible verdict from the LOCAL committed star (a real star → pass).
+test_doctor_h_is_read_only_no_fetch() {
+  local repo; repo="$(make_target "doctor-readonly-nofetch")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real committed star"
+  # A no-fetch invariant: remove any stray FETCH_HEAD, snapshot object count, run doctor, re-check.
+  rm -f "$repo/.git/FETCH_HEAD"
+  local fh_before objs_before fh_after objs_after
+  fh_before="$([ -e "$repo/.git/FETCH_HEAD" ] && echo yes || echo no)"
+  objs_before="$(find "$repo/.git/objects" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  local line; line="$(run_doctor_h "$repo")"
+  fh_after="$([ -e "$repo/.git/FETCH_HEAD" ] && echo yes || echo no)"
+  objs_after="$(find "$repo/.git/objects" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "(4g-ii) doctor (h) does NOT create .git/FETCH_HEAD (read-only; no fetch)" "$fh_before" "$fh_after"
+  assert_eq "(4g-ii) doctor (h) downloads NO objects (read-only; no fetch)" "$objs_before" "$objs_after"
+  # No refs/doctor/* private anchor ref is left behind (the fetch-into-private-ref path is gone).
+  local doctor_refs; doctor_refs="$(git -C "$repo" for-each-ref --format='%(refname)' 'refs/doctor' 2>/dev/null || true)"
+  assert_eq "(4g-ii) doctor (h) leaves NO private refs/doctor/* ref (no fetch machinery)" "" "$doctor_refs"
+  # …and still diagnoses the LOCAL committed real star sensibly.
+  assert_contains "(4g-ii) doctor (h) still PASSES on the local committed star (read-only diagnosis)" "pass:" "$line"
+}
+
+# (4g-ii') READ-ONLY reads LOCAL, not the fresh remote (#102 round-5 [P2]) — the inverse of the old
+# "fetches fresh" test. The LOCAL committed default branch is a PLACEHOLDER; the remote default is
+# advanced to a REAL star (local cache stays STALE at the placeholder). A fetching doctor would read
+# the fresh remote (pass); the READ-ONLY doctor reads the LOCAL placeholder → WARN (cites the
+# shipped-default marker). This proves doctor no longer fetches, and its read tracks LOCAL state.
+test_doctor_h_reads_local_not_fresh_remote() {
+  local name="doctor-readonly-local"
   local repo; repo="$(make_target "$name")"
   commit_star_raw "$repo" <<'STAR'
 ### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
 body
 STAR
-  # Advance the bare remote's default to a REAL star via a separate pusher (portable helper), so
-  # the target's remote-tracking cache stays STALE at the placeholder.
+  # Advance the bare remote's default to a REAL star; the target's LOCAL refs/heads/main stays at the
+  # placeholder (no fetch happens in doctor). A fetching doctor would pass on the fresh remote star.
   advance_remote_default "$name" "### Ship v2 · status: **active** — fresh integrated approved goal"
+  rm -f "$repo/.git/FETCH_HEAD"
   local line; line="$(run_doctor_h "$repo")"
-  assert_contains "(4g-ii) doctor (h) fetches fresh (not the stale placeholder cache) → PASSES on the integrated star" "pass:" "$line"
+  # READ-ONLY: reads the LOCAL placeholder, so it WARNs (does NOT read the fresh remote real star).
+  assert_contains "(4g-ii') doctor (h) reads the LOCAL committed placeholder (not the fresh remote) → WARN" "warn:" "$line"
+  assert_contains "(4g-ii') WARN cites the local placeholder's shipped-default marker" "fabrica-shipped-default" "$line"
+  # And confirm the read really was local-only: no FETCH_HEAD was written.
+  local fh_after; fh_after="$([ -e "$repo/.git/FETCH_HEAD" ] && echo yes || echo no)"
+  assert_eq "(4g-ii') doctor (h) wrote NO .git/FETCH_HEAD while reading the local placeholder" "no" "$fh_after"
 }
 
 # (4g-iii) doctor (h) on a genuinely LOCAL target (no gh repo) uses the VISIBLE local-HEAD fallback
@@ -1270,12 +1311,14 @@ test_normalize_repo_id_authority_and_schemes() {
     failed=$((failed + 1)); echo "FAIL: (17z-v) scp-style (no port) must equal portless https"; echo "      s=[$s] t=[$t]"
   fi
 
-  # (17z-vi) CASE-INSENSITIVE SCHEME + HOST (#102 round-3 [P3]). git accepts URL schemes
-  # case-insensitively and DNS hostnames are case-insensitive, so an UPPERCASE scheme and/or a
-  # mixed-case host must normalize to the SAME identity as their lowercase forms — else the round-3
-  # lowercase-only allowlist returned EMPTY (regression: `ghr_select_remote` couldn't match the
-  # gh-bound repo → a spurious FAIL). The owner/repo PATH is left AS-IS (display-sensitive).
-  # Regression reproducers: an uppercase scheme must NOT normalize to empty.
+  # (17z-vi) CASE-INSENSITIVE IDENTITY (#102 round-3 [P3] + round-5 [P2]). git accepts URL schemes
+  # case-insensitively, DNS hostnames are case-insensitive, AND GitHub treats owner/repo
+  # case-insensitively too — and this function's OUTPUT is a comparison IDENTITY (never displayed),
+  # so an UPPERCASE scheme and/or a mixed-case host and/or a mixed-case owner/repo must all normalize
+  # to the SAME lowercase identity. Else a remote configured `Acme/App` would falsely MISMATCH gh's
+  # canonical `acme/app` (round-5 [P2]), and the round-3 lowercase-only scheme allowlist returned
+  # EMPTY on an uppercase scheme (`ghr_select_remote` couldn't match the gh-bound repo → a spurious
+  # FAIL). Regression reproducers: an uppercase scheme must NOT normalize to empty.
   assert_eq "(17z-vi) UPPERCASE scheme https → same id as lowercase" "github.com/org/repo" "$(norm "HTTPS://github.com/org/repo.git")"
   assert_eq "(17z-vi) UPPERCASE scheme ssh:// → same id as lowercase" "github.com/org/repo" "$(norm "SSH://git@github.com/org/repo.git")"
   assert_eq "(17z-vi) mixed-case scheme (HttpS://) → normalized" "github.com/o/r" "$(norm "HttpS://github.com/o/r.git")"
@@ -1291,8 +1334,19 @@ test_normalize_repo_id_authority_and_schemes() {
   else
     failed=$((failed + 1)); echo "FAIL: (17z-vi) uppercase scheme+host must normalize equal to lowercase"; echo "      u=[$u] l=[$l]"
   fi
-  # The owner/repo PATH is preserved AS-IS (NOT case-folded) — only scheme + host are normalized.
-  assert_eq "(17z-vi) owner/repo path case preserved (Org/Repo stays Org/Repo)" "github.com/Org/Repo" "$(norm "https://github.com/Org/Repo.git")"
+  # The owner/repo PATH is LOWERCASED too (#102 round-5 [P2]) — GitHub is case-insensitive on it and
+  # this id is a comparison key, so `Org/Repo` folds to `org/repo`. (Reverses the round-5 "preserve
+  # owner/repo case", which caused `Acme/App` vs gh's `acme/app` to false-mismatch.)
+  assert_eq "(17z-vi) owner/repo path lowercased (Org/Repo → org/repo)" "github.com/org/repo" "$(norm "https://github.com/Org/Repo.git")"
+  # And a mixed-case owner/repo normalizes EQUAL to its lowercase form — the round-5 [P2] property:
+  # `Acme/App` (however transported) IS `acme/app` (gh's canonical), so a remote and gh's id match.
+  local m n
+  m="$(norm "git@github.com:Acme/App.git")"; n="$(norm "https://github.com/acme/app.git")"
+  if [ -n "$m" ] && [ "$m" = "$n" ] && [ "$m" = "github.com/acme/app" ]; then
+    passed=$((passed + 1)); echo "pass: (17z-vi) Acme/App scp == acme/app https (case-insensitive owner/repo identity) ([$m])"
+  else
+    failed=$((failed + 1)); echo "FAIL: (17z-vi) Acme/App must normalize equal to acme/app (case-insensitive identity)"; echo "      m=[$m] n=[$n]"
+  fi
 }
 
 # (17z-vii) END-TO-END SELECTION — a configured remote with an UPPERCASE URL scheme still SELECTS
@@ -1324,6 +1378,30 @@ test_gate_uppercase_scheme_remote_selected() {
   local res rc
   res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"
   assert_eq "(17z-vii) uppercase-scheme remote AUTHORIZEs (rc 0) → gate proceeds, no spurious FAIL" "0" "$rc"
+}
+
+# (17z-viii) END-TO-END SELECTION + AUTHORIZATION — case-INSENSITIVE owner/repo (#102 round-5 [P2]).
+# GitHub treats owner/repo case-insensitively, so a remote configured `Acme/App` (mixed case) must
+# still SELECT + AUTHORIZE against gh's canonical lowercase `acme/app` id. Before the round-5 fix the
+# owner/repo case was preserved in the identity, so `github.com/Acme/App` != `github.com/acme/app`
+# and ghr_select_remote found NO match → the caller FAILed CLOSED before fetching (a spurious FAIL,
+# not a bypass). Drives the real selection + authorization path (no git network); no insteadOf, so
+# the effective url == the configured mixed-case url — the decision rests on the id being lowercased.
+test_gate_case_insensitive_owner_repo_selected() {
+  local repo="$tmproot/case-insensitive-owner-repo"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  # origin's CONFIGURED url carries a MIXED-CASE owner/repo (scp-style). gh's canonical id is the
+  # lowercase github.com/acme/app — they must be treated as the SAME repo.
+  git -C "$repo" remote add origin "git@github.com:Acme/App.git"
+  local gh_id="github.com/acme/app"
+  # SELECTION: the mixed-case remote is matched against gh's lowercase id (was a no-match before).
+  assert_eq "(17z-viii) mixed-case owner/repo remote is SELECTED against gh's lowercase id" "origin" "$(sel "$repo" "$gh_id")"
+  # AUTHORIZATION: the effective identity (== the configured mixed-case url, lowercased) equals gh's
+  # → the gate proceeds (rc 0), NOT the fail-closed path. No local-mirror opt-in needed.
+  local res rc
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"
+  assert_eq "(17z-viii) mixed-case owner/repo remote AUTHORIZEs (rc 0) → no spurious FAIL" "0" "$rc"
 }
 
 # (17a) UNIT — ghr_assert_effective_identity directly, FAIL-CLOSED (#102 round-2 FIX 1). Deterministic
@@ -1386,17 +1464,42 @@ test_effective_identity_helper_unit() {
   assert_eq "(17a-iv) local file:// mirror insteadOf → OK under the explicit opt-in (rc 0)" "0" "$rc"
   git -C "$repo" config --unset "url.file:///srv/mirror/widget.git.insteadOf"
 
-  # (v) LOCAL PATH substitution (a bare absolute path, normalizes empty) → FAIL-CLOSED by default.
+  # (v) LOCAL PATH substitution (a bare absolute path, normalizes empty) → FAIL-CLOSED by default,
+  # and — like file:// — ALLOWED under the opt-in (a bare filesystem path IS a genuine local mirror,
+  # #102 round-5 [P2]).
   git -C "$repo" config "url./srv/mirror/widget.git.insteadOf" "https://github.com/someone/widget.git"
   res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17a-v) local-PATH insteadOf → FAILs closed by default (rc 1)" "1" "$rc"
+  res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-v) local-PATH insteadOf → OK under the opt-in (a genuine local mirror, rc 0)" "0" "$rc"
   git -C "$repo" config --unset "url./srv/mirror/widget.git.insteadOf"
 
-  # (vi) ext:: exotic transport substitution (normalizes empty) → FAIL-CLOSED by default.
+  # (vi) ext:: exotic transport substitution (normalizes empty) → FAIL-CLOSED by default AND — the
+  # #102 round-5 [P2] fix — STILL FAILs even WITH FABRICA_ALLOW_LOCAL_MIRROR=1: the opt-in relaxes
+  # ONLY genuinely-local (file://+path) transports, NEVER an ext::/fd::/remote-helper that runs an
+  # arbitrary transport against an arbitrary source while the verdict binds to gh's repo.
   git -C "$repo" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/widget.git"
   res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17a-vi) ext:: transport insteadOf → FAILs closed by default (rc 1)" "1" "$rc"
+  res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-vi) ext:: transport insteadOf → STILL FAILs under the opt-in (rc 1; opt-in is local-only)" "1" "$rc"
   git -C "$repo" config --unset "url.ext::sh -c evil.insteadOf"
+
+  # (vii) fd:: remote-helper (normalizes empty) → STILL FAILs under the opt-in too (#102 round-5
+  # [P2]) — any `<helper>::…` transport is never local.
+  git -C "$repo" config "url.fd::17/foo.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-vii) fd:: transport insteadOf → STILL FAILs under the opt-in (rc 1)" "1" "$rc"
+  git -C "$repo" config --unset "url.fd::17/foo.insteadOf"
+
+  # (viii) A NON-LOCAL remote SCHEME whose identity is UNPROVABLE (an ssh:// host-alias / bare host
+  # that normalizes empty) must ALSO stay fail-closed under the opt-in (#102 round-5 [P2]): the
+  # opt-in never blesses a remote scheme, only file://+local paths. `ssh://alias/` has no owner/repo
+  # path, so it normalizes EMPTY (unprovable) yet is a REMOTE transport → FAIL even with the opt-in.
+  git -C "$repo" config "url.ssh://mirrorhost/.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-viii) non-local remote scheme (empty id) → STILL FAILs under the opt-in (rc 1)" "1" "$rc"
+  git -C "$repo" config --unset "url.ssh://mirrorhost/.insteadOf"
 }
 
 # (17b) END-TO-END — a cross-repo-substitution insteadOf makes the GATE FAIL (does NOT fetch/anchor
@@ -1483,6 +1586,33 @@ test_gate_insteadof_ext_transport_no_optin_fails() {
   case "$out" in
     *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17f) gate must NOT reach a verdict on an ext:: transport"; echo "      actual: [$out]" ;;
     *) passed=$((passed + 1)); echo "pass: (17f) gate did NOT authorize on the ext:: transport" ;;
+  esac
+}
+
+# (17f') END-TO-END — insteadOf → ext:: exotic transport STILL FAILs closed even WITH the opt-in
+# (#102 round-5 [P2]). The FABRICA_ALLOW_LOCAL_MIRROR=1 opt-in relaxes ONLY genuinely-local
+# (file://+path) transports; an ext:: remote-helper runs an arbitrary transport, so it must remain
+# fail-closed even under the opt-in — otherwise `insteadOf → ext::<cmd>` would let the gate fetch
+# from anywhere while binding its verdict to gh's repo. Same setup as 17f, run under the opt-in.
+test_gate_insteadof_ext_transport_optin_still_fails() {
+  local name="insteadof-ext-optin"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/${name}.git"
+  local res rc out
+  # Explicit opt-in ON — the ext:: transport must STILL fail closed.
+  res="$( FABRICA_ALLOW_LOCAL_MIRROR=1 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17f') ext:: transport insteadOf WITH the opt-in → STILL FAILs closed (rc 1; opt-in is local-only)" "1" "$rc"
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17f') gate must NOT authorize an ext:: transport even under the opt-in"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17f') gate did NOT authorize the ext:: transport even under the opt-in" ;;
   esac
 }
 
@@ -1618,12 +1748,14 @@ test_doctor_h_ghbound_no_matching_remote_warns() {
 # block (#102 round-3 [P2]). Pre-fix, the anchor block resolved+fetched the CWD repo's default
 # branch (network, FETCH_HEAD/private-ref writes, WRONG-repo anchor warnings) BEFORE the later
 # "north star not checked for the target" guard. The fix gates the whole block on
-# ns_h_cwd_is_target: when the cwd is NOT the passed target, skip it entirely — no fetch, no
-# wrong-repo anchor warning — and still report the "not checked for <target>" outcome. We run a
-# normal remote-backed checkout (its own gh identity / origin / fetchable default) but pass a
-# DIFFERENT target slug, so cwd != target. The observable proof the block was skipped: the anchor
-# line stays "local HEAD" (a fetch would have logged "fetched fresh"), and no wrong-repo anchor
-# warning is emitted.
+# ns_h_cwd_is_target: when the cwd is NOT the passed target, skip the block entirely — no remote
+# resolution, no wrong-repo anchor warning — and still report the "not checked for <target>"
+# outcome. We run a normal remote-backed checkout (its own gh identity / origin / default branch)
+# but pass a DIFFERENT target slug, so cwd != target. The observable proof the block was skipped:
+# the anchor line stays the plain local-HEAD DEFAULT (the resolved-remote path would instead name
+# "the LOCAL committed default branch '<name>'"), and no wrong-repo anchor warning is emitted.
+# (doctor is read-only and never fetches at all — round-5 [P2]; this test proves the SKIP, not a
+# fetch/no-fetch distinction.)
 test_doctor_target_arg_non_target_skips_anchor() {
   local name="doctor-nontarget-skip"
   local repo; repo="$(make_target "$name")"
@@ -1635,15 +1767,17 @@ test_doctor_target_arg_non_target_skips_anchor() {
     PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 bash "$doctor" "$target" 2>&1 || true
   )"
   anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
-  # Anchor block skipped → no fetch → the anchor stays the local-HEAD default (never "fetched fresh").
-  assert_contains "(17j) doctor from a non-target checkout does NOT fetch (anchor stays local HEAD)" "local HEAD" "$anchorline"
+  # Anchor block skipped → the anchor stays the plain local-HEAD DEFAULT (never the resolved-remote
+  # path that names "the LOCAL committed default branch '<name>'").
+  assert_contains "(17j) doctor from a non-target checkout skips remote resolution (anchor stays local HEAD)" "local HEAD" "$anchorline"
   case "$anchorline" in
-    *"fetched fresh"*) failed=$((failed + 1)); echo "FAIL: (17j) doctor must NOT fetch the cwd repo's default when cwd != target"; echo "      actual: [$anchorline]" ;;
-    *) passed=$((passed + 1)); echo "pass: (17j) doctor skipped the anchor fetch when cwd != target" ;;
+    *"LOCAL committed default branch"*) failed=$((failed + 1)); echo "FAIL: (17j) doctor must NOT resolve the cwd repo's remote default when cwd != target"; echo "      actual: [$anchorline]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17j) doctor skipped the anchor resolution when cwd != target" ;;
   esac
-  # No wrong-repo anchor warning (the identity / default-branch / fetch WARNs the block emits) fired.
+  # No wrong-repo anchor warning (the identity / no-matching-remote / default-branch WARNs the block
+  # emits) fired for the cwd repo.
   case "$out" in
-    *"warn: (h)"*"insteadOf"*|*"warn: (h)"*"no configured git remote matches"*|*"warn: (h)"*"could not fetch remote"*|*"warn: (h) gh could not resolve"*)
+    *"warn: (h)"*"insteadOf"*|*"warn: (h)"*"no configured git remote matches"*|*"warn: (h) gh could not resolve"*)
       failed=$((failed + 1)); echo "FAIL: (17j) doctor emitted a WRONG-repo anchor warning for the cwd repo when cwd != target"; echo "      actual: [$out]" ;;
     *) passed=$((passed + 1)); echo "pass: (17j) doctor emitted no wrong-repo anchor warning when cwd != target" ;;
   esac
@@ -1957,15 +2091,18 @@ test_doctor_h_fabrica_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
 test_doctor_h_anchor_logs_ghbound
-test_doctor_h_fetches_fresh_not_stale_cache
+test_doctor_h_is_read_only_no_fetch
+test_doctor_h_reads_local_not_fresh_remote
 test_doctor_h_local_fallback_visible
 test_normalize_repo_id_authority_and_schemes
 test_gate_uppercase_scheme_remote_selected
+test_gate_case_insensitive_owner_repo_selected
 test_effective_identity_helper_unit
 test_gate_insteadof_cross_repo_fails
 test_gate_insteadof_same_identity_transport_works
 test_gate_insteadof_local_mirror_no_optin_fails
 test_gate_insteadof_ext_transport_no_optin_fails
+test_gate_insteadof_ext_transport_optin_still_fails
 test_gate_insteadof_https_ssh_same_repo_proceeds
 test_gate_insteadof_userinfo_path_host_trick_fails
 test_doctor_h_insteadof_cross_repo_warns

@@ -135,10 +135,13 @@ if [ -f "$ns_lib" ]; then
 fi
 
 # Source the shared gh-bound remote-identity helper too (scripts/lib/gh-remote.sh), so check (h)
-# diagnoses the SAME anchored source the gate authorizes on (#102): the gh-BOUND remote's
-# default-branch committed state, fetched fresh. Guarded like the resolver — a partial restore may
-# be missing exactly this file; (h) then falls back to the visible local-default/HEAD anchor (a
-# diagnostic may legitimately run local-only), and check (f) independently flags the missing file.
+# names the SAME default branch the gate authorizes on (#102) using READ-ONLY probes only — the
+# gh-BOUND remote's default-branch NAME (`gh repo view --json defaultBranchRef` / `git ls-remote
+# --symref`) — and reads the north star from the LOCAL committed state (doctor is strictly read-only,
+# so it NEVER fetches; the gate is the one that fetches the remote default fresh; round-5 [P2]).
+# Guarded like the resolver — a partial restore may be missing exactly this file; (h) then falls back
+# to the visible local-default/HEAD anchor (a diagnostic may legitimately run local-only), and check
+# (f) independently flags the missing file.
 ghr_lib="$repo_root/scripts/lib/gh-remote.sh"
 ghr_lib_ok=0
 if [ -f "$ghr_lib" ]; then
@@ -346,29 +349,29 @@ else
   committed_relpath=".fabrica/north-star.md"
 fi
 
-# ANCHOR RESOLUTION (#102) — diagnose the SAME committed source the gate authorizes on: the
-# gh-BOUND remote's DEFAULT branch, FETCHED FRESH, not raw local HEAD. So doctor's pass/warn
-# tracks the gate's authorize/FAIL. doctor is a DIAGNOSTIC (may run local-only / with no comment
-# target), so — unlike the gate — a missing gh repo OR no matching remote OR a failed fetch is NOT
-# a hard fail: it falls back to the VISIBLE local-default/HEAD anchor and LOGS the line (never
-# silent). We fetch into a private per-run ref and clean it up. `anchor_commit` is the commit-ish
-# the committed reads below resolve against (a full SHA when fetched/local-HEAD, or `HEAD`).
-doctor_anchor_ref=""
-cleanup_doctor_anchor_ref() {
-  [ -n "$doctor_anchor_ref" ] || return 0
-  git update-ref -d "$doctor_anchor_ref" 2>/dev/null || true
-  doctor_anchor_ref=""
-}
-trap cleanup_doctor_anchor_ref EXIT
-
+# ANCHOR RESOLUTION (#102; READ-ONLY in doctor, round-5 [P2]) — doctor is STRICTLY read-only, so
+# unlike the GATE it must NEVER `git fetch` (a fetch writes .git/FETCH_HEAD and downloads objects —
+# mutating the checkout for a command documented as read-only). doctor therefore diagnoses against
+# the LOCAL COMMITTED state already present, using only READ-ONLY probes to name the default branch:
+#   - the default-branch NAME comes from gh (`gh repo view --json defaultBranchRef`) or, offline, the
+#     remote's advertised HEAD (`git ls-remote --symref`) / the local remote-tracking symref — all
+#     read-only (ghr_gh_default_branch / ghr_remote_default_branch; no fetch);
+#   - the NORTH STAR is read from the LOCAL committed state: the local default-branch ref
+#     `refs/heads/<default>` when it exists, else local HEAD.
+# This is ADVISORY: the GATE (manager-review.sh) anchors to the freshly-FETCHED remote default at run
+# time, so a local ref that lags the remote can make doctor's read differ from the gate's. The anchor
+# line below names doctor's local source AND states the gate fetches fresh, so the read is never
+# mistaken for the gate's authoritative anchor. `anchor_commit` is the commit-ish the committed reads
+# below resolve against (a local branch ref or `HEAD`). The gh-bound-fallback WARN semantics
+# (no matching remote / unresolvable default / cross-repo-or-unprovable insteadOf) are preserved —
+# they flag a gate that would FAIL closed — but none of them fetch.
 anchor_commit="HEAD"
-anchor_source="local HEAD"
-# CWD-IS-TARGET GATE (#102 round-3 [P2]): the whole anchor-resolution/fetch block below describes
-# the CWD repo (its gh binding, its remotes, its default branch). When a target <owner>/<repo> was
-# given but the cwd is NOT that target's checkout, resolving/fetching here would hit the network,
-# write FETCH_HEAD/private refs, and emit anchor WARNs for the WRONG repo — none of which describe
-# the target. The later "north star not checked for <target>" guard already reports the real
-# outcome, so SKIP the block entirely (no fetch, no warning) when cwd isn't the target.
+anchor_source="local HEAD (read-only; the gate fetches the remote default fresh)"
+# CWD-IS-TARGET GATE (#102 round-3 [P2]): the whole anchor-resolution block below describes the CWD
+# repo (its gh binding, its remotes, its default branch). When a target <owner>/<repo> was given but
+# the cwd is NOT that target's checkout, resolving here would emit anchor WARNs for the WRONG repo —
+# none of which describe the target. The later "north star not checked for <target>" guard already
+# reports the real outcome, so SKIP the block entirely (no warning) when cwd isn't the target.
 if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ] && [ "$ns_h_cwd_is_target" -eq 1 ]; then
   # Resolve the gh repo from the cwd (clear GH_REPO so it reflects the actual checkout).
   ns_h_gh_repo="$(env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
@@ -385,32 +388,32 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ] && [ "$ns_h_cwd_is_target" -eq 
     # unless the selected remote's EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's. That
     # covers a `url.<other-gh-repo>.insteadOf` cross-repo substitution AND — round-2 — a
     # local-path/file://-substitution or any transport it can't PROVE is gh's repo. doctor only
-    # diagnoses, so it WARNs and falls back to the visible local-HEAD anchor (never fetching from the
-    # substituted/unprovable source). Suppress the helper's own stderr; emit a WARN.
+    # diagnoses, so it WARNs and falls back to the visible local-HEAD anchor (a read-only check;
+    # doctor never fetches at all). Suppress the helper's own stderr; emit a WARN.
     if [ -n "$ns_h_remote" ] \
        && ! ( cd "$toplevel" && ghr_assert_effective_identity "$ns_h_remote" "$ns_h_gh_id" ) 2>/dev/null; then
-      report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT or unprovable repo identity than gh's (${ns_h_gh_id}) — the gate FAILs closed on this; diagnosing against LOCAL HEAD instead. Point the remote at gh's real transport (or, for a deliberate local mirror, export FABRICA_ALLOW_LOCAL_MIRROR=1) before enabling proactive mode"
+      report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT or unprovable repo identity than gh's (${ns_h_gh_id}) — the gate FAILs closed on this; diagnosing against LOCAL committed state instead. Point the remote at gh's real transport (or, for a deliberate local mirror, export FABRICA_ALLOW_LOCAL_MIRROR=1) before enabling proactive mode"
       ns_h_remote=""
       ns_h_identity_warned=1
     fi
     # NO USABLE REMOTE ON A GH-BOUND RUN (#102 round-3 [P2]): gh resolved a repo, but NO configured
     # remote matches its identity (ghr_select_remote returned empty) — the SAME scenario in which the
     # gate (manager-review.sh) FAILs closed ("no configured git remote matches the gh-resolved
-    # identity"). doctor is a diagnostic and still falls back to the visible local-HEAD anchor, but it
+    # identity"). doctor is a diagnostic and still falls back to the visible local anchor, but it
     # must NOT silently print `pass:` for a committed local star and thereby advertise a ready gate for
-    # a setup that can't actually run. Emit a WARN before the local-HEAD fallback. (Skipped when the
+    # a setup that can't actually run. Emit a WARN before the local fallback. (Skipped when the
     # identity gate above already WARNed — same empty-remote outcome, already reported — and it never
     # fires on the plain local-only/greenfield case, which has no gh repo at all and stays outside this
     # `[ -n "$ns_h_gh_repo" ]` block, keeping its existing visible-fallback behavior.)
     if [ -z "$ns_h_remote" ] && [ "$ns_h_identity_warned" -eq 0 ]; then
-      report_warn "(h) gh resolved ${ns_h_gh_repo} (${ns_h_gh_id}) but no configured git remote matches that identity — the gate (manager-review.sh) FAILs closed here; doctor is diagnosing against LOCAL HEAD instead. Add a git remote whose URL is gh's repo (${ns_h_gh_id}) before enabling proactive mode, so the gate can anchor + fetch the integrated default branch"
+      report_warn "(h) gh resolved ${ns_h_gh_repo} (${ns_h_gh_id}) but no configured git remote matches that identity — the gate (manager-review.sh) FAILs closed here; doctor is diagnosing against LOCAL committed state instead. Add a git remote whose URL is gh's repo (${ns_h_gh_id}) before enabling proactive mode, so the gate can anchor + fetch the integrated default branch"
     fi
     if [ -n "$ns_h_remote" ]; then
-      # Default-branch NAME: mirror the gate's gh-authoritative source (#102 round-2 fix B) —
-      # `gh repo view --json defaultBranchRef`, the SAME binding the verdict posts to, NOT the
-      # stale/spoofable local symref. doctor is a DIAGNOSTIC, so if gh can't resolve it, WARN and
-      # degrade VISIBLY to the local `ghr_remote_default_branch` fallback (the gate FAILs closed there
-      # — doctor only diagnoses, so it flags the gap and still names a plausible default).
+      # Default-branch NAME (READ-ONLY): mirror the gate's gh-authoritative source (#102 round-2
+      # fix B) — `gh repo view --json defaultBranchRef`, the SAME binding the verdict posts to. If gh
+      # can't resolve it, WARN and degrade VISIBLY to the local read-only `ghr_remote_default_branch`
+      # fallback (ls-remote --symref / local symref — no fetch). doctor never fetches; it uses the
+      # NAME only to pick the LOCAL branch ref to read the committed star from.
       ns_h_default="$(ghr_gh_default_branch "$ns_h_gh_repo" 2>/dev/null || true)"
       if [ -z "$ns_h_default" ]; then
         ns_h_default="$( { cd "$toplevel" && ghr_remote_default_branch "$ns_h_remote"; } 2>/dev/null || true )"
@@ -426,21 +429,23 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ] && [ "$ns_h_cwd_is_target" -eq 
         fi
       fi
       if [ -n "$ns_h_default" ]; then
-        doctor_anchor_ref="refs/doctor/$$/anchor"
-        ns_h_fetched="$( { cd "$toplevel" && ghr_fetch_default_commit "$ns_h_remote" "$ns_h_default" "$doctor_anchor_ref"; } 2>/dev/null || true )"
-        if [ -n "$ns_h_fetched" ]; then
-          anchor_commit="$ns_h_fetched"
-          anchor_source="the gh-bound remote '${ns_h_remote}' default branch '${ns_h_default}' (fetched fresh)"
+        # READ-ONLY anchor: read the LOCAL committed default-branch ref when present (no fetch — the
+        # gate is the one that fetches fresh). `git rev-parse --verify` is read-only; if the local
+        # branch ref doesn't exist (never checked out / never fetched) we fall through to local HEAD.
+        ns_h_local_ref="$( { cd "$toplevel" && git rev-parse --verify --quiet "refs/heads/${ns_h_default}"; } 2>/dev/null || true )"
+        if [ -n "$ns_h_local_ref" ]; then
+          anchor_commit="$ns_h_local_ref"
+          anchor_source="the LOCAL committed default branch '${ns_h_default}' (read-only; the gate fetches the remote default fresh at run time)"
         else
-          doctor_anchor_ref=""
-          report_warn "(h) could not fetch remote '${ns_h_remote}' default branch '${ns_h_default}' — diagnosing against LOCAL HEAD instead (the gate anchors to the fetched default-branch commit; confirm network access)"
+          anchor_source="local HEAD (no local '${ns_h_default}' ref; read-only — the gate fetches the remote default fresh at run time)"
         fi
       fi
     fi
   fi
 fi
-# Log the anchor source so it is never silent (matches the gate's fetched anchor, or names the
-# visible local fallback). Emitted as an informational line ahead of the (h) verdict.
+# Log the anchor source so it is never silent. doctor is read-only: it names the LOCAL committed
+# source it read AND states that the gate fetches the remote default fresh (so this read is advisory,
+# not the gate's authoritative anchor). Emitted as an informational line ahead of the (h) verdict.
 echo "info: (h) north-star anchor: ${anchor_source}"
 
 # Committed existence + content at the ANCHOR commit (the gate's authoritative source). `|| true`
@@ -471,8 +476,9 @@ elif [ "$committed_present" -eq 1 ]; then
   # gets the same "gate reads the committed version" note on an uncommitted ROOT edit. The
   # gate reads the ANCHOR commit's $committed_relpath and ignores the working tree, so a
   # dirty/divergent working-tree copy must not read as a silent clean pass here. We diff the
-  # working tree against the SAME anchor commit doctor diagnosed (the gh-bound default-branch
-  # commit when fetched, else local HEAD) so the note tracks the gate's actual source.
+  # working tree against the SAME anchor commit doctor diagnosed (the LOCAL committed default-branch
+  # ref when present, else local HEAD — doctor reads local, read-only) so the note tracks the source
+  # doctor read; the gate reads the analogous committed state (fetched fresh) at run time.
   if [ -n "$toplevel" ] \
      && ! git -C "$toplevel" diff --quiet "$anchor_commit" -- "$committed_relpath" 2>/dev/null; then
     head_note=" (note: the working-tree copy differs from the anchored committed version the gate reads)"
