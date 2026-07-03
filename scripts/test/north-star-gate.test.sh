@@ -247,7 +247,7 @@ test_worktree_only_does_not_authorize() {
 # gate reads committed content at the pinned commit, independent of the dirty working tree.
 test_committed_authorizes_even_if_worktree_deleted() {
   local repo; repo="$(make_target "committed-del")"
-  commit_star "$repo" "our real committed north star"
+  commit_star "$repo" "### our real committed north star · status: **active**"
   rm -f "$repo/.fabrica/north-star.md"   # working-tree copy gone; HEAD still has it
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
@@ -260,7 +260,7 @@ test_committed_authorizes_even_if_worktree_deleted() {
 # placeholder edit neither redirects nor blocks it.
 test_committed_authorizes_even_if_worktree_modified() {
   local repo; repo="$(make_target "committed-mod")"
-  commit_star "$repo" "our real committed north star"
+  commit_star "$repo" "### our real committed north star · status: **active**"
   # Dirty the working tree with a placeholder marker — the gate must ignore this and read HEAD.
   printf 'placeholder <!-- fabrica-shipped-default -->\n' > "$repo/.fabrica/north-star.md"
   local res rc out
@@ -343,7 +343,7 @@ test_fabrica_self_no_committed_root_fails_not_local() {
 # (3a) A LOCAL committed star with no marker → the gate debates it (proceeds to the verdict).
 test_local_committed_debates() {
   local repo; repo="$(make_target "local-ok")"
-  commit_star "$repo" "ship the widget v2 by Q3"
+  commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(3a) LOCAL committed star (no marker) → gate debates (exit 0)" "0" "$rc"
@@ -464,7 +464,7 @@ test_gate_nested_repo_fails() {
 # target (committed real star) and assert the gate PROCEEDs from it.
 test_gate_linked_worktree_ok() {
   local repo; repo="$(make_target "wt-main")"
-  commit_star "$repo" "the target's real committed north star"
+  commit_star "$repo" "### the target's real committed north star · status: **active**"
   # Create a linked worktree UNDER the repo's tree (same shape as this project's .claude/worktrees).
   local wt="$repo/.wts/feature"
   git -C "$repo" worktree add -q --detach "$wt" HEAD 2>/dev/null
@@ -591,6 +591,31 @@ test_gate_single_heading_active_proceeds() {
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(9b) normal single-heading active entry → gate PROCEEDs" "0" "$rc"
   assert_contains "(9b) single-heading gate reached the verdict" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (10) [P2, round-3] NO-ACTIVE-ENTRY FAIL — a committed north star with content but NO valid
+# `status: active` heading (e.g. the marker was mistyped/removed when editing the template) does
+# NOT authorize: ns_has_shipped_default_marker is false (no active region → no marker) AND the file
+# exists (so it is not UNSET), so pre-fix the gate PROCEEDED against a goalless file. The fix FAILs
+# with "no active … entry" BEFORE any Codex verdict. A normal active entry still PROCEEDs (covered
+# by 9b/3a); placeholder still FAILs (3b); UNSET still FAILs (3c).
+# ---------------------------------------------------------------------------------
+test_gate_no_active_entry_fails() {
+  local repo; repo="$(make_target "no-active-entry")"
+  # Content, but NO `status: active` heading — a heading + body that never marks an active entry
+  # (the operator typo'd/removed `status: active` when editing the template).
+  printf '### Ship widget v2 by Q3 — our goal (status typo: actve)\nsome body text describing the goal\n' \
+    | commit_star_raw "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(10) committed star with NO 'status: active' heading → gate FAILs" "1" "$rc"
+  assert_contains "(10) no-active-entry FAIL cites the missing active entry" "no active 'status: active' north-star entry" "$out"
+  # It must NOT have reached the Codex verdict against the goalless file.
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (10) gate must NOT debate a goalless (no-active-entry) star"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (10) gate did NOT reach a verdict against the goalless star" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------------
@@ -742,6 +767,7 @@ test_gate_subdir_regular_star_proceeds
 test_gate_subdir_symlink_still_fails
 test_gate_prose_active_before_heading_still_fails
 test_gate_single_heading_active_proceeds
+test_gate_no_active_entry_fails
 test_doctor_unset_warns
 test_doctor_local_committed_passes
 test_doctor_local_marker_warns

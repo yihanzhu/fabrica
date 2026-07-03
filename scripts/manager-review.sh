@@ -316,6 +316,29 @@ else
   exit 1
 fi
 
+# NO-ACTIVE-ENTRY FAIL (round-3 [P2]) — a committed north star with NO valid `status: active`
+# heading does NOT authorize proactive work. We reach here only on an AUTHORIZED source (the
+# FABRICA_SELF or LOCAL committed branch above populated $north_star; UNSET/placeholder/symlink
+# already exited). But "the file exists and is not the shipped placeholder" is NOT enough:
+# proactive work is authorized ONLY by an approved ACTIVE north star, and a target that committed
+# `.fabrica/north-star.md` (or the control plane its NORTH_STAR.md) with the `status: active`
+# heading mistyped/removed has NO active goal — debating Codex against that goalless file would
+# authorize work the operator never steered. So require a NON-EMPTY active region from the SAME
+# committed content already read ($north_star), via the shared ns_active_region helper (identical
+# to doctor's (h) check and to the placeholder scoping), fed over stdin (`-`). This sits ALONGSIDE
+# the UNSET-FAIL (no committed star) and the placeholder-FAIL (committed but un-replaced template),
+# closing the goalless-debate gap between them. doctor.sh diagnoses the same condition as a WARN
+# (user-directed work stays valid; only the proactive gate FAILs).
+if [ -z "$(printf '%s' "$north_star" | ns_active_region - | head -n1 || true)" ]; then
+  echo "error: no active 'status: active' north-star entry in the committed north star for ${repo}" >&2
+  echo "       (resolver: ${ns_kind}) at HEAD (${head_commit}). The manager-debate gate authorizes" >&2
+  echo "       proactive work ONLY against an approved ACTIVE north star, and this committed file has" >&2
+  echo "       no 'status: active' heading (e.g. the marker was mistyped or removed when editing the" >&2
+  echo "       template). Set an active entry (a heading carrying 'status: active'), commit it, and" >&2
+  echo "       approve it, then re-run. See reviewer/manager-review.md > north star." >&2
+  exit 1
+fi
+
 # Pull the issue title + body + the comment thread — the proposal Codex debates, PLUS the
 # prior debate. On a REFINE rerun, Faber edits the issue and replies in an issue comment
 # (issue-as-bus), so the comment thread carries the prior Codex verdicts and Faber's
