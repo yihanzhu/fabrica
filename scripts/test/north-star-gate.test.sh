@@ -196,7 +196,7 @@ setup_remote() {
   git init -q --bare "$bare"
   git -C "$repo" remote add origin "https://github.com/someone/${name}.git"
   # Transport rewrite: fetch/push of the https identity url actually hit the local bare repo.
-  git -C "$repo" config "url.file://x${bare}.insteadOf" "https://github.com/someone/${name}.git"
+  git -C "$repo" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
 }
 
 # push_default <repo> — push the working repo's current branch to origin/main and set the remote
@@ -259,6 +259,30 @@ commit_symlink_star() {
   git -C "$repo" add -A
   git -C "$repo" commit -q -m "commit symlink north star"
   push_default "$repo"
+}
+
+# advance_remote_default <name> <star-content...> — advance the bare remote <name>.git's default
+# branch (main) to a NEW commit whose .fabrica/north-star.md is <star-content>, WITHOUT touching the
+# original target's local remote-tracking cache (so that cache goes STALE). Used by the fetch-fresh
+# tests. Portable: it builds a throwaway "pusher" repo wired to the bare remote the SAME way as the
+# targets (insteadOf transport rewrite to a canonical `file://<abspath>` URL, push by remote NAME) —
+# NOT `git clone <file-url>` (cloning a file:// URL behaved inconsistently across git versions in
+# CI). It fetches the current default tip, builds on it (fast-forward), and pushes.
+advance_remote_default() {
+  local name="$1"; shift
+  local bare="$remotes_root/${name}.git"
+  local pusher="$tmproot/${name}-pusher"
+  rm -rf "$pusher"
+  git init -q -b main "$pusher"
+  git -C "$pusher" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$pusher" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
+  git -C "$pusher" fetch -q origin main
+  git -C "$pusher" checkout -q -B main FETCH_HEAD
+  mkdir -p "$pusher/.fabrica"
+  printf '%s\n' "$*" > "$pusher/.fabrica/north-star.md"
+  git -C "$pusher" add .fabrica/north-star.md
+  git -C "$pusher" commit -q -m "advance remote default"
+  git -C "$pusher" push -q origin HEAD:main
 }
 
 # make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of BOTH sourced libs
@@ -906,7 +930,6 @@ STAR
 test_gate_fetches_fresh_not_stale_cache() {
   local name="anchor-stale-cache"
   local repo; repo="$(make_target "$name")"
-  local bare="$remotes_root/${name}.git"
   # v1 on main = a PLACEHOLDER star, pushed → the target's refs/remotes/origin/main now caches v1.
   commit_star_raw "$repo" <<'STAR'
 ### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
@@ -914,16 +937,9 @@ body
 STAR
   # Confirm the cache is populated at the placeholder commit (belt-and-suspenders).
   local cached; cached="$(git -C "$repo" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
-  # Advance the bare remote's main to v2 (a REAL star) from a SEPARATE clone, so the target's
-  # remote-tracking ref stays STALE at v1 (the target never fetched v2).
-  local pusher="$tmproot/${name}-pusher"
-  git clone -q "file://x${bare}" "$pusher"
-  mkdir -p "$pusher/.fabrica"
-  printf '### Ship v2 by Q3 · status: **active** — the fresh integrated approved goal\nbody\n' \
-    > "$pusher/.fabrica/north-star.md"
-  git -C "$pusher" add .fabrica/north-star.md
-  git -C "$pusher" commit -q -m "advance default to the real approved star (v2)"
-  git -C "$pusher" push -q origin HEAD:main
+  # Advance the bare remote's main to v2 (a REAL star) via a SEPARATE pusher (not the target), so
+  # the target's remote-tracking ref stays STALE at v1 (the target never fetched v2).
+  advance_remote_default "$name" "### Ship v2 by Q3 · status: **active** — the fresh integrated approved goal"
   # The target's cache is still v1; the gate must FETCH FRESH → v2 (real) → PROCEED.
   local stale_now; stale_now="$(git -C "$repo" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
   assert_eq "(12) target's remote-tracking cache is STALE (unchanged after the out-of-band push)" "$cached" "$stale_now"
@@ -976,23 +992,28 @@ test_gate_fork_selects_upstream_not_origin() {
   local up_bare="$remotes_root/${name}.git"
   git init -q --bare "$up_bare"
   git -C "$path" remote add upstream "https://github.com/someone/${name}.git"
-  git -C "$path" config "url.file://x${up_bare}.insteadOf" "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://${up_bare}.insteadOf" "https://github.com/someone/${name}.git"
   git -C "$path" push -q -f upstream HEAD:refs/heads/main
   git -C "$path" remote set-head upstream main >/dev/null 2>&1 || true
   # `origin` = a FORK with a DIFFERENT identity (and a PLACEHOLDER default, to prove it is NOT used).
   local fork_bare="$remotes_root/${name}-fork.git"
   git init -q --bare "$fork_bare"
   git -C "$path" remote add origin "https://github.com/me/${name}-fork.git"
-  git -C "$path" config "url.file://x${fork_bare}.insteadOf" "https://github.com/me/${name}-fork.git"
+  git -C "$path" config "url.file://${fork_bare}.insteadOf" "https://github.com/me/${name}-fork.git"
   # Push a placeholder-star commit to the fork's main so, if the gate wrongly picked origin, it FAILs.
+  # Build the fork commit in a fresh repo wired via the insteadOf transport (portable — no
+  # `git clone` of a file:// URL), then push to the empty fork bare and set its HEAD.
   local forkclone="$tmproot/${name}-forkclone"
-  git clone -q "file://x${fork_bare}" "$forkclone" 2>/dev/null || { mkdir -p "$forkclone"; git -C "$forkclone" init -q -b main; git -C "$forkclone" remote add origin "file://x${fork_bare}"; }
+  git init -q -b main "$forkclone"
+  git -C "$forkclone" remote add origin "https://github.com/me/${name}-fork.git"
+  git -C "$forkclone" config "url.file://${fork_bare}.insteadOf" "https://github.com/me/${name}-fork.git"
   mkdir -p "$forkclone/.fabrica"
   printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
     > "$forkclone/.fabrica/north-star.md"
   git -C "$forkclone" add .fabrica/north-star.md
   git -C "$forkclone" commit -q -m "fork placeholder star"
   git -C "$forkclone" push -q origin HEAD:main
+  git --git-dir="$fork_bare" symbolic-ref HEAD refs/heads/main
   # gh resolves someone/<basename> → matches `upstream`, NOT `origin` (me/<basename>-fork). The gate
   # must anchor to upstream's default (the real star) → PROCEED, ignoring the fork's placeholder.
   local res rc out
@@ -1016,7 +1037,7 @@ test_gate_matching_remote_unset_symref_falls_back_to_lsremote() {
   git init -q --bare "$up_bare"
   # The bare remote needs its OWN HEAD symref pointing at main so ls-remote --symref reports it.
   git -C "$path" remote add upstream "https://github.com/someone/${name}.git"
-  git -C "$path" config "url.file://x${up_bare}.insteadOf" "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://${up_bare}.insteadOf" "https://github.com/someone/${name}.git"
   git -C "$path" push -q -f upstream HEAD:refs/heads/main
   git --git-dir="$up_bare" symbolic-ref HEAD refs/heads/main
   # Deliberately do NOT `git remote set-head upstream` → refs/remotes/upstream/HEAD stays UNSET.
@@ -1087,19 +1108,13 @@ test_doctor_h_anchor_logs_ghbound() {
 test_doctor_h_fetches_fresh_not_stale_cache() {
   local name="doctor-anchor-stale"
   local repo; repo="$(make_target "$name")"
-  local bare="$remotes_root/${name}.git"
   commit_star_raw "$repo" <<'STAR'
 ### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
 body
 STAR
-  local pusher="$tmproot/${name}-pusher"
-  git clone -q "file://x${bare}" "$pusher"
-  mkdir -p "$pusher/.fabrica"
-  printf '### Ship v2 · status: **active** — fresh integrated approved goal\nbody\n' \
-    > "$pusher/.fabrica/north-star.md"
-  git -C "$pusher" add .fabrica/north-star.md
-  git -C "$pusher" commit -q -m "advance default to real star (v2)"
-  git -C "$pusher" push -q origin HEAD:main
+  # Advance the bare remote's default to a REAL star via a separate pusher (portable helper), so
+  # the target's remote-tracking cache stays STALE at the placeholder.
+  advance_remote_default "$name" "### Ship v2 · status: **active** — fresh integrated approved goal"
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4g-ii) doctor (h) fetches fresh (not the stale placeholder cache) → PASSES on the integrated star" "pass:" "$line"
 }
