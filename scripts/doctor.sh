@@ -372,6 +372,9 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ]; then
     # remotes) via a subshell that `cd`s in; the helpers themselves degrade to empty output, so we
     # capture stdout regardless. `|| true` guards the whole substitution under `set -e`.
     ns_h_remote="$( { cd "$toplevel" && ghr_select_remote "$ns_h_gh_id"; } 2>/dev/null || true )"
+    # `ns_h_identity_warned` tracks whether the effective-identity gate below already emitted a WARN,
+    # so the gh-bound / no-usable-remote WARN (#102 round-3 [P2]) doesn't double-report that case.
+    ns_h_identity_warned=0
     # EFFECTIVE-URL IDENTITY GATE (#102 fix A, FAIL-CLOSED), mirroring the gate: the gate FAILs
     # unless the selected remote's EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's. That
     # covers a `url.<other-gh-repo>.insteadOf` cross-repo substitution AND — round-2 — a
@@ -382,6 +385,19 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ]; then
        && ! ( cd "$toplevel" && ghr_assert_effective_identity "$ns_h_remote" "$ns_h_gh_id" ) 2>/dev/null; then
       report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT or unprovable repo identity than gh's (${ns_h_gh_id}) — the gate FAILs closed on this; diagnosing against LOCAL HEAD instead. Point the remote at gh's real transport (or, for a deliberate local mirror, export FABRICA_ALLOW_LOCAL_MIRROR=1) before enabling proactive mode"
       ns_h_remote=""
+      ns_h_identity_warned=1
+    fi
+    # NO USABLE REMOTE ON A GH-BOUND RUN (#102 round-3 [P2]): gh resolved a repo, but NO configured
+    # remote matches its identity (ghr_select_remote returned empty) — the SAME scenario in which the
+    # gate (manager-review.sh) FAILs closed ("no configured git remote matches the gh-resolved
+    # identity"). doctor is a diagnostic and still falls back to the visible local-HEAD anchor, but it
+    # must NOT silently print `pass:` for a committed local star and thereby advertise a ready gate for
+    # a setup that can't actually run. Emit a WARN before the local-HEAD fallback. (Skipped when the
+    # identity gate above already WARNed — same empty-remote outcome, already reported — and it never
+    # fires on the plain local-only/greenfield case, which has no gh repo at all and stays outside this
+    # `[ -n "$ns_h_gh_repo" ]` block, keeping its existing visible-fallback behavior.)
+    if [ -z "$ns_h_remote" ] && [ "$ns_h_identity_warned" -eq 0 ]; then
+      report_warn "(h) gh resolved ${ns_h_gh_repo} (${ns_h_gh_id}) but no configured git remote matches that identity — the gate (manager-review.sh) FAILs closed here; doctor is diagnosing against LOCAL HEAD instead. Add a git remote whose URL is gh's repo (${ns_h_gh_id}) before enabling proactive mode, so the gate can anchor + fetch the integrated default branch"
     fi
     if [ -n "$ns_h_remote" ]; then
       # Default-branch NAME: mirror the gate's gh-authoritative source (#102 round-2 fix B) —

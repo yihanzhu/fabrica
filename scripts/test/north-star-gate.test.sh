@@ -1190,6 +1190,59 @@ test_doctor_h_local_fallback_visible() {
 # SAME repo, normalizes to the same id) PASSES.
 # ---------------------------------------------------------------------------------
 
+# (17z) UNIT — ghr_normalize_repo_id parses the URL AUTHORITY, not a path-embedded host, and rejects
+# transport-helper / exotic schemes (#102 round-3 [P1]). This normalizer is the crux of the whole
+# fail-closed guard: if it can be fooled into returning gh's `github.com/<owner>/<repo>` identity for
+# a URL that actually fetches from a DIFFERENT host/transport, the guard blesses the wrong fetch.
+# Deterministic + pure (no git/network): source the lib and call the function directly.
+# norm <url> — source the lib in a subshell and print ghr_normalize_repo_id's output for <url>.
+norm() {
+  # shellcheck source=scripts/lib/gh-remote.sh
+  ( . "$ghr_lib" && ghr_normalize_repo_id "$1" )
+}
+
+test_normalize_repo_id_authority_and_schemes() {
+  local out
+
+  # (17z-i) USERINFO-PATH TRICK: the real host is the authority (evil.example); `github.com` is only
+  # in the PATH. The fix must read the host from the authority, so the result is NOT gh's github.com
+  # identity — it carries the real host (evil.example), which fails the caller's equality check → the
+  # guard FAILs closed. Assert the security property directly: it must NOT normalize to github.com/…
+  out="$(norm "https://evil.example/x@github.com/acme/app.git")"
+  case "$out" in
+    github.com/*) failed=$((failed + 1)); echo "FAIL: (17z-i) userinfo-path trick MUST NOT normalize to a github.com identity"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17z-i) userinfo-path trick does not yield a github.com identity" ;;
+  esac
+  # And it reads the AUTHORITY (evil.example) as the host, not the path-embedded github.com.
+  assert_eq "(17z-i) host is parsed from the authority (evil.example), not the path" "evil.example" "${out%%/*}"
+
+  # (17z-ii) TRANSPORT-HELPER / EXOTIC SCHEMES → EMPTY (fail closed). `ext::…git@github.com:…` and
+  # `fd::…` run an arbitrary transport; the scp-style branch used to wrongly extract `github.com`.
+  assert_eq "(17z-ii) ext:: transport helper → empty" "" "$(norm "ext::sh -c git@github.com:acme/app.git")"
+  assert_eq "(17z-ii) fd:: transport helper → empty" "" "$(norm "fd::17/foo")"
+  assert_eq "(17z-ii) generic <helper>:: → empty" "" "$(norm "transport::whatever")"
+  # An unsupported real scheme (e.g. file://) is also unprovable → empty.
+  assert_eq "(17z-ii) file:// scheme → empty" "" "$(norm "file:///srv/mirror/widget.git")"
+  assert_eq "(17z-ii) unknown scheme → empty" "" "$(norm "weird://github.com/o/r.git")"
+
+  # (17z-iii) POSITIVE CONTROLS — genuine forms all normalize to the SAME github.com/o/r identity,
+  # including a legit userinfo on the REAL github host, and an ssh URL with an explicit port.
+  assert_eq "(17z-iii) https → github.com/o/r" "github.com/o/r" "$(norm "https://github.com/o/r.git")"
+  assert_eq "(17z-iii) scp-style → github.com/o/r" "github.com/o/r" "$(norm "git@github.com:o/r.git")"
+  assert_eq "(17z-iii) ssh:// → github.com/o/r" "github.com/o/r" "$(norm "ssh://git@github.com/o/r.git")"
+  assert_eq "(17z-iii) https + legit userinfo (real github host) → github.com/o/r" "github.com/o/r" "$(norm "https://user@github.com/o/r.git")"
+  assert_eq "(17z-iii) ssh:// with :port → github.com/o/r" "github.com/o/r" "$(norm "ssh://git@github.com:22/o/r.git")"
+
+  # (17z-iv) https↔ssh SAME-repo normalization stays EQUAL (a legit transport swap must match).
+  local a b c
+  a="$(norm "https://github.com/o/r.git")"; b="$(norm "git@github.com:o/r.git")"; c="$(norm "ssh://git@github.com/o/r.git")"
+  if [ "$a" = "$b" ] && [ "$b" = "$c" ] && [ -n "$a" ]; then
+    passed=$((passed + 1)); echo "pass: (17z-iv) https/scp/ssh same-repo normalize equal ([$a])"
+  else
+    failed=$((failed + 1)); echo "FAIL: (17z-iv) https/scp/ssh same-repo must normalize equal"; echo "      a=[$a] b=[$b] c=[$c]"
+  fi
+}
+
 # (17a) UNIT — ghr_assert_effective_identity directly, FAIL-CLOSED (#102 round-2 FIX 1). Deterministic
 # (no network): we only vary the insteadOf (and the FABRICA_ALLOW_LOCAL_MIRROR opt-in) and check the
 # helper's rc + message, since it is a pure derivation over `git remote get-url`. Covers: no insteadOf
@@ -1375,6 +1428,45 @@ test_gate_insteadof_https_ssh_same_repo_proceeds() {
   assert_eq "(17g) same-repo target → gate PROCEEDs" "0" "$rc"
 }
 
+# (17h) END-TO-END — the USERINFO-PATH TRICK (#102 round-3 [P1]): an insteadOf rewrites origin's
+# configured (matching) https url to `https://evil.example/x@github.com/<owner>/<repo>.git`. The
+# naive parser read the path-embedded `github.com` as the host and blessed the fetch with gh's
+# identity — while `git fetch` actually contacts evil.example. The fixed parser reads the host from
+# the AUTHORITY (evil.example ≠ gh's github.com), so the effective identity does NOT equal gh's →
+# the gate FAILs closed before any fetch, never reaching a Codex verdict. Run with the local-mirror
+# opt-in OFF so the ONLY thing that can save it is correct host parsing (a cross-HOST github id, not
+# an empty/unprovable one). Even under the opt-in a DIFFERING non-empty github id would still FAIL,
+# but here evil.example is not a github id at all — the point is it must never match gh's.
+test_gate_insteadof_userinfo_path_host_trick_fails() {
+  local name="insteadof-userinfo-path"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  # origin matches gh's identity (someone/<basename>) so ghr_select_remote picks it...
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  # ...but an insteadOf redirects the FETCH to a URL whose REAL host is evil.example, with a
+  # path-embedded `@github.com` decoy (the userinfo-path trick). Correct authority parsing → the
+  # effective id's host is evil.example, not gh's github.com → FAIL closed.
+  git -C "$path" config "url.https://evil.example/x@github.com/someone/${name}.git.insteadOf" "https://github.com/someone/${name}.git"
+  local res rc out
+  res="$( FABRICA_ALLOW_LOCAL_MIRROR=0 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17h) userinfo-path host trick → gate FAILs closed (host read from authority, not path)" "1" "$rc"
+  # The FAIL must come from the IDENTITY gate (host parsed as evil.example ≠ gh's github.com), BEFORE
+  # any fetch — not merely because the bogus host was unreachable. Assert the effective id it derived
+  # carries the real authority host (evil.example), proving the parser did NOT read the path-embedded
+  # github.com. (Against the pre-fix parser this would have normalized to gh's id and PASSED the gate.)
+  assert_contains "(17h) FAIL is the identity gate, citing the real authority host (evil.example)" "evil.example" "$out"
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17h) gate must NOT authorize on a userinfo-path host trick"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17h) gate did NOT authorize on the userinfo-path host trick" ;;
+  esac
+}
+
 # (17d) doctor (h) mirrors FIX A: a cross-repo-substitution insteadOf → doctor WARNs (the gate FAILs)
 # and falls back to the visible local-HEAD anchor (doctor only diagnoses). We build a target whose
 # origin matches gh's identity but whose fetch is redirected to a DIFFERENT github identity.
@@ -1399,6 +1491,44 @@ test_doctor_h_insteadof_cross_repo_warns() {
   anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
   assert_contains "(17d) doctor (h) WARNs on a cross-repo insteadOf rewrite" "insteadOf rewrite redirecting its fetch" "$warnline"
   assert_contains "(17d) doctor (h) falls back to the visible LOCAL HEAD anchor (never fetches the substituted repo)" "local HEAD" "$anchorline"
+}
+
+# (17i) doctor (h) on a GH-BOUND run whose gh identity has NO matching configured remote → WARN, not
+# a silent `pass:` (#102 round-3 [P2]). This is the exact scenario in which the gate FAILs closed
+# ("no configured git remote matches"); with a committed active local star, doctor used to silently
+# anchor to local HEAD and print `pass:`, advertising a ready gate for a setup that can't run. Now it
+# WARNs before the visible local-HEAD fallback. gh resolves someone/<basename> (fake gh reads the top-
+# level basename since origin's identity is someone-else/…), but origin normalizes to a DIFFERENT id →
+# no match. (Contrast test_doctor_h_local_fallback_visible: NO gh repo at all → visible fallback, no
+# such WARN.)
+test_doctor_h_ghbound_no_matching_remote_warns() {
+  local name="doctor-no-matching-remote"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed local star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  # origin points at a DIFFERENT repo identity than gh resolves (gh → someone/<basename>).
+  git -C "$path" remote add origin "https://github.com/someone-else/unrelated.git"
+  local out hline warnline anchorline
+  out="$(
+    cd "$path"
+    PATH="$fakebin:$PATH" bash "$doctor" 2>&1 || true
+  )"
+  # The (h) verdict must be a WARN (not pass:) for this gh-bound / no-matching-remote setup.
+  hline="$(printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true)"
+  case "$hline" in
+    warn:*) passed=$((passed + 1)); echo "pass: (17i) doctor (h) WARNs (not pass:) on a gh-bound run with no matching remote" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (17i) doctor (h) must WARN (not pass:) on a gh-bound run with no matching remote"; echo "      actual: [$hline]" ;;
+  esac
+  warnline="$(printf '%s' "$out" | grep -E '^warn: \(h\).*no configured git remote matches' | head -n1 || true)"
+  assert_contains "(17i) WARN names the gh-bound no-matching-remote gap (mirrors the gate FAIL)" "no configured git remote matches" "$warnline"
+  # It still degrades VISIBLY to the local-HEAD anchor (doctor only diagnoses).
+  anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
+  assert_contains "(17i) doctor still falls back to the VISIBLE local HEAD anchor" "local HEAD" "$anchorline"
 }
 
 # ---------------------------------------------------------------------------------
@@ -1662,13 +1792,16 @@ test_doctor_missing_lib_reports_and_summarizes
 test_doctor_h_anchor_logs_ghbound
 test_doctor_h_fetches_fresh_not_stale_cache
 test_doctor_h_local_fallback_visible
+test_normalize_repo_id_authority_and_schemes
 test_effective_identity_helper_unit
 test_gate_insteadof_cross_repo_fails
 test_gate_insteadof_same_identity_transport_works
 test_gate_insteadof_local_mirror_no_optin_fails
 test_gate_insteadof_ext_transport_no_optin_fails
 test_gate_insteadof_https_ssh_same_repo_proceeds
+test_gate_insteadof_userinfo_path_host_trick_fails
 test_doctor_h_insteadof_cross_repo_warns
+test_doctor_h_ghbound_no_matching_remote_warns
 test_gate_default_repoint_uses_lsremote_not_stale_symref
 test_gate_spoofed_local_symref_ignored
 test_gate_gh_no_default_branch_fails_closed

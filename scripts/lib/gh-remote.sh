@@ -26,21 +26,59 @@
 #   ssh://git@host/owner/repo(.git)   (ssh:// URL, optional user@)
 #   https://host/owner/repo(.git)     (https, optional user@host)
 # Prints the normalized id, or nothing if the URL doesn't parse to host + owner/repo.
+#
+# IDENTITY-CRITICAL PARSING (#102 round-3, [P1]). The host must come from the URL AUTHORITY, never
+# from anything embedded in the PATH — the whole fail-closed guard rests on this. Two bypasses the
+# naive "drop everything before the last/first `@`" approach let through:
+#   - USERINFO-PATH trick: `https://evil.example/x@github.com/acme/app.git` — the real host is the
+#     authority `evil.example`; `github.com` sits in the PATH. Stripping to the last `@` wrongly read
+#     `github.com` as the host, so a fetch that contacts evil.example was blessed with gh's identity.
+#     FIX: take the authority = substring between `://` and the FIRST `/`, and strip `userinfo@`
+#     WITHIN that authority only (never a path-embedded `@`).
+#   - TRANSPORT-HELPER / exotic scheme: `ext::sh -c '…git@github.com:acme/app'`, `fd::…`, any
+#     `<helper>::…` runs an ARBITRARY transport; the scp-style branch wrongly extracted `github.com`.
+#     FIX: reject any url containing `::` outright, and accept only the schemes below → else empty.
+# The returned host is NOT checked against github.com here (this normalizer is host-agnostic so it
+# also serves GH Enterprise / the gh-configured host); the CALLERS enforce host correctness by
+# requiring the normalized id to EQUAL gh's id (ghr_select_remote / ghr_assert_effective_identity).
+# A parse that resolves to the WRONG host (e.g. evil.example/acme/app) therefore fails that equality
+# and the guard FAILs closed — exactly the intent.
 ghr_normalize_repo_id() {
-  local url="$1" host rest
+  local url="$1" host rest authority
+  # Reject git transport helpers / any `<scheme>::…` form outright (ext::, fd::, transport::…): the
+  # `::` runs an arbitrary helper, so no host we could parse out is authoritative. Fail closed.
+  case "$url" in
+    *::*) return 0 ;;
+  esac
   case "$url" in
     *://*)
-      # scheme://[user@]host/owner/repo... — drop scheme, then any leading userinfo, then split host/path.
+      # scheme://[userinfo@]host[:port]/owner/repo... — accept ONLY genuine git URL schemes; any
+      # other scheme is unsupported and unprovable → empty (fail closed).
+      case "$url" in
+        https://*|http://*|ssh://*|git://*) : ;;
+        *) return 0 ;;
+      esac
       rest="${url#*://}"
-      rest="${rest#*@}"
-      host="${rest%%/*}"
+      # AUTHORITY = everything up to the FIRST '/' (host[:port], with optional leading userinfo@).
+      # The remaining path stays in `rest`; a path-embedded '@' is NEVER read as the host.
+      authority="${rest%%/*}"
       rest="${rest#*/}"
+      # Strip userinfo WITHIN the authority only (up to the last '@' in the authority component),
+      # then drop any ':port'. What remains is the host.
+      authority="${authority##*@}"
+      host="${authority%%:*}"
       ;;
     *@*:*)
-      # scp-style git@host:owner/repo — drop userinfo, split on the FIRST colon.
+      # scp-style [userinfo@]host:owner/repo — host is between the optional userinfo@ and the FIRST
+      # colon; owner/repo follow it. (The `::` reject above already excluded transport-helper forms.)
       rest="${url#*@}"
       host="${rest%%:*}"
       rest="${rest#*:}"
+      ;;
+    *:*)
+      # scp-style with NO userinfo (host:owner/repo). Split on the first colon.
+      host="${url%%:*}"
+      rest="${url#*:}"
       ;;
     *)
       # Unrecognized form — can't match.
