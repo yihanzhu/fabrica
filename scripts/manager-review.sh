@@ -271,13 +271,25 @@ if [ -n "$repo" ]; then
     echo "       'origin' at ${repo}), then re-run." >&2
     exit 1
   fi
-  # Resolve the selected remote's default branch NAME from its remote-tracking HEAD. We use only the
-  # NAME here — never the (possibly stale) commit at refs/remotes/<remote>/HEAD — and FETCH FRESH.
+  # EFFECTIVE-URL IDENTITY GATE (#102 fix A, insteadOf repo-substitution guard). Selection above
+  # matched the CONFIGURED url, but the fetch below goes BY NAME — which applies any
+  # `url.<other>.insteadOf`, so the URL git actually contacts can be a DIFFERENT repo. Before
+  # fetching (and anchoring the gate off it), assert the EFFECTIVE fetch URL still resolves to the
+  # SAME GitHub identity gh bound the verdict to; the helper FAILs (with an actionable message) on a
+  # cross-repo-substitution rewrite, so the gate never reads one repo while posting to another's.
+  if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
+    exit 1
+  fi
+  # Resolve the selected remote's default branch NAME — AUTHORITATIVELY, from the remote's own HEAD
+  # (`git ls-remote --symref`), not the stale/spoofable local tracking HEAD (#102 fix B). We use only
+  # the NAME here — never a stale commit — and FETCH FRESH below.
   default_branch="$(ghr_remote_default_branch "$selected_remote")"
   if [ -z "$default_branch" ]; then
     echo "error: could not resolve the default branch of remote '${selected_remote}' (${repo})." >&2
-    echo "       refs/remotes/${selected_remote}/HEAD is not set. Run" >&2
-    echo "       'git remote set-head ${selected_remote} --auto' (or fetch once) to populate it, then re-run." >&2
+    echo "       'git ls-remote --symref ${selected_remote} HEAD' returned nothing and no local" >&2
+    echo "       refs/remotes/${selected_remote}/HEAD offline fallback is set. Confirm network access" >&2
+    echo "       to the remote (or 'git remote set-head ${selected_remote} --auto' for offline use)," >&2
+    echo "       then re-run." >&2
     exit 1
   fi
   # FETCH FRESH into a PRIVATE, PER-RUN-UNIQUE ref we own (under refs/manager-review/<PID>/), via the

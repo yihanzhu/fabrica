@@ -33,6 +33,16 @@ silently redirect the gate. A target with **no committed** north star on that de
 (or one still carrying the shipped Fabrica default marker) does **not** authorize proactive
 work: the gate FAILs before invoking Codex, with a pointer back here.
 
+The anchor is also hardened against three transport/identity attacks (an adversarial sweep):
+(1) the **default-branch NAME** is read *authoritatively* from the remote (`git ls-remote
+--symref … HEAD`), never the stale/locally-spoofable local tracking `HEAD` symref, so a repoint
+or a spoofed local symref can't anchor to a non-default branch; (2) before fetching, the gate
+asserts the remote's **effective** fetch URL (after any `url.<base>.insteadOf` rewrite) still
+resolves to the **same** GitHub identity `gh` bound the verdict to — a `url.<other>.insteadOf`
+that would silently redirect the fetch to a *different* repo FAILs (read repo A / post to repo B
+is refused); (3) the anchor fetch uses `--refmap=` so it writes **only** its private per-run ref
+and never mutates the operator's remote-tracking refs.
+
 **Fail vs. fallback (gh-bound).** `manager-review.sh` reads *and posts* a GitHub issue, so its
 anchor must bind to the **same repo identity** it comments on. If `gh` resolves a repo but **no
 configured remote matches** that identity, the gate **FAILs clearly** — it does **not** fall

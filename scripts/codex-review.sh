@@ -166,6 +166,16 @@ if [ -z "$selected_remote" ]; then
   exit 1
 fi
 
+# EFFECTIVE-URL IDENTITY GATE (#102 fix A, insteadOf repo-substitution guard). Selection matched the
+# CONFIGURED url, but the fetch below goes BY NAME — which applies any `url.<other>.insteadOf`, so the
+# URL git actually contacts can be a DIFFERENT repo. Before fetching the PR head + base (and reviewing
+# off them), assert the EFFECTIVE fetch URL still resolves to the SAME GitHub identity gh bound the
+# review to; the helper FAILs (with an actionable message) on a cross-repo-substitution rewrite, so the
+# reviewer never fetches one repo's diff while posting the review to another's PR.
+if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
+  exit 1
+fi
+
 # Fetch the PR head fork-safely AND refresh the base, into THIS repo's object store, from the
 # SELECTED REMOTE NAME (not a synthesized URL) so the operator's configured transport +
 # credentials are used. The remote was chosen by matching gh's canonical host + owner/repo, so
@@ -196,10 +206,13 @@ fi
 # auto-following could force-update local `refs/tags/*` if the repo moved a tag reachable
 # from the fetched commits — an operator-state mutation. `--no-tags` disables that
 # auto-following, so this fetch touches nothing outside the two named destination refs.
+# `--refmap=` (empty, #102 fix C) additionally DISABLES the remote's configured fetch refmap for
+# this fetch, so the operator's `refs/remotes/<remote>/<base>` tracking ref is NOT force-updated as
+# a side effect of fetching the base branch — only the two explicit per-run destinations are written.
 run_ref_ns="refs/codex-review/${pr}-$$"
 pr_head_ref="${run_ref_ns}/head"
 base_dest_ref="${run_ref_ns}/base"
-git fetch --no-tags "$selected_remote" \
+git fetch --no-tags --refmap= "$selected_remote" \
   "+refs/pull/${pr}/head:${pr_head_ref}" \
   "+refs/heads/${base}:${base_dest_ref}"
 pr_head="$(git rev-parse "$pr_head_ref")"

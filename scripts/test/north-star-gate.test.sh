@@ -34,7 +34,8 @@ setup_script="$repo_root/scripts/setup-target-repo.sh"
 faber_template="$repo_root/templates/faber-command.md"
 persona="$repo_root/manager/CLAUDE.md"
 ns_template="$repo_root/templates/.fabrica/north-star.md"
-for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template"; do
+ghr_lib="$repo_root/scripts/lib/gh-remote.sh"   # #102: the shared gh-bound remote-identity helper
+for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib"; do
   if [ ! -f "$f" ]; then echo "FAIL: missing $f" >&2; exit 1; fi
 done
 
@@ -1137,6 +1138,287 @@ test_doctor_h_local_fallback_visible() {
   assert_contains "(4g-iii) doctor (h) still PASSES on the committed active star via the local fallback" "pass:" "$line"
 }
 
+# ---------------------------------------------------------------------------------
+# (17) #102 anchor-security sweep — FIX A: EFFECTIVE-URL IDENTITY GATE (insteadOf repo-substitution).
+# ghr_select_remote matches the CONFIGURED url, but the fetch goes BY NAME and applies
+# `url.<other>.insteadOf`. A rewrite that redirects the fetch to a DIFFERENT GitHub identity must
+# FAIL (the gate would otherwise read repo B while posting the verdict to gh's repo A). A
+# same-identity transport rewrite (normalizes to the same host/owner/repo), or a local mirror that
+# doesn't parse to a GitHub identity, must PASS.
+# ---------------------------------------------------------------------------------
+
+# (17a) UNIT — ghr_assert_effective_identity directly. Deterministic (no network): we only vary the
+# insteadOf and check the helper's rc + message, since it is a pure derivation over `git remote
+# get-url`. Covers: cross-repo GitHub substitution → FAIL; same-identity https↔ssh rewrite → OK;
+# local file:// mirror (unparseable identity) → OK; no insteadOf at all → OK.
+# run_effid <repo_dir> <gh_id> — source the lib in a subshell cd'd into <repo_dir> and run
+# ghr_assert_effective_identity against `origin`; echo "<rc>|<stderr>". A standalone helper (like
+# run_gate) so the subshell reads only its OWN positional args — no outer `$repo` shared across the
+# subshell boundary, so shellcheck's SC2030/SC2031 subshell-scoping heuristic never fires.
+run_effid() {
+  local rd="$1" ghid="$2" rc out
+  # shellcheck source=scripts/lib/gh-remote.sh
+  out="$( cd "$rd" && . "$ghr_lib" && ghr_assert_effective_identity origin "$ghid" 2>&1 )" && rc=0 || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+test_effective_identity_helper_unit() {
+  local repo="$tmproot/effid-unit"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  git -C "$repo" remote add origin "https://github.com/someone/widget.git"
+  local gh_id="github.com/someone/widget"
+  local res rc out
+
+  # (i) no insteadOf → effective == configured (same identity) → OK (rc 0).
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-i) no insteadOf → effective identity matches gh → OK (rc 0)" "0" "$rc"
+
+  # (ii) CROSS-REPO GitHub substitution insteadOf → effective is a DIFFERENT github identity → FAIL.
+  git -C "$repo" config "url.https://github.com/attacker/evil.git.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-ii) cross-repo insteadOf (github.com/attacker/evil) → helper FAILs (rc 1)" "1" "$rc"
+  assert_contains "(17a-ii) FAIL cites the different fetch-URL identity" "DIFFERENT repo identity" "$out"
+  assert_contains "(17a-ii) FAIL names the substituted identity" "github.com/attacker/evil" "$out"
+  git -C "$repo" config --unset "url.https://github.com/attacker/evil.git.insteadOf"
+
+  # (iii) SAME-IDENTITY transport rewrite (https→ssh for the SAME repo) → normalizes to the same id → OK.
+  git -C "$repo" config "url.git@github.com:someone/widget.git.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-iii) same-identity https→ssh insteadOf → helper OK (rc 0)" "0" "$rc"
+  git -C "$repo" config --unset "url.git@github.com:someone/widget.git.insteadOf"
+
+  # (iv) LOCAL file:// mirror (unparseable GitHub identity) → NOT the cross-repo attack → OK. This is
+  # exactly the hermetic transport the rest of this suite relies on, so it must stay allowed.
+  git -C "$repo" config "url.file:///srv/mirror/widget.git.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17a-iv) local file:// mirror insteadOf (unparseable id) → helper OK (rc 0)" "0" "$rc"
+  git -C "$repo" config --unset "url.file:///srv/mirror/widget.git.insteadOf"
+}
+
+# (17b) END-TO-END — a cross-repo-substitution insteadOf makes the GATE FAIL (does NOT fetch/anchor
+# the other repo). The target's origin matches gh's identity (so selection succeeds), but an
+# insteadOf redirects the fetch to a DIFFERENT github identity. The gate must FAIL at the
+# effective-identity check, BEFORE fetching, and never reach a Codex verdict.
+test_gate_insteadof_cross_repo_fails() {
+  local name="insteadof-cross-repo"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  # A committed real star locally (so ONLY the insteadOf guard — not a missing star — can be the FAIL).
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  # origin matches gh's identity (someone/<basename>) so ghr_select_remote picks it...
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  # ...but an insteadOf redirects the FETCH to a DIFFERENT github identity (the attack).
+  git -C "$path" config "url.https://github.com/attacker/evil.git.insteadOf" "https://github.com/someone/${name}.git"
+  local res rc out
+  res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17b) cross-repo insteadOf → gate FAILs (does NOT fetch/anchor the substituted repo)" "1" "$rc"
+  assert_contains "(17b) FAIL cites the insteadOf repo-substitution" "DIFFERENT repo identity" "$out"
+  # It must NOT have reached a Codex verdict off the substituted repo.
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17b) gate must NOT reach a verdict under a cross-repo insteadOf"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17b) gate did NOT authorize under the cross-repo insteadOf" ;;
+  esac
+}
+
+# (17c) END-TO-END — a SAME-identity/transport insteadOf still WORKS: the hermetic targets (built by
+# make_target) rewrite the configured https identity url to a local file:// bare for transport. The
+# effective url is a local mirror (unparseable GitHub identity) — NOT the cross-repo attack — so the
+# guard passes and the gate PROCEEDs. This is the positive control for FIX A: the guard must not
+# break the legitimate transport rewrite the whole loop depends on.
+test_gate_insteadof_same_identity_transport_works() {
+  local repo; repo="$(make_target "insteadof-transport-ok")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real committed star via transport insteadOf"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(17c) transport insteadOf (local mirror, non-github effective id) → gate PROCEEDs (not falsely FAILed)" "0" "$rc"
+  assert_contains "(17c) gate proceeded under the legitimate transport insteadOf" "PROCEED" "$out"
+}
+
+# (17d) doctor (h) mirrors FIX A: a cross-repo-substitution insteadOf → doctor WARNs (the gate FAILs)
+# and falls back to the visible local-HEAD anchor (doctor only diagnoses). We build a target whose
+# origin matches gh's identity but whose fetch is redirected to a DIFFERENT github identity.
+test_doctor_h_insteadof_cross_repo_warns() {
+  local name="doctor-insteadof-cross-repo"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.https://github.com/attacker/evil.git.insteadOf" "https://github.com/someone/${name}.git"
+  local out warnline anchorline
+  out="$(
+    cd "$path"
+    PATH="$fakebin:$PATH" bash "$doctor" 2>&1 || true
+  )"
+  warnline="$(printf '%s' "$out" | grep -E '^warn: \(h\).*insteadOf' | head -n1 || true)"
+  anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
+  assert_contains "(17d) doctor (h) WARNs on a cross-repo insteadOf rewrite" "insteadOf rewrite redirecting its fetch" "$warnline"
+  assert_contains "(17d) doctor (h) falls back to the visible LOCAL HEAD anchor (never fetches the substituted repo)" "local HEAD" "$anchorline"
+}
+
+# ---------------------------------------------------------------------------------
+# (18) #102 anchor-security sweep — FIX B: the default-branch NAME is resolved AUTHORITATIVELY from
+# `git ls-remote --symref <remote> HEAD`, NOT the stale/spoofable local refs/remotes/<remote>/HEAD.
+# ---------------------------------------------------------------------------------
+
+# (18a) DEFAULT-BRANCH REPOINT — the remote's default was `develop`, later repointed to `main`
+# (where the real star lives). The target's local refs/remotes/origin/HEAD still names the STALE
+# `develop` (fetch never refreshes it). If the gate trusted the local symref it would anchor to
+# develop (a placeholder star) and FAIL; ls-remote-authoritative anchors to the CURRENT default
+# (main, real star) → PROCEED.
+test_gate_default_repoint_uses_lsremote_not_stale_symref() {
+  local name="default-repoint"
+  local path="$tmproot/$name"
+  local bare="$remotes_root/${name}.git"
+  mkdir -p "$path"
+  git init -q --bare "$bare"
+  git -C "$path" init -q -b develop
+  git -C "$path" commit -q --allow-empty -m init
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
+  # develop carries a PLACEHOLDER star; push it and make the remote default = develop.
+  mkdir -p "$path/.fabrica"
+  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "develop placeholder star"
+  git -C "$path" push -q -f origin develop:refs/heads/develop
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/develop
+  # Populate the target's LOCAL refs/remotes/origin/HEAD = develop (via set-head), then it goes stale.
+  git -C "$path" fetch -q origin
+  git -C "$path" remote set-head origin develop >/dev/null 2>&1 || true
+  # Now REPOINT the remote default to `main` with the REAL star (out of band; local symref stays stale).
+  git -C "$path" checkout -q -b main
+  printf '### Ship v2 by Q3 · status: **active** — the real integrated goal on the NEW default\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "main real star"
+  git -C "$path" push -q -f origin main:refs/heads/main
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/main   # remote default repointed → main
+  # The target's local refs/remotes/origin/HEAD still says develop (stale). Confirm (belt-and-suspenders).
+  local local_head; local_head="$(git -C "$path" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  assert_eq "(18a) local origin/HEAD is STALE at develop (fetch never refreshed it)" "refs/remotes/origin/develop" "$local_head"
+  # The gate must anchor to the CURRENT default (main, real star) via ls-remote → PROCEED.
+  local res rc out
+  res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(18a) default repoint develop→main: gate anchors to CURRENT default via ls-remote → PROCEEDs" "0" "$rc"
+  assert_contains "(18a) gate debated the current-default (main) real star, not the stale develop placeholder" "PROCEED" "$out"
+}
+
+# (18b) SPOOFED LOCAL SYMREF — the remote default is `main` (real star), but a locally-spoofed
+# refs/remotes/origin/HEAD points at a `sneaky` branch carrying a placeholder. ls-remote-authoritative
+# ignores the spoofed local symref and anchors to the real default → PROCEED (a symref-trusting gate
+# would anchor to `sneaky` and FAIL on its placeholder).
+test_gate_spoofed_local_symref_ignored() {
+  local name="spoofed-symref"
+  local path="$tmproot/$name"
+  local bare="$remotes_root/${name}.git"
+  mkdir -p "$path"
+  git init -q --bare "$bare"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
+  # main = the REAL star; push it and make it the remote default.
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — the real integrated star on main\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "main real star"
+  git -C "$path" push -q -f origin main:refs/heads/main
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/main
+  # Create a `sneaky` branch with a PLACEHOLDER star, push it, and SPOOF the local symref at it.
+  git -C "$path" checkout -q -b sneaky
+  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "sneaky placeholder star"
+  git -C "$path" push -q -f origin sneaky:refs/heads/sneaky
+  git -C "$path" fetch -q origin
+  # Locally SPOOF refs/remotes/origin/HEAD → sneaky (the attack the fix defends against).
+  git -C "$path" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/sneaky
+  git -C "$path" checkout -q main
+  local res rc out
+  res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(18b) spoofed local origin/HEAD → gate ignores it, anchors to the real default via ls-remote → PROCEEDs" "0" "$rc"
+  assert_contains "(18b) gate anchored to the real default (main), not the spoofed sneaky placeholder" "PROCEED" "$out"
+}
+
+# run_default_branch <repo_dir> — source the lib in a subshell cd'd into <repo_dir> and echo
+# ghr_remote_default_branch's result for `origin`. Standalone (like run_gate/run_effid) so the
+# subshell reads only its own positional arg (no shared outer var → no SC2030/SC2031).
+run_default_branch() {
+  local rd="$1"
+  # shellcheck source=scripts/lib/gh-remote.sh
+  ( cd "$rd" && . "$ghr_lib" && ghr_remote_default_branch origin )
+}
+
+# (18c) OFFLINE FALLBACK — when the remote read is unavailable, ghr_remote_default_branch falls back
+# to the LOCAL refs/remotes/<remote>/HEAD symref. UNIT-level (deterministic): a repo with a bad
+# remote URL (ls-remote fails) but a populated local symref → the helper returns the local default
+# name; with NEITHER available → empty.
+test_default_branch_offline_local_fallback_unit() {
+  local repo="$tmproot/offline-fallback-unit"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  git -C "$repo" commit -q --allow-empty -m init
+  # A remote whose URL is unreachable (a nonexistent local path) so ls-remote FAILS. Build a
+  # refs/remotes/origin/* + symref by hand so the offline fallback has something to read.
+  git -C "$repo" remote add origin "file:///nonexistent/definitely-not-a-repo.git"
+  git -C "$repo" update-ref refs/remotes/origin/main "$(git -C "$repo" rev-parse HEAD)"
+  git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  local got
+  got="$(run_default_branch "$repo")"
+  assert_eq "(18c) offline (ls-remote fails) → helper falls back to the LOCAL symref default name" "main" "$got"
+  # With the local symref removed too → empty (nothing to resolve).
+  git -C "$repo" symbolic-ref -d refs/remotes/origin/HEAD
+  got="$(run_default_branch "$repo")"
+  assert_eq "(18c) offline AND no local symref → helper returns empty" "" "$got"
+}
+
+# ---------------------------------------------------------------------------------
+# (19) #102 anchor-security sweep — FIX C: `--refmap=` — the anchor fetch writes ONLY the private
+# per-run ref; the operator's remote-tracking refs (refs/remotes/<remote>/* and .../HEAD) are
+# UNCHANGED after a gate run, and the private per-run anchor ref is cleaned up.
+# ---------------------------------------------------------------------------------
+test_gate_no_ref_mutation_after_run() {
+  local name="no-ref-mutation"
+  local repo; repo="$(make_target "$name")"
+  # main = a PLACEHOLDER star locally-cached, then advance the remote OUT OF BAND to a REAL star so a
+  # tracking-ref-mutating fetch WOULD move refs/remotes/origin/main (making the mutation observable).
+  commit_star_raw "$repo" <<'STAR'
+### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+body
+STAR
+  # Populate the local tracking cache at the placeholder tip.
+  git -C "$repo" fetch -q origin
+  local track_before head_before
+  track_before="$(git -C "$repo" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+  head_before="$(git -C "$repo" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  # Advance the remote default to a REAL star via a separate pusher; the target's cache stays behind.
+  advance_remote_default "$name" "### Ship v2 · status: **active** — fresh integrated star"
+  # Run the gate: it fetches the fresh real star (→ PROCEED) but must NOT move the tracking refs.
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(19) gate proceeds on the freshly-fetched real star" "0" "$rc"
+  assert_contains "(19) gate reached the verdict" "PROCEED" "$out"
+  # Tracking refs must be UNCHANGED (still the stale placeholder tip), proving --refmap= isolation.
+  local track_after head_after
+  track_after="$(git -C "$repo" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+  head_after="$(git -C "$repo" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  assert_eq "(19) refs/remotes/origin/main UNCHANGED after the gate run (--refmap= isolation)" "$track_before" "$track_after"
+  assert_eq "(19) refs/remotes/origin/HEAD UNCHANGED after the gate run" "$head_before" "$head_after"
+  # The private per-run anchor ref is cleaned up (no leaked refs/manager-review/*).
+  local leaked; leaked="$(git -C "$repo" for-each-ref --format='%(refname)' 'refs/manager-review/**' 2>/dev/null || true)"
+  assert_eq "(19) the private per-run anchor ref (refs/manager-review/*) is cleaned up after exit" "" "$leaked"
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -1178,6 +1460,14 @@ test_doctor_missing_lib_reports_and_summarizes
 test_doctor_h_anchor_logs_ghbound
 test_doctor_h_fetches_fresh_not_stale_cache
 test_doctor_h_local_fallback_visible
+test_effective_identity_helper_unit
+test_gate_insteadof_cross_repo_fails
+test_gate_insteadof_same_identity_transport_works
+test_doctor_h_insteadof_cross_repo_warns
+test_gate_default_repoint_uses_lsremote_not_stale_symref
+test_gate_spoofed_local_symref_ignored
+test_default_branch_offline_local_fallback_unit
+test_gate_no_ref_mutation_after_run
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

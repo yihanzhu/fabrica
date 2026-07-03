@@ -89,11 +89,19 @@ ghr_gh_repo_id() {
 #
 # We read the CONFIGURED url via `git config --get remote.<name>.url`, NOT `git remote get-url`,
 # on purpose: `get-url` applies any `url.<base>.insteadOf` TRANSPORT rewrite, so on a checkout
-# that rewrites its remote for transport, `get-url` would return the rewritten (possibly local)
-# URL and the identity match would spuriously fail. The CONFIGURED url is the operator's declared
-# identity for the remote — the right thing to match against gh's identity — while the caller
-# still FETCHES by the remote NAME, so any insteadOf transport rewrite is honored for the fetch.
-# In the common case (no insteadOf) the two are identical.
+# that rewrites its remote for transport (e.g. an https↔ssh swap, or a local mirror), `get-url`
+# would return the rewritten URL and the identity match would spuriously fail. The CONFIGURED url
+# is the operator's declared identity for the remote — the right thing to match against gh's
+# identity for SELECTION. In the common case (no insteadOf) the two are identical.
+#
+# insteadOf is NOT "only a transport rewrite" (an earlier version of this comment claimed so —
+# that was WRONG): `url.<other>.insteadOf = <configured>` makes the FETCH-BY-NAME silently pull
+# from `<other>`, an ARBITRARY different repo, even though selection matched the configured URL.
+# So selection alone is not enough — the caller MUST additionally gate the FETCH on the EFFECTIVE
+# URL's identity via ghr_assert_effective_identity (below), which FAILs if the rewritten fetch URL
+# resolves to a DIFFERENT GitHub identity than gh's. That split (match configured for selection,
+# gate effective for the fetch) is deliberate: a legit same-repo transport insteadOf still selects
+# AND passes the effective-identity gate, while a cross-repo-substitution insteadOf FAILs the gate.
 ghr_select_remote() {
   local gh_repo_id="$1"
   [ -n "$gh_repo_id" ] || return 0
@@ -114,14 +122,67 @@ ghr_select_remote() {
   printf '%s' "$selected_remote"
 }
 
-# ghr_remote_default_branch <remote> — print the SHORT default branch NAME of the given remote
-# (e.g. `main`). Prefers the LOCAL remote-tracking HEAD (`git symbolic-ref
-# refs/remotes/<remote>/HEAD` → `refs/remotes/<remote>/<default>`); if that is unset (common for a
-# manually-added `upstream` that was never `git remote set-head`), falls back to asking the remote
-# directly via `git ls-remote --symref <remote> HEAD`. Prints nothing if neither resolves.
+# ghr_assert_effective_identity <remote> <gh_repo_id> — the FETCH-time identity gate (insteadOf
+# repo-substitution guard). ghr_select_remote picks the remote by its CONFIGURED url, but the
+# caller then FETCHES BY NAME — which applies `url.<base>.insteadOf`, so the URL git actually
+# contacts can differ from the configured one. An attacker who can set
+# `url.<attacker-repo>.insteadOf = <the configured url>` makes the fetch silently pull from
+# `<attacker-repo>` — an ARBITRARY different repo — while the verdict still posts to gh's repo.
+# This gate closes that hole: it re-derives the EFFECTIVE fetch URL (`git remote get-url`, which
+# applies insteadOf exactly as the fetch will), normalizes it, and FAILs when that EFFECTIVE
+# identity resolves to a DIFFERENT GitHub host/owner/repo than <gh_repo_id>.
 #
-# NOTE: this only tells us the default branch's NAME — never a trustworthy commit. The local
-# tracking HEAD can be STALE, and even the ls-remote read is used ONLY for the name. Callers use
+# Returns 0 (OK to fetch) when the effective URL is safe, non-zero (printing an actionable error
+# to stderr) when it is a cross-repo substitution. "Safe" is: the effective URL normalizes to the
+# SAME id as gh's (a legit same-identity transport insteadOf, e.g. https↔ssh for the SAME repo), OR
+# it does NOT normalize to a GitHub-style identity at all (an empty result — a local mirror such as
+# a `file://` path or an exotic transport the operator deliberately configured). Only a NON-EMPTY
+# effective identity that DIFFERS from gh's is the documented attack, because the verdict-posting
+# gh binding stays <gh_repo_id> regardless — so redirecting the FETCH to a different *GitHub repo*
+# (which normalizes to a valid, non-empty, differing id) is the exact "read repo A, post to repo B"
+# confused-deputy this refuses. A non-parseable local transport cannot itself be a GitHub repo the
+# gate would post a verdict to, so it is left to the operator's own transport config.
+#
+# `|| true` on the get-url substitution so a git hiccup degrades to empty (treated as safe/local)
+# rather than aborting a `set -e` caller before this function's own check runs.
+ghr_assert_effective_identity() {
+  local remote="$1" gh_repo_id="$2"
+  [ -n "$remote" ] && [ -n "$gh_repo_id" ] || return 0
+  local effective_url effective_id
+  effective_url="$(git remote get-url "$remote" 2>/dev/null || true)"
+  [ -n "$effective_url" ] || return 0
+  effective_id="$(ghr_normalize_repo_id "$effective_url")"
+  # Empty effective id = a non-GitHub-parseable transport (local mirror / exotic scheme): not the
+  # cross-repo-substitution attack (see above) — allow it.
+  [ -n "$effective_id" ] || return 0
+  if [ "$effective_id" != "$gh_repo_id" ]; then
+    echo "error: remote '${remote}' is configured to match ${gh_repo_id}, but an insteadOf rewrite" >&2
+    echo "       redirects its actual fetch URL to a DIFFERENT repo identity (${effective_id})." >&2
+    echo "       The gate/reviewer refuses to fetch from one repo while binding its verdict to" >&2
+    echo "       another (a 'url.<other>.insteadOf' repo-substitution). Remove the cross-repo" >&2
+    echo "       insteadOf rewrite (or point it at the SAME repo's transport), then re-run." >&2
+    return 1
+  fi
+  return 0
+}
+
+# ghr_remote_default_branch <remote> — print the SHORT default branch NAME of the given remote
+# (e.g. `main`). PREFERS the remote's AUTHORITATIVE HEAD via `git ls-remote --symref <remote> HEAD`
+# (parse the `ref: refs/heads/<name>` line); falls back to the LOCAL remote-tracking HEAD
+# (`git symbolic-ref refs/remotes/<remote>/HEAD`) ONLY as an offline last resort when the remote
+# read fails or returns nothing. Prints nothing if neither resolves.
+#
+# WHY ls-remote is authoritative, NOT the local symref (#102 security fix): the local
+# `refs/remotes/<remote>/HEAD` symref is (a) STALE — `git fetch` never refreshes it, so after the
+# remote repoints its default (e.g. master→main, or → a release branch) it still names the OLD
+# default; and (b) locally MUTABLE/SPOOFABLE (`git symbolic-ref refs/remotes/<remote>/HEAD
+# refs/remotes/<remote>/<any-branch>`). Either way, trusting it first would let the gate anchor to a
+# NON-default branch (the exact bypass #102 closes). The gate/doctor already hit the network to
+# FETCH the anchor commit fresh, so an extra `ls-remote` keeps the branch-IDENTITY as fresh +
+# trustworthy as the commit. The local symref stays only for the genuinely-offline case (a
+# manually-added `upstream` never `set-head`, or a network blip) — degraded, but the best available.
+#
+# NOTE: this still only tells us the default branch's NAME — never a trustworthy commit. Callers use
 # the name to build a fully-qualified fetch refspec (`refs/heads/<default>`) and FETCH FRESH from
 # the remote into a private per-run ref, pinning to the FETCHED commit — never to
 # `refs/remotes/<remote>/HEAD` itself. `|| true` keeps this degrade-to-empty under a `set -e`
@@ -129,19 +190,21 @@ ghr_select_remote() {
 ghr_remote_default_branch() {
   local remote="$1"
   [ -n "$remote" ] || return 0
-  local ref
-  ref="$(git symbolic-ref --quiet "refs/remotes/${remote}/HEAD" 2>/dev/null || true)"
-  if [ -n "$ref" ]; then
-    # ref is refs/remotes/<remote>/<default>; strip the leading refs/remotes/<remote>/ prefix.
-    printf '%s' "${ref#"refs/remotes/${remote}/"}"
-    return 0
-  fi
-  # Fallback: ask the remote. `git ls-remote --symref <remote> HEAD` prints a line like
+  # AUTHORITATIVE: ask the remote. `git ls-remote --symref <remote> HEAD` prints a line like
   # `ref: refs/heads/main\tHEAD`; extract the branch short-name from that symref line.
   local symref
   symref="$(git ls-remote --symref "$remote" HEAD 2>/dev/null | awk '/^ref:/ {print $2; exit}' || true)"
-  [ -n "$symref" ] || return 0
-  printf '%s' "${symref#refs/heads/}"
+  if [ -n "$symref" ]; then
+    printf '%s' "${symref#refs/heads/}"
+    return 0
+  fi
+  # OFFLINE last resort ONLY (remote read failed/empty): the LOCAL remote-tracking HEAD. May be
+  # stale or spoofed, but it is the best available when the remote can't be reached.
+  local ref
+  ref="$(git symbolic-ref --quiet "refs/remotes/${remote}/HEAD" 2>/dev/null || true)"
+  [ -n "$ref" ] || return 0
+  # ref is refs/remotes/<remote>/<default>; strip the leading refs/remotes/<remote>/ prefix.
+  printf '%s' "${ref#"refs/remotes/${remote}/"}"
 }
 
 # ghr_fetch_default_commit <remote> <branch> <dest_ref> — FETCH FRESH the <branch> from <remote>
@@ -156,9 +219,15 @@ ghr_remote_default_branch() {
 # the caller owns and cleans up). We never write a remote-tracking ref, so the operator's
 # `<remote>/<branch>` tracking state is untouched. The CALLER is responsible for choosing a
 # per-run-unique <dest_ref> (e.g. refs/<tool>/<PID>/anchor) and for deleting it on exit.
+#
+# `--refmap=` (empty, #102 fix C) DISABLES the remote's configured fetch refmap for this fetch, so
+# ONLY the explicit `+refs/heads/<branch>:<dest_ref>` destination is written. Without it, a plain
+# `git fetch <remote> <refspec>` ALSO applies the configured `remote.<remote>.fetch` refmap and
+# force-updates the operator's `refs/remotes/<remote>/*` tracking refs — contradicting the
+# "only our private per-run ref is written" guarantee. The empty refmap makes that guarantee real.
 ghr_fetch_default_commit() {
   local remote="$1" branch="$2" dest_ref="$3"
   [ -n "$remote" ] && [ -n "$branch" ] && [ -n "$dest_ref" ] || return 1
-  git fetch --no-tags "$remote" "+refs/heads/${branch}:${dest_ref}" >/dev/null 2>&1 || return 1
+  git fetch --no-tags --refmap= "$remote" "+refs/heads/${branch}:${dest_ref}" >/dev/null 2>&1 || return 1
   git rev-parse "$dest_ref" 2>/dev/null || return 1
 }
