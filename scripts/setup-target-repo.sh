@@ -222,10 +222,14 @@ Manual follow-ups this script can't do (see templates/repo-setup.md):
      Template (under your Fabrica clone): ${target_claude_template}.
   4. Install the /faber command: run scripts/install.sh from your fabrica clone.
   5. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
-  6. Set your own north star (NORTH_STAR.md in your fabrica clone) — replace the shipped
-     Fabrica default with your own direction; then approve it with Faber once you run /faber
-     (this unlocks proactive autonomous mode). Approve it to Faber in-session, not by editing
-     the file — the shipped approval note is the prior owner's history, not a token that
-     approves the goal for you. Until it's set + approved, Faber acts only on issues you
-     direct (your one-liner -> Faber drafts the spec -> you approve that drafted spec -> ready).
+  6. Set THIS target's north star — create it yourself: copy templates/.fabrica/north-star.md
+     (from your fabrica clone) into this repo as .fabrica/north-star.md, replace the placeholder
+     with your own direction, remove the '<!-- fabrica-shipped-default -->' marker, then commit it
+     (this script does NOT seed the star — it only creates the loop labels above). Then approve it
+     with Faber once you run /faber (this unlocks proactive autonomous mode). Approve it to Faber
+     in-session, not by editing the file — the shipped approval note is the prior owner's history,
+     not a token that approves the goal for you. Until it's set + committed + approved, Faber acts
+     only on issues you direct (your one-liner -> Faber drafts the spec -> you approve that drafted
+     spec -> ready). (Fabrica-self is its own target: running against the control-plane repo uses
+     its root NORTH_STAR.md instead.)
 EOF

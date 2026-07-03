@@ -58,6 +58,11 @@ set -euo pipefail
 #       slug (P3, round-3).
 #   (k) `ns_fabrica_root` under `set -euo pipefail` from a deleted sourced tree yields rc 0, empty
 #       stdout, and no stderr leak — matching the sibling value-helpers (P3, round-3).
+#   (q) [P1, round-3 SIGPIPE] ns_has_shipped_default_marker DRAINS stdin: a LARGE committed star
+#       (placeholder marker in the active entry + tens of KB of body after the next heading, big
+#       enough to fill the pipe buffer) still reports "marker present" under `set -o pipefail` —
+#       the old `exit`-early awk SIGPIPE'd the upstream printf (141), which pipefail turned into a
+#       FALSE "no marker" → placeholder-FAIL bypass. The fix drains to EOF so the verdict holds.
 #
 # Cases (g)–(k) were surfaced by an adversarial audit; each reproduces a bug the prior suite
 # MASKED because it sourced via an ABSOLUTE path and never cd'd away / never stubbed gh-missing.
@@ -811,6 +816,65 @@ test_marker_matcher_variants() {
     "$(if ns_has_shipped_default_marker "$test_dir/../../templates/.fabrica/north-star.md"; then echo yes; else echo no; fi)"
 }
 
+# --- (q) LARGE star: the matcher DRAINS stdin, no SIGPIPE placeholder-bypass [P1, round-3] ------
+# The callers run `printf '%s' "$north_star" | ns_has_shipped_default_marker -` UNDER `set -o
+# pipefail` (manager-review.sh L294, doctor.sh L373). Pre-fix, ns_active_region's awk `exit`ed as
+# soon as the active region ended (the next heading/rule). For a large committed star — placeholder
+# marker in the active entry PLUS tens of KB of body after the next heading, enough to fill the
+# ~64KB pipe buffer — that early `exit` closed awk's stdin while `printf` still had bytes to write,
+# so `printf` died with SIGPIPE (141). Under `pipefail` the 141 became the WHOLE pipeline's status,
+# so `if ns_has_shipped_default_marker` read FALSE even though the marker matched → the gate PROCEEDS
+# against an un-replaced placeholder and doctor MISSES the WARN (a placeholder-FAIL bypass). The fix
+# makes the awk read every line to EOF (latch the region closed, keep reading, emit nothing further)
+# so no early close → no SIGPIPE → the verdict holds. We assert on a ~250KB document that the marker
+# is STILL reported present (the same-shape small document is already covered by (m)/(p)); this case
+# reproduces the bug pre-fix (the standalone repro showed rc=141, "marker MISSED") and is closed here.
+test_marker_large_star_drains_stdin() {
+  # shellcheck source=scripts/lib/north-star.sh
+  . "$lib"
+  # Build a big star: placeholder marker on the ACTIVE entry, a NEXT heading, then ~250KB of body
+  # after it (well past the pipe buffer, so a pre-fix early `exit` would SIGPIPE the upstream printf).
+  local big
+  big="$(
+    printf '### Goal · status: **active** · <!-- fabrica-shipped-default --> shipped default\n'
+    printf 'a body line inside the active region\n'
+    printf '### Next section (content AFTER the active region — must not be scanned, must be DRAINED)\n'
+    local i
+    for i in $(seq 1 4000); do
+      printf 'filler line %05d aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$i"
+    done
+  )"
+  # Guard: assert the document really is large enough to matter (tens of KB past the buffer).
+  local bytes; bytes="$(printf '%s' "$big" | wc -c | tr -d '[:space:]')"
+  if [ "$bytes" -lt 100000 ]; then
+    failed=$((failed + 1))
+    echo "FAIL: (q) test fixture too small ($bytes bytes) to exercise the pipe buffer"
+  fi
+  # Run EXACTLY as the callers do: piped into the matcher as the LAST stage under `pipefail`, in an
+  # `if` condition. On the pre-fix code this pipeline's status is 141 (printf SIGPIPE) → "no". The
+  # subshell sets `pipefail` to mirror the callers precisely (the runner already has it, but pin it).
+  local verdict
+  verdict="$(set -o pipefail; if printf '%s' "$big" | ns_has_shipped_default_marker -; then echo yes; else echo "no($?)"; fi)"
+  assert_eq "(q) large placeholder star ($bytes B) still MATCHES under pipefail (no SIGPIPE bypass)" "yes" "$verdict"
+
+  # And a large CORRECTLY-REPLACED star (marker only in prose before the active heading, huge body
+  # after) must still report NO match — draining doesn't over-match. `no` (not `no(141)`).
+  local big_clean
+  big_clean="$(
+    printf 'Intro prose names <!-- fabrica-shipped-default --> as a token (outside any active heading).\n\n'
+    printf '### Ship v2 by Q3 · status: **active** — our real approved goal\n'
+    printf 'a body line inside the active region\n'
+    printf '### Next section\n'
+    local i
+    for i in $(seq 1 4000); do
+      printf 'filler line %05d aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$i"
+    done
+  )"
+  local verdict_clean
+  verdict_clean="$(set -o pipefail; if printf '%s' "$big_clean" | ns_has_shipped_default_marker -; then echo yes; else echo "no($?)"; fi)"
+  assert_eq "(q) large correctly-replaced star (marker only in prose) still NO match (clean rc, no SIGPIPE)" "no(1)" "$verdict_clean"
+}
+
 echo "== north-star resolver tests =="
 test_local_wins
 test_subdir_resolves_toplevel
@@ -836,6 +900,7 @@ test_fabrica_root_case_canonical
 test_committed_regular_file_from_subdir
 test_active_region_heading_anchored
 test_marker_matcher_variants
+test_marker_large_star_drains_stdin
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

@@ -308,9 +308,11 @@ else
   echo "error: no committed north star resolved for ${repo} (resolver: ${ns_kind}) — .fabrica/north-star.md is" >&2
   echo "       not committed at HEAD (${head_commit}). The manager-debate gate reads COMMITTED" >&2
   echo "       target state — an uncommitted local edit does not authorize proactive work. Set one up:" >&2
-  echo "         run '\"${control_plane_root}/scripts/setup-target-repo.sh\" ${repo}' from this" >&2
-  echo "         checkout to seed .fabrica/north-star.md, then replace the placeholder, commit," >&2
-  echo "         and approve it — see reviewer/manager-review.md > north star" >&2
+  echo "         copy '${control_plane_root}/templates/.fabrica/north-star.md' into the target" >&2
+  echo "         as .fabrica/north-star.md, replace the placeholder with your own direction," >&2
+  echo "         remove the '<!-- fabrica-shipped-default -->' marker from the active heading," >&2
+  echo "         then commit and approve it — see reviewer/manager-review.md > north star." >&2
+  echo "       (setup-target-repo.sh only creates the loop labels; it does NOT seed the star.)" >&2
   exit 1
 fi
 

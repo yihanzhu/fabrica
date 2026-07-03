@@ -288,15 +288,34 @@ ns_active_region() {
   # (`status:` then optional non-alpha then `active`), so scoping is consistent — but ONLY on a
   # heading line, so a prose/front-matter mention of `status: active` before the real heading
   # cannot open the region early and hide the marker on the actual placeholder heading.
+  #
+  # DRAIN-TO-EOF, never `exit` early (round-3 [P1] SIGPIPE fix): when the source is `-` (stdin),
+  # callers pipe the content in as `printf '%s' "$star" | ns_active_region - | …` under the
+  # caller's `set -o pipefail`. An early `exit` (as soon as the region ends at the NEXT heading/
+  # rule) closes awk's stdin while the upstream `printf` still has bytes to write — for a large
+  # committed star (placeholder marker in the active entry + tens of KB of body after the next
+  # section, enough to fill the pipe buffer) `printf` then dies with SIGPIPE (141). Under
+  # `pipefail` that 141 becomes the WHOLE pipeline's status, so `if ns_has_shipped_default_marker`
+  # reads FALSE even though the marker matched — a placeholder-FAIL BYPASS (gate proceeds, doctor
+  # misses the WARN). So we NEVER `exit`: we track the region with flags and keep READING every
+  # line to EOF, merely stopping OUTPUT once the region ends. The emitted bytes are byte-identical
+  # to the old `exit` behaviour (same first active region, nothing after), so the marker verdict is
+  # unchanged for every case — only the stdin-draining differs, which is what closes the bypass.
+  # A `done` latch keeps this to the FIRST active region (a later `status: active` heading cannot
+  # re-open output), exactly as the old single-`exit` did.
   awk '
     {
       line = $0
       low = tolower(line)
     }
     in_region {
-      # A new heading (line starting with #) or a horizontal rule ends the active region.
+      # A new heading (line starting with #) or a horizontal rule ENDS the active region. Do NOT
+      # `exit` (that SIGPIPEs the upstream printf under pipefail) — latch the region closed and
+      # keep reading the remaining lines to EOF, emitting nothing further.
       if (line ~ /^[[:space:]]*#/ || low ~ /^[[:space:]]*(-{3,}|\*{3,}|_{3,})[[:space:]]*$/) {
-        exit
+        in_region = 0
+        done = 1
+        next
       }
       print line
       next
@@ -305,8 +324,10 @@ ns_active_region() {
     # space) whose text has a `status:` followed (after any non-letters, e.g. `**`) by `active`.
     # Both conditions are tested on the lowercased line so casing never matters. Requiring the
     # heading form is the FIX — a bare prose line mentioning `status: active` no longer starts the
-    # region, so the marker on the true active heading is always scanned.
-    low ~ /^[[:space:]]*#{1,6}[[:space:]]/ && low ~ /status:[^a-z]*active/ {
+    # region, so the marker on the true active heading is always scanned. The `!done` guard keeps
+    # us to the FIRST active region only (a subsequent active heading past the region does not
+    # re-open output), matching the old single-region-then-`exit` behaviour.
+    !done && low ~ /^[[:space:]]*#{1,6}[[:space:]]/ && low ~ /status:[^a-z]*active/ {
       in_region = 1
       print line
       next
@@ -383,8 +404,8 @@ ns_resolve() {
   # uses, and it is what a bare top-level PATH compare could not do: Faber operates from a LINKED
   # WORKTREE (`.claude/worktrees/*`) whose `git rev-parse --show-toplevel` is the WORKTREE path, not
   # the main checkout, so `toplevel == fabrica_root` FALSELY FAILed and the Fabrica worktree was
-  # misclassified as an external target (skipping the root NORTH_STAR.md; setup would seed
-  # `.fabrica/north-star.md` into it). A linked worktree SHARES its parent repo's common-dir, so the
+  # misclassified as an external target (skipping the root NORTH_STAR.md and instead resolving off a
+  # `.fabrica/north-star.md` in the worktree, mis-steering Fabrica-self). A linked worktree SHARES its parent repo's common-dir, so the
   # common-dir compare makes the main checkout AND all its linked worktrees resolve as Fabrica-self,
   # while a genuinely SEPARATE repo (different common-dir) does not. The existing top-level PATH
   # equality is KEPT as one accepted case (belt-and-suspenders: a match either way is self) — but the

@@ -6,12 +6,15 @@ It is the foundation for per-target steering: Fabrica's tooling reads your north
 here, so running Fabrica against your repo debates proposals against *your* goal rather than
 a shared one.
 
-**Fabrica's tooling uses this file.** `scripts/setup-target-repo.sh` seeds it from the shipped
-template when it is absent, `scripts/doctor.sh` check (h) reports whether it is set (and not
-still the shipped default), and the proactive manager-debate (`scripts/manager-review.sh`) reads
-its **committed** content as the gate a proactive issue is debated against. The gate reads the
-**committed** file (pinned to the commit the review runs on) — an uncommitted local edit does
-**not** authorize proactive work, so **commit your north star** after you set it.
+**Fabrica's tooling uses this file.** You create it yourself: copy this shipped template into
+your repo as `.fabrica/north-star.md`, replace the placeholder, remove the
+`<!-- fabrica-shipped-default -->` marker, then commit it (`scripts/setup-target-repo.sh` only
+creates the loop labels — it does **not** seed this file). Once it exists, `scripts/doctor.sh`
+check (h) reports whether it is set (and not still the shipped default), and the proactive
+manager-debate (`scripts/manager-review.sh`) reads its **committed** content as the gate a
+proactive issue is debated against. The gate reads the **committed** file (pinned to the commit
+the review runs on) — an uncommitted local edit does **not** authorize proactive work, so
+**commit your north star** after you set it.
 
 **One north star is active at a time.** On a north-star transition, mark the achieved one
 `achieved` and promote (or add) the next as `active`. Keep the log below so you can see where
