@@ -22,9 +22,9 @@ separate human channel to the workers. Claude and Codex never talk directly;
 | Agent | Vendor | How it runs | Writes? |
 |-------|--------|-------------|---------|
 | **Faber** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs (merges clean low-risk PRs) |
-| **Coder** | Claude | A subagent Faber spawns with the issue/PR context + `routines/coder.md` | yes (branches, PRs) |
-| **Coder (revisions)** | Claude | A fix-mode subagent Faber spawns with `routines/coder-revision.md` | yes |
-| **Reviewer** | Codex (OpenAI) | Faber runs `scripts/codex-review.sh` against the PR | **comments only** |
+| **Coder** | Claude | A subagent Faber spawns with the issue/PR context — two modes: build (`routines/coder.md`) then fix (`routines/coder-revision.md`) | yes (branches, PRs) |
+| **Manager-reviewer** | Codex (OpenAI) | Faber runs `scripts/manager-review.sh` at **plan altitude, before coding** — debates a proactive issue vs. the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
+| **Code-reviewer** | Codex (OpenAI) | Faber runs `scripts/codex-review.sh` at **code altitude, after coding** — against the PR diff | **comments only / read-only** |
 
 ## The loop
 
@@ -64,7 +64,7 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
 
 ## Design decisions (the "why")
 
-- **3 roles, fixed.** Manager = the PM (no separate PM). Add an agent only for a
+- **4 roles, fixed** (2 vendors). Manager = the PM (no separate PM). Add an agent only for a
   distinct *job + trigger + tool surface* — not per discipline (no FE/BE split;
   specialize via each target repo's `CLAUDE.md`).
 - **Cross-vendor by design.** Claude codes, Codex reviews — different training/
