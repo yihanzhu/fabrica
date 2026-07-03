@@ -363,7 +363,13 @@ trap cleanup_doctor_anchor_ref EXIT
 
 anchor_commit="HEAD"
 anchor_source="local HEAD"
-if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ]; then
+# CWD-IS-TARGET GATE (#102 round-3 [P2]): the whole anchor-resolution/fetch block below describes
+# the CWD repo (its gh binding, its remotes, its default branch). When a target <owner>/<repo> was
+# given but the cwd is NOT that target's checkout, resolving/fetching here would hit the network,
+# write FETCH_HEAD/private refs, and emit anchor WARNs for the WRONG repo — none of which describe
+# the target. The later "north star not checked for <target>" guard already reports the real
+# outcome, so SKIP the block entirely (no fetch, no warning) when cwd isn't the target.
+if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ] && [ "$ns_h_cwd_is_target" -eq 1 ]; then
   # Resolve the gh repo from the cwd (clear GH_REPO so it reflects the actual checkout).
   ns_h_gh_repo="$(env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
   if [ -n "$ns_h_gh_repo" ]; then
@@ -410,6 +416,13 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ]; then
         ns_h_default="$( { cd "$toplevel" && ghr_remote_default_branch "$ns_h_remote"; } 2>/dev/null || true )"
         if [ -n "$ns_h_default" ]; then
           report_warn "(h) gh could not resolve ${ns_h_gh_repo}'s default branch (gh repo view --json defaultBranchRef) — the gate takes the default-branch NAME from gh and FAILs closed here; doctor degraded to the LOCAL symref default '${ns_h_default}' for this diagnosis (confirm 'gh repo view ${ns_h_gh_repo}' auth + network before enabling proactive mode)"
+        else
+          # EMPTY-FALLBACK (#102 round-3 [P2]): gh couldn't resolve the default branch AND the local
+          # fallback is empty too, so there is NO name to anchor on and doctor falls through to
+          # `local HEAD`. The gate (manager-review.sh) FAILs closed for this gh-bound repo, so doctor
+          # must NOT silently print `pass:` for a committed local star. WARN before diagnosing against
+          # local HEAD — consistent with the non-empty-fallback WARN above; only ONE of the two fires.
+          report_warn "(h) gh could not resolve ${ns_h_gh_repo}'s default branch (gh repo view --json defaultBranchRef) and no local fallback default was available — the gate takes the default-branch NAME from gh and FAILs closed here; doctor is diagnosing against LOCAL HEAD instead (confirm 'gh repo view ${ns_h_gh_repo}' auth + network before enabling proactive mode)"
         fi
       fi
       if [ -n "$ns_h_default" ]; then

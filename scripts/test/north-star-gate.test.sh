@@ -1241,6 +1241,34 @@ test_normalize_repo_id_authority_and_schemes() {
   else
     failed=$((failed + 1)); echo "FAIL: (17z-iv) https/scp/ssh same-repo must normalize equal"; echo "      a=[$a] b=[$b] c=[$c]"
   fi
+
+  # (17z-v) PORT IS PART OF THE HOST IDENTITY (#102 round-3 [P2]). A NON-DEFAULT port must be kept so
+  # a GHE host on :8443 does NOT falsely normalize equal to the same host on the scheme default;
+  # the scheme's DEFAULT port is normalized away so legit same-repo comparisons still hold.
+  # A non-default port is preserved as `<host>:<port>`.
+  assert_eq "(17z-v) non-default port kept in identity" "ghe.example:8443/o/r" "$(norm "https://ghe.example:8443/o/r.git")"
+  # …and is therefore NOT equal to the no-port identity for the same host+owner+repo.
+  local p q
+  p="$(norm "https://ghe.example:8443/o/r.git")"; q="$(norm "https://ghe.example/o/r.git")"
+  if [ -n "$p" ] && [ "$p" != "$q" ]; then
+    passed=$((passed + 1)); echo "pass: (17z-v) :8443 endpoint NOT equal to the no-port endpoint ([$p] != [$q])"
+  else
+    failed=$((failed + 1)); echo "FAIL: (17z-v) :8443 endpoint must NOT equal the no-port endpoint"; echo "      p=[$p] q=[$q]"
+  fi
+  # DEFAULT ports are normalized away → equal to the no-port form (per scheme).
+  assert_eq "(17z-v) https default :443 == no-port" "github.com/o/r" "$(norm "https://github.com:443/o/r.git")"
+  assert_eq "(17z-v) https default :443 equals explicit no-port form" "$(norm "https://github.com/o/r.git")" "$(norm "https://github.com:443/o/r.git")"
+  assert_eq "(17z-v) ssh default :22 == no-port" "github.com/o/r" "$(norm "ssh://git@github.com:22/o/r.git")"
+  # A NON-default ssh port is likewise preserved.
+  assert_eq "(17z-v) non-default ssh port kept" "ghe.example:2222/o/r" "$(norm "ssh://git@ghe.example:2222/o/r.git")"
+  # scp-style carries NO port, so it stays portless and still matches the portless https/ssh form.
+  local s t
+  s="$(norm "git@ghe.example:o/r.git")"; t="$(norm "https://ghe.example/o/r.git")"
+  if [ -n "$s" ] && [ "$s" = "$t" ]; then
+    passed=$((passed + 1)); echo "pass: (17z-v) scp-style (no port) equals portless https ([$s])"
+  else
+    failed=$((failed + 1)); echo "FAIL: (17z-v) scp-style (no port) must equal portless https"; echo "      s=[$s] t=[$t]"
+  fi
 }
 
 # (17a) UNIT — ghr_assert_effective_identity directly, FAIL-CLOSED (#102 round-2 FIX 1). Deterministic
@@ -1531,6 +1559,90 @@ test_doctor_h_ghbound_no_matching_remote_warns() {
   assert_contains "(17i) doctor still falls back to the VISIBLE local HEAD anchor" "local HEAD" "$anchorline"
 }
 
+# (17j) doctor.sh <owner>/<repo> from a NON-target checkout must SKIP the anchor-resolution/fetch
+# block (#102 round-3 [P2]). Pre-fix, the anchor block resolved+fetched the CWD repo's default
+# branch (network, FETCH_HEAD/private-ref writes, WRONG-repo anchor warnings) BEFORE the later
+# "north star not checked for the target" guard. The fix gates the whole block on
+# ns_h_cwd_is_target: when the cwd is NOT the passed target, skip it entirely — no fetch, no
+# wrong-repo anchor warning — and still report the "not checked for <target>" outcome. We run a
+# normal remote-backed checkout (its own gh identity / origin / fetchable default) but pass a
+# DIFFERENT target slug, so cwd != target. The observable proof the block was skipped: the anchor
+# line stays "local HEAD" (a fetch would have logged "fetched fresh"), and no wrong-repo anchor
+# warning is emitted.
+test_doctor_target_arg_non_target_skips_anchor() {
+  local name="doctor-nontarget-skip"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### Ship v2 · status: **active** — the checkout's own committed star"
+  local target="someone/some-other-repo"   # deliberately NOT this checkout's slug (someone/$name)
+  local out anchorline hline
+  out="$(
+    cd "$repo"
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 bash "$doctor" "$target" 2>&1 || true
+  )"
+  anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
+  # Anchor block skipped → no fetch → the anchor stays the local-HEAD default (never "fetched fresh").
+  assert_contains "(17j) doctor from a non-target checkout does NOT fetch (anchor stays local HEAD)" "local HEAD" "$anchorline"
+  case "$anchorline" in
+    *"fetched fresh"*) failed=$((failed + 1)); echo "FAIL: (17j) doctor must NOT fetch the cwd repo's default when cwd != target"; echo "      actual: [$anchorline]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17j) doctor skipped the anchor fetch when cwd != target" ;;
+  esac
+  # No wrong-repo anchor warning (the identity / default-branch / fetch WARNs the block emits) fired.
+  case "$out" in
+    *"warn: (h)"*"insteadOf"*|*"warn: (h)"*"no configured git remote matches"*|*"warn: (h)"*"could not fetch remote"*|*"warn: (h) gh could not resolve"*)
+      failed=$((failed + 1)); echo "FAIL: (17j) doctor emitted a WRONG-repo anchor warning for the cwd repo when cwd != target"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (17j) doctor emitted no wrong-repo anchor warning when cwd != target" ;;
+  esac
+  # It still reports the real outcome: "north star not checked for <target>".
+  hline="$(printf '%s' "$out" | grep -E '^warn: \(h\).*not checked for' | head -n1 || true)"
+  assert_contains "(17j) doctor still reports the 'not checked for <target>' outcome" "not checked for $target" "$hline"
+}
+
+# (17k) doctor (h): gh resolves the repo AND a remote matches, but the default branch is
+# unresolvable via gh AND the local fallback is ALSO empty → WARN, not a silent `pass:` (#102
+# round-3 [P2]). Pre-fix, doctor fell through silently to `anchor_source="local HEAD"` and could
+# print `pass:` for a committed local star even though the gate (manager-review.sh) FAILs closed
+# for this gh-bound repo. Now it WARNs on the empty fallback before diagnosing against local HEAD.
+# Hermetic setup: origin matches gh's identity (so a remote is selected), FAKE_GH_NO_DEFAULT=1
+# makes gh return an empty defaultBranchRef, and the bare remote's HEAD points at an UNBORN branch
+# (with no local origin/HEAD symref) so ghr_remote_default_branch's ls-remote AND local-symref
+# fallback are BOTH empty — the empty-fallback path.
+test_doctor_h_empty_default_fallback_warns() {
+  local name="doctor-empty-default"
+  local path="$tmproot/$name"
+  local bare="$remotes_root/${name}.git"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m init
+  mkdir -p "$path/.fabrica"
+  printf '### Ship v2 · status: **active** — real committed local star\nbody\n' > "$path/.fabrica/north-star.md"
+  git -C "$path" add .fabrica/north-star.md
+  git -C "$path" commit -q -m "set star"
+  # origin matches gh's identity (fake gh reads it → someone/<name>) via the insteadOf transport.
+  git init -q --bare "$bare"
+  # Bare HEAD → an UNBORN branch that no one pushes, so `ls-remote --symref origin HEAD` is EMPTY
+  # (the local fallback source). No local refs/remotes/origin/HEAD symref is set → that fallback is
+  # empty too. Together: ghr_remote_default_branch returns empty.
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/ghost
+  git -C "$path" remote add origin "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
+  local out hline warnline anchorline
+  out="$(
+    cd "$path"
+    FAKE_GH_NO_DEFAULT=1 PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 bash "$doctor" 2>&1 || true
+  )"
+  # A WARN must be present (not a silent pass:). run_doctor_h-style: the first (h) line is the WARN.
+  hline="$(printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true)"
+  case "$hline" in
+    warn:*) passed=$((passed + 1)); echo "pass: (17k) doctor (h) WARNs (not a silent pass:) on the empty default-branch fallback" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (17k) doctor (h) must WARN (not silent pass:) when the default branch AND local fallback are both empty"; echo "      actual: [$hline]" ;;
+  esac
+  warnline="$(printf '%s' "$out" | grep -E '^warn: \(h\).*no local fallback default was available' | head -n1 || true)"
+  assert_contains "(17k) WARN cites the empty default-branch fallback (mirrors the gate FAIL)" "no local fallback default was available" "$warnline"
+  # It still degrades VISIBLY to the local-HEAD anchor (doctor only diagnoses).
+  anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
+  assert_contains "(17k) doctor still falls back to the VISIBLE local HEAD anchor" "local HEAD" "$anchorline"
+}
+
 # ---------------------------------------------------------------------------------
 # (18) #102 anchor-security sweep — FIX B/FIX 2: the default-branch NAME is resolved AUTHORITATIVELY
 # from gh (`gh repo view --json defaultBranchRef`, the SAME binding the verdict posts to), NOT the
@@ -1802,6 +1914,8 @@ test_gate_insteadof_https_ssh_same_repo_proceeds
 test_gate_insteadof_userinfo_path_host_trick_fails
 test_doctor_h_insteadof_cross_repo_warns
 test_doctor_h_ghbound_no_matching_remote_warns
+test_doctor_target_arg_non_target_skips_anchor
+test_doctor_h_empty_default_fallback_warns
 test_gate_default_repoint_uses_lsremote_not_stale_symref
 test_gate_spoofed_local_symref_ignored
 test_gate_gh_no_default_branch_fails_closed

@@ -20,12 +20,21 @@
 # local anchor). See codex-review.sh / manager-review.sh for the per-consumer refusal policy.
 
 # ghr_normalize_repo_id <url> — normalize a git remote URL (or gh web URL) to
-# "<host>/<owner>/<repo>", lowercased, with any trailing `.git` stripped. Handles the three
+# "<host[:port]>/<owner>/<repo>", lowercased, with any trailing `.git` stripped. Handles the three
 # common transports without fragile regex (pure parameter expansion + `case`):
 #   git@host:owner/repo(.git)         (scp-style SSH)
 #   ssh://git@host/owner/repo(.git)   (ssh:// URL, optional user@)
 #   https://host/owner/repo(.git)     (https, optional user@host)
 # Prints the normalized id, or nothing if the URL doesn't parse to host + owner/repo.
+#
+# PORT IS PART OF THE HOST IDENTITY (#102 round-3, [P2]). A GHE host reachable on `:8443` is a
+# DIFFERENT endpoint than the same host on the scheme default — dropping the port let distinct
+# endpoints normalize to the same id and compare equal (a false same-repo match). So we KEEP any
+# NON-DEFAULT port as `<host>:<port>`, and normalize away ONLY the scheme's DEFAULT port so legit
+# same-repo comparisons still hold: https default 443, http 80, ssh 22, git 9418, and scp-style has
+# no port at all (default). Thus `https://github.com/o/r` and `git@github.com:o/r.git` both have no
+# port and stay equal; `https://github.com:443/o/r` == `https://github.com/o/r`; but
+# `https://ghe.example:8443/o/r` keeps `:8443` and is NOT equal to `ghe.example/o/r`.
 #
 # IDENTITY-CRITICAL PARSING (#102 round-3, [P1]). The host must come from the URL AUTHORITY, never
 # from anything embedded in the PATH — the whole fail-closed guard rests on this. Two bypasses the
@@ -44,7 +53,7 @@
 # A parse that resolves to the WRONG host (e.g. evil.example/acme/app) therefore fails that equality
 # and the guard FAILs closed — exactly the intent.
 ghr_normalize_repo_id() {
-  local url="$1" host rest authority
+  local url="$1" host rest authority port="" default_port=""
   # Reject git transport helpers / any `<scheme>::…` form outright (ext::, fd::, transport::…): the
   # `::` runs an arbitrary helper, so no host we could parse out is authoritative. Fail closed.
   case "$url" in
@@ -53,9 +62,13 @@ ghr_normalize_repo_id() {
   case "$url" in
     *://*)
       # scheme://[userinfo@]host[:port]/owner/repo... — accept ONLY genuine git URL schemes; any
-      # other scheme is unsupported and unprovable → empty (fail closed).
+      # other scheme is unsupported and unprovable → empty (fail closed). Record the scheme's
+      # DEFAULT port so a matching explicit ':port' below is normalized away (kept otherwise).
       case "$url" in
-        https://*|http://*|ssh://*|git://*) : ;;
+        https://*) default_port=443 ;;
+        http://*)  default_port=80 ;;
+        ssh://*)   default_port=22 ;;
+        git://*)   default_port=9418 ;;
         *) return 0 ;;
       esac
       rest="${url#*://}"
@@ -64,19 +77,24 @@ ghr_normalize_repo_id() {
       authority="${rest%%/*}"
       rest="${rest#*/}"
       # Strip userinfo WITHIN the authority only (up to the last '@' in the authority component),
-      # then drop any ':port'. What remains is the host.
+      # then split host from ':port'. A port is part of the endpoint identity (see header), so we
+      # KEEP it — dropping only the scheme default below.
       authority="${authority##*@}"
       host="${authority%%:*}"
+      case "$authority" in
+        *:*) port="${authority##*:}" ;;
+      esac
       ;;
     *@*:*)
       # scp-style [userinfo@]host:owner/repo — host is between the optional userinfo@ and the FIRST
-      # colon; owner/repo follow it. (The `::` reject above already excluded transport-helper forms.)
+      # colon; owner/repo follow it. scp-style carries NO port (the ':' delimits the path), so the
+      # port stays empty = the default. (The `::` reject above already excluded transport-helper forms.)
       rest="${url#*@}"
       host="${rest%%:*}"
       rest="${rest#*:}"
       ;;
     *:*)
-      # scp-style with NO userinfo (host:owner/repo). Split on the first colon.
+      # scp-style with NO userinfo (host:owner/repo). Split on the first colon. No port (see above).
       host="${url%%:*}"
       rest="${url#*:}"
       ;;
@@ -85,13 +103,20 @@ ghr_normalize_repo_id() {
       return 0
       ;;
   esac
+  # Normalize away ONLY the scheme's DEFAULT port so legit same-repo comparisons across transports
+  # stay equal; PRESERVE any non-default port as part of the host identity.
+  if [ -n "$port" ] && [ "$port" = "$default_port" ]; then
+    port=""
+  fi
   # `rest` is now the path "owner/repo[/...]"; keep exactly the first two segments.
   local owner="${rest%%/*}"
   rest="${rest#*/}"
   local name="${rest%%/*}"
   name="${name%.git}"
   [ -n "$host" ] && [ -n "$owner" ] && [ -n "$name" ] || return 0
-  printf '%s/%s/%s' "$host" "$owner" "$name" | tr '[:upper:]' '[:lower:]'
+  local host_id="$host"
+  [ -n "$port" ] && host_id="${host}:${port}"
+  printf '%s/%s/%s' "$host_id" "$owner" "$name" | tr '[:upper:]' '[:lower:]'
 }
 
 # ghr_gh_repo_id <repo> — compute gh's normalized identity (host + owner/repo) for the repo
