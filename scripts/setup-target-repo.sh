@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# setup-target-repo.sh — bootstrap a target repo's loop labels + per-target north star.
+# setup-target-repo.sh — bootstrap a target repo's loop labels.
 #
-# Creates the labels the review loop uses as its state (each coder spawn is stateless), and —
-# when run from within the target's own checkout — SEEDS the per-target north star at
-# <target>/.fabrica/north-star.md from the shipped template (templates/.fabrica/north-star.md)
-# if absent, so the resolver (scripts/lib/north-star.sh) and the manager-review.sh gate find a
-# file to read. Idempotent: re-running on a repo that already has the labels updates them
-# instead of failing, and an existing north star is NEVER overwritten. Branch protection, CI,
-# the /faber command, and the Codex CLI reviewer are NOT scriptable here — see the manual
-# follow-ups printed at the end and templates/repo-setup.md.
+# Creates the labels the review loop uses as its state (each coder spawn is stateless).
+# Idempotent: re-running on a repo that already has the labels updates them instead of
+# failing. Branch protection, CI, the /faber command, and the Codex CLI reviewer are NOT
+# scriptable here — see the manual follow-ups printed at the end and
+# templates/repo-setup.md.
 #
 # This script is the CANONICAL source of truth for the loop labels. A normal run
 # force-edits each existing label to the definitions below (name/color/description), so
@@ -66,12 +63,6 @@ done
 repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 target_claude_template="$repo_root/templates/target-CLAUDE.md"
 
-# Source the shared north-star helpers for ns_slug_eq (case-insensitive slug compare used by
-# the cwd-guard below). It lives at <repo_root>/scripts/lib/north-star.sh — the same fixed,
-# install-location-independent path doctor.sh sources it from.
-# shellcheck source=scripts/lib/north-star.sh
-. "$repo_root/scripts/lib/north-star.sh"
-
 # Preflight — fail honestly and early, BEFORE creating any label, so a misconfigured
 # run surfaces an actionable pointer instead of an opaque mid-loop gh error and a
 # half-bootstrapped repo (see QUICKSTART.md > Prerequisites).
@@ -116,64 +107,6 @@ labels=(
   "needs-human|d93f0b|Escalation: round cap hit, ambiguous spec, oversized PR, or failure"
   "merge-ready|5319e7|Current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge"
 )
-
-# Resolve whether the CURRENT WORKING DIRECTORY is a checkout OF THE TARGET repo. Seeding
-# .fabrica/north-star.md writes into $PWD's git top-level, so it is only correct to seed (or
-# to report a missing-star as drift) when $PWD actually IS the target's checkout — otherwise
-# we'd write the target's star into some UNRELATED repo the user happens to be sitting in.
-# We compare SLUGS, not paths: `gh repo view` on the cwd yields the cwd's <owner>/<repo>, and
-# we seed only when it equals the "$repo" argument. GitHub slugs are CASE-INSENSITIVE, so the
-# compare goes through ns_slug_eq (not a bare `=`): a user-typed `acme/myrepo` and gh's
-# canonical `Acme/MyRepo` are the SAME target and must both seed. `env -u GH_REPO`: gh honors
-# an exported GH_REPO OVER the cwd's remote, so a set GH_REPO would make this print the ENV
-# repo's slug and could spoof a non-target cwd into looking like the target — clear it for this
-# one probe so the slug always reflects the repo at $PWD. `|| true` so a non-repo cwd yields an
-# empty slug (⇒ not the target) instead of aborting under `set -e`.
-cwd_slug="$(env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
-cwd_is_target=0
-if [ -n "$cwd_slug" ] && ns_slug_eq "$cwd_slug" "$repo"; then
-  cwd_is_target=1
-fi
-
-# FIX C (#98a) — is the cwd the FABRICA CONTROL-PLANE repo itself (its main checkout OR a linked
-# worktree of it)? Detected by GIT-STRUCTURAL IDENTITY (the same trustworthy signal ns_resolve
-# uses, NOT a slug): the cwd's git COMMON-DIR equals THIS lib's own control-plane common-dir. This
-# is the SAME shared-common-dir signal the nested-repo guard above (round-1 FIX F) uses — and it is
-# what a bare top-level PATH compare could not do: Faber operates from a LINKED WORKTREE
-# (`.claude/worktrees/*`) whose git top-level is the WORKTREE path, not the main checkout, so the old
-# `cwd_toplevel == fabrica_root` compare FALSELY FAILed → setup would seed .fabrica/north-star.md
-# INTO the Fabrica worktree (polluting the control plane). A linked worktree SHARES its parent repo's
-# common-dir, so the common-dir compare treats the main checkout AND all its worktrees as self; the
-# top-level PATH equality is KEPT as one accepted case (belt-and-suspenders). Both common-dirs are
-# canonicalized to absolute physical paths (ns_git_common_dir), immune to a relative
-# `--git-common-dir` and to `/var`→`/private/var` symlink skew. We must NEVER seed
-# .fabrica/north-star.md into the control plane — Fabrica-self's north star is the root
-# NORTH_STAR.md, and a seeded .fabrica/north-star.md would pollute the control plane AND
-# (pre-precedence-fix) could shadow the root star. `|| true` keeps the derivations from aborting
-# under `set -e`; the emptiness guards below ensure an unresolved common-dir never false-matches.
-cwd_is_fabrica_self=0
-cwd_toplevel="$(ns_git_toplevel "$PWD" || true)"
-fabrica_root="$(ns_fabrica_root || true)"
-cwd_common="$(ns_git_common_dir "$cwd_toplevel" || true)"
-fab_common="$(ns_git_common_dir "$fabrica_root" || true)"
-if [ -n "$cwd_common" ] && [ -n "$fab_common" ] && [ "$cwd_common" = "$fab_common" ]; then
-  cwd_is_fabrica_self=1
-elif [ -n "$cwd_toplevel" ] && [ -n "$fabrica_root" ] && [ "$cwd_toplevel" = "$fabrica_root" ]; then
-  cwd_is_fabrica_self=1
-fi
-
-# The target-local north star lives at the cwd's git top-level (only meaningful when the cwd
-# IS the target checkout AND it is not Fabrica-self). Resolve it once here so both --check (drift
-# on a missing file) and the mutating path (seed the file) agree on the same location. When the
-# cwd is Fabrica-self we leave ns_target empty so NEITHER path seeds or drift-reports a star there.
-ns_template="$repo_root/templates/.fabrica/north-star.md"
-ns_target=""
-if [ "$cwd_is_target" -eq 1 ] && [ "$cwd_is_fabrica_self" -ne 1 ]; then
-  target_toplevel="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
-  if [ -n "$target_toplevel" ]; then
-    ns_target="$target_toplevel/.fabrica/north-star.md"
-  fi
-fi
 
 if [ "$check_mode" -eq 1 ]; then
   # Read-only drift report. Pull the live labels once (name/color/description) and
@@ -232,21 +165,9 @@ if [ "$check_mode" -eq 1 ]; then
     fi
   done
 
-  # North-star drift: a target whose labels all match but which has NO .fabrica/north-star.md
-  # still needs setup — the seed block runs only in the mutating path, so if --check reported
-  # "all good" here the file would never get seeded (Faber's bootstrap mutates ONLY on drift).
-  # So report a missing star as drift, which makes --check exit non-zero and triggers the
-  # mutating re-run that seeds it. We can only observe the LOCAL file when the cwd IS the target
-  # checkout (the cwd-guard) — a missing star is reportable only then; from a non-target cwd we
-  # can't see the target's tree, so we stay silent and let the label check speak.
-  if [ "$cwd_is_target" -eq 1 ] && [ -n "$ns_target" ] && [ ! -f "$ns_target" ]; then
-    echo "  north star: missing ${ns_target}"
-    drift=1
-  fi
-
   if [ "$drift" -ne 0 ]; then
     echo ""
-    echo "drift detected — run '$0 ${repo}' to reconcile (force-edits live labels to this script's definitions; seeds a missing .fabrica/north-star.md when run from the target checkout)" >&2
+    echo "drift detected — run '$0 ${repo}' to reconcile (force-edits live labels to this script's definitions)" >&2
     exit 1
   fi
   echo ""
@@ -277,43 +198,6 @@ for entry in "${labels[@]}"; do
   fi
 done
 
-# Seed the target's per-target north star (.fabrica/north-star.md) from the shipped template
-# so the per-target north-star RESOLVER (scripts/lib/north-star.sh, issue #97) finds a file to
-# read. Without it a set-up target has only Fabrica's control-plane NORTH_STAR.md and the
-# resolver FAILs UNSET for manager-review.
-#
-# ONLY seed when the cwd IS the target checkout (cwd_slug == "$repo"; resolved up top). The
-# seed writes into $PWD's git top-level, so seeding from a NON-target cwd would drop the
-# target's star into an unrelated repo the user happens to be sitting in. So we gate on the
-# slug match, not merely "is $PWD a git work tree." When the cwd is not the target, skip with a
-# clear note; the label bootstrap above still stands (labels are addressed by the "$repo" arg,
-# not the cwd).
-#
-# Idempotent: NEVER overwrite an existing north star — a target that already set its own goal
-# keeps it.
-#
-# FIX C (#98a): NEVER seed into the Fabrica control-plane repo itself (path-identity detected up
-# top). Fabrica-self steers by the root NORTH_STAR.md, so a seeded .fabrica/north-star.md would
-# pollute the control plane (and shadow the root star). Skip it explicitly with a note. Checked
-# FIRST so it wins even when the cwd's slug also equals the "$repo" arg (a Fabrica-on-Fabrica run).
-if [ "$cwd_is_fabrica_self" -eq 1 ]; then
-  echo "  north star: skipped — cwd is the Fabrica control-plane repo itself; it steers by the root NORTH_STAR.md, so .fabrica/north-star.md is intentionally NOT seeded here"
-elif [ "$cwd_is_target" -ne 1 ]; then
-  echo "  north star: skipped — cwd is not the target checkout (${cwd_slug:-<no repo>} != ${repo}); run from the ${repo} checkout to seed .fabrica/north-star.md"
-elif [ -z "$ns_target" ]; then
-  # cwd_is_target but no git top-level resolved (shouldn't normally happen once the slug
-  # matches, since a slug implies a repo) — skip defensively rather than seed at an unknown path.
-  echo "  north star: skipped — could not resolve the target's git top-level for the seed"
-elif [ ! -f "$ns_template" ]; then
-  echo "  north star: skipped — template not found at ${ns_template}" >&2
-elif [ -f "$ns_target" ]; then
-  echo "  north star: kept existing ${ns_target} (not overwritten)"
-else
-  mkdir -p "$(dirname "$ns_target")"
-  cp "$ns_template" "$ns_target"
-  echo "  north star: seeded ${ns_target} from the shipped template (replace the placeholder with your goal)"
-fi
-
 cat <<EOF
 
 Labels done. Note: running this by hand is OPTIONAL — Faber creates/reconciles these labels
@@ -338,12 +222,10 @@ Manual follow-ups this script can't do (see templates/repo-setup.md):
      Template (under your Fabrica clone): ${target_claude_template}.
   4. Install the /faber command: run scripts/install.sh from your fabrica clone.
   5. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
-  6. Set your own north star — this repo's own .fabrica/north-star.md (seeded above from the
-     shipped template when run from the target checkout). Replace the placeholder with your own
-     direction, remove the fabrica-shipped-default marker, and COMMIT it (manager-review.sh's
-     gate reads the COMMITTED file). Then approve it with Faber once you run /faber (this unlocks
-     proactive autonomous mode). Approve it to Faber in-session, not by relying on any in-file
-     note — the shipped text is the prior owner's history, not a token that approves the goal for
-     you. Until it's set + committed + approved, Faber acts only on issues you direct (your
-     one-liner -> Faber drafts the spec -> you approve that drafted spec -> ready).
+  6. Set your own north star (NORTH_STAR.md in your fabrica clone) — replace the shipped
+     Fabrica default with your own direction; then approve it with Faber once you run /faber
+     (this unlocks proactive autonomous mode). Approve it to Faber in-session, not by editing
+     the file — the shipped approval note is the prior owner's history, not a token that
+     approves the goal for you. Until it's set + approved, Faber acts only on issues you
+     direct (your one-liner -> Faber drafts the spec -> you approve that drafted spec -> ready).
 EOF

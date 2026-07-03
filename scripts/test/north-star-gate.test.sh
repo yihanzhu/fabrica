@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # north-star-gate.test.sh — integration asserts for the ATOMIC per-target north-star flip
-# (issue #98a): the manager-review.sh consensus GATE, doctor.sh check (h), and
-# setup-target-repo.sh seeding all read the TARGET's north star, and the gate reads it
-# COMMITTED (never an uncommitted working-tree edit).
+# (issue #98a): the manager-review.sh consensus GATE and doctor.sh check (h) both read the
+# TARGET's north star, and the gate reads it COMMITTED (never an uncommitted working-tree edit).
+# (Seeding a target's .fabrica/north-star.md is adoption scope — deferred to #98b — so this
+# suite no longer drives setup-target-repo.sh.)
 #
 # These complement scripts/test/north-star-resolver.test.sh, which asserts the resolver lib in
 # isolation. This suite asserts the CONSUMERS now wired to that resolver by #98a — the part
@@ -18,10 +19,9 @@ set -euo pipefail
 #   - a worktree-only .fabrica/north-star.md (not committed) does NOT authorize (gate FAILs); and
 #   - a HEAD-committed star STILL authorizes even if the working-tree copy is deleted or modified.
 # Plus: LOCAL committed star → debates; LOCAL + shipped-default marker → FAIL; UNSET → FAIL;
-# doctor UNSET → WARN and doctor LOCAL committed → pass; setup seeds only when cwd-slug==target
-# and --check flags a missing star as drift; and the SOURCE-IDENTITY assert (approval source ==
-# gate source), pinned by inspecting the shipped files since operator approval is not
-# machine-readable.
+# doctor UNSET → WARN and doctor LOCAL committed → pass; and the SOURCE-IDENTITY assert
+# (approval source == gate source), pinned by inspecting the shipped files since operator
+# approval is not machine-readable.
 #
 # OFFLINE and hermetic: no network/gh/codex — both are faked on PATH. Every case builds a
 # throwaway git repo in a temp dir. Run: scripts/test/north-star-gate.test.sh
@@ -721,183 +721,6 @@ test_doctor_missing_lib_reports_and_summarizes() {
   assert_eq "(4e) doctor exits non-zero when the lib (a fail) is missing" "1" "$rc"
 }
 
-# ---------------------------------------------------------------------------------
-# (5) setup-target-repo.sh seeding — SEEDs only when cwd-slug == target-slug; --check flags a
-# missing north-star file as drift. We run --check (read-only, never mutates labels) with a
-# fake gh so no network is touched, and exercise the seed's cwd-guard + idempotency directly
-# via the same slug-match predicate the script uses (ns_slug_eq), plus a real cp.
-# ---------------------------------------------------------------------------------
-
-# The --check path lists labels (fake gh returns an empty label set → all labels "missing", so
-# --check already exits non-zero on labels). To isolate the NORTH-STAR drift signal, we assert
-# on setup's north-star drift LINE, which prints only when cwd_is_target and the star is absent.
-# Fake gh for setup: `repo view` → a slug we can match/mismatch; `label list` → empty JSON.
-test_setup_check_missing_star_is_drift() {
-  local repo; repo="$(make_target "setup-check")"   # committed init, no star
-  local setup_fakebin="$tmproot/setup-fakebin-match"
-  mkdir -p "$setup_fakebin"
-  # cwd slug == target arg → cwd_is_target=1 → missing star reported as drift.
-  cat >"$setup_fakebin/gh" <<'GH'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "repo view") echo "acme/setup-check" ;;
-  "label list") echo "[]" ;;
-  *) exit 0 ;;
-esac
-GH
-  chmod +x "$setup_fakebin/gh"
-  local out rc
-  out="$(
-    cd "$repo"
-    PATH="$setup_fakebin:$PATH" bash "$setup_script" --check "acme/setup-check" 2>&1
-  )" && rc=0 || rc=$?
-  assert_contains "(5a) --check reports a missing .fabrica/north-star.md as drift" "north star: missing" "$out"
-  assert_eq "(5a) --check exits non-zero on the missing-star drift" "1" "$rc"
-}
-
-# From a NON-target cwd (slug mismatch), --check must NOT claim the local tree is the target's
-# and must NOT report a north-star drift line (it can't see the target's tree).
-test_setup_check_nontarget_cwd_no_star_drift() {
-  local repo; repo="$(make_target "setup-nontarget")"
-  local setup_fakebin="$tmproot/setup-fakebin-mismatch"
-  mkdir -p "$setup_fakebin"
-  # cwd slug != target arg → cwd_is_target=0 → NO north-star drift line for the target's tree.
-  cat >"$setup_fakebin/gh" <<'GH'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "repo view") echo "someone/some-other-checkout" ;;
-  "label list") echo "[]" ;;
-  *) exit 0 ;;
-esac
-GH
-  chmod +x "$setup_fakebin/gh"
-  local out
-  out="$(
-    cd "$repo"
-    PATH="$setup_fakebin:$PATH" bash "$setup_script" --check "acme/the-real-target" 2>&1 || true
-  )"
-  case "$out" in
-    *"north star: missing"*) failed=$((failed + 1)); echo "FAIL: (5b) --check from a non-target cwd wrongly reported a north-star drift" ;;
-    *) passed=$((passed + 1)); echo "pass: (5b) --check from a non-target cwd does NOT report the target's north-star drift" ;;
-  esac
-}
-
-# The seed's cwd-guard predicate itself: SEED only when the cwd slug matches the target (via
-# ns_slug_eq), and NEVER overwrite an existing star. We source the resolver for ns_slug_eq and
-# exercise the exact seed predicate the script uses, with a real cp.
-test_setup_seed_cwd_guard_and_idempotency() {
-  # shellcheck source=scripts/lib/north-star.sh
-  . "$repo_root/scripts/lib/north-star.sh"
-
-  # Slug match → would seed.
-  local do_seed="no"
-  if ns_slug_eq "acme/target" "acme/target"; then do_seed="yes"; fi
-  assert_eq "(5c) cwd slug == target slug → seed permitted" "yes" "$do_seed"
-  # Slug mismatch → must NOT seed (never write the target's star into an unrelated repo).
-  do_seed="no"
-  if ns_slug_eq "someone/other" "acme/target"; then do_seed="yes"; fi
-  assert_eq "(5c) cwd slug != target slug → seed refused" "no" "$do_seed"
-
-  # Idempotency + actual seed: into a fresh target, seed from the shipped template; re-seeding
-  # must KEEP the existing (already-replaced) star, never overwrite it.
-  local repo; repo="$(make_target "seed-idem")"
-  local star="$repo/.fabrica/north-star.md"
-  # First seed (absent → copy the template).
-  if [ ! -f "$star" ]; then mkdir -p "$(dirname "$star")"; cp "$ns_template" "$star"; fi
-  assert_eq "(5c) first seed creates the star from the template" "0" "$([ -f "$star" ] && echo 0 || echo 1)"
-  # Operator replaces it with their own goal.
-  printf 'my own committed goal\n' > "$star"
-  # Re-run's guard: an EXISTING star is never overwritten.
-  if [ -f "$star" ]; then :; else cp "$ns_template" "$star"; fi
-  assert_contains "(5c) re-seed keeps the operator's star (never overwrites)" "my own committed goal" "$(cat "$star")"
-}
-
-# (5d) FIX C — setup on the Fabrica control-plane repo ITSELF must NOT seed .fabrica/north-star.md
-# (it steers by the root NORTH_STAR.md; a seed would pollute the control plane). Detection is
-# PATH-based: the cwd's git top-level == ns_fabrica_root (derived from the lib's own location). We
-# build a throwaway "control-plane" clone that CONTAINS a copy of the resolver lib + setup script +
-# template, init it as git, and run setup from its root. ns_fabrica_root then resolves to THIS
-# clone's root (== cwd toplevel) → Fabrica-self → the seed is skipped with a note, AND no
-# .fabrica/north-star.md is written. The fake gh reports the cwd slug == target arg too, so this
-# proves the Fabrica-self exemption WINS even when cwd_is_target would otherwise be true.
-test_setup_fabrica_self_no_seed() {
-  local cp_root="$tmproot/fabrica-self-cp"
-  mkdir -p "$cp_root/scripts/lib" "$cp_root/templates/.fabrica"
-  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
-  cp "$setup_script" "$cp_root/scripts/setup-target-repo.sh"; chmod +x "$cp_root/scripts/setup-target-repo.sh"
-  cp "$ns_template" "$cp_root/templates/.fabrica/north-star.md"
-  git -C "$cp_root" init -q
-  git -C "$cp_root" commit -q --allow-empty -m "cp init"
-  local self_fakebin="$tmproot/self-fakebin"
-  mkdir -p "$self_fakebin"
-  # repo view → a slug that also equals the target arg (so cwd_is_target would be 1); label list
-  # → empty (labels aren't the point here).
-  cat >"$self_fakebin/gh" <<'GH'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "repo view") echo "acme/fabrica" ;;
-  "label create") exit 0 ;;
-  "label edit") exit 0 ;;
-  "label list") echo "[]" ;;
-  *) exit 0 ;;
-esac
-GH
-  chmod +x "$self_fakebin/gh"
-  local out
-  out="$(
-    cd "$cp_root"
-    PATH="$self_fakebin:$PATH" bash "$cp_root/scripts/setup-target-repo.sh" "acme/fabrica" 2>&1 || true
-  )"
-  assert_contains "(5d) setup on Fabrica-self skips the seed with a control-plane note" "cwd is the Fabrica control-plane repo itself" "$out"
-  assert_eq "(5d) setup on Fabrica-self does NOT create .fabrica/north-star.md" "1" \
-    "$([ -f "$cp_root/.fabrica/north-star.md" ] && echo 0 || echo 1)"
-}
-
-# (5e) [P2, round-3] setup run from a LINKED WORKTREE of the Fabrica control plane must ALSO treat
-# it as self (no seed). Faber operates from `.claude/worktrees/*`; a linked worktree's git
-# top-level is the WORKTREE path (not the main checkout), so the old strict top-level compare
-# FALSELY missed it and setup would seed .fabrica/north-star.md INTO the Fabrica worktree. The
-# common-dir identity fix classifies the worktree as self. We build a control-plane clone that
-# ships the lib+setup+template, add a linked worktree, and run setup FROM the worktree — asserting
-# the seed is skipped with the control-plane note and no .fabrica/north-star.md is written there.
-test_setup_fabrica_self_linked_worktree_no_seed() {
-  local cp_root="$tmproot/fabrica-self-cp-wt"
-  mkdir -p "$cp_root/scripts/lib" "$cp_root/templates/.fabrica"
-  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
-  cp "$setup_script" "$cp_root/scripts/setup-target-repo.sh"; chmod +x "$cp_root/scripts/setup-target-repo.sh"
-  cp "$ns_template" "$cp_root/templates/.fabrica/north-star.md"
-  git -C "$cp_root" init -q
-  git -C "$cp_root" add -A
-  git -C "$cp_root" commit -q -m "cp init"
-  # Add a linked worktree of the control plane (same shape as .claude/worktrees/*).
-  local wt="$cp_root/.claude/worktrees/feature"
-  git -C "$cp_root" worktree add -q --detach "$wt" HEAD 2>/dev/null
-  local self_fakebin="$tmproot/self-wt-fakebin"
-  mkdir -p "$self_fakebin"
-  # repo view → a slug that also equals the target arg (so cwd_is_target would be 1 for the
-  # worktree too); label list → empty.
-  cat >"$self_fakebin/gh" <<'GH'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "repo view") echo "acme/fabrica" ;;
-  "label create") exit 0 ;;
-  "label edit") exit 0 ;;
-  "label list") echo "[]" ;;
-  *) exit 0 ;;
-esac
-GH
-  chmod +x "$self_fakebin/gh"
-  local out
-  out="$(
-    cd "$wt"
-    PATH="$self_fakebin:$PATH" bash "$cp_root/scripts/setup-target-repo.sh" "acme/fabrica" 2>&1 || true
-  )"
-  assert_contains "(5e) setup from a Fabrica LINKED WORKTREE skips the seed with a control-plane note" "cwd is the Fabrica control-plane repo itself" "$out"
-  assert_eq "(5e) setup from a Fabrica linked worktree does NOT create .fabrica/north-star.md in it" "1" \
-    "$([ -f "$wt/.fabrica/north-star.md" ] && echo 0 || echo 1)"
-  git -C "$cp_root" worktree remove --force "$wt" 2>/dev/null || true
-}
-
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -927,11 +750,6 @@ test_doctor_h_committed_worktree_modified
 test_doctor_h_fabrica_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
-test_setup_check_missing_star_is_drift
-test_setup_check_nontarget_cwd_no_star_drift
-test_setup_seed_cwd_guard_and_idempotency
-test_setup_fabrica_self_no_seed
-test_setup_fabrica_self_linked_worktree_no_seed
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then
