@@ -67,8 +67,11 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
   `reviewer/manager-review.md`. The north star is **per-target**: it lives in the **target
   repo's `.fabrica/north-star.md`**, resolved via `scripts/lib/north-star.sh` — and
-  `manager-review.sh` reads its **committed** content (pinned to the commit the review runs
-  on) as the gate. This is the **same source** you check for my approval — **gate source ≡
+  `manager-review.sh` reads its **committed** content at the **gh-bound remote's default-branch
+  commit, fetched fresh** (#102 — not raw local HEAD; the default branch is where reviewed work
+  integrates, so its committed star is the *approved/integrated* one, and a feature-branch-only
+  star does not authorize), pinning both the read and the Codex review worktree to that commit,
+  as the gate. This is the **same source** you check for my approval — **gate source ≡
   approval source, they never diverge.** Only when the target IS the Fabrica control-plane repo
   itself does the north star come from this repo's `NORTH_STAR.md` (the resolver's Fabrica-self
   case). You update the *target's* `.fabrica/north-star.md` on a north-star transition (for a

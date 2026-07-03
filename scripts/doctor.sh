@@ -134,6 +134,18 @@ if [ -f "$ns_lib" ]; then
   . "$ns_lib" && ns_lib_ok=1
 fi
 
+# Source the shared gh-bound remote-identity helper too (scripts/lib/gh-remote.sh), so check (h)
+# diagnoses the SAME anchored source the gate authorizes on (#102): the gh-BOUND remote's
+# default-branch committed state, fetched fresh. Guarded like the resolver — a partial restore may
+# be missing exactly this file; (h) then falls back to the visible local-default/HEAD anchor (a
+# diagnostic may legitimately run local-only), and check (f) independently flags the missing file.
+ghr_lib="$repo_root/scripts/lib/gh-remote.sh"
+ghr_lib_ok=0
+if [ -f "$ghr_lib" ]; then
+  # shellcheck source=scripts/lib/gh-remote.sh
+  . "$ghr_lib" && ghr_lib_ok=1
+fi
+
 passed=0
 warned=0
 failed=0
@@ -333,18 +345,65 @@ if [ "$ns_h_kind" = "FABRICA_SELF" ]; then
 else
   committed_relpath=".fabrica/north-star.md"
 fi
-# Committed existence + content at HEAD (the gate's authoritative source). `|| true` so a
-# not-committed path (git exits non-zero) flows through rather than aborting under `set -e`.
+
+# ANCHOR RESOLUTION (#102) — diagnose the SAME committed source the gate authorizes on: the
+# gh-BOUND remote's DEFAULT branch, FETCHED FRESH, not raw local HEAD. So doctor's pass/warn
+# tracks the gate's authorize/FAIL. doctor is a DIAGNOSTIC (may run local-only / with no comment
+# target), so — unlike the gate — a missing gh repo OR no matching remote OR a failed fetch is NOT
+# a hard fail: it falls back to the VISIBLE local-default/HEAD anchor and LOGS the line (never
+# silent). We fetch into a private per-run ref and clean it up. `anchor_commit` is the commit-ish
+# the committed reads below resolve against (a full SHA when fetched/local-HEAD, or `HEAD`).
+doctor_anchor_ref=""
+cleanup_doctor_anchor_ref() {
+  [ -n "$doctor_anchor_ref" ] || return 0
+  git update-ref -d "$doctor_anchor_ref" 2>/dev/null || true
+  doctor_anchor_ref=""
+}
+trap cleanup_doctor_anchor_ref EXIT
+
+anchor_commit="HEAD"
+anchor_source="local HEAD"
+if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ]; then
+  # Resolve the gh repo from the cwd (clear GH_REPO so it reflects the actual checkout).
+  ns_h_gh_repo="$(env -u GH_REPO gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+  if [ -n "$ns_h_gh_repo" ]; then
+    ns_h_gh_id="$(ghr_gh_repo_id "$ns_h_gh_repo" || true)"
+    # Run the remote helpers FROM the git top-level (a subdir invocation still resolves the repo's
+    # remotes) via a subshell that `cd`s in; the helpers themselves degrade to empty output, so we
+    # capture stdout regardless. `|| true` guards the whole substitution under `set -e`.
+    ns_h_remote="$( { cd "$toplevel" && ghr_select_remote "$ns_h_gh_id"; } 2>/dev/null || true )"
+    if [ -n "$ns_h_remote" ]; then
+      ns_h_default="$( { cd "$toplevel" && ghr_remote_default_branch "$ns_h_remote"; } 2>/dev/null || true )"
+      if [ -n "$ns_h_default" ]; then
+        doctor_anchor_ref="refs/doctor/$$/anchor"
+        ns_h_fetched="$( { cd "$toplevel" && ghr_fetch_default_commit "$ns_h_remote" "$ns_h_default" "$doctor_anchor_ref"; } 2>/dev/null || true )"
+        if [ -n "$ns_h_fetched" ]; then
+          anchor_commit="$ns_h_fetched"
+          anchor_source="the gh-bound remote '${ns_h_remote}' default branch '${ns_h_default}' (fetched fresh)"
+        else
+          doctor_anchor_ref=""
+          report_warn "(h) could not fetch remote '${ns_h_remote}' default branch '${ns_h_default}' — diagnosing against LOCAL HEAD instead (the gate anchors to the fetched default-branch commit; confirm network access)"
+        fi
+      fi
+    fi
+  fi
+fi
+# Log the anchor source so it is never silent (matches the gate's fetched anchor, or names the
+# visible local fallback). Emitted as an informational line ahead of the (h) verdict.
+echo "info: (h) north-star anchor: ${anchor_source}"
+
+# Committed existence + content at the ANCHOR commit (the gate's authoritative source). `|| true`
+# so a not-committed path (git exits non-zero) flows through rather than aborting under `set -e`.
 committed_present=0
 committed_star=""
-if [ -n "$toplevel" ] && git -C "$toplevel" cat-file -e "HEAD:$committed_relpath" 2>/dev/null; then
+if [ -n "$toplevel" ] && git -C "$toplevel" cat-file -e "${anchor_commit}:$committed_relpath" 2>/dev/null; then
   committed_present=1
-  committed_star="$(git -C "$toplevel" show "HEAD:$committed_relpath" 2>/dev/null || true)"
+  committed_star="$(git -C "$toplevel" show "${anchor_commit}:$committed_relpath" 2>/dev/null || true)"
 fi
 
 if [ -n "$target_repo" ] && [ "$ns_h_cwd_is_target" -ne 1 ]; then
   report_warn "(h) north star not checked for $target_repo — the cwd (${ns_h_cwd_slug:-<no repo>}) is not $target_repo's checkout; run doctor from the target's clone to check its .fabrica/north-star.md"
-elif [ -n "$toplevel" ] && ! ns_committed_is_regular_file "$toplevel" "HEAD" "$committed_relpath" && [ "$committed_present" -eq 1 ]; then
+elif [ -n "$toplevel" ] && ! ns_committed_is_regular_file "$toplevel" "$anchor_commit" "$committed_relpath" && [ "$committed_present" -eq 1 ]; then
   # SYMLINK guard (round-2 FIX 4), symmetric with the gate: a committed north star stored as a
   # SYMLINK makes `git show HEAD:<path>` return the link's target-path string, not content — the
   # gate FAILs on this, so doctor diagnoses it as a WARN (a readiness gap) rather than reading the
@@ -359,11 +418,13 @@ elif [ "$committed_present" -eq 1 ]; then
   # Drive this off $committed_relpath (the exact path the gate reads) — NOT a hardcoded
   # .fabrica-relative path — so a Fabrica-self checkout (committed_relpath = NORTH_STAR.md)
   # gets the same "gate reads the committed version" note on an uncommitted ROOT edit. The
-  # gate reads HEAD:$committed_relpath and ignores the working tree, so a dirty root star must
-  # not read as a silent clean pass here.
+  # gate reads the ANCHOR commit's $committed_relpath and ignores the working tree, so a
+  # dirty/divergent working-tree copy must not read as a silent clean pass here. We diff the
+  # working tree against the SAME anchor commit doctor diagnosed (the gh-bound default-branch
+  # commit when fetched, else local HEAD) so the note tracks the gate's actual source.
   if [ -n "$toplevel" ] \
-     && ! git -C "$toplevel" diff --quiet HEAD -- "$committed_relpath" 2>/dev/null; then
-    head_note=" (note: the working-tree copy differs from HEAD — the gate reads the committed version)"
+     && ! git -C "$toplevel" diff --quiet "$anchor_commit" -- "$committed_relpath" 2>/dev/null; then
+    head_note=" (note: the working-tree copy differs from the anchored committed version the gate reads)"
   fi
   # Isolate the active-entry heading from the COMMITTED content (shared region helper), to WARN on
   # a missing `status: active` entry; the marker check goes through the shared insensitive matcher.
@@ -376,16 +437,18 @@ elif [ "$committed_present" -eq 1 ]; then
     report 0 "(h) the target's committed north star ($committed_relpath) is set and not the shipped default$head_note"
   fi
 elif [ "$ns_h_kind" = "LOCAL" ]; then
-  # A working-tree-only star (resolver saw the on-disk file) that is NOT committed at HEAD: the gate
-  # reads committed state and would treat it as UNSET. WARN (doctor only diagnoses).
-  report_warn "(h) the target's north star (.fabrica/north-star.md) is not committed at HEAD — the gate reads committed state and would treat it as UNSET; commit your north star before enabling proactive mode"
+  # A working-tree-only star (resolver saw the on-disk file) that is NOT committed at the anchored
+  # source: the gate reads the anchored committed state and would treat it as UNSET. WARN (doctor
+  # only diagnoses). This also fires when the star is committed on a NON-default branch but not on
+  # the anchored (gh-bound default) branch — the gate would not authorize off it either.
+  report_warn "(h) the target's north star (.fabrica/north-star.md) is not committed at the anchored source (${anchor_source}) — the gate reads that committed state and would treat it as UNSET; commit your north star to the default branch before enabling proactive mode"
 else
   # No committed star and no working-tree star. UNSET (non-empty target), EMPTY (commit-less), or
   # NOREPO (cwd not a git work tree) — WARN (not FAIL): the gate FAILs, doctor only flags the gap.
   case "$ns_h_kind" in
     UNSET) report_warn "(h) no north star set for the target — .fabrica/north-star.md is absent; set + commit one before enabling proactive mode (manager-review.sh's gate FAILs without it)" ;;
     EMPTY) report_warn "(h) target repo has no commits yet — no north star expected; set + commit .fabrica/north-star.md before enabling proactive mode" ;;
-    FABRICA_SELF) report_warn "(h) the Fabrica control-plane root NORTH_STAR.md is not committed at HEAD — commit it before enabling proactive mode" ;;
+    FABRICA_SELF) report_warn "(h) the Fabrica control-plane root NORTH_STAR.md is not committed at the anchored source (${anchor_source}) — commit it before enabling proactive mode" ;;
     *)     report_warn "(h) could not resolve a north star from the cwd (resolver: ${ns_h_kind:-none}) — run doctor from the target repo's checkout to check its .fabrica/north-star.md" ;;
   esac
 fi

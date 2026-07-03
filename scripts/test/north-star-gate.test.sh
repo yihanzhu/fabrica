@@ -64,25 +64,49 @@ assert_contains() {
 }
 
 # --- fake gh / codex on PATH -------------------------------------------------------
-# Fake gh: `repo view --json nameWithOwner` prints a slug DERIVED FROM THE CWD's basename, so a
-# throwaway target repo and the real Fabrica clone get DIFFERENT slugs — otherwise the resolver
-# would false-match FABRICA_SELF when a run's target has no local star (the resolver falls back
-# to the slug identity check, which compares the target's slug to Fabrica's own; ns_repo_slug
-# cd's into each dir before calling gh, so keying the slug off $PWD keeps them distinct).
-# `issue view` prints deterministic scalars for gh's -q extraction; `issue comment` is a no-op.
+# Fake gh: the identity that the #102 gh-bound anchor pattern needs.
+#   - `repo view [<repo>] --json nameWithOwner` → a slug keyed off the CWD's git top-level
+#     basename (`someone/<basename>`), so a throwaway target repo and the real Fabrica clone get
+#     DIFFERENT slugs (the resolver's Fabrica-self check must not false-match).
+#   - `repo view [<repo>] --json url` → the matching web URL `https://github.com/someone/<basename>`
+#     (#102). ghr_gh_repo_id reads the HOST off this url and re-appends the slug, so the gate's
+#     canonical identity is `github.com/someone/<basename>` — which the remote-backed target's
+#     configured `origin` url (`https://github.com/someone/<basename>.git`) normalizes to, so
+#     ghr_select_remote matches `origin`. (The FETCH goes to the bare repo via an insteadOf
+#     transport rewrite; identity matches on the CONFIGURED url — see setup_remote below.)
+#   - `FAKE_GH_NO_REPO=1` in the env → `repo view` fails (empty), simulating a genuinely local /
+#     no-gh-remote target so manager-review takes its VISIBLE local-HEAD fallback (and doctor its
+#     visible fallback). Used by the greenfield/local-only case.
+#   - `issue view` prints deterministic scalars for gh's -q extraction; `issue comment` is a no-op.
 fakebin="$tmproot/fakebin"
 mkdir -p "$fakebin"
 cat >"$fakebin/gh" <<'GH'
 #!/usr/bin/env bash
-# Minimal gh stub for the manager-review gate test. Only the calls manager-review.sh makes.
+# Minimal gh stub for the manager-review gate test. Only the calls the scripts make.
 cmd="${1:-}"; sub="${2:-}"
 case "$cmd $sub" in
   "repo view")
-    # `gh repo view --json nameWithOwner -q .nameWithOwner` → a slug keyed off the cwd, so the
-    # target repo (`someone/<cwd-basename>`) never equals Fabrica's own clone slug. Resolve the
-    # cwd's git top-level so a subdir invocation still yields the repo's basename.
-    top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    echo "someone/$(basename "$top")" ;;
+    # Simulate a genuinely local / no-gh-remote target when asked.
+    if [ "${FAKE_GH_NO_REPO:-0}" = "1" ]; then
+      exit 1
+    fi
+    # Derive the repo NAME from the CONFIGURED origin url (`https://github.com/someone/<name>.git`)
+    # when present — this is shared across a repo's linked worktrees (common config), so a run from
+    # a linked worktree resolves the SAME identity as the main checkout (a real gh does too). Fall
+    # back to the git top-level basename only when there is no origin (bare-init throwaway repos).
+    origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+    case "$origin_url" in
+      https://github.com/someone/*)
+        name="${origin_url#https://github.com/someone/}"; name="${name%.git}" ;;
+      *)
+        top="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; name="$(basename "$top")" ;;
+    esac
+    # Return whichever field was requested (nameWithOwner slug, or the web url for #102).
+    if printf '%s\n' "$@" | grep -q 'url'; then
+      echo "https://github.com/someone/${name}"
+    else
+      echo "someone/${name}"
+    fi ;;
   "issue view")
     if printf '%s\n' "$@" | grep -q 'title'; then
       echo "A proactive proposal"
@@ -136,7 +160,7 @@ chmod +x "$fakebin/codex"
 
 # run_gate <repo_dir> — run the REAL manager-review.sh from inside <repo_dir> with the fakes on
 # PATH; echo "<rc>|<combined-output>". codex/gh are faked; git is real. issue# is 1 (validated
-# as a bare integer by the script).
+# as a bare integer by the script). FAKE_GH_NO_REPO (if exported by a caller) passes through.
 run_gate() {
   local repo_dir="$1" rc out
   out="$(
@@ -146,39 +170,87 @@ run_gate() {
   printf '%s|%s' "$rc" "$out"
 }
 
-# make_target <name> — a throwaway non-Fabrica git repo with one commit; echo its path.
+# --- remote-backed throwaway targets (#102) ----------------------------------------
+# The #102 gate anchors to the gh-BOUND remote's DEFAULT branch, FETCHED FRESH. So a throwaway
+# target must have a matching configured remote AND a fetchable default branch. We wire that
+# HERMETICALLY (no network):
+#   - a bare "remote" repo lives under $tmproot/remotes/<name>.git;
+#   - the working repo's `origin` is CONFIGURED with the clean identity url
+#     `https://github.com/someone/<name>.git` (what ghr_select_remote matches against — it reads
+#     the CONFIGURED url, ignoring insteadOf);
+#   - an `insteadOf` rewrite maps that https url to the local bare repo, so the actual git
+#     TRANSPORT (push/fetch) goes to the bare repo offline;
+#   - `git remote set-head origin --auto` populates refs/remotes/origin/HEAD so
+#     ghr_remote_default_branch can name the default branch.
+# The default branch is `main`. Commits are PUSHED to the bare repo so the fetched default carries
+# them — that is exactly the integrated state the gate anchors to.
+
+remotes_root="$tmproot/remotes"
+mkdir -p "$remotes_root"
+
+# setup_remote <repo> <name> — create the bare remote, configure origin (identity url + insteadOf
+# transport rewrite), and set the default-branch head. Idempotent per <name>.
+setup_remote() {
+  local repo="$1" name="$2"
+  local bare="$remotes_root/${name}.git"
+  git init -q --bare "$bare"
+  git -C "$repo" remote add origin "https://github.com/someone/${name}.git"
+  # Transport rewrite: fetch/push of the https identity url actually hit the local bare repo.
+  git -C "$repo" config "url.file://x${bare}.insteadOf" "https://github.com/someone/${name}.git"
+}
+
+# push_default <repo> — push the working repo's current branch to origin/main and set the remote
+# default head. Called after each commit so the fetched default carries it. Tolerant of a repo
+# with NO `origin` (e.g. the embedded inner repo in the nested-repo test, where the nested-repo
+# guard fires before any anchor/fetch): skip silently in that case.
+push_default() {
+  local repo="$1"
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 || return 0
+  git -C "$repo" push -q -f origin HEAD:refs/heads/main
+  git -C "$repo" remote set-head origin main >/dev/null 2>&1 || \
+    git -C "$repo" remote set-head origin --auto >/dev/null 2>&1 || true
+}
+
+# make_target <name> — a throwaway non-Fabrica git repo on default branch `main` with one commit,
+# backed by a matching gh-bound remote (so the #102 gate can anchor + fetch fresh); echo its path.
 make_target() {
-  local path="$tmproot/$1"
+  local name="$1"
+  local path="$tmproot/$name"
   mkdir -p "$path"
-  git -C "$path" init -q
+  git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m "init"
+  setup_remote "$path" "$name"
+  push_default "$path"
   echo "$path"
 }
 
-# commit_star <repo> <content...> — write .fabrica/north-star.md and COMMIT it.
+# commit_star <repo> <content...> — write .fabrica/north-star.md, COMMIT it, and PUSH to the
+# remote default branch (so the gate's fetched-fresh anchor carries it).
 commit_star() {
   local repo="$1"; shift
   mkdir -p "$repo/.fabrica"
   printf '%s\n' "$*" > "$repo/.fabrica/north-star.md"
   git -C "$repo" add .fabrica/north-star.md
   git -C "$repo" commit -q -m "set north star"
+  push_default "$repo"
 }
 
-# commit_star_raw <repo> — read EXACT .fabrica/north-star.md bytes from stdin and COMMIT (so a
-# test can pin whitespace/tab/multiline-split marker variants that `commit_star`'s printf can't).
+# commit_star_raw <repo> — read EXACT .fabrica/north-star.md bytes from stdin, COMMIT, and PUSH
+# (so a test can pin whitespace/tab/multiline-split marker variants printf can't).
 commit_star_raw() {
   local repo="$1"
   mkdir -p "$repo/.fabrica"
   cat > "$repo/.fabrica/north-star.md"
   git -C "$repo" add .fabrica/north-star.md
   git -C "$repo" commit -q -m "set north star"
+  push_default "$repo"
 }
 
 # commit_symlink_star <repo> <relpath> — commit <relpath> as a SYMLINK pointing at a sibling
 # regular file (the symlink attack: `git show <commit>:<relpath>` then returns the link's
-# target-path string, not content). The link target file has REAL non-placeholder content, so a
-# gate that followed the symlink would wrongly PROCEED — the FIX 4 guard must FAIL on the symlink
-# mode (120000) before ever reading it.
+# target-path string, not content), then PUSH. The link target file has REAL non-placeholder
+# content, so a gate that followed the symlink would wrongly PROCEED — the FIX 4 guard must FAIL
+# on the symlink mode (120000) before ever reading it.
 commit_symlink_star() {
   local repo="$1" relpath="$2"
   mkdir -p "$repo/$(dirname "$relpath")"
@@ -186,6 +258,37 @@ commit_symlink_star() {
   ( cd "$repo" && ln -s "decoy-target.md" "$relpath" )
   git -C "$repo" add -A
   git -C "$repo" commit -q -m "commit symlink north star"
+  push_default "$repo"
+}
+
+# make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of BOTH sourced libs
+# (north-star.sh + gh-remote.sh, #102) and manager-review.sh, so ns_fabrica_root (derived from the
+# lib's own location) == this clone's git top-level → the resolver classifies FABRICA_SELF and the
+# gate takes the FABRICA_SELF branch. Remote-backed on default branch `main` (same as make_target)
+# so the #102 gh-bound anchor path is exercised for the self case too. Echoes the clone path; the
+# caller commits + pushes the root NORTH_STAR.md (or whatever the case needs) and runs the COPIED
+# manager-review.sh so its own-location lib derivation lands inside the clone.
+make_cp_clone() {
+  local name="$1"
+  local cp_root="$tmproot/$name"
+  mkdir -p "$cp_root/scripts/lib"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$repo_root/scripts/lib/gh-remote.sh" "$cp_root/scripts/lib/gh-remote.sh"
+  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
+  git -C "$cp_root" init -q -b main
+  setup_remote "$cp_root" "$name"
+  echo "$cp_root"
+}
+
+# run_cp_gate <cp_root> — run the clone's OWN copied manager-review.sh from inside it with the
+# fakes on PATH; echo "<rc>|<combined-output>".
+run_cp_gate() {
+  local cp_root="$1" rc out
+  out="$(
+    cd "$cp_root"
+    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
+  )" && rc=0 || rc=$?
+  printf '%s|%s' "$rc" "$out"
 }
 
 # ---------------------------------------------------------------------------------
@@ -281,21 +384,16 @@ test_committed_authorizes_even_if_worktree_modified() {
 # marker). This is the self analogue of (2b) and directly exercises the resolver/gate agreement.
 # ---------------------------------------------------------------------------------
 test_fabrica_self_committed_worktree_deleted_proceeds() {
-  local cp_root="$tmproot/gate-fabrica-self-committed-del"
-  mkdir -p "$cp_root/scripts/lib"
-  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
-  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
-  git -C "$cp_root" init -q
-  # Commit a root NORTH_STAR.md, then delete the worktree copy: the gate must read HEAD.
+  local cp_root; cp_root="$(make_cp_clone "gate-fabrica-self-committed-del")"
+  # Commit a root NORTH_STAR.md + push it to the anchored default branch, then delete the worktree
+  # copy: the gate must read the fetched default-branch commit, not the (deleted) worktree file.
   printf '### Fabrica goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
-  git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/manager-review.sh
+  git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/manager-review.sh
   git -C "$cp_root" commit -q -m "cp init with committed root star"
-  rm -f "$cp_root/NORTH_STAR.md"   # worktree copy gone; HEAD still has it
-  local rc out
-  out="$(
-    cd "$cp_root"
-    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
-  )" && rc=0 || rc=$?
+  push_default "$cp_root"
+  rm -f "$cp_root/NORTH_STAR.md"   # worktree copy gone; the anchored commit still has it
+  local res rc out
+  res="$(run_cp_gate "$cp_root")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(2c) FABRICA_SELF authorizes off COMMITTED root star with the worktree copy DELETED (gate proceeds)" "0" "$rc"
   assert_contains "(2c) Fabrica-self gate reached the verdict" "PROCEED" "$out"
 }
@@ -312,21 +410,15 @@ test_fabrica_self_committed_worktree_deleted_proceeds() {
 # committed) with an actionable message, and it NEVER authorizes off the stray `.fabrica` star.
 # ---------------------------------------------------------------------------------
 test_fabrica_self_no_committed_root_fails_not_local() {
-  local cp_root="$tmproot/gate-fabrica-self-no-root"
-  mkdir -p "$cp_root/scripts/lib"
-  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
-  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
-  git -C "$cp_root" init -q
-  # NO root NORTH_STAR.md. A STRAY .fabrica/north-star.md IS committed (must NOT be authorized).
+  local cp_root; cp_root="$(make_cp_clone "gate-fabrica-self-no-root")"
+  # NO root NORTH_STAR.md. A STRAY .fabrica/north-star.md IS committed + pushed (must NOT authorize).
   mkdir -p "$cp_root/.fabrica"
   printf '### Stray goal · status: **active** — must NOT authorize Fabrica-self\nbody\n' > "$cp_root/.fabrica/north-star.md"
-  git -C "$cp_root" add scripts/lib/north-star.sh scripts/manager-review.sh .fabrica/north-star.md
+  git -C "$cp_root" add scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/manager-review.sh .fabrica/north-star.md
   git -C "$cp_root" commit -q -m "cp init: stray local star, NO root star"
-  local rc out
-  out="$(
-    cd "$cp_root"
-    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
-  )" && rc=0 || rc=$?
+  push_default "$cp_root"
+  local res rc out
+  res="$(run_cp_gate "$cp_root")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(2d) FABRICA_SELF with no committed root NORTH_STAR.md → gate FAILs (does NOT fall back to .fabrica)" "1" "$rc"
   assert_contains "(2d) FABRICA_SELF missing-root FAIL cites NORTH_STAR.md not committed at HEAD" "NORTH_STAR.md is not committed at HEAD" "$out"
   # And it must NOT have proceeded against the stray .fabrica star.
@@ -498,21 +590,15 @@ test_gate_local_symlink_fails() {
 # like (2c): a throwaway control-plane clone that ships the lib + manager-review.sh, so
 # ns_fabrica_root == the cwd's top-level → the gate takes the FABRICA_SELF branch.
 test_gate_fabrica_self_symlink_fails() {
-  local cp_root="$tmproot/gate-fabrica-self-symlink"
-  mkdir -p "$cp_root/scripts/lib"
-  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
-  cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
-  git -C "$cp_root" init -q
-  # Commit NORTH_STAR.md as a SYMLINK to a decoy real file.
+  local cp_root; cp_root="$(make_cp_clone "gate-fabrica-self-symlink")"
+  # Commit NORTH_STAR.md as a SYMLINK to a decoy real file, then push.
   printf '### Real fabrica goal · status: **active** — decoy content\nbody\n' > "$cp_root/decoy-root.md"
   ( cd "$cp_root" && ln -s "decoy-root.md" "NORTH_STAR.md" )
   git -C "$cp_root" add -A
   git -C "$cp_root" commit -q -m "cp init with SYMLINK root star"
-  local rc out
-  out="$(
-    cd "$cp_root"
-    PATH="$fakebin:$PATH" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
-  )" && rc=0 || rc=$?
+  push_default "$cp_root"
+  local res rc out
+  res="$(run_cp_gate "$cp_root")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(7b) FABRICA_SELF committed symlink NORTH_STAR.md → gate FAILs" "1" "$rc"
   assert_contains "(7b) FABRICA_SELF symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
 }
@@ -624,15 +710,27 @@ test_gate_no_active_entry_fails() {
 # ---------------------------------------------------------------------------------
 
 # run_doctor_h <repo_dir> — run doctor.sh from inside <repo_dir> with the fakes on PATH; echo
-# only its (h) line. doctor may exit non-zero on unrelated hard fails (no /faber etc.), so
-# capture output regardless of rc.
+# only its (h) VERDICT line (pass/warn/fail), NOT the informational `info: (h) north-star anchor:`
+# line (#102) that now precedes it. doctor may exit non-zero on unrelated hard fails (no /faber
+# etc.), so capture output regardless of rc.
 run_doctor_h() {
   local repo_dir="$1" out
   out="$(
     cd "$repo_dir"
     PATH="$fakebin:$PATH" bash "$doctor" 2>&1 || true
   )"
-  printf '%s' "$out" | grep '(h)' | head -n1 || true
+  printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true
+}
+
+# run_doctor_h_anchor <repo_dir> — like run_doctor_h but echo the informational anchor line
+# (`info: (h) north-star anchor: …`) so a test can assert HOW doctor resolved the anchor.
+run_doctor_h_anchor() {
+  local repo_dir="$1" out
+  out="$(
+    cd "$repo_dir"
+    PATH="$fakebin:$PATH" bash "$doctor" 2>&1 || true
+  )"
+  printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true
 }
 
 test_doctor_unset_warns() {
@@ -679,7 +777,7 @@ test_doctor_h_committed_worktree_modified() {
   printf 'placeholder <!-- fabrica-shipped-default -->\n' > "$repo/.fabrica/north-star.md"
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4d') doctor (h) reads the COMMITTED (clean) star despite a dirty placeholder worktree edit → pass" "pass:" "$line"
-  assert_contains "(4d') doctor (h) notes the working-tree copy differs from HEAD" "differs from HEAD" "$line"
+  assert_contains "(4d') doctor (h) notes the working-tree copy differs from the anchored committed version" "differs from the anchored committed version" "$line"
 }
 
 # (4d'') FIX 1 (round-3) — the head-vs-worktree drift note must fire for FABRICA_SELF too. doctor
@@ -692,15 +790,19 @@ test_doctor_h_committed_worktree_modified() {
 # top-level → the resolver classifies FABRICA_SELF → committed_relpath = NORTH_STAR.md), commit a
 # real root star, then DIRTY the working-tree copy and run doctor from the clone.
 test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
-  local cp_root="$tmproot/doctor-fabrica-self-mod"
+  local name="doctor-fabrica-self-mod"
+  local cp_root="$tmproot/$name"
   mkdir -p "$cp_root/scripts/lib"
   cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$repo_root/scripts/lib/gh-remote.sh" "$cp_root/scripts/lib/gh-remote.sh"
   cp "$doctor" "$cp_root/scripts/doctor.sh"; chmod +x "$cp_root/scripts/doctor.sh"
-  git -C "$cp_root" init -q
-  # A real (non-placeholder) committed root star → doctor (h) would normally PASS clean.
+  git -C "$cp_root" init -q -b main
+  setup_remote "$cp_root" "$name"
+  # A real (non-placeholder) committed root star, pushed to the anchored default → PASS clean.
   printf '### Fabrica goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
-  git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/doctor.sh
+  git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/doctor.sh
   git -C "$cp_root" commit -q -m "cp init with committed root star"
+  push_default "$cp_root"
   # Now DIRTY the working-tree root copy (uncommitted edit the gate would ignore).
   printf '### Fabrica goal · status: **active** — uncommitted local edit\nbody CHANGED\n' > "$cp_root/NORTH_STAR.md"
   local line
@@ -708,9 +810,9 @@ test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
     cd "$cp_root"
     PATH="$fakebin:$PATH" bash "$cp_root/scripts/doctor.sh" 2>&1 || true
   )"
-  line="$(printf '%s' "$line" | grep '(h)' | head -n1 || true)"
+  line="$(printf '%s' "$line" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true)"
   assert_contains "(4d'') doctor (h) on Fabrica-self reads the COMMITTED root star despite a dirty worktree edit → pass" "pass:" "$line"
-  assert_contains "(4d'') doctor (h) notes the Fabrica-self ROOT working-tree copy differs from HEAD" "differs from HEAD" "$line"
+  assert_contains "(4d'') doctor (h) notes the Fabrica-self ROOT working-tree copy differs from the anchored committed version" "differs from the anchored committed version" "$line"
 }
 
 # (4f) FIX 4 (round-2) — doctor (h) diagnoses a committed SYMLINK north star as a WARN (symmetric
@@ -746,6 +848,280 @@ test_doctor_missing_lib_reports_and_summarizes() {
   assert_eq "(4e) doctor exits non-zero when the lib (a fail) is missing" "1" "$rc"
 }
 
+# ---------------------------------------------------------------------------------
+# (11) #102 — the gate anchors to the gh-BOUND remote's DEFAULT branch, not the checked-out branch.
+# A star committed ONLY on a NON-default (feature) branch must NOT authorize; the gate anchors to
+# the DEFAULT branch (main), which carries the integrated/operator-approved star.
+# ---------------------------------------------------------------------------------
+
+# (11a) The default branch (main) has the REAL committed star; a checked-out FEATURE branch has a
+# DIFFERENT (placeholder) star. The gate anchors to main → PROCEEDs on the integrated star, NOT the
+# feature branch's placeholder (pre-#102 it pinned local HEAD = the feature branch → would FAIL).
+test_gate_anchors_to_default_not_feature_branch() {
+  local repo; repo="$(make_target "anchor-default-branch")"
+  # main gets the real approved star (pushed → the anchored default carries it).
+  commit_star "$repo" "### Ship v2 by Q3 · status: **active** — our real integrated goal"
+  # Now check out a FEATURE branch and commit a PLACEHOLDER star there (NOT pushed to main).
+  git -C "$repo" checkout -q -b feature
+  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
+    > "$repo/.fabrica/north-star.md"
+  git -C "$repo" add .fabrica/north-star.md
+  git -C "$repo" commit -q -m "feature-branch placeholder star (must NOT authorize)"
+  # HEAD is now the feature branch. The gate must anchor to main (the pushed real star) → PROCEED.
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(11a) star on a non-default branch does NOT authorize; gate anchors to the DEFAULT branch → PROCEEDs" "0" "$rc"
+  assert_contains "(11a) gate debated the integrated (default-branch) star, not the feature placeholder" "PROCEED" "$out"
+}
+
+# (11b) The mirror: the DEFAULT branch (main) carries a PLACEHOLDER star, while the checked-out
+# feature branch has a REAL star. The gate anchors to main → FAILs on the placeholder, proving it
+# ignores the feature branch's (uncommitted-to-default) real star.
+test_gate_default_placeholder_feature_real_fails() {
+  local repo; repo="$(make_target "anchor-default-placeholder")"
+  # main gets a PLACEHOLDER star (pushed → the anchored default carries it).
+  commit_star_raw "$repo" <<'STAR'
+### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+body
+STAR
+  # A feature branch has a REAL star, but it never reaches the default branch.
+  git -C "$repo" checkout -q -b feature
+  printf '### Ship v2 · status: **active** — real feature-branch star (not on default)\nbody\n' \
+    > "$repo/.fabrica/north-star.md"
+  git -C "$repo" add .fabrica/north-star.md
+  git -C "$repo" commit -q -m "feature real star (not integrated to default)"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(11b) gate anchors to the DEFAULT branch's placeholder (ignores the feature real star) → FAILs" "1" "$rc"
+  assert_contains "(11b) FAIL cites the default-branch shipped placeholder" "shipped placeholder" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (12) #102 — STALE remote-tracking cache: the gate FETCHES FRESH and pins the INTEGRATED commit,
+# NOT a stale local refs/remotes/origin/HEAD. We advance the bare remote's default from a SEPARATE
+# clone so the target's remote-tracking ref stays behind. Old cached tip = a PLACEHOLDER star;
+# fresh remote tip = a REAL star. If the gate used the stale cache it would FAIL (placeholder);
+# fetching fresh → PROCEED, proving it pinned the fetched integrated commit.
+# ---------------------------------------------------------------------------------
+test_gate_fetches_fresh_not_stale_cache() {
+  local name="anchor-stale-cache"
+  local repo; repo="$(make_target "$name")"
+  local bare="$remotes_root/${name}.git"
+  # v1 on main = a PLACEHOLDER star, pushed → the target's refs/remotes/origin/main now caches v1.
+  commit_star_raw "$repo" <<'STAR'
+### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+body
+STAR
+  # Confirm the cache is populated at the placeholder commit (belt-and-suspenders).
+  local cached; cached="$(git -C "$repo" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+  # Advance the bare remote's main to v2 (a REAL star) from a SEPARATE clone, so the target's
+  # remote-tracking ref stays STALE at v1 (the target never fetched v2).
+  local pusher="$tmproot/${name}-pusher"
+  git clone -q "file://x${bare}" "$pusher"
+  mkdir -p "$pusher/.fabrica"
+  printf '### Ship v2 by Q3 · status: **active** — the fresh integrated approved goal\nbody\n' \
+    > "$pusher/.fabrica/north-star.md"
+  git -C "$pusher" add .fabrica/north-star.md
+  git -C "$pusher" commit -q -m "advance default to the real approved star (v2)"
+  git -C "$pusher" push -q origin HEAD:main
+  # The target's cache is still v1; the gate must FETCH FRESH → v2 (real) → PROCEED.
+  local stale_now; stale_now="$(git -C "$repo" rev-parse refs/remotes/origin/main 2>/dev/null || true)"
+  assert_eq "(12) target's remote-tracking cache is STALE (unchanged after the out-of-band push)" "$cached" "$stale_now"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(12) gate fetches fresh (not the stale placeholder cache) → PROCEEDs on the integrated commit" "0" "$rc"
+  assert_contains "(12) gate debated the freshly-fetched real star" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (13) #102 — gh resolves a repo but NO configured remote matches that identity → manager-review
+# FAILs CLEARLY (does NOT silently anchor to local HEAD while commenting on the gh-bound issue).
+# We build a repo whose `origin` points at a DIFFERENT identity than the fake gh resolves.
+# ---------------------------------------------------------------------------------
+test_gate_gh_repo_no_matching_remote_fails() {
+  local name="no-matching-remote"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m "init"
+  commit_star "$path" "### Ship v2 · status: **active** — real committed star"
+  # origin points at a DIFFERENT repo identity than gh resolves (gh → someone/<basename>).
+  git -C "$path" remote add origin "https://github.com/someone-else/unrelated.git"
+  local res rc out
+  res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(13) gh-repo-but-no-matching-remote → gate FAILs (no silent local-HEAD anchor)" "1" "$rc"
+  assert_contains "(13) FAIL says no configured git remote matches the gh-resolved identity" "no configured git remote matches" "$out"
+  # It must NOT have reached a Codex verdict off an unbound local anchor.
+  case "$out" in
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (13) gate must NOT authorize off local HEAD when no remote matches"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (13) gate did NOT anchor to local HEAD on a gh-bound-but-unmatched repo" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------------
+# (14) #102 — FORK / non-`origin` matching remote: the gate anchors to the MATCHING remote's default
+# branch, NOT blindly `origin`. `origin` = a FORK (different identity), `upstream` = the canonical
+# repo gh resolves to. The star lives on upstream's default; the gate must select `upstream`.
+# ---------------------------------------------------------------------------------
+test_gate_fork_selects_upstream_not_origin() {
+  local name="fork-upstream"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m "init"
+  # The REAL star lives on upstream (the canonical repo gh resolves to: someone/<basename>).
+  commit_star "$path" "### Ship v2 · status: **active** — canonical upstream approved goal"
+  # Wire the CANONICAL identity as `upstream` (matches gh someone/<basename>); point `origin` at a
+  # FORK (different identity). setup_remote already created `origin`? No — we build this by hand.
+  local up_bare="$remotes_root/${name}.git"
+  git init -q --bare "$up_bare"
+  git -C "$path" remote add upstream "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://x${up_bare}.insteadOf" "https://github.com/someone/${name}.git"
+  git -C "$path" push -q -f upstream HEAD:refs/heads/main
+  git -C "$path" remote set-head upstream main >/dev/null 2>&1 || true
+  # `origin` = a FORK with a DIFFERENT identity (and a PLACEHOLDER default, to prove it is NOT used).
+  local fork_bare="$remotes_root/${name}-fork.git"
+  git init -q --bare "$fork_bare"
+  git -C "$path" remote add origin "https://github.com/me/${name}-fork.git"
+  git -C "$path" config "url.file://x${fork_bare}.insteadOf" "https://github.com/me/${name}-fork.git"
+  # Push a placeholder-star commit to the fork's main so, if the gate wrongly picked origin, it FAILs.
+  local forkclone="$tmproot/${name}-forkclone"
+  git clone -q "file://x${fork_bare}" "$forkclone" 2>/dev/null || { mkdir -p "$forkclone"; git -C "$forkclone" init -q -b main; git -C "$forkclone" remote add origin "file://x${fork_bare}"; }
+  mkdir -p "$forkclone/.fabrica"
+  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
+    > "$forkclone/.fabrica/north-star.md"
+  git -C "$forkclone" add .fabrica/north-star.md
+  git -C "$forkclone" commit -q -m "fork placeholder star"
+  git -C "$forkclone" push -q origin HEAD:main
+  # gh resolves someone/<basename> → matches `upstream`, NOT `origin` (me/<basename>-fork). The gate
+  # must anchor to upstream's default (the real star) → PROCEED, ignoring the fork's placeholder.
+  local res rc out
+  res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(14) fork setup: gate selects the MATCHING remote (upstream), not blindly origin → PROCEEDs" "0" "$rc"
+  assert_contains "(14) gate debated upstream's canonical star, not the fork's placeholder" "PROCEED" "$out"
+}
+
+# (14b) #102 — matching remote whose local remote-tracking HEAD is NOT set (a manually-added
+# `upstream` that was never `git remote set-head`): ghr_remote_default_branch falls back to
+# `git ls-remote --symref <remote> HEAD` for the default-branch NAME, so the gate still anchors +
+# fetches fresh and PROCEEDs. Same wiring as (14) but the matching remote's symref is left UNSET.
+test_gate_matching_remote_unset_symref_falls_back_to_lsremote() {
+  local name="upstream-no-sethead"
+  local path="$tmproot/$name"
+  mkdir -p "$path"
+  git -C "$path" init -q -b main
+  git -C "$path" commit -q --allow-empty -m "init"
+  commit_star "$path" "### Ship v2 · status: **active** — canonical star via ls-remote fallback"
+  local up_bare="$remotes_root/${name}.git"
+  git init -q --bare "$up_bare"
+  # The bare remote needs its OWN HEAD symref pointing at main so ls-remote --symref reports it.
+  git -C "$path" remote add upstream "https://github.com/someone/${name}.git"
+  git -C "$path" config "url.file://x${up_bare}.insteadOf" "https://github.com/someone/${name}.git"
+  git -C "$path" push -q -f upstream HEAD:refs/heads/main
+  git --git-dir="$up_bare" symbolic-ref HEAD refs/heads/main
+  # Deliberately do NOT `git remote set-head upstream` → refs/remotes/upstream/HEAD stays UNSET.
+  local res rc out
+  res="$(run_gate "$path")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(14b) matching remote with UNSET tracking HEAD → ls-remote symref fallback names default → PROCEEDs" "0" "$rc"
+  assert_contains "(14b) gate anchored via the ls-remote default-branch fallback" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (15) #102 — detached HEAD at the default commit must NOT fail for lacking a branch name. We check
+# out the target in DETACHED HEAD state at the default-branch tip; the gate compares COMMITS (not
+# branch names) so it proceeds normally.
+# ---------------------------------------------------------------------------------
+test_gate_detached_head_at_default_proceeds() {
+  local repo; repo="$(make_target "detached-at-default")"
+  commit_star "$repo" "### Ship v2 · status: **active** — our real integrated goal"
+  # Detach HEAD at the current (default-branch) commit — no branch name.
+  git -C "$repo" checkout -q --detach HEAD
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(15) detached HEAD at the default commit → gate PROCEEDs (compares commits, not branch names)" "0" "$rc"
+  assert_contains "(15) detached-HEAD gate reached the verdict" "PROCEED" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (16) #102 — genuinely LOCAL / greenfield (no gh repo/remote at all): manager-review takes its
+# VISIBLE local-default/HEAD fallback (LOGGED, never silent) and a committed active star STILL
+# authorizes. Simulated via FAKE_GH_NO_REPO=1 (gh resolves no repo).
+# ---------------------------------------------------------------------------------
+test_gate_local_greenfield_visible_fallback_authorizes() {
+  local repo; repo="$(make_target "local-greenfield")"
+  commit_star "$repo" "### Ship the 0->1 scaffold · status: **active** — greenfield goal"
+  local res rc out
+  res="$(
+    cd "$repo"
+    FAKE_GH_NO_REPO=1 PATH="$fakebin:$PATH" bash "$manager_review" 1 2>&1
+  )" && rc=0 || rc=$?
+  # NOTE: with no gh repo, manager-review's own gh guard (`gh repo view`) exits first — the gate
+  # cannot post to a non-existent issue. So the VISIBLE-local-fallback anchor path is exercised by
+  # doctor (below); for manager-review the correct behavior with no gh repo is the early gh-guard
+  # FAIL. Assert the gh-guard message (NOT a north-star authorization).
+  assert_eq "(16) manager-review with no gh repo → early gh-guard FAIL (cannot post to a non-existent issue)" "1" "$rc"
+  assert_contains "(16) gh-guard FAIL names the missing gh-recognized remote" "not inside a git repo with a gh-recognized remote" "$res"
+}
+
+# ---------------------------------------------------------------------------------
+# (4g) #102 — doctor (h) diagnoses the SAME anchored source the gate authorizes on: the gh-bound
+# remote's default branch, FETCHED FRESH. It logs the anchor source (never silent), and — like the
+# gate — reads the FETCHED integrated commit, not a stale local remote-tracking cache. doctor's
+# fallback (no gh repo / no matching remote) is VISIBLE (logged), not a hard fail.
+# ---------------------------------------------------------------------------------
+
+# (4g-i) doctor (h) on a remote-backed target LOGS the gh-bound fetched-fresh anchor line and
+# PASSES on the real committed default-branch star.
+test_doctor_h_anchor_logs_ghbound() {
+  local repo; repo="$(make_target "doctor-anchor-ghbound")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real integrated star"
+  local anchor; anchor="$(run_doctor_h_anchor "$repo")"
+  assert_contains "(4g-i) doctor (h) logs the gh-bound fetched-fresh anchor (never silent)" "fetched fresh" "$anchor"
+  local line; line="$(run_doctor_h "$repo")"
+  assert_contains "(4g-i) doctor (h) PASSES on the anchored default-branch star" "pass:" "$line"
+}
+
+# (4g-ii) doctor (h) fetches fresh, not the stale cache: same setup as gate (12). Stale cache =
+# placeholder; fresh remote = real star. doctor must diagnose the FRESH real star → PASS (a
+# stale-cache read would WARN on the placeholder).
+test_doctor_h_fetches_fresh_not_stale_cache() {
+  local name="doctor-anchor-stale"
+  local repo; repo="$(make_target "$name")"
+  local bare="$remotes_root/${name}.git"
+  commit_star_raw "$repo" <<'STAR'
+### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+body
+STAR
+  local pusher="$tmproot/${name}-pusher"
+  git clone -q "file://x${bare}" "$pusher"
+  mkdir -p "$pusher/.fabrica"
+  printf '### Ship v2 · status: **active** — fresh integrated approved goal\nbody\n' \
+    > "$pusher/.fabrica/north-star.md"
+  git -C "$pusher" add .fabrica/north-star.md
+  git -C "$pusher" commit -q -m "advance default to real star (v2)"
+  git -C "$pusher" push -q origin HEAD:main
+  local line; line="$(run_doctor_h "$repo")"
+  assert_contains "(4g-ii) doctor (h) fetches fresh (not the stale placeholder cache) → PASSES on the integrated star" "pass:" "$line"
+}
+
+# (4g-iii) doctor (h) on a genuinely LOCAL target (no gh repo) uses the VISIBLE local-HEAD fallback
+# and LOGS it (never silent). A committed active star still diagnoses as set (PASS).
+test_doctor_h_local_fallback_visible() {
+  local repo; repo="$(make_target "doctor-anchor-local")"
+  commit_star "$repo" "### Ship v2 · status: **active** — local committed goal"
+  local anchor line
+  anchor="$(
+    cd "$repo"
+    FAKE_GH_NO_REPO=1 PATH="$fakebin:$PATH" bash "$doctor" 2>&1 | grep 'north-star anchor:' | head -n1 || true
+  )"
+  line="$(
+    cd "$repo"
+    FAKE_GH_NO_REPO=1 PATH="$fakebin:$PATH" bash "$doctor" 2>&1 | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true
+  )"
+  assert_contains "(4g-iii) doctor (h) logs the VISIBLE local HEAD fallback when no gh repo resolves" "local HEAD" "$anchor"
+  assert_contains "(4g-iii) doctor (h) still PASSES on the committed active star via the local fallback" "pass:" "$line"
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -768,6 +1144,14 @@ test_gate_subdir_symlink_still_fails
 test_gate_prose_active_before_heading_still_fails
 test_gate_single_heading_active_proceeds
 test_gate_no_active_entry_fails
+test_gate_anchors_to_default_not_feature_branch
+test_gate_default_placeholder_feature_real_fails
+test_gate_fetches_fresh_not_stale_cache
+test_gate_gh_repo_no_matching_remote_fails
+test_gate_fork_selects_upstream_not_origin
+test_gate_matching_remote_unset_symref_falls_back_to_lsremote
+test_gate_detached_head_at_default_proceeds
+test_gate_local_greenfield_visible_fallback_authorizes
 test_doctor_unset_warns
 test_doctor_local_committed_passes
 test_doctor_local_marker_warns
@@ -776,6 +1160,9 @@ test_doctor_h_committed_worktree_modified
 test_doctor_h_fabrica_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
+test_doctor_h_anchor_logs_ghbound
+test_doctor_h_fetches_fresh_not_stale_cache
+test_doctor_h_local_fallback_visible
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then
