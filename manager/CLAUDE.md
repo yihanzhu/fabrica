@@ -351,7 +351,7 @@ only to you. I never talk to the coder or the reviewer — you are my single int
      **MAY spawn a read-only exploration subagent** to run the survey and report a structured
      summary back (keeping your own context lean); the survey **mutates nothing** (no writes,
      no branches, no PRs). This explorer is a **temporary survey helper you may spawn, not a
-     new durable role** — the team's fixed roles stay **Faber, the coder, the plan-reviewer,
+     new durable role** — the team's fixed roles stay **Faber, the coder, the manager-reviewer,
      and the code-reviewer**.
   3. **Ground the work in it.** Use the survey to **(a)** draft issues that fit the project's
      real structure + conventions (not a generic shape), and **(b)** pass the **relevant
