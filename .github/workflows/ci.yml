@@ -42,11 +42,38 @@ jobs:
           echo "structure ok"
 
       - name: Shellcheck (if any shell scripts)
+        env:
+          # Pinned shellcheck version — the single source of truth for the
+          # version coders must lint against locally. The preinstalled binary on
+          # ubuntu-latest drifts on runner-image bumps and disagrees with coders'
+          # local installs (different findings + codes for the same issue, e.g.
+          # SC2317 vs SC2329), so "clean locally" could land CI-red. Pin it so
+          # local↔CI parity is deterministic. Bumping this value is the ONE place
+          # the version changes — keep CLAUDE.md / routines/coder*.md in sync.
+          SHELLCHECK_VERSION: "0.9.0"
         run: |
-          # ubuntu-latest ships shellcheck preinstalled — use it instead of an
-          # apt reinstall on every run (faster, and the version is pinned to the
-          # runner image rather than whatever apt resolves that day).
+          set -euo pipefail
+          # Install the exact pinned release rather than trusting the runner's
+          # preinstalled binary: download the official static release and put it
+          # on PATH for this step.
+          url="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "downloading shellcheck v${SHELLCHECK_VERSION} from $url"
+          curl -fsSL "$url" -o /tmp/shellcheck.tar.xz
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          # /usr/local/bin is root-owned and this step runs as the unprivileged
+          # `runner` user, so a bare `install` is fragile to runner-image drift
+          # (the exact drift this pin exists to prevent). Use passwordless sudo —
+          # guaranteed on GitHub-hosted runners — to place it on the standard PATH.
+          sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          # Assert the exact version BEFORE the sweep — a silent drift (wrong
+          # download, stale PATH shadowing) must fail loudly, not lint quietly
+          # under an unexpected version.
           shellcheck --version
+          got=$(shellcheck --version | awk '/^version:/ {print $2}')
+          if [ "$got" != "$SHELLCHECK_VERSION" ]; then
+            echo "shellcheck version mismatch: expected $SHELLCHECK_VERSION, got $got"; exit 1
+          fi
+          echo "shellcheck version pinned to $got — ok"
           scripts=$(find . -name '*.sh' -not -path './.git/*')
           if [ -n "$scripts" ]; then
             # -S style = shellcheck's default floor; pinned explicitly so the
