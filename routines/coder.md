@@ -112,10 +112,21 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      scaffolding happens in the implementation step (step 6), AFTER step 5 creates the branch**
      — branch first, then scaffold, so branch-safety holds. In that implementation step you
      create the initial **project skeleton + a manifest + a first test + a `pull_request` CI
-     workflow together**: scaffold a minimal runnable skeleton per the goal Faber states in the
-     brief, add its manifest, add one real first test, and author a `pull_request`-triggered
-     workflow that installs and runs the lint / build / test for that skeleton; run those same
-     commands locally (step 9) so the workflow you author is green. This exception is **narrow +
+     workflow + a committed `<target>/.fabrica/north-star.md` together**: scaffold a minimal
+     runnable skeleton per the goal Faber states in the brief, add its manifest, add one real
+     first test, and author a `pull_request`-triggered workflow that installs and runs the lint /
+     build / test for that skeleton; run those same commands locally (step 9) so the workflow you
+     author is green. **Also create + commit `<target>/.fabrica/north-star.md` with the
+     Faber-provided north star:** post-98a the merge / manager-debate gate reads the target's
+     **committed** `.fabrica/north-star.md` and FAILs on missing / `fabrica-shipped-default`-marker /
+     no-`status: active`-entry, so the 0→1 bootstrap must leave a real committed one. **Faber's
+     brief gives you the exact north-star text + done-signal** (drafted from the operator's command
+     as part of the operator-approved bootstrap plan) — **commit THAT text; do not invent the
+     goal.** Write it with an active `status: active` heading carrying the operator's goal + the
+     done-signal, **NO `fabrica-shipped-default` marker**, and **no fabricated approval token**
+     (approval is the operator's in-session act, not a line you write). If the brief does not
+     include the north-star text, do NOT invent it: comment (lead with the SHORT reason
+     `ambiguous-spec`), add label `needs-human`, and stop. This exception is **narrow +
      sole-purpose** — it applies **only** to the designated greenfield-bootstrap issue (a first
      scaffold on an empty target); any other/feature work still hits the normal step-3 and
      step-4 gates and escalates + stops on a CI-less / command-less repo as above.

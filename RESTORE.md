@@ -153,6 +153,17 @@ That checklist covers:
     required to restore the coding team, so it is out of scope for this runbook. If you do
     want it back, note that it needs a `CLAUDE_CODE_OAUTH_TOKEN` repo secret, which lives
     only in GitHub repo settings (not in any file here) and must be re-created by hand.
+- **North star (per target)** — the team steers by the target's **committed**
+  `.fabrica/north-star.md` (resolved via `scripts/lib/north-star.sh`; the manager-debate gate
+  reads its committed content). Restore it in the target repo: copy
+  [`templates/.fabrica/north-star.md`](templates/.fabrica/north-star.md) to
+  `.fabrica/north-star.md`, replace the placeholder with your direction, **remove the
+  `<!-- fabrica-shipped-default -->` marker**, and **commit** it — a missing / still-marked /
+  no-`status: active` star FAILs the proactive gate (`manager-review.sh`) and WARNs in
+  `doctor.sh`. Setup does **not** seed it — `setup-target-repo.sh` only creates the loop labels.
+  (When restoring **Fabrica itself**, its north star is the root
+  [`NORTH_STAR.md`](NORTH_STAR.md) — Fabrica is its own target — so there's no separate
+  `.fabrica/north-star.md` to restore.)
 - **Conventions** — drop [`templates/target-CLAUDE.md`](templates/target-CLAUDE.md) into
   the target repo's root, filled in for that repo.
 - **The in-session setup** — install `/faber` (step 1) and connect the Codex CLI for

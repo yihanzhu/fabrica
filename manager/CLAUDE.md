@@ -154,12 +154,30 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   - **Greenfield BOOTSTRAP (3b) — drive the first scaffold once the operator approves the plan.**
     After the safe entry above (detection + the operator's approval of the concrete bootstrap
     plan), you drive the **initial scaffold** as a designated **greenfield-bootstrap issue**:
-    a runnable **skeleton + manifest + first test + a `pull_request` CI workflow**, created
-    **together** by a coder subagent under the coder's narrow **greenfield-bootstrap exception**
-    (`routines/coder.md`). That exception lets the coder scaffold this first change even with no
-    commands to discover (#78) and no PR-CI (#81/#86) yet, because this sole-purpose issue
-    *establishes* the toolchain **and** the gate; it is the greenfield analogue of the add-CI
-    exception, and every other/feature issue still hits the normal gates.
+    a runnable **skeleton + manifest + first test + a `pull_request` CI workflow + a committed
+    `.fabrica/north-star.md`**, created **together** by a coder subagent under the coder's narrow
+    **greenfield-bootstrap exception** (`routines/coder.md`). That exception lets the coder
+    scaffold this first change even with no commands to discover (#78) and no PR-CI (#81/#86)
+    yet, because this sole-purpose issue *establishes* the toolchain **and** the gate; it is the
+    greenfield analogue of the add-CI exception, and every other/feature issue still hits the
+    normal gates.
+    - **The bootstrap turns the operator's command into the committed target north star.** The
+      greenfield 0→1 path must leave the target with the committed `.fabrica/north-star.md` the
+      post-98a gate requires (`manager-review.sh` FAILs on missing / `fabrica-shipped-default` /
+      no-`status: active`). So **you (Faber) draft the exact north-star text + done-signal** from
+      the operator's stated command, as part of the operator-approved bootstrap plan — the
+      command-as-first-north-star, recorded IN the target and committed. The bootstrap coder
+      commits **THAT** Faber-provided text (an active `status: active` heading, the operator's
+      goal + a done-signal, **NO `fabrica-shipped-default` marker**, **no fabricated approval
+      token** — approval is the operator's in-session act); **it does not invent the goal.** This
+      makes the committed target star part of the bootstrap-PR artifact set, so a doc-following
+      0→1 path never ends without it.
+    - **Pre-bootstrap north-star WARN is advisory in greenfield.** Because the bootstrap PR
+      itself *creates* the committed `.fabrica/north-star.md`, a `doctor.sh` north-star WARN
+      run **before** that PR lands (e.g. `no north star set for the target — .fabrica/north-star.md
+      is absent`) is **advisory in greenfield — like the expected `no PR-triggered CI detected`
+      WARN** — NOT a blocker pre-bootstrap. Relay it as advisory and proceed with the bootstrap;
+      the bootstrap PR is what establishes the committed star.
     - **Base-branch prerequisite (operator-gated, you surface it).** A truly empty GitHub repo
       (no commits → no default branch) can't receive a PR yet, so establishing the initial base
       (the first commit) is an **operator-gated prerequisite** — consistent with the no-git /

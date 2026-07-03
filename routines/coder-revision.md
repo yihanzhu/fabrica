@@ -83,12 +83,19 @@ Faber has briefed you with the PR, the latest review comments, and the current r
    to an add-CI PR; any feature PR on a CI-less repo still escalates and stops per this gate.
    **GREENFIELD-BOOTSTRAP EXCEPTION** (mirrors `coder.md`): when the PR is the **designated
    greenfield-bootstrap** — the first scaffold on an empty target (skeleton + manifest + first
-   test + `pull_request` CI together) — this sole-purpose PR is **permitted** despite step-3
+   test + `pull_request` CI + a committed `<target>/.fabrica/north-star.md` together) — this
+   sole-purpose PR is **permitted** despite step-3
    finding nothing and no PR-CI existing yet: neither the step-3 command-discovery nor this
    PR-CI gate applies, because it *establishes* the toolchain **and** the gate. **This is a gate
    decision only** — you are working on the PR's existing branch (fix mode already branched), so
-   fold review feedback into the skeleton / manifest / first test / workflow on that branch, run
-   those commands locally (step 5), and push the green result. Also **narrow + sole-purpose** —
+   fold review feedback into the skeleton / manifest / first test / workflow / committed
+   `<target>/.fabrica/north-star.md` on that branch, run
+   those commands locally (step 5), and push the green result. **The committed
+   `<target>/.fabrica/north-star.md`** carries the **Faber-provided** north star (an active
+   `status: active` heading, the operator's goal + a done-signal, **NO `fabrica-shipped-default`
+   marker**, **no fabricated approval token**) — **commit the text Faber's brief provides; do not
+   invent the goal** (the post-98a gate reads the committed file and FAILs on missing /
+   marker-carrying / no-active-entry). Also **narrow + sole-purpose** —
    only the greenfield-bootstrap PR; any other PR on a command-less / CI-less repo still
    escalates and stops per this gate. (This bootstrap PR is operator-approved + human-merged —
    Faber's concern; your job is the green push and stop.)

@@ -172,17 +172,25 @@ gate yet (Faber won't run autonomously until a real gate exists):
    outward-facing action Faber won't do silently). If you already have a folder with a base
    branch, skip this.
 4. **Approve the concrete bootstrap plan.** Faber proposes the initial scaffold — a runnable
-   **skeleton + manifest + first test + a `pull_request` CI workflow** — and you approve that
-   plan. That approval is the go for the bootstrap.
+   **skeleton + manifest + first test + a `pull_request` CI workflow + a committed
+   `.fabrica/north-star.md`** — and you approve that plan. That approval is the go for the
+   bootstrap. Part of the plan is the **exact north-star text + done-signal Faber drafts from
+   your opening command** (command-as-first-north-star): the bootstrap coder commits *that* text
+   into the target's `.fabrica/north-star.md` — Faber doesn't invent your goal.
 5. **Faber scaffolds it.** Once the repo + base branch exist, Faber first bootstraps the loop
    labels and runs its read-only **readiness self-check** (`doctor.sh`) — surfacing any hard
    failure like `gh`/Codex CLI not signed in **before** it spawns anything (the bootstrap PR
    still gets a Codex review, so that prerequisite matters up front); the expected no-CI /
-   no-`CLAUDE.md` results here are just advisory warnings. Then Faber spawns the coder under its
-   narrow **greenfield-bootstrap exception** to create the skeleton, manifest, first test, and
-   PR CI **together** in one sole-purpose PR (the coder is normally blocked with no commands to
-   discover and no PR CI — this exception exists precisely to establish both). Cross-vendor Codex
-   review still runs.
+   no-`CLAUDE.md` — **and no-north-star** — results here are just advisory warnings (the bootstrap
+   PR is what creates the committed `.fabrica/north-star.md`, so a north-star WARN *before* it
+   lands is advisory in greenfield, like the missing-PR-CI WARN). Then Faber spawns the coder
+   under its narrow **greenfield-bootstrap exception** to create the skeleton, manifest, first
+   test, PR CI, **and a committed `.fabrica/north-star.md`** (an active non-placeholder entry
+   carrying your goal + done-signal, no `fabrica-shipped-default` marker) **together** in one
+   sole-purpose PR (the coder is normally blocked with no commands to discover and no PR CI —
+   this exception exists precisely to establish both). Cross-vendor Codex review still runs. This
+   leaves the 0→1 target with the committed north star the shipped gate (`manager-review.sh`)
+   requires.
 6. **You approve and merge the bootstrap PR by hand.** No real gate exists yet for it to
    certify itself, so Faber classifies it **human-merge-only** and does **not** auto-merge
    it — you merge that initial gate yourself (same as the add-PR-CI bootstrap above).
