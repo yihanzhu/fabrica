@@ -99,21 +99,37 @@ esac
 GH
 chmod +x "$fakebin/gh"
 
-# Fake codex: `codex exec -C <wt> -c ... -o <tmp> [-m model] -` writes a verdict into the -o
-# file and exits 0. We parse out the -o argument.
+# Fake codex. Two invocation shapes must be honored WITHOUT crossing wires:
+#   - The real gate call `codex exec -C <wt> -c ... -o <tmp> [-m model] -` pipes the prompt
+#     over stdin (the trailing `-`). It writes a verdict into the -o file and exits 0. Here
+#     we MUST drain stdin so the upstream printf doesn't SIGPIPE.
+#   - doctor.sh probes `codex login --help` / `codex login status` (and any version probe)
+#     WITHOUT piping stdin. Reading stdin there blocks a local interactive run on terminal
+#     input. So we only drain stdin for the `codex exec … -` path; other subcommands return
+#     the canned behavior without ever touching stdin.
 cat >"$fakebin/codex" <<'CODEX'
 #!/usr/bin/env bash
-out=""
-prev=""
-for a in "$@"; do
-  if [ "$prev" = "-o" ]; then out="$a"; fi
-  prev="$a"
-done
-# Drain stdin (the prompt) so the upstream printf doesn't SIGPIPE.
-cat >/dev/null 2>&1 || true
-if [ -n "$out" ]; then
-  printf 'VERDICT: PROCEED\nREASONING: stub.\nGAP FABER MISSED: none.\n' >"$out"
+# Detect the gate call: `exec` subcommand whose trailing positional is `-` (stdin prompt).
+last=""
+for a in "$@"; do last="$a"; done
+if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
+  out=""
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "-o" ]; then out="$a"; fi
+    prev="$a"
+  done
+  # Drain stdin (the prompt) so the upstream printf doesn't SIGPIPE.
+  cat >/dev/null 2>&1 || true
+  if [ -n "$out" ]; then
+    printf 'VERDICT: PROCEED\nREASONING: stub.\nGAP FABER MISSED: none.\n' >"$out"
+  fi
+  exit 0
 fi
+# Non-exec probes (doctor's `login --help` / `login status`, any version check): exit 0 WITHOUT
+# reading stdin so a local interactive run never blocks waiting on the terminal. This matches
+# the original stub's observable behavior for these calls (no stdout, exit 0): `login --help`
+# yields no `status` word, so doctor (d) reports the read-only "sign-in not verifiable" pass.
 exit 0
 CODEX
 chmod +x "$fakebin/codex"
