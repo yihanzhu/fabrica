@@ -72,7 +72,10 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   not a second copy.
 - **Reviewer is read-only, comments only, never the author.** Non-negotiable.
 - **Judgment lives at the direction (front gate at the north-star altitude), not the diff.**
-  You approve the **north star** ([`NORTH_STAR.md`](NORTH_STAR.md)) and Faber pursues it
+  You approve the **north star** — each target repo's own committed
+  [`.fabrica/north-star.md`](templates/.fabrica/north-star.md) (when the target *is* this
+  control-plane repo, that file is the root [`NORTH_STAR.md`](NORTH_STAR.md) — Fabrica is its
+  own target) — and Faber pursues it
   autonomously — you stop reviewing diffs, and for **proactive** work you stop approving each
   issue. Two paths clear an issue to run: a **user-directed** issue where your one-liner is the
   *request* — Faber drafts the spec, **you still approve that drafted spec**, and *that approval*
@@ -150,10 +153,12 @@ scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a
 scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed issue vs. the north star, post the verdict to the issue verbatim
 scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
+scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .fabrica/north-star.md (or root NORTH_STAR.md for a Fabrica-self run)
 templates/faber-command.md Template for the /faber command (path placeholder)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
+templates/.fabrica/north-star.md  Template each target copies to .fabrica/north-star.md as its own committed north star
 templates/repo-setup.md    Labels + branch protection checklist
-NORTH_STAR.md              The team's current north star + done-signal + log (manager-review reads this)
+NORTH_STAR.md              Fabrica-self's own target north star + done-signal + log — the resolver returns it only for a Fabrica-self run; other targets keep theirs in .fabrica/north-star.md
 RESTORE.md                 Disaster-recovery runbook: rebuild the team from this repo
 ```
 
