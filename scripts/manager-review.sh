@@ -139,6 +139,20 @@ fi
 # shellcheck source=scripts/lib/north-star.sh
 . "$ns_lib"
 
+# Source the shared gh-bound remote-identity selection helper (scripts/lib/gh-remote.sh),
+# alongside the resolver. The gate anchors its pin to the gh-BOUND remote's default branch
+# (fetched fresh, #102), reusing the SAME remote-selection codex-review.sh uses — factored into
+# this shared lib so the two can't diverge. Located under the same control-plane root.
+ghr_lib="${control_plane_root}/scripts/lib/gh-remote.sh"
+if [ ! -f "$ghr_lib" ]; then
+  echo "error: gh-remote helper not found (${ghr_lib})" >&2
+  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       restore scripts/lib/gh-remote.sh, then re-run" >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/gh-remote.sh
+. "$ghr_lib"
+
 # Pin gh to the cwd's checkout, not whatever GH_REPO points at. If GH_REPO is set in the
 # environment, every `gh repo view` / `gh issue view/comment` would target THAT repo
 # instead of the cwd's git remote — so the script could debate the cwd target's north star
@@ -156,11 +170,11 @@ if ! repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" |
   exit 1
 fi
 
-# Resolve the current commit (HEAD) — this is the tracked content Codex grounds its
-# judgment in, materialized in a clean detached worktree below. The usage allows running
-# from anywhere inside the clone, and a worktree at HEAD always contains the WHOLE repo's
-# tracked tree, so the review covers the full repo regardless of cwd (subdir vs. root).
-if ! head_commit="$(git rev-parse HEAD 2>/dev/null)" || [ -z "$head_commit" ]; then
+# Sanity-resolve local HEAD first — used by the nested-repo guard below and as the local-only
+# fallback anchor (below) when there is genuinely no gh repo/remote. The AUTHORITATIVE anchor is
+# resolved AFTER the nested-repo guard (#102): it is the gh-bound remote's default-branch commit,
+# fetched fresh — NOT raw local HEAD (which authorizes off whatever branch the checkout sits on).
+if ! git rev-parse HEAD >/dev/null 2>&1; then
   echo "error: cannot resolve HEAD of the current repo" >&2
   echo "       run this from within the target repo's clone" >&2
   exit 1
@@ -204,6 +218,115 @@ if [ -n "$gate_toplevel" ]; then
       exit 1
     fi
   fi
+fi
+
+# ANCHOR RESOLUTION (#102) — pin the gate to the gh-BOUND remote's DEFAULT branch, FETCHED FRESH,
+# not raw local HEAD. Before #102 the gate captured `git rev-parse HEAD`, so a north star committed
+# on a NON-default (feature) branch could authorize proactive work — the checkout's current branch,
+# not the integrated/operator-approved state, was the anchor. The APPROVED north star is the one on
+# the target's DEFAULT branch (where reviewed changes land via the loop); "default branch" is a
+# proxy for operator approval (approval is the operator's out-of-band act, not a line in the file),
+# but it is the best available signal that a committed star is the INTEGRATED one, not a feature
+# variant. We resolve the anchor commit into $head_commit (kept as the downstream variable name):
+# BOTH the committed north-star read (`git show "${head_commit}:…"`) AND the Codex review worktree
+# (`git worktree add --detach … "$head_commit"`) pin to this SINGLE commit, preserving every 98a
+# guarantee (committed-only read, placeholder/no-active/symlink/nested guards) — only WHICH commit
+# is the anchor changes.
+#
+# Consumer-specific fallback (round-3): manager-review.sh is gh-BOUND — it reads AND posts a GitHub
+# issue. The gate's anchor MUST bind to the SAME repo identity the verdict is posted to, never one
+# repo's default branch while commenting on another's issue. So:
+#   - gh resolved a repo (guaranteed: the guard above exits if not) AND a configured remote matches
+#     that identity → select it (same shared pattern as codex-review.sh; prefer `origin` only if it
+#     matches, else e.g. `upstream` in a fork), FETCH FRESH, anchor to the fetched commit.
+#   - gh resolved a repo but NO configured remote matches → FAIL clearly. Do NOT fall back to local
+#     HEAD: an unbound local anchor while commenting on a gh-bound issue is the wrong-source risk.
+#   - only when there is genuinely NO gh repo/remote at all (local-only / greenfield-pre-remote — not
+#     reachable here past the gh guard above, but handled for completeness / parity with doctor) do we
+#     use the visible local-default/HEAD fallback, LOGGING the line so it is never silent.
+#
+# `head_commit` = the resolved anchor commit; `anchor_ref` = the private per-run fetch ref to clean
+# up on exit (empty when we did not fetch). We register the ref cleanup NOW so an early exit between
+# the fetch and the main cleanup trap can't leak it.
+head_commit=""
+anchor_ref=""
+cleanup_anchor_ref() {
+  [ -n "$anchor_ref" ] || return 0
+  git update-ref -d "$anchor_ref" 2>/dev/null || true
+  anchor_ref=""
+}
+trap cleanup_anchor_ref EXIT
+
+if [ -n "$repo" ]; then
+  # gh-BOUND path. Compute gh's canonical identity (host + owner/repo) and select the configured
+  # git remote whose URL matches it, via the SHARED helper (identical to codex-review.sh).
+  gh_repo_id="$(ghr_gh_repo_id "$repo")"
+  selected_remote="$(ghr_select_remote "$gh_repo_id")"
+  if [ -z "$selected_remote" ]; then
+    echo "error: gh resolved this repo as ${repo}, but no configured git remote matches that identity." >&2
+    echo "       The manager-debate gate anchors its authorization to the gh-BOUND remote's default" >&2
+    echo "       branch (fetched fresh) — it will NOT fall back to local HEAD while posting the verdict" >&2
+    echo "       to ${repo}'s issue (an unbound local anchor on a gh-bound issue is the wrong source)." >&2
+    echo "       Add the matching remote (e.g. 'git remote add upstream <url>' for a fork, or point" >&2
+    echo "       'origin' at ${repo}), then re-run." >&2
+    exit 1
+  fi
+  # EFFECTIVE-URL IDENTITY GATE (#102 fix A, FAIL-CLOSED). Selection matched the remote by URL, but
+  # the fetch below goes BY NAME — which applies any `url.<other>.insteadOf`, so the URL git actually
+  # contacts can be a DIFFERENT repo. Before fetching (and anchoring the gate off it), assert the
+  # EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's: a cross-repo GitHub substitution, a
+  # local-path/file://-substitution, or any transport we can't PROVE is gh's repo all FAIL closed
+  # (round-2 — empty is no longer trusted; a deliberate local mirror needs FABRICA_ALLOW_LOCAL_MIRROR=1).
+  # So the gate never reads a source it can't prove is the repo the verdict posts to.
+  if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
+    exit 1
+  fi
+  # Resolve the default branch NAME AUTHORITATIVELY from gh — the SAME binding the verdict posts to
+  # (#102 round-2 fix B): `gh repo view "$repo" --json defaultBranchRef`. NOT the stale/spoofable
+  # local `refs/remotes/<remote>/HEAD` symref, and NOT `ls-remote` off the selected remote (which an
+  # insteadOf could redirect) — the default-branch NAME is an AUTHORIZATION input (which branch's
+  # committed north star authorizes the gate), so it must be as authoritative as the repo identity.
+  # We use only the NAME here — never a commit — and FETCH FRESH from the validated remote below.
+  # If gh can't resolve it on this gh-bound run, FAIL closed (no local-symref authorization).
+  default_branch="$(ghr_gh_default_branch "$repo")"
+  if [ -z "$default_branch" ]; then
+    echo "error: gh could not resolve the default branch of ${repo} (gh repo view --json defaultBranchRef)." >&2
+    echo "       The manager-debate gate anchors its authorization to that branch's freshly-fetched" >&2
+    echo "       commit and takes the branch NAME from gh — the SAME binding the verdict posts to —" >&2
+    echo "       never a stale/spoofable local refs/remotes/${selected_remote}/HEAD symref. It will" >&2
+    echo "       NOT fall back to a local source on a gh-bound run. Confirm 'gh repo view ${repo}'" >&2
+    echo "       works (auth + network), then re-run." >&2
+    exit 1
+  fi
+  # FETCH FRESH into a PRIVATE, PER-RUN-UNIQUE ref we own (under refs/manager-review/<PID>/), via the
+  # shared ghr_fetch_default_commit (the generalization of codex-review.sh's per-run PR/base fetch).
+  # This is what makes the anchor the INTEGRATED commit, not a stale local remote-tracking cache:
+  # `refs/remotes/<selected>/HEAD` (and its tracking branch) may be arbitrarily out of date, so we go
+  # to the remote for the current tip. The helper force-updates ONLY our own per-run ref and never a
+  # remote-tracking ref, so the operator's `<remote>/<default>` tracking state is untouched.
+  anchor_ref="refs/manager-review/$$/anchor"
+  if ! head_commit="$(ghr_fetch_default_commit "$selected_remote" "$default_branch" "$anchor_ref")" \
+     || [ -z "$head_commit" ]; then
+    # cleanup_anchor_ref (EXIT trap) still deletes the ref if a partial fetch created it.
+    echo "error: failed to fetch the default branch '${default_branch}' from remote '${selected_remote}' (${repo})." >&2
+    echo "       The manager-debate gate anchors to that branch's freshly-fetched commit. Confirm network" >&2
+    echo "       access and that the branch exists on the remote, then re-run." >&2
+    exit 1
+  fi
+else
+  # LOCAL-ONLY / GREENFIELD fallback (no gh repo/remote at all). Not reachable past the gh guard
+  # above for manager-review, but kept for completeness. Prefer the LOCAL default branch's commit if
+  # resolvable; else raw local HEAD. VISIBLE (never silent) — the operator must see that the gate is
+  # authorizing off local state, not an integrated/gh-bound remote.
+  local_default="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  head_commit="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [ -z "$head_commit" ]; then
+    echo "error: cannot resolve HEAD of the current repo" >&2
+    echo "       run this from within the target repo's clone" >&2
+    exit 1
+  fi
+  echo "note: no gh-bound repo/remote resolved — anchoring the gate to LOCAL ${local_default:-HEAD} (${head_commit})." >&2
+  echo "      this local fallback applies only to a genuinely local/greenfield target with no GitHub remote." >&2
 fi
 
 # Resolve the north star FOR THE TARGET, then read its COMMITTED content pinned to the SAME
@@ -365,12 +488,16 @@ issue_comments="$(gh issue view "$issue" --repo "$repo" --json comments \
 worktree="$(mktemp -d)"
 tmp="$(mktemp)"
 
-# Clean up on EVERY exit (success or failure): remove the temp worktree and the temp output
-# file. `git worktree remove --force` drops the worktree even at a detached head; the rm -rf
-# fallback covers the case where it was never added.
+# Clean up on EVERY exit (success or failure): remove the temp worktree, the temp output file,
+# AND the private per-run anchor ref (#102) if the gh-bound fetch created one. `git worktree
+# remove --force` drops the worktree even at a detached head; the rm -rf fallback covers the case
+# where it was never added. cleanup_anchor_ref (defined above, idempotent) deletes only OUR own
+# refs/manager-review/<PID>/anchor, never a concurrent run's ref or a remote-tracking ref. This
+# REPLACES the earlier `trap cleanup_anchor_ref EXIT`, so we fold the ref cleanup in here.
 cleanup() {
   git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
   rm -f "$tmp"
+  cleanup_anchor_ref
 }
 trap cleanup EXIT
 
@@ -471,8 +598,10 @@ printf '%s' "$prompt" | "${review_cmd[@]}" -
 comment="$(mktemp)"
 # Re-arm the trap to also remove this second temp file. We re-`git worktree remove` the
 # worktree here too (replacing, not appending to, the EXIT trap) so the worktree cleanup is
-# not lost; it is idempotent / harmless if the worktree is already gone.
-trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$comment"' EXIT
+# not lost; it is idempotent / harmless if the worktree is already gone. cleanup_anchor_ref is
+# folded in so the per-run anchor ref (#102) is dropped on exit as well (kept alive until now so
+# the fetched anchor commit stays reachable through the worktree add above).
+trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$comment"; cleanup_anchor_ref' EXIT
 {
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
   echo

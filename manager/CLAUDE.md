@@ -67,8 +67,17 @@ only to you. I never talk to the coder or the reviewer — you are my single int
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
   `reviewer/manager-review.md`. The north star is **per-target**: it lives in the **target
   repo's `.fabrica/north-star.md`**, resolved via `scripts/lib/north-star.sh` — and
-  `manager-review.sh` reads its **committed** content (pinned to the commit the review runs
-  on) as the gate. This is the **same source** you check for my approval — **gate source ≡
+  `manager-review.sh` reads its **committed** content at the **gh-bound remote's default-branch
+  commit, fetched fresh** (#102 — not raw local HEAD; the default branch is where reviewed work
+  integrates, so its committed star is the *approved/integrated* one, and a feature-branch-only
+  star does not authorize), pinning both the read and the Codex review worktree to that commit,
+  as the gate. The anchor is **gh-authoritative and fail-closed** (#102 round-2): the repo
+  identity, the matching remote's *effective* fetch URL, and the **default-branch NAME** (from
+  gh's `defaultBranchRef`, never a spoofable/stale local `refs/remotes/*/HEAD` symref) are all
+  proven against the same `gh` binding the verdict posts to — any step not provable against that
+  identity (a cross-repo or local/`file://`/`ext::` insteadOf substitution, or an unresolvable
+  default branch) **FAILs the gate** rather than anchoring to an unverified source (a deliberate
+  local mirror is an explicit `FABRICA_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). This is the **same source** you check for my approval — **gate source ≡
   approval source, they never diverge.** Only when the target IS the Fabrica control-plane repo
   itself does the north star come from this repo's `NORTH_STAR.md` (the resolver's Fabrica-self
   case). You update the *target's* `.fabrica/north-star.md` on a north-star transition (for a

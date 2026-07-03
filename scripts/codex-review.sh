@@ -76,6 +76,30 @@ fi
 
 pr="$1"
 
+# Source the shared gh-bound remote-identity selection helper (scripts/lib/gh-remote.sh), located
+# from THIS script's OWN location (follow symlinks, then dirname/..) so it is found regardless of
+# which target repo's cwd this is invoked from. The remote-selection logic (normalize a git URL to
+# host+owner/repo, compute gh's identity, pick the matching configured remote) is FACTORED here so
+# codex-review.sh and manager-review.sh share ONE implementation and can't diverge.
+cr_script_path="$0"
+while [ -L "$cr_script_path" ]; do
+  cr_link_target="$(readlink "$cr_script_path")"
+  case "$cr_link_target" in
+    /*) cr_script_path="$cr_link_target" ;;
+    *)  cr_script_path="$(dirname "$cr_script_path")/$cr_link_target" ;;
+  esac
+done
+# This script lives at <root>/scripts/codex-review.sh; the lib is its sibling under lib/.
+ghr_lib="$(dirname "$cr_script_path")/lib/gh-remote.sh"
+if [ ! -f "$ghr_lib" ]; then
+  echo "error: gh-remote helper not found (${ghr_lib})" >&2
+  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       restore scripts/lib/gh-remote.sh, then re-run" >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/gh-remote.sh
+. "$ghr_lib"
+
 # Preflight — fail honestly and early, BEFORE any fetch/worktree side-effect, so a
 # first-time adopter gets an actionable "install X" pointer instead of an opaque
 # mid-run `command not found`. Required tools (see QUICKSTART.md > Prerequisites):
@@ -122,81 +146,34 @@ fi
 base="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
 
 # Resolve gh's canonical repo identity — the HOST + `owner/repo` of the repo it bound the
-# review to. `$repo` is already the `owner/repo` (`nameWithOwner`); we pass it EXPLICITLY to
-# `gh repo view` so the URL reports THAT repo — never a PR-followed parent/upstream — and we
-# read the HOST off that URL so the match below is host-correct on GitHub Enterprise /
-# non-github.com hosts (where `nameWithOwner` resolves the same but the canonical host is NOT
-# github.com). `gh repo view` returns the web URL (e.g. `https://HOST/owner/repo`).
-repo_url="$(gh repo view "$repo" --json url -q .url)"
-
-# Normalize a git remote URL (or gh web URL) to "<host>/<owner>/<repo>", lowercased, with any
-# trailing `.git` stripped. Handles the three common transports without fragile regex (pure
-# parameter expansion + `case`):
-#   git@host:owner/repo(.git)         (scp-style SSH)
-#   ssh://git@host/owner/repo(.git)   (ssh:// URL, optional user@)
-#   https://host/owner/repo(.git)     (https, optional user@host)
-# Prints the normalized id, or nothing if the URL doesn't parse to host + owner/repo.
-normalize_repo_id() {
-  local url="$1" host rest
-  case "$url" in
-    *://*)
-      # scheme://[user@]host/owner/repo... — drop scheme, then any leading userinfo, then split host/path.
-      rest="${url#*://}"
-      rest="${rest#*@}"
-      host="${rest%%/*}"
-      rest="${rest#*/}"
-      ;;
-    *@*:*)
-      # scp-style git@host:owner/repo — drop userinfo, split on the FIRST colon.
-      rest="${url#*@}"
-      host="${rest%%:*}"
-      rest="${rest#*:}"
-      ;;
-    *)
-      # Unrecognized form — can't match.
-      return 0
-      ;;
-  esac
-  # `rest` is now the path "owner/repo[/...]"; keep exactly the first two segments.
-  local owner="${rest%%/*}"
-  rest="${rest#*/}"
-  local name="${rest%%/*}"
-  name="${name%.git}"
-  [ -n "$host" ] && [ -n "$owner" ] && [ -n "$name" ] || return 0
-  printf '%s/%s/%s' "$host" "$owner" "$name" | tr '[:upper:]' '[:lower:]'
-}
-
-# Compute gh's normalized identity to match against: host (from `$repo_url`) + `owner/repo`
-# (`$repo`). We synthesize a normalizable string from the gh-resolved host and `$repo`.
-gh_host="$(normalize_repo_id "$repo_url")"; gh_host="${gh_host%%/*}"
-gh_repo_id="$(normalize_repo_id "https://${gh_host}/${repo}")"
-
-# Select the configured git remote whose URL resolves to the SAME host + owner/repo that gh
-# bound the review to, and fetch from THAT REMOTE NAME — so the operator's own configured
-# transport AND credentials are used. This is what makes the fetch work on private repos and
-# SSH-only-authenticated checkouts: a synthesized HTTPS web URL carries no credentials, so
-# `git fetch <url>` would fail there even though `gh auth status` passes and `origin` works.
-# We do NOT blindly use `origin`: in a fork workflow `origin` = your fork while the PR lives
-# on `upstream`, so we match on identity (fork-safe). `origin` is only PREFERRED when it is
-# itself the match. If NO configured remote resolves to gh's repo, we REFUSE (below) rather
-# than fall back to an unauthenticated synthesized URL.
-selected_remote=""
-while IFS= read -r remote_name; do
-  [ -n "$remote_name" ] || continue
-  remote_url="$(git remote get-url "$remote_name" 2>/dev/null)" || continue
-  [ -n "$remote_url" ] || continue
-  if [ "$(normalize_repo_id "$remote_url")" = "$gh_repo_id" ]; then
-    if [ "$remote_name" = "origin" ]; then
-      selected_remote="origin"
-      break
-    fi
-    [ -n "$selected_remote" ] || selected_remote="$remote_name"
-  fi
-done < <(git remote)
+# review to — and select the configured git remote whose URL resolves to that SAME identity,
+# via the SHARED helper (scripts/lib/gh-remote.sh), so codex-review.sh and manager-review.sh
+# select the remote identically. ghr_gh_repo_id passes `$repo` EXPLICITLY to `gh repo view`
+# (so the URL reports THAT repo, never a PR-followed parent/upstream) and reads the HOST off it
+# (host-correct on GitHub Enterprise / non-github.com). ghr_select_remote then matches on repo
+# IDENTITY (fork-safe) — NOT blindly `origin`: in a fork workflow `origin` = your fork while the
+# PR lives on `upstream`, so it prefers `origin` ONLY when `origin` is itself the match. If NO
+# configured remote resolves to gh's repo, we REFUSE (below) rather than fetch from an
+# unauthenticated synthesized URL — using the selected remote NAME means the operator's own
+# configured transport + credentials are used (works on private repos and SSH-only checkouts,
+# where a synthesized HTTPS web URL carries no credentials and `git fetch <url>` would fail).
+gh_repo_id="$(ghr_gh_repo_id "$repo")"
+selected_remote="$(ghr_select_remote "$gh_repo_id")"
 
 if [ -z "$selected_remote" ]; then
   echo "error: the repo gh resolved (${repo}) is not reachable via any configured git remote;" >&2
   echo "       add it (e.g. 'git remote add upstream <url>') and re-run" >&2
+  exit 1
+fi
+
+# EFFECTIVE-URL IDENTITY GATE (#102 fix A, FAIL-CLOSED). Selection matched the remote by URL, but the
+# fetch below goes BY NAME — which applies any `url.<other>.insteadOf`, so the URL git actually
+# contacts can be a DIFFERENT repo. Before fetching the PR head + base (and reviewing off them), assert
+# the EFFECTIVE fetch URL is a NON-EMPTY GitHub identity EQUAL to the one gh bound the review to: a
+# cross-repo substitution, a local-path/file://-substitution, or any transport we can't PROVE is gh's
+# repo all FAIL closed (round-2 — empty is no longer trusted; a deliberate local mirror needs
+# FABRICA_ALLOW_LOCAL_MIRROR=1). So the reviewer never fetches a source it can't prove is the PR's repo.
+if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
   exit 1
 fi
 
@@ -230,10 +207,13 @@ fi
 # auto-following could force-update local `refs/tags/*` if the repo moved a tag reachable
 # from the fetched commits — an operator-state mutation. `--no-tags` disables that
 # auto-following, so this fetch touches nothing outside the two named destination refs.
+# `--refmap=` (empty, #102 fix C) additionally DISABLES the remote's configured fetch refmap for
+# this fetch, so the operator's `refs/remotes/<remote>/<base>` tracking ref is NOT force-updated as
+# a side effect of fetching the base branch — only the two explicit per-run destinations are written.
 run_ref_ns="refs/codex-review/${pr}-$$"
 pr_head_ref="${run_ref_ns}/head"
 base_dest_ref="${run_ref_ns}/base"
-git fetch --no-tags "$selected_remote" \
+git fetch --no-tags --refmap= "$selected_remote" \
   "+refs/pull/${pr}/head:${pr_head_ref}" \
   "+refs/heads/${base}:${base_dest_ref}"
 pr_head="$(git rev-parse "$pr_head_ref")"

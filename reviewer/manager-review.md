@@ -18,11 +18,47 @@ the judgment; the manager-debate is for the issues Faber raises on its own.
 The north star is **per target**: the debate is judged against the **target repo's own
 committed `.fabrica/north-star.md`** — set, committed, and operator-approved in that repo.
 `manager-review.sh` resolves it via the shared resolver (`scripts/lib/north-star.sh`) from
-the cwd's checkout and reads the **committed** copy pinned to HEAD (`git show
-HEAD:.fabrica/north-star.md`) — the north star is an autonomy-authorization artifact, so an
-uncommitted working-tree edit must **not** silently redirect the gate. A target with **no
-committed** north star (or one still carrying the shipped Fabrica default marker) does **not**
-authorize proactive work: the gate FAILs before invoking Codex, with a pointer back here.
+the cwd's checkout and reads the **committed** copy pinned to the **gh-bound remote's
+default-branch commit, fetched fresh** (#102) — not raw local HEAD. The default branch is
+where reviewed changes land via the loop, so its committed star is the *integrated* one (the
+best available proxy for operator approval); anchoring there stops a star committed on a
+**feature branch** from authorizing proactive work. The gate selects the git remote whose URL
+matches the repo `gh` resolves for the cwd (the same gh-bound remote-identity pattern
+`codex-review.sh` uses — prefer `origin` only if it matches, else e.g. `upstream` in a fork),
+**fetches that remote's default branch into a private per-run ref** (never trusting a possibly
+stale local `refs/remotes/<remote>/HEAD`), and pins **both** the north-star read **and** the
+Codex review worktree to that fetched commit. The north star is an autonomy-authorization
+artifact, so an uncommitted working-tree edit (or a feature-branch-only edit) must **not**
+silently redirect the gate. A target with **no committed** north star on that default branch
+(or one still carrying the shipped Fabrica default marker) does **not** authorize proactive
+work: the gate FAILs before invoking Codex, with a pointer back here.
+
+The anchor is **gh-authoritative and fail-closed** (an adversarial sweep, #102 round-2): every
+input that decides *what* the gate reads is proven against the **same `gh` binding the verdict
+posts to**, and any step not provable → **FAIL**. (1) The **default-branch NAME** comes from
+gh's `defaultBranchRef` (`gh repo view --json defaultBranchRef`), *not* the stale/locally-
+spoofable local `refs/remotes/<remote>/HEAD` symref and *not* `ls-remote` off a remote an
+insteadOf could redirect — so a repoint or a spoofed local symref can't anchor to a non-default
+branch, and if gh can't resolve the default on a gh-bound run the gate FAILs. (2) Before
+fetching, the gate asserts the selected remote's **effective** fetch URL (after any
+`url.<base>.insteadOf` rewrite) is a **non-empty GitHub identity equal to** the one `gh` bound
+the verdict to — a cross-repo `url.<other>.insteadOf` (read repo A / post to repo B) FAILs, and
+so does a rewrite to a **local path / `file://` / `ext::`** or any transport the gate cannot
+*prove* is gh's repo (round-2 closed the earlier "empty ⇒ trusted" hole; a deliberate local
+mirror is an explicit `FABRICA_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). Remote
+*selection* stays available (it matches the configured URL first, then falls back to the
+effective URL, so an SSH-alias/shorthand remote still selects — safety is still enforced by the
+effective-identity assert before any fetch). (3) The anchor fetch uses `--refmap=` so it writes
+**only** its private per-run ref and never mutates the operator's remote-tracking refs.
+
+**Fail vs. fallback (gh-bound).** `manager-review.sh` reads *and posts* a GitHub issue, so its
+anchor must bind to the **same repo identity** it comments on. If `gh` resolves a repo but **no
+configured remote matches** that identity, the gate **FAILs clearly** — it does **not** fall
+back to local HEAD (an unbound local anchor while commenting on a gh-bound issue is the
+wrong-source risk). The **visible local-default/HEAD fallback** (logged, never silent) applies
+**only** to a genuinely local / greenfield-pre-remote target with no GitHub repo at all — where
+there is no issue to post to anyway. `doctor.sh` (a diagnostic that may run local-only) keeps a
+visible local fallback for the no-repo / no-matching-remote case, and logs it.
 
 Fabrica-self is its **own** target. When the gate runs against this control-plane repo it
 reads its own root [`NORTH_STAR.md`](../NORTH_STAR.md) (Fabrica's real approved goal) — that
@@ -136,18 +172,26 @@ target repo. It `unset`s `GH_REPO` then derives the repo from the cwd and passes
 explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect the
 comment to a *different* repo's issue. Then:
 
-1. **Reads the target's committed north star** — resolved *for the target this run operates
-   on* via the shared resolver (`scripts/lib/north-star.sh`, located from the script's own
-   location by following symlinks then `dirname/..`, the same derivation `install.sh`/
-   `doctor.sh` use). For a normal target it reads the **committed** `.fabrica/north-star.md`
-   pinned to HEAD (`git show HEAD:.fabrica/north-star.md`); on a Fabrica-self run it reads the
-   control-plane root `NORTH_STAR.md` (committed, at HEAD). It reads the **committed** copy —
-   not the working tree — because the north star is an autonomy-authorization artifact: an
-   uncommitted local edit must not silently redirect the gate. If there is no committed north
-   star (or it still carries the shipped Fabrica default marker), the gate **FAILs before
-   invoking Codex** with an actionable pointer — the debate needs a committed goal to judge
-   against. It also reads the issue's title + body (`gh issue view <issue#> --json
-   title,body`).
+1. **Reads the target's committed north star at the gh-bound default-branch commit, fetched
+   fresh** (#102) — resolved *for the target this run operates on* via the shared resolver
+   (`scripts/lib/north-star.sh`, located from the script's own location by following symlinks
+   then `dirname/..`, the same derivation `install.sh`/`doctor.sh` use). It selects the git
+   remote matching the repo `gh` resolves (shared `scripts/lib/gh-remote.sh` — the same gh-bound
+   remote-identity pattern `codex-review.sh` uses), **fetches that remote's default branch into a
+   private per-run ref**, and pins the read to that fetched commit: for a normal target,
+   `git show <default-branch-commit>:.fabrica/north-star.md`; on a Fabrica-self run, the
+   control-plane root `NORTH_STAR.md` at the same commit. The per-run ref is cleaned up on exit.
+   It reads the **committed** copy at the **default-branch** commit — not the working tree, and
+   not raw local HEAD — because the north star is an autonomy-authorization artifact: an
+   uncommitted local edit (or a feature-branch-only edit) must not silently redirect the gate; the
+   integrated (default-branch) state is the approved goal. If `gh` resolves a repo but no
+   configured remote matches, the gate **FAILs** (it will not anchor to local HEAD while
+   commenting on the gh-bound issue); a genuinely local/greenfield target with no remote uses a
+   **visible** local-HEAD fallback (logged). If there is no committed north star on that
+   default-branch commit (or it still carries the shipped Fabrica default marker), the gate
+   **FAILs before invoking Codex** with an actionable pointer — the debate needs an integrated,
+   committed goal to judge against. It also reads the issue's title + body (`gh issue view
+   <issue#> --json title,body`).
 2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -o <tmpfile> -`** —
    the prompt is fed over **stdin** (the trailing `-`), not as an argv argument, so a large
    issue body + comment thread can't trip `E2BIG` or leak into process listings. Codex forms
@@ -159,15 +203,17 @@ comment to a *different* repo's issue. Then:
    sandbox so the review can't inherit a writable default from the operator's Codex config;
    the script deliberately does **not** pass `--dangerously-bypass-approvals-and-sandbox`,
    and avoids `--ignore-user-config` so the operator's model/effort defaults still apply.
-   Codex grounds its judgment by reading a **clean detached temp worktree at HEAD** —
-   `git worktree add --detach <worktree> HEAD` under `mktemp -d`, with `codex exec -C
-   <worktree>` pinning the review there — isolated from the operator's live checkout, so
-   Codex sees only the tracked content at HEAD, never untracked/ignored/uncommitted files
-   (`.env`, secrets, local WIP). The read-only sandbox blocks writes but not reads, so the
-   worktree — not the sandbox — is what keeps the operator's dirty/local state out of the
-   review, mirroring `codex-review.sh`'s isolation. The worktree (and the `<tmpfile>` below)
-   is removed via a `trap ... EXIT` on every exit. There is no PR head to fetch (this judges
-   an issue, not a diff); HEAD is the commit the worktree is materialized at.
+   Codex grounds its judgment by reading a **clean detached temp worktree at the same anchored
+   default-branch commit** — `git worktree add --detach <worktree> <default-branch-commit>` under
+   `mktemp -d`, with `codex exec -C <worktree>` pinning the review there — isolated from the
+   operator's live checkout, so Codex sees only the tracked content at that integrated commit,
+   never untracked/ignored/uncommitted files (`.env`, secrets, local WIP) or a feature-branch
+   variant. The read-only sandbox blocks writes but not reads, so the worktree — not the sandbox —
+   is what keeps the operator's dirty/local state out of the review, mirroring `codex-review.sh`'s
+   isolation. The worktree, the `<tmpfile>` below, and the private per-run anchor ref are removed
+   via a `trap ... EXIT` on every exit. There is no PR head to fetch as a *diff* (this judges an
+   issue, not a diff); the **freshly-fetched default-branch commit** is what the read and the
+   worktree are both materialized at.
 3. **Posts Codex's verdict to the issue VERBATIM**: `gh issue comment <issue#> --body-file
    <tmpfile>`, prefixed only with a short header marking it the Codex manager-reviewer (and
    also echoes it to stdout). No Claude session rewrites, blends, or summarizes it — that
