@@ -356,8 +356,13 @@ elif [ "$committed_present" -eq 1 ]; then
   # Supplementary head-vs-worktree note: surface when the on-disk copy differs from the committed
   # version (an uncommitted edit the gate would ignore) — advisory only.
   head_note=""
-  if [ -n "$toplevel" ] && [ "$committed_relpath" = ".fabrica/north-star.md" ] \
-     && ! git -C "$toplevel" diff --quiet HEAD -- .fabrica/north-star.md 2>/dev/null; then
+  # Drive this off $committed_relpath (the exact path the gate reads) — NOT a hardcoded
+  # .fabrica-relative path — so a Fabrica-self checkout (committed_relpath = NORTH_STAR.md)
+  # gets the same "gate reads the committed version" note on an uncommitted ROOT edit. The
+  # gate reads HEAD:$committed_relpath and ignores the working tree, so a dirty root star must
+  # not read as a silent clean pass here.
+  if [ -n "$toplevel" ] \
+     && ! git -C "$toplevel" diff --quiet HEAD -- "$committed_relpath" 2>/dev/null; then
     head_note=" (note: the working-tree copy differs from HEAD — the gate reads the committed version)"
   fi
   # Isolate the active-entry heading from the COMMITTED content (shared region helper), to WARN on

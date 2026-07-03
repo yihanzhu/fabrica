@@ -641,6 +641,37 @@ test_doctor_h_committed_worktree_modified() {
   assert_contains "(4d') doctor (h) notes the working-tree copy differs from HEAD" "differs from HEAD" "$line"
 }
 
+# (4d'') FIX 1 (round-3) — the head-vs-worktree drift note must fire for FABRICA_SELF too. doctor
+# drives the note off $committed_relpath (the exact path the gate reads), NOT a hardcoded
+# .fabrica-relative path — so an uncommitted edit to the control plane's ROOT NORTH_STAR.md is
+# surfaced as "differs from HEAD / the gate reads the committed version", not swallowed as a
+# silent clean pass. (manager-review.sh reads HEAD:NORTH_STAR.md and ignores the working tree, so
+# a dirty root star that doctor reported clean would be misleading.) We build a throwaway
+# control-plane clone (contains doctor.sh + the resolver lib, so ns_fabrica_root == its git
+# top-level → the resolver classifies FABRICA_SELF → committed_relpath = NORTH_STAR.md), commit a
+# real root star, then DIRTY the working-tree copy and run doctor from the clone.
+test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
+  local cp_root="$tmproot/doctor-fabrica-self-mod"
+  mkdir -p "$cp_root/scripts/lib"
+  cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
+  cp "$doctor" "$cp_root/scripts/doctor.sh"; chmod +x "$cp_root/scripts/doctor.sh"
+  git -C "$cp_root" init -q
+  # A real (non-placeholder) committed root star → doctor (h) would normally PASS clean.
+  printf '### Fabrica goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
+  git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/doctor.sh
+  git -C "$cp_root" commit -q -m "cp init with committed root star"
+  # Now DIRTY the working-tree root copy (uncommitted edit the gate would ignore).
+  printf '### Fabrica goal · status: **active** — uncommitted local edit\nbody CHANGED\n' > "$cp_root/NORTH_STAR.md"
+  local line
+  line="$(
+    cd "$cp_root"
+    PATH="$fakebin:$PATH" bash "$cp_root/scripts/doctor.sh" 2>&1 || true
+  )"
+  line="$(printf '%s' "$line" | grep '(h)' | head -n1 || true)"
+  assert_contains "(4d'') doctor (h) on Fabrica-self reads the COMMITTED root star despite a dirty worktree edit → pass" "pass:" "$line"
+  assert_contains "(4d'') doctor (h) notes the Fabrica-self ROOT working-tree copy differs from HEAD" "differs from HEAD" "$line"
+}
+
 # (4f) FIX 4 (round-2) — doctor (h) diagnoses a committed SYMLINK north star as a WARN (symmetric
 # with the gate, which FAILs). doctor must not read the link's target-path string as if it were the
 # star; it WARNs that a regular file is required.
@@ -832,6 +863,7 @@ test_doctor_local_committed_passes
 test_doctor_local_marker_warns
 test_doctor_h_committed_worktree_deleted
 test_doctor_h_committed_worktree_modified
+test_doctor_h_fabrica_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
 test_setup_check_missing_star_is_drift

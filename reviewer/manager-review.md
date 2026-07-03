@@ -13,6 +13,22 @@ This gate is for Faber's **proactive** (self-generated) proposals toward the nor
 **User-directed issues skip it** — when the human asks for something directly, that *is*
 the judgment; the manager-debate is for the issues Faber raises on its own.
 
+## north star
+
+The north star is **per target**: the debate is judged against the **target repo's own
+committed `.fabrica/north-star.md`** — set, committed, and operator-approved in that repo.
+`manager-review.sh` resolves it via the shared resolver (`scripts/lib/north-star.sh`) from
+the cwd's checkout and reads the **committed** copy pinned to HEAD (`git show
+HEAD:.fabrica/north-star.md`) — the north star is an autonomy-authorization artifact, so an
+uncommitted working-tree edit must **not** silently redirect the gate. A target with **no
+committed** north star (or one still carrying the shipped Fabrica default marker) does **not**
+authorize proactive work: the gate FAILs before invoking Codex, with a pointer back here.
+
+Fabrica-self is its **own** target. When the gate runs against this control-plane repo it
+reads its own root [`NORTH_STAR.md`](../NORTH_STAR.md) (Fabrica's real approved goal) — that
+root file is now **only** Fabrica-self's target file, not the source for adopters. Adopters set
+their direction in their target's `.fabrica/north-star.md`, not in the control-plane root.
+
 ## Why issue-as-bus (and not a one-shot print)
 
 Code review happens **on the PR**, over rounds; manager-review happens **on the issue**,
@@ -26,12 +42,13 @@ state never lives in an agent's memory.
 
 ```
 Step 0 — gate check: has the operator explicitly approved the ACTIVE north star?
-   (Faber knows this from the operator, NOT from a line in the file — a fresh
-    adopter clone showing the shipped Fabrica default, or any `approved-by-user`-
-    style text, is the prior owner's history, NOT this operator's go.)
-        ├── unset / not yet operator-approved / still the shipped default
+   (the target's committed .fabrica/north-star.md — Fabrica-self uses its root
+    NORTH_STAR.md. Faber knows the approval from the operator, NOT from a line in
+    the file — a fresh adopter clone showing the shipped Fabrica default, or any
+    `approved-by-user`-style text, is the prior owner's history, NOT this operator's go.)
+        ├── unset / not committed / not yet operator-approved / still the shipped default
         │      → do NOT draft, do NOT run the debate, do NOT apply `ready`;
-        │        ask the operator to set + approve their own north star first
+        │        ask the operator to set + commit + approve their own north star first
         │        (that approval is the root authorization for ALL proactive work)
         └── operator has explicitly approved the active north star → proceed:
         ↓
@@ -59,16 +76,17 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 
 - **Step 0 — the operator must have explicitly approved the active north star.** Before Faber
   drafts a proactive issue, runs this manager-debate, or applies `ready` on consensus, Faber must
-  confirm *from the operator* that they have explicitly approved the north star currently in
-  [`NORTH_STAR.md`](../NORTH_STAR.md). Faber knows this **from the operator, not from a line in
-  the file** — a fresh adopter clone showing the shipped Fabrica default (or any
-  `approved-by-user`-style text) is the prior owner's history, **not** this operator's go. If the
-  north star is **unset, not yet approved by this operator, or still the shipped Fabrica default**,
-  Faber does **not** start this gate or self-apply `ready` — it asks the operator to set and approve
-  their own north star first (that approval is the root authorization that unlocks all proactive
-  work). This is the same step-0 guard the manager prompt (`manager/CLAUDE.md`) and the generated
-  `/faber` command (`templates/faber-command.md`) carry — the consensus gate below is legitimate
-  *only* under an operator-approved north star.
+  confirm *from the operator* that they have explicitly approved the target's active north star —
+  the target repo's committed **`.fabrica/north-star.md`** (Fabrica-self uses its root
+  [`NORTH_STAR.md`](../NORTH_STAR.md); see [north star](#north-star) above). Faber knows this
+  **from the operator, not from a line in the file** — a fresh adopter clone showing the shipped
+  Fabrica default (or any `approved-by-user`-style text) is the prior owner's history, **not** this
+  operator's go. If the north star is **unset, not committed, not yet approved by this operator, or
+  still the shipped Fabrica default**, Faber does **not** start this gate or self-apply `ready` — it
+  asks the operator to set, commit, and approve their own north star first (that approval is the
+  root authorization that unlocks all proactive work). This is the same step-0 guard the manager
+  prompt (`manager/CLAUDE.md`) and the generated `/faber` command (`templates/faber-command.md`)
+  carry — the consensus gate below is legitimate *only* under an operator-approved north star.
 - **Consensus IS the gate (proactive issues).** For a proactive issue *under an operator-approved
   north star* (see step 0 above), the manager-debate
   is not just a recommendation — it is the **front gate**. On consensus (both Faber and Codex
@@ -90,8 +108,9 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 - **Never rubber-stamp, never invent busywork.** Codex is told to default to DROP on
   genuine doubt; a proposal that doesn't clearly serve the north star is dropped.
 - **But LOG the override-worthy drops.** When Faber believed a *vetoed* item was genuinely
-  north-star-relevant, Faber records it in [`NORTH_STAR.md`](../NORTH_STAR.md)'s
-  north-star log (the "vetoed-but-Faber-thought-relevant" section), so the human can see
+  north-star-relevant, Faber records it in the target's north-star log (the
+  "vetoed-but-Faber-thought-relevant" section of that target's `.fabrica/north-star.md`;
+  Fabrica-self logs to its root [`NORTH_STAR.md`](../NORTH_STAR.md)), so the human can see
   what consensus filtered out and override it if they want. Default-drop is the floor, not
   a silent shredder.
 
@@ -117,13 +136,18 @@ target repo. It `unset`s `GH_REPO` then derives the repo from the cwd and passes
 explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect the
 comment to a *different* repo's issue. Then:
 
-1. **Reads the current north star** from [`NORTH_STAR.md`](../NORTH_STAR.md) in the
-   **control-plane repo** — resolved from the script's *own* location (follow symlinks, then
-   `dirname/..`), the same derivation `install.sh`/`doctor.sh` use, so it reads the control
-   plane's north star regardless of which target repo's cwd it is run from (the file lives
-   in fabrica, not in each target repo; errors out with a pointer if it is missing — the
-   debate needs a goal to judge against). It also reads the issue's title + body (`gh issue
-   view <issue#> --json title,body`).
+1. **Reads the target's committed north star** — resolved *for the target this run operates
+   on* via the shared resolver (`scripts/lib/north-star.sh`, located from the script's own
+   location by following symlinks then `dirname/..`, the same derivation `install.sh`/
+   `doctor.sh` use). For a normal target it reads the **committed** `.fabrica/north-star.md`
+   pinned to HEAD (`git show HEAD:.fabrica/north-star.md`); on a Fabrica-self run it reads the
+   control-plane root `NORTH_STAR.md` (committed, at HEAD). It reads the **committed** copy —
+   not the working tree — because the north star is an autonomy-authorization artifact: an
+   uncommitted local edit must not silently redirect the gate. If there is no committed north
+   star (or it still carries the shipped Fabrica default marker), the gate **FAILs before
+   invoking Codex** with an actionable pointer — the debate needs a committed goal to judge
+   against. It also reads the issue's title + body (`gh issue view <issue#> --json
+   title,body`).
 2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -o <tmpfile> -`** —
    the prompt is fed over **stdin** (the trailing `-`), not as an argv argument, so a large
    issue body + comment thread can't trip `E2BIG` or leak into process listings. Codex forms
@@ -165,9 +189,10 @@ comment to a *different* repo's issue. Then:
 
 ## The manager-reviewer prompt
 
-The script builds this prompt from the role + the current north star (from
-`NORTH_STAR.md`) + the issue title/body + a "read the repo to ground your judgment"
-instruction, and asks for a structured **PROCEED / REFINE / DROP** verdict:
+The script builds this prompt from the role + the target's current committed north star
+(the target's `.fabrica/north-star.md`, or Fabrica-self's root `NORTH_STAR.md`) + the issue
+title/body + a "read the repo to ground your judgment" instruction, and asks for a structured
+**PROCEED / REFINE / DROP** verdict:
 
 > You are the cross-vendor MANAGER reviewer for an autonomous coding team. Faber (a Claude
 > manager) has DRAFTED the GitHub issue below as a *proactive* proposal toward the team's
@@ -176,7 +201,7 @@ instruction, and asks for a structured **PROCEED / REFINE / DROP** verdict:
 > edit the issue, or merge anything; you only give a verdict that Faber weighs. The team
 > proceeds ONLY on consensus, and DEFAULT-DROPS on no consensus, so do not invent busywork.
 >
-> — the **current north star** (from `NORTH_STAR.md`) —
+> — the **current north star** (the target's committed north star) —
 > — the **proposed issue** (title + body) —
 >
 > Read the repository (read-only) to ground your judgment in what actually exists. Then
