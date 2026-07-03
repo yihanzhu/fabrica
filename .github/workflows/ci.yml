@@ -67,3 +67,13 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "ci"
           bash scripts/test/north-star-resolver.test.sh
+
+      - name: North-star gate/consumer tests
+        run: |
+          # Integration asserts for the #98a atomic flip: the manager-review.sh gate and doctor.sh
+          # check (h) both read the TARGET's north star, and the gate reads it COMMITTED
+          # (both-direction committed test + approval==gate source identity). Hermetic — gh/codex
+          # faked on PATH, real git on throwaway repos.
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          bash scripts/test/north-star-gate.test.sh

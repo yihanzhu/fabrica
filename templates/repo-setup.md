@@ -115,12 +115,19 @@ The team runs from a Claude Code session — there are no per-repo routine trigg
   reviewer.
 
 ## 6. Set + approve your own north star (unlocks proactive autonomous mode)
-Edit `NORTH_STAR.md` in your **fabrica control-plane clone** (not this target repo) to *your*
-direction and explicitly approve it to Faber. **Your explicit approval of the active north
-star is the root authorization for all proactive work** — and Faber gates on that approval,
-not on any line written in the file. The shipped approval note is the prior owner's history,
-**not** a token that approves the goal for you: a fresh clone inheriting it is not auto-approved.
-Until you set + approve your own, Faber acts only on issues you ask for directly and will ask
-you to set + approve the north star before pursuing anything proactively. The shipped entry is
-*Fabrica's own* goal, so an adopter must replace + approve it before proactive consensus-gated
-work runs in their setup.
+Your north star lives in **this target repo**, at `.fabrica/north-star.md` (committed, owned by
+your repo — not the fabrica control-plane clone). Setup does **not** auto-seed it; you create it:
+copy `templates/.fabrica/north-star.md` from your fabrica clone into this repo as
+`.fabrica/north-star.md`, replace the placeholder with *your* direction, remove the
+`<!-- fabrica-shipped-default -->` marker, then **commit** it. `scripts/setup-target-repo.sh`
+only creates the loop labels — it does not create this file. Then explicitly approve the active
+north star to Faber. **Your explicit approval of the active north star is the root authorization
+for all proactive work** — and Faber gates on that approval, not on any line written in the file.
+The shipped approval note is the prior owner's history, **not** a token that approves the goal for
+you: a fresh copy inheriting it is not auto-approved. Until you set + commit + approve your own,
+Faber acts only on issues you ask for directly and will ask you to set + approve the north star
+before pursuing anything proactively. The proactive manager-debate (`scripts/manager-review.sh`)
+reads the **committed** `.fabrica/north-star.md`; a missing, still-placeholder, or no-active-entry
+star FAILs the gate — so commit your north star after you write it. (When the target is the
+Fabrica control-plane repo itself, its north star is the root `NORTH_STAR.md` — Fabrica is its
+own target.)

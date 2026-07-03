@@ -46,3 +46,4 @@ scripts/lib/north-star.sh
 
 # Tests (run by CI; also executable — see ci.yml)
 scripts/test/north-star-resolver.test.sh
+scripts/test/north-star-gate.test.sh

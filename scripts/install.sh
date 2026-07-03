@@ -77,9 +77,15 @@ Next steps:
      (see the discovery order in $repo_root/routines/coder.md). A filled-in CLAUDE.md
      "Stack & commands" ($repo_root/templates/target-CLAUDE.md) is an OPTIONAL override —
      add one only to pin or disambiguate a non-standard toolchain.
-  2. Set your own north star in $repo_root/NORTH_STAR.md — replace the shipped Fabrica
-     default with your own direction. The shipped approval note is the prior owner's
-     history, not a token that approves the goal for you.
+  2. Set your own north star PER TARGET — in each target repo, CREATE + commit + approve
+     .fabrica/north-star.md yourself: copy $repo_root/templates/.fabrica/north-star.md into
+     the target as .fabrica/north-star.md, replace the placeholder, remove the
+     '<!-- fabrica-shipped-default -->' marker, then commit it (the gate reads the target's
+     COMMITTED north star; an uncommitted local edit does not authorize proactive work, and
+     setup-target-repo.sh only creates the loop labels — it does NOT seed this file). The
+     shipped approval note is the prior owner's history, not a token that approves the goal
+     for you. (Fabrica-self is its own target: when you run against this control-plane repo
+     it uses its own root $repo_root/NORTH_STAR.md.)
   3. Open Claude Code in a target repo and run /faber to summon the manager. On its first
      loop action this session, Faber auto-bootstraps the repo — derives <owner>/<repo> from
      the cwd, creates/reconciles the loop labels, and runs the read-only readiness self-check

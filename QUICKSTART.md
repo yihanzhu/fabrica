@@ -78,11 +78,17 @@ command, point it at a target repo, and watch one loop run. For the mental model
    > target repo's loop labels exist — one pass/warn/fail line per check, non-zero exit only on a
    > hard fail. Mutates nothing.
 
-4. **Set your own north star.** Edit [`NORTH_STAR.md`](NORTH_STAR.md) to *your* direction —
-   the shipped entry is *Fabrica's own* goal and its approval note is the prior owner's
-   history, **not** a token that approves the goal for you. (Setting the file is the pre-flight
-   step; *approving* it happens with Faber in the next step, once a session exists to receive
-   that approval.)
+4. **Set your own north star** — in the **target repo**, at `.fabrica/north-star.md`. Your
+   north star is committed in and owned by *your* repo, not the fabrica control-plane clone.
+   Once you've cloned the target (next step), copy `templates/.fabrica/north-star.md` from
+   your fabrica clone into it as `.fabrica/north-star.md`, replace the placeholder with *your*
+   direction, remove the `<!-- fabrica-shipped-default -->` marker, and **commit** it — the
+   proactive manager-debate reads the *committed* file, and a missing / still-placeholder /
+   no-active-entry star FAILs the gate. Setup does **not** auto-seed this file;
+   `setup-target-repo.sh` only creates the loop labels. (Creating + committing the file is the
+   pre-flight step; *approving* it happens with Faber in step 6, once a session exists to
+   receive that approval. When the target is the Fabrica control-plane repo itself, its north
+   star is the root `NORTH_STAR.md` — Fabrica is its own target.)
 
 5. **Clone the target repo and `cd` into it.** `/faber` and every orchestration script
    (`codex-review.sh`, `merge-pr.sh`, `manager-review.sh`) run from **inside the target
