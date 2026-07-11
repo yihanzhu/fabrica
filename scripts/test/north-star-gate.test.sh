@@ -35,7 +35,8 @@ faber_template="$repo_root/templates/faber-command.md"
 persona="$repo_root/manager/CLAUDE.md"
 ns_template="$repo_root/templates/.fabrica/north-star.md"
 ghr_lib="$repo_root/scripts/lib/gh-remote.sh"   # #102: the shared gh-bound remote-identity helper
-for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib"; do
+models_conf="$repo_root/config/models.conf"     # #110: manager-review.sh now sources this (required)
+for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib" "$models_conf"; do
   if [ ! -f "$f" ]; then echo "FAIL: missing $f" >&2; exit 1; fi
 done
 
@@ -323,18 +324,21 @@ advance_remote_default() {
 }
 
 # make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of BOTH sourced libs
-# (north-star.sh + gh-remote.sh, #102) and manager-review.sh, so ns_fabrica_root (derived from the
-# lib's own location) == this clone's git top-level → the resolver classifies FABRICA_SELF and the
-# gate takes the FABRICA_SELF branch. Remote-backed on default branch `main` (same as make_target)
-# so the #102 gh-bound anchor path is exercised for the self case too. Echoes the clone path; the
-# caller commits + pushes the root NORTH_STAR.md (or whatever the case needs) and runs the COPIED
-# manager-review.sh so its own-location lib derivation lands inside the clone.
+# (north-star.sh + gh-remote.sh, #102), config/models.conf (#110 — manager-review.sh now sources
+# this from its own control-plane root and FAILs loudly if it's missing), and manager-review.sh,
+# so ns_fabrica_root (derived from the lib's own location) == this clone's git top-level → the
+# resolver classifies FABRICA_SELF and the gate takes the FABRICA_SELF branch. Remote-backed on
+# default branch `main` (same as make_target) so the #102 gh-bound anchor path is exercised for
+# the self case too. Echoes the clone path; the caller commits + pushes the root NORTH_STAR.md
+# (or whatever the case needs) and runs the COPIED manager-review.sh so its own-location lib
+# (and config) derivation lands inside the clone.
 make_cp_clone() {
   local name="$1"
   local cp_root="$tmproot/$name"
-  mkdir -p "$cp_root/scripts/lib"
+  mkdir -p "$cp_root/scripts/lib" "$cp_root/config"
   cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
   cp "$repo_root/scripts/lib/gh-remote.sh" "$cp_root/scripts/lib/gh-remote.sh"
+  cp "$repo_root/config/models.conf" "$cp_root/config/models.conf"
   cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
   git -C "$cp_root" init -q -b main
   setup_remote "$cp_root" "$name"

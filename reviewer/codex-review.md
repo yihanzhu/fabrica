@@ -67,23 +67,29 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    adds its worktree at a fresh `mktemp` path, a stale entry from a hard-killed previous run
    never blocks a re-run. (It deliberately avoids a global `git worktree prune`, which is
    repo-wide and would touch unrelated operator worktrees.)
-2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile>`** —
+2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile> [-m <model>]`** —
    Codex's built-in review of the PR head diff vs. its **current** (qualified, freshly-fetched) base,
    inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the
    `review` subcommand). The `-c sandbox_mode="read-only"` override **forces** the read-only
    sandbox so the review can't inherit a writable default from the operator's Codex config
    (approval is already `never` for review); the script deliberately does **not** pass
    `--dangerously-bypass-approvals-and-sandbox`, and avoids `--ignore-user-config` so the
-   operator's model/effort defaults still apply.
+   operator's model/effort defaults still apply. See **model policy** below for how `<effort>`
+   and the optional `-m <model>` are resolved (#110) — the gate's reasoning effort is **always**
+   pinned explicitly, never left to inherit whatever the operator's personal Codex config
+   happens to default to.
 3. Posts Codex's review to the PR **verbatim**: `gh pr comment <PR#> --body-file <tmpfile>`,
    prefixed only with a short header marking it the Codex cross-vendor reviewer. That header
    also stamps the exact head SHA Codex reviewed as a parseable marker line —
    **`Reviewed-head: <full-sha>`** — so a later actor can bind a merge to the precise commit
-   this review covered (and refuse if the head has since moved). The marker is part of
+   this review covered (and refuse if the head has since moved), plus a
+   **`reviewer: <model> @ <effort>`** line recording the RESOLVED config that gated this review
+   (see **model policy** below). The marker and reviewer lines are part of
    Faber's header prefix, clearly separate from Codex's verbatim body, so the review stays
    read-only / comments-only / verbatim. [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) is
-   the first consumer: it reads this marker, confirms the PR's current head still equals it
-   and that CI is green, then squash-merges pinned to that SHA (`--match-head-commit`).
+   the first consumer: it reads the `Reviewed-head`/`Reviewed-base` markers, confirms the PR's
+   current head still equals it and that CI is green, then squash-merges pinned to that SHA
+   (`--match-head-commit`).
 
 ```
 # run from within the TARGET repo's clone; invoke the script by ABSOLUTE PATH
@@ -101,6 +107,38 @@ The `<tmpfile>` and the throwaway worktree both live in the system temp dir, nev
 the repo, and are cleaned up via the `trap ... EXIT` (removed even on failure) — the
 `<tmpfile>` exists only to capture Codex's clean final review off the noisy exec trace.
 Neither is **ever** committed; the **PR comment is the durable reviewer output**.
+
+## Model policy (#110)
+
+The review gate is a **max-capability decision point** (spend-by-leverage — see
+[`config/models.conf`](../config/models.conf) and README.md's "Model policy" section), so it
+does not simply inherit the operator's personal Codex defaults. Before doing anything else,
+the script sources `config/models.conf` **resolved relative to its own location** (this clone's
+control-plane root, following symlinks — never a hardcoded personal path), which sets
+`FABRICA_CODEX_MODEL` (empty by default) and `FABRICA_REVIEW_EFFORT` (`high` by default). A
+missing or unsourceable `config/models.conf` **fails loudly**, pointing at `scripts/doctor.sh`
+check (k), rather than silently reviewing at an unknown effort.
+
+If the **reviewed repo** has committed its own [`.fabrica/models.conf`](../templates/.fabrica/models.conf)
+(same format/keys, an opt-in per-target override), it is sourced **after** the shipped defaults —
+but read from the **same fetched worktree the review runs against** (the detached worktree
+checked out at the exact PR head fetched above), never the operator's possibly-stale or dirty
+cwd checkout, so the override always reflects the commit actually under review. An unsourceable
+override also fails loudly, the same way.
+
+Applying the resolved config:
+
+- **`-c model_reasoning_effort="$FABRICA_REVIEW_EFFORT"` is ALWAYS passed** — the gate is never
+  class-routed down, so this explicitly raises it to the resolved value (`high` by default)
+  instead of silently inheriting whatever the operator's `~/.codex/config.toml` happens to
+  default to (often `low`).
+- **`-m <model>` is passed only when a model is actually resolved.** The script's own `-m` CLI
+  flag keeps precedence over `FABRICA_CODEX_MODEL`; if neither is set, no `-m` is passed at all
+  (Codex uses its own default model).
+- The **resolved** model + effort are echoed into the posted PR comment's header —
+  `reviewer: <model> @ <effort>` (e.g. `reviewer: operator-default @ high` when no model was
+  pinned) — so every review documents on the record exactly what gated it, and any drift from
+  a stray personal config is visible in the PR history, not just in a log nobody reads.
 
 ## Invariants (non-negotiable)
 

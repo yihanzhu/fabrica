@@ -34,6 +34,23 @@ set -euo pipefail
 # --ignore-user-config on purpose: that flag would also drop the operator's model/effort
 # defaults, which we want to keep.
 #
+# MODEL TIERING (#110) — the manager-debate gate is a max-capability decision point
+# (spend-by-leverage, see config/models.conf), so it does not simply "keep the operator's
+# model/effort defaults": it sources this clone's shipped config/models.conf (resolved from
+# THIS script's own location, alongside the ns_lib/ghr_lib sourcing below) and ALWAYS passes
+# `-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"`, explicitly raising the gate to that
+# effort (default `high`) instead of silently inheriting whatever the operator's personal
+# `~/.codex/config.toml` happens to default to (often `low`). A `-m <model>` is passed only
+# when one is actually resolved (the CLI `-m` flag keeps precedence; else FABRICA_CODEX_MODEL,
+# empty by default = inherit Codex's own default model) — never downgraded by task class. If
+# the TARGET repo has committed its own `.fabrica/models.conf` (see
+# templates/.fabrica/models.conf), it is sourced AFTER the shipped defaults, read from the SAME
+# pinned worktree/commit ($head_commit) the debate runs against (never the operator's
+# possibly-stale cwd checkout). The resolved model + effort are echoed into the posted issue
+# comment's header (`reviewer: <model> @ <effort>`) so every debate documents what gated it. A
+# missing/unsourceable config FAILs loudly (pointing at scripts/doctor.sh) rather than silently
+# debating at an unknown effort.
+#
 # It operates on the CURRENT repo: gh infers <owner>/<repo> from the cwd's git remote, and
 # the comment is posted to that repo's issue. Run it from within the target repo's clone —
 # there is deliberately no <owner>/<repo> arg, so the script can't read one repo's issue
@@ -67,7 +84,9 @@ usage() {
   echo "  run from within the target repo's clone; debates the ISSUE on the CURRENT repo" >&2
   echo "  runs 'codex exec' read-only with the manager-reviewer prompt + north star + the" >&2
   echo "  issue, and posts Codex's PROCEED/REFINE/DROP verdict as an issue comment, verbatim" >&2
-  echo "  -m <model>  optional Codex model override (defaults to Codex's own default)" >&2
+  echo "  always runs at config/models.conf's FABRICA_DEBATE_EFFORT (a target's committed" >&2
+  echo "  .fabrica/models.conf may override); -m here keeps precedence over FABRICA_CODEX_MODEL" >&2
+  echo "  -m <model>  optional Codex model override (defaults to the resolved config, else Codex's own default)" >&2
 }
 
 model=""
@@ -152,6 +171,43 @@ if [ ! -f "$ghr_lib" ]; then
 fi
 # shellcheck source=scripts/lib/gh-remote.sh
 . "$ghr_lib"
+
+# Source the shipped model-tiering defaults (config/models.conf, #109) from this clone's own
+# control-plane root ($control_plane_root, resolved above), so the manager-debate gate ALWAYS
+# runs at an explicit, known reasoning effort (#110) instead of silently inheriting whatever the
+# operator's personal Codex CLI/config happens to resolve to. Fail loudly rather than silently
+# debating at unknown effort: a missing or unsourceable config is a restore/setup gap, not
+# something to paper over.
+models_conf="${control_plane_root}/config/models.conf"
+if [ ! -f "$models_conf" ]; then
+  echo "error: config/models.conf not found (${models_conf})" >&2
+  echo "       it ships in the fabrica control-plane repo; restore it (see RESTORE.md), then" >&2
+  echo "       re-run. scripts/doctor.sh check (k) diagnoses this file — run it for details" >&2
+  exit 1
+fi
+# Source it with errexit MOMENTARILY OFF, capturing the real exit status via `$?` right after —
+# NOT `if ! . "$models_conf"; then …` (which looks equivalent but is NOT reliable: under `set -e`,
+# some bash versions — e.g. bash 3.2, macOS's shipped /bin/bash — abort the WHOLE script the
+# instant a command inside a SOURCED file fails, even when the `.` itself sits in a tested `if`/`||`
+# context that POSIX says should be exempt from errexit. Toggling errexit off for the source call
+# sidesteps that version-dependent gap entirely, on every bash we need to support).
+set +e
+# shellcheck source=config/models.conf
+. "$models_conf"
+models_conf_rc=$?
+set -e
+if [ "$models_conf_rc" -ne 0 ]; then
+  echo "error: config/models.conf failed to source (${models_conf}) — check it for a shell" >&2
+  echo "       syntax error (bash -n ${models_conf}). scripts/doctor.sh check (k) diagnoses" >&2
+  echo "       this file — run it for details" >&2
+  exit 1
+fi
+if [ -z "${FABRICA_DEBATE_EFFORT:-}" ]; then
+  echo "error: FABRICA_DEBATE_EFFORT is unset/empty after sourcing ${models_conf}" >&2
+  echo "       the manager-debate gate refuses to run at an unknown reasoning effort; fix the" >&2
+  echo "       shipped config (scripts/doctor.sh check (k) diagnoses it), then re-run" >&2
+  exit 1
+fi
 
 # Pin gh to the cwd's checkout, not whatever GH_REPO points at. If GH_REPO is set in the
 # environment, every `gh repo view` / `gh issue view/comment` would target THAT repo
@@ -507,6 +563,50 @@ trap cleanup EXIT
 # uncommitted state, and never mutates the operator's branch / index / working tree.
 git worktree add --detach "$worktree" "$head_commit"
 
+# Per-target override: if the TARGET repo has committed a .fabrica/models.conf (same
+# format/keys as config/models.conf — see templates/.fabrica/models.conf), source it AFTER the
+# shipped defaults so it can override specific keys for this target only. Read it from the
+# worktree we just checked out at the EXACT anchored commit ($head_commit) above — never the
+# operator's cwd checkout (which can sit on a different branch, lag behind, or be dirty) and
+# never an unfetched/stale local ref — so the override always reflects the SAME commit the
+# debate runs against. Absence is normal (most targets have no override); an unsourceable
+# override fails loudly rather than silently falling back to the shipped defaults.
+target_models_conf="$worktree/.fabrica/models.conf"
+if [ -f "$target_models_conf" ]; then
+  # errexit toggled off around the source call — see the shipped-defaults sourcing above for why
+  # `if ! . file; then` is not reliable here across bash versions.
+  set +e
+  # shellcheck disable=SC1090  # per-target path, resolved at run time from the pinned worktree
+  . "$target_models_conf"
+  target_models_conf_rc=$?
+  set -e
+  if [ "$target_models_conf_rc" -ne 0 ]; then
+    echo "error: ${repo}'s .fabrica/models.conf (at ${head_commit}) failed to source — check it" >&2
+    echo "       for a shell syntax error (bash -n ${target_models_conf}); the manager-debate" >&2
+    echo "       gate refuses to run at an unknown/partially-applied config rather than silently" >&2
+    echo "       ignoring it" >&2
+    exit 1
+  fi
+  if [ -z "${FABRICA_DEBATE_EFFORT:-}" ]; then
+    echo "error: FABRICA_DEBATE_EFFORT is unset/empty after sourcing ${target_models_conf}" >&2
+    echo "       the manager-debate gate refuses to run at an unknown reasoning effort; fix" >&2
+    echo "       ${repo}'s .fabrica/models.conf override, then re-run" >&2
+    exit 1
+  fi
+fi
+
+# Resolve the effective Codex model: the existing -m CLI flag keeps precedence over config (per
+# #110) — it is only missing when the operator omitted -m, in which case we fall back to
+# FABRICA_CODEX_MODEL (empty by default, meaning "inherit the operator's own Codex CLI/config
+# default"; a target's .fabrica/models.conf override, sourced just above, may have changed it).
+# model_display feeds the resolved-config echo below so every debate documents what gated it,
+# even when nothing was explicitly pinned (shown as "operator-default").
+effective_model="$model"
+if [ -z "$effective_model" ]; then
+  effective_model="${FABRICA_CODEX_MODEL:-}"
+fi
+model_display="${effective_model:-operator-default}"
+
 # Build the manager-reviewer prompt: the role + the current north star + the issue under
 # debate + an instruction to read the repo to ground the judgment, asking for a structured
 # PROCEED / REFINE / DROP verdict with reasoning and any gap Faber missed. This is a
@@ -584,9 +684,16 @@ prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_bo
 # many comments) — passing that on the command line risks `E2BIG` once the thread grows, and
 # on a shared machine it would also expose the issue/north-star text in `ps`/process listings
 # while Codex runs. stdin avoids both. All flags stay BEFORE the `-` (flags then positional).
-review_cmd=(codex exec -C "$worktree" -c sandbox_mode="read-only" -o "$tmp")
-if [ -n "$model" ]; then
-  review_cmd+=(-m "$model")
+#
+# `-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"` is ALWAYS passed (#110) — the
+# manager-debate gate is a max-capability decision point (spend-by-leverage), never
+# class-routed down, so this raises it from whatever effort the operator's Codex config
+# happened to default to (often `low`) to the resolved config's explicit value. `-m` is passed
+# only when a model was actually resolved (CLI flag or FABRICA_CODEX_MODEL); empty means
+# "inherit Codex's own default model".
+review_cmd=(codex exec -C "$worktree" -c sandbox_mode="read-only" -c model_reasoning_effort="$FABRICA_DEBATE_EFFORT" -o "$tmp")
+if [ -n "$effective_model" ]; then
+  review_cmd+=(-m "$effective_model")
 fi
 printf '%s' "$prompt" | "${review_cmd[@]}" -
 
@@ -594,7 +701,11 @@ printf '%s' "$prompt" | "${review_cmd[@]}" -
 # then Codex's verdict VERBATIM. The header is Faber's prefix — clearly separate from
 # Codex's verbatim body — so this stays read-only / comments-only / verbatim (no Claude
 # rewriting). Build it into a second temp file so we can both echo it to stdout (the
-# operator sees the verdict in-session) and post it as the issue comment.
+# operator sees the verdict in-session) and post it as the issue comment. A
+# `reviewer: <model> @ <effort>` line records the RESOLVED config (#110) — model and reasoning
+# effort actually applied, after CLI/-m > FABRICA_CODEX_MODEL and any per-target
+# .fabrica/models.conf override — so every debate documents what gated it on the record, and
+# personal-config drift (e.g. a stray operator default) is visible in the issue history.
 comment="$(mktemp)"
 # Re-arm the trap to also remove this second temp file. We re-`git worktree remove` the
 # worktree here too (replacing, not appending to, the EXIT trap) so the worktree cleanup is
@@ -604,6 +715,8 @@ comment="$(mktemp)"
 trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$comment"; cleanup_anchor_ref' EXIT
 {
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
+  echo
+  echo "reviewer: ${model_display} @ ${FABRICA_DEBATE_EFFORT}"
   echo
   echo "_Posted verbatim by \`manager-review.sh\` (\`codex exec\`, sandbox forced read-only, debating issue #${issue} against the current north star). Comments only — veto-only: Codex never labels \`ready\`, edits the issue, or merges. Proceed only on consensus._"
   echo

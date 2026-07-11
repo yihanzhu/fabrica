@@ -192,7 +192,7 @@ comment to a *different* repo's issue. Then:
    **FAILs before invoking Codex** with an actionable pointer — the debate needs an integrated,
    committed goal to judge against. It also reads the issue's title + body (`gh issue view
    <issue#> --json title,body`).
-2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -o <tmpfile> -`** —
+2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" -o <tmpfile> [-m <model>] -`** —
    the prompt is fed over **stdin** (the trailing `-`), not as an argv argument, so a large
    issue body + comment thread can't trip `E2BIG` or leak into process listings. Codex forms
    the manager-review with the **manager-reviewer prompt + the north star + the issue +
@@ -202,7 +202,10 @@ comment to a *different* repo's issue. Then:
    vs. the north star*. The `-c sandbox_mode="read-only"` override **forces** the read-only
    sandbox so the review can't inherit a writable default from the operator's Codex config;
    the script deliberately does **not** pass `--dangerously-bypass-approvals-and-sandbox`,
-   and avoids `--ignore-user-config` so the operator's model/effort defaults still apply.
+   and avoids `--ignore-user-config` so the operator's model/effort defaults still apply. See
+   **model policy** below for how `<effort>` and the optional `-m <model>` are resolved (#110) —
+   the gate's reasoning effort is **always** pinned explicitly, never left to inherit whatever
+   the operator's personal Codex config happens to default to.
    Codex grounds its judgment by reading a **clean detached temp worktree at the same anchored
    default-branch commit** — `git worktree add --detach <worktree> <default-branch-commit>` under
    `mktemp -d`, with `codex exec -C <worktree>` pinning the review there — isolated from the
@@ -210,16 +213,20 @@ comment to a *different* repo's issue. Then:
    never untracked/ignored/uncommitted files (`.env`, secrets, local WIP) or a feature-branch
    variant. The read-only sandbox blocks writes but not reads, so the worktree — not the sandbox —
    is what keeps the operator's dirty/local state out of the review, mirroring `codex-review.sh`'s
-   isolation. The worktree, the `<tmpfile>` below, and the private per-run anchor ref are removed
-   via a `trap ... EXIT` on every exit. There is no PR head to fetch as a *diff* (this judges an
-   issue, not a diff); the **freshly-fetched default-branch commit** is what the read and the
-   worktree are both materialized at.
+   isolation. This same worktree is also where a target's optional per-target `.fabrica/models.conf`
+   override (see **model policy** below) is read from, so the config always matches the exact
+   commit Codex is grounding its judgment in. The worktree, the `<tmpfile>` below, and the private
+   per-run anchor ref are removed via a `trap ... EXIT` on every exit. There is no PR head to
+   fetch as a *diff* (this judges an issue, not a diff); the **freshly-fetched default-branch
+   commit** is what the read and the worktree are both materialized at.
 3. **Posts Codex's verdict to the issue VERBATIM**: `gh issue comment <issue#> --body-file
-   <tmpfile>`, prefixed only with a short header marking it the Codex manager-reviewer (and
-   also echoes it to stdout). No Claude session rewrites, blends, or summarizes it — that
-   preserves the independence of the second opinion. The `<tmpfile>` lives in the system
-   temp dir, never inside the repo, and is cleaned up via a `trap ... EXIT` (removed even on
-   failure); it is never committed — the **issue comment is the durable reviewer output**.
+   <tmpfile>`, prefixed only with a short header marking it the Codex manager-reviewer — including
+   a **`reviewer: <model> @ <effort>`** line recording the RESOLVED config that gated this debate
+   (see **model policy** below) — (and also echoes it to stdout). No Claude session rewrites,
+   blends, or summarizes it — that preserves the independence of the second opinion. The
+   `<tmpfile>` lives in the system temp dir, never inside the repo, and is cleaned up via a
+   `trap ... EXIT` (removed even on failure); it is never committed — the **issue comment is the
+   durable reviewer output**.
 
 ```
 # run from within the TARGET repo's clone; invoke the script by ABSOLUTE PATH
@@ -232,6 +239,40 @@ comment to a *different* repo's issue. Then:
 #   export PATH="$HOME/git/fabrica/scripts:$PATH"   # (add to your shell rc)
 #   manager-review.sh <issue#>
 ```
+
+## Model policy (#110)
+
+The manager-debate gate is a **max-capability decision point** (spend-by-leverage — see
+[`config/models.conf`](../config/models.conf) and README.md's "Model policy" section), so it
+does not simply inherit the operator's personal Codex defaults. Before doing anything else
+(alongside sourcing `scripts/lib/north-star.sh` / `scripts/lib/gh-remote.sh`), the script
+sources `config/models.conf` **resolved relative to its own location** (this clone's
+control-plane root, following symlinks — never a hardcoded personal path), which sets
+`FABRICA_CODEX_MODEL` (empty by default) and `FABRICA_DEBATE_EFFORT` (`high` by default). A
+missing or unsourceable `config/models.conf` **fails loudly**, pointing at `scripts/doctor.sh`
+check (k), rather than silently debating at an unknown effort.
+
+If the **target repo** has committed its own [`.fabrica/models.conf`](../templates/.fabrica/models.conf)
+(same format/keys, an opt-in per-target override), it is sourced **after** the shipped defaults —
+but read from the **same anchored worktree the debate runs against** (the detached worktree
+checked out at the fetched default-branch commit, step 2 above), never the operator's possibly-
+stale or dirty cwd checkout, so the override always reflects the SAME integrated commit the
+north star was read from and Codex is grounding its judgment in. An unsourceable override also
+fails loudly, the same way.
+
+Applying the resolved config:
+
+- **`-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"` is ALWAYS passed** — the gate is never
+  class-routed down, so this explicitly raises it to the resolved value (`high` by default)
+  instead of silently inheriting whatever the operator's `~/.codex/config.toml` happens to
+  default to (often `low`).
+- **`-m <model>` is passed only when a model is actually resolved.** The script's own `-m` CLI
+  flag keeps precedence over `FABRICA_CODEX_MODEL`; if neither is set, no `-m` is passed at all
+  (Codex uses its own default model).
+- The **resolved** model + effort are echoed into the posted issue comment's header —
+  `reviewer: <model> @ <effort>` (e.g. `reviewer: operator-default @ high` when no model was
+  pinned) — so every debate documents on the record exactly what gated it, and any drift from
+  a stray personal config is visible in the issue history, not just in a log nobody reads.
 
 ## The manager-reviewer prompt
 
