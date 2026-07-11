@@ -18,6 +18,10 @@ NORTH_STAR.md
 # Manager persona
 manager/CLAUDE.md
 
+# Model tiering config (shipped defaults; per-target override convention documented
+# in README.md's "Model policy" section)
+config/models.conf
+
 # Routines (paste-ready Claude instructions)
 routines/coder.md
 routines/coder-revision.md
@@ -32,6 +36,7 @@ templates/target-CLAUDE.md
 templates/repo-setup.md
 templates/faber-command.md
 templates/.fabrica/north-star.md
+templates/.fabrica/models.conf
 
 # Scripts (must also be executable — see ci.yml)
 scripts/install.sh
