@@ -380,8 +380,10 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   **Coder spawn model — read before every spawn, fixed ceiling, never escalated.** Before
   spawning **any** coder subagent (round-0 or fix-mode), read `config/models.conf` from
   this control-plane repo, then the target repo's committed `.fabrica/models.conf`
-  override if present (sourced after — it wins on any key it sets). Pass an explicit
-  **`model`** parameter on the spawn call, set to the resolved **`FABRICA_CODER_MODEL`**.
+  override if present (parsed as data after — it wins on any key it sets; never
+  shell-source the target file — only this control-plane file may be sourced). Pass
+  an explicit **`model`** parameter on the spawn call, set to the resolved
+  **`FABRICA_CODER_MODEL`**.
   This is a fixed ceiling **by design**: never escalate it at runtime — not for a bounced
   round, not for a `risk:high` issue, not because a task looks hard. A per-target override
   is a **static per-repo commitment** (set once, committed), never a per-task rescue.
