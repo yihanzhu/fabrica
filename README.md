@@ -194,11 +194,20 @@ shipped defaults (`config/models.conf` present, sourceable, coder/hands values
 non-empty) and check (l) warns if `CLAUDE_CODE_SUBAGENT_MODEL` is set in the
 environment (it would silently override a per-spawn model argument).
 
-**Partial wiring.** The review and manager-debate **gates**
-(`scripts/codex-review.sh` / `scripts/manager-review.sh`) already read
-`config/models.conf` (and a target's `.fabrica/models.conf` override) to resolve the
-Codex model + reasoning effort for every run. Wiring the **coder spawn** and the
-**hands policy** to this config is still follow-up work.
+**Wiring status: gates + coder spawn wired, hands remains follow-up.** The review
+and manager-debate **gates** (`scripts/codex-review.sh` / `scripts/manager-review.sh`)
+already read `config/models.conf` (and a target's `.fabrica/models.conf` override) to
+resolve the Codex model + reasoning effort for every run. The **coder spawn** now reads
+this config too ([#111](../../issues/111)): Faber's own instructions
+(`manager/CLAUDE.md` / `templates/faber-command.md`) read `config/models.conf`, then a
+target's committed `.fabrica/models.conf` override if present, before every coder spawn
+(round-0 or fix-mode), and pass the resolved `FABRICA_CODER_MODEL` as an explicit
+`model` parameter — a fixed ceiling, never escalated at runtime, including on a bounced
+review round (see the bounce protocol in `manager/CLAUDE.md`, which replaces any notion
+of mid-round model escalation). This is a **prompt-level** wiring: it takes effect once
+`scripts/install.sh` regenerates the live `/faber` command, not merely by merging the
+doc change — `doctor.sh`'s static validation is unaffected. Only the **hands-work
+ceiling** (`FABRICA_HANDS_MODEL`) remains unwired — follow-up work ([#112](../../issues/112)).
 
 ## Layout
 
