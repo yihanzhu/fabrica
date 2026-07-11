@@ -22,6 +22,17 @@ set -euo pipefail
 # vulnerable `source`/`.` pattern is GONE and the new trust-anchor + parse-not-source wiring is
 # actually present in the shipped scripts, not just correct in the lib alone.
 #
+# P2 FOLLOW-UP (adversarial review of PR #115, revision): manager-review.sh's parse-not-source fix
+# still read the override via `mc_parse_target_override < "$worktree/.fabrica/models.conf"` — a
+# `<`-redirect from the CHECKED-OUT WORKTREE PATH, which FOLLOWS SYMLINKS. A target-committed
+# `.fabrica/models.conf` SYMLINK to an arbitrary operator-local file would pass `[ -f ]` and leak
+# that file's `FABRICA_CODEX_MODEL=` value into the PUBLIC posted issue comment header. It now
+# reads via `git show "${head_commit}:.fabrica/models.conf"` instead — the SAME anchor commit, but
+# as a git blob (never a filesystem path), mirroring codex-review.sh's pre-existing symlink-safe
+# read of this same file (a symlink's blob content is just the link-target-path string, which
+# fails the parser's charset check and is ignored). See test_scripts_wire_the_fix (h) below for
+# the static assertions, and scripts/test/north-star-gate.test.sh's (22) for the end-to-end case.
+#
 # Run: scripts/test/models-conf-parser.test.sh   (exits non-zero on the first failed assert)
 
 test_dir="$(cd "$(dirname "$0")" && pwd -P)"
@@ -89,9 +100,15 @@ run_parser_herestring() {
   mc_parse_target_override <<<"$1" 2>"$stderr_tmp"
 }
 
-# run_parser_file <path> — feed content from an actual FILE, mirroring manager-review.sh's
-# `mc_parse_target_override < "$target_models_conf"` calling convention (it reads from a
-# checked-out worktree file). Same current-shell / no-subshell property as above.
+# run_parser_file <path> — feed content from an actual FILE via the library's OTHER supported
+# calling convention (`mc_parse_target_override < "$file"`, see scripts/lib/models-conf.sh's
+# calling-convention doc). Neither real script uses this convention anymore as of the P2 fix
+# (adversarial review of PR #115, revision): both codex-review.sh and manager-review.sh now read
+# their target override via `git show <anchor>:.fabrica/models.conf` + a here-string, never a
+# `<`-redirect from a checked-out worktree path (a worktree-path redirect FOLLOWS SYMLINKS — see
+# test_scripts_wire_the_fix (h) and scripts/test/north-star-gate.test.sh's (22) end-to-end case).
+# This function still exercises the file-redirection convention directly as a regression guard on
+# the library itself. Same current-shell / no-subshell property as above.
 run_parser_file() {
   : > "$stderr_tmp"
   mc_parse_target_override < "$1" 2>"$stderr_tmp"
@@ -126,9 +143,10 @@ EOF
   assert_eq "(a) a semicolon-chained VALUE is rejected — the key is left at its baseline (FABRICA_HANDS_MODEL)" "" "$FABRICA_HANDS_MODEL"
 }
 
-# (a2) Same malicious-file scenario, but read via a real FILE + the file-redirection calling
-# convention manager-review.sh actually uses (`< "$target_models_conf"`) — both call sites are
-# covered, not just the here-string one.
+# (a2) Same malicious-file scenario, but read via a real FILE + the library's file-redirection
+# calling convention (`< "$file"`) — a regression guard on that convention in isolation, not just
+# the here-string one (neither real script still calls it this way as of the P2 fix; see
+# run_parser_file above).
 test_malicious_file_sentinel_not_created_via_file() {
   local sentinel="$tmproot/sentinel-a2"
   rm -f "$sentinel"
@@ -331,6 +349,20 @@ test_scripts_wire_the_fix() {
   # shellcheck disable=SC2016  # literal source-text needle; must not expand.
   case "$cr" in *'$worktree/.fabrica/models.conf'*) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh STILL reads the override from the PR-head worktree" ;;
     *) passed=$((passed + 1)); echo "pass: (h) codex-review.sh no longer reads the override from the PR-head worktree" ;; esac
+
+  # manager-review.sh's SYMLINK-SAFE fix (P2, adversarial review of PR #115, revision): the
+  # .fabrica/models.conf override is read from the anchored $head_commit via `git show` — a git
+  # blob, never a filesystem path — so a target-committed SYMLINK yields only the link's
+  # target-path string (fails the parser's charset check, silently ignored) instead of following
+  # the link to an arbitrary operator-local file. It must NEVER go back to a `<`-redirect from the
+  # checked-out worktree path, which follows symlinks. See also
+  # scripts/test/north-star-gate.test.sh's (22) end-to-end case.
+  # shellcheck disable=SC2016  # literal source-text needle; must not expand.
+  case "$mr" in *'git show "${head_commit}:.fabrica/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) manager-review.sh reads the override from the anchored head_commit via git show (symlink-safe)" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh does not read the override from head_commit via git show" ;; esac
+  # shellcheck disable=SC2016  # literal source-text needle; must not expand.
+  case "$mr" in *'$worktree/.fabrica/models.conf'*) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh STILL reads the override from the checked-out worktree path (follows symlinks)" ;;
+    *) passed=$((passed + 1)); echo "pass: (h) manager-review.sh no longer reads the override from the checked-out worktree path" ;; esac
 
   # Both scripts fold the gate-key-override warning into the posted comment/header — never a
   # silent ignore.

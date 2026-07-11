@@ -2103,6 +2103,48 @@ EOF
   assert_contains "(21) visible warning about the rejected gate-effort override is posted" "target override attempted to set gate effort" "$out"
 }
 
+# ---------------------------------------------------------------------------------
+# (22) TARGET .fabrica/models.conf OVERRIDE — SYMLINK-SAFE READ (P2 fix, adversarial review of
+# PR #115, found on the revision). Before this fix, manager-review.sh read the per-target
+# override via `mc_parse_target_override < "$worktree/.fabrica/models.conf"` — a `<`-redirect
+# from the CHECKED-OUT WORKTREE PATH, which FOLLOWS SYMLINKS. A target that commits
+# `.fabrica/models.conf` AS A SYMLINK to an arbitrary sentinel file would pass `[ -f ... ]` and
+# have the parser read the POINTED-TO file's content: a charset-valid `FABRICA_CODEX_MODEL=`
+# line in that sentinel would then leak into the resolved model and the PUBLIC posted issue
+# comment header — a narrow info-leak of an arbitrary local file. The fix reads the override via
+# `git show "${head_commit}:.fabrica/models.conf"` instead (a git blob, never a filesystem path):
+# for a symlinked path this returns only the link's TARGET-PATH STRING, which does not match any
+# `FABRICA_*=` key and is silently ignored — exactly like the analogous north-star symlink guards
+# above (commit_symlink_star), and mirroring codex-review.sh's pre-existing symlink-safe
+# `git show`-based read of this same file. This exercises the REAL manager-review.sh end-to-end
+# (real git, fake gh/codex), proving the sentinel's content never appears in the output.
+# ---------------------------------------------------------------------------------
+test_gate_target_models_conf_symlink_not_dereferenced() {
+  local name="models-conf-symlink"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
+  # A sentinel file OUTSIDE .fabrica/, with a charset-valid FABRICA_CODEX_MODEL= line that WOULD
+  # apply if dereferenced. .fabrica/models.conf is committed as a SYMLINK pointing at it — never
+  # a regular file.
+  printf 'FABRICA_CODEX_MODEL=leaked-sentinel-model\n' > "$repo/decoy-models-target.conf"
+  mkdir -p "$repo/.fabrica"
+  ( cd "$repo" && ln -s "../decoy-models-target.conf" ".fabrica/models.conf" )
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "commit symlinked models.conf override pointing at a sentinel file"
+  push_default "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(22) target with a SYMLINKED models.conf override → gate still PROCEEDs" "0" "$rc"
+  assert_contains "(22) gate reached the verdict" "PROCEED" "$out"
+  case "$out" in
+    *"leaked-sentinel-model"*)
+      failed=$((failed + 1)); echo "FAIL: (22) sentinel file content DEREFERENCED through the symlinked override into the posted output" ;;
+    *)
+      passed=$((passed + 1)); echo "pass: (22) sentinel file content NOT dereferenced — symlinked override ignored" ;;
+  esac
+  assert_contains "(22) resolved model falls back to operator-default (symlinked override not applied)" "reviewer: operator-default @ high" "$out"
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -2167,6 +2209,7 @@ test_default_branch_offline_local_fallback_unit
 test_select_remote_ssh_alias_effective_fallback
 test_gate_no_ref_mutation_after_run
 test_gate_target_models_conf_override_parsed_not_sourced
+test_gate_target_models_conf_symlink_not_dereferenced
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

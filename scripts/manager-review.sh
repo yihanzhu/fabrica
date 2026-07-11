@@ -59,6 +59,19 @@ set -euo pipefail
 # visible warning folded into the posted issue comment) — a target can never lower or otherwise
 # change its own manager-debate gate.
 #
+# PER-TARGET OVERRIDE — SYMLINK-SAFE READ (P2 fix, adversarial review of PR #115). The parse-not-
+# source fix above still read the override via `mc_parse_target_override < "$worktree/.fabrica/
+# models.conf"` — a `<`-redirect from the checked-out worktree path, which FOLLOWS SYMLINKS. A
+# target that commits `.fabrica/models.conf` as a symlink to an arbitrary operator-local regular
+# file would pass the `[ -f ]` check and have the parser read the POINTED-TO file's content; a
+# charset-valid `FABRICA_CODEX_MODEL=<value>` line there then leaked into the PUBLIC issue comment
+# header — a narrow info-leak of an arbitrary local file (the device/FIFO DoS variant was already
+# blocked by `[ -f ]`). The override is now read via `git show "${head_commit}:.fabrica/
+# models.conf"` instead — the SAME anchor commit, but as a git blob, never a filesystem path — so
+# a symlink entry yields only its link-target-path STRING (which fails the parser's charset check
+# and is ignored), exactly mirroring codex-review.sh's identical `git show`-based read and its
+# existing symlink guards on the committed north star above (SYMLINK guard, round-2 FIX 4).
+#
 # It operates on the CURRENT repo: gh infers <owner>/<repo> from the cwd's git remote, and
 # the comment is posted to that repo's issue. Run it from within the target repo's clone —
 # there is deliberately no <owner>/<repo> arg, so the script can't read one repo's issue
@@ -588,18 +601,28 @@ git worktree add --detach "$worktree" "$head_commit"
 # Per-target override: if the TARGET repo has committed a .fabrica/models.conf (same
 # format/keys as config/models.conf — see templates/.fabrica/models.conf), PARSE it (never
 # source/eval it — see scripts/lib/models-conf.sh for the full P1 rationale) AFTER the shipped
-# defaults, so it can override the PRODUCER/MODEL keys for this target only. Read it from the
-# worktree we just checked out at the EXACT anchored commit ($head_commit) above — never the
-# operator's cwd checkout (which can sit on a different branch, lag behind, or be dirty) and
-# never an unfetched/stale local ref — so the override always reflects the SAME commit the
-# debate runs against. Absence is normal (most targets have no override). GATE keys
-# (FABRICA_DEBATE_EFFORT) are recognized by the parser but never applied from a target override —
-# a target can never lower/change its own manager-debate gate — mc_parse_target_override instead
-# warns (stderr) and sets MC_TARGET_OVERRIDE_GATE_WARNING, folded into the posted issue comment below.
-target_models_conf="$worktree/.fabrica/models.conf"
+# defaults, so it can override the PRODUCER/MODEL keys for this target only. Read it via `git
+# show "${head_commit}:.fabrica/models.conf"` — the SAME EXACT anchored commit ($head_commit)
+# already resolved above for the committed north-star reads and the worktree checkout — never a
+# `<`-redirect from the checked-out worktree path (P2 fix, adversarial review of PR #115): a
+# target could commit `.fabrica/models.conf` AS A SYMLINK to an arbitrary operator-local file, and
+# an `[ -f ]` check on that checked-out path follows the symlink, so a redirect from it would read
+# and parse the POINTED-TO file's content — a charset-valid `FABRICA_CODEX_MODEL=<value>` line in that
+# file would then leak into the PUBLIC issue comment header (`reviewer: <model> @ <effort>`
+# below) — a narrow info-leak of an arbitrary local file (the device/FIFO DoS variant was already
+# blocked by `[ -f ]`). `git show <commit>:path` never dereferences a symlink: for a symlinked
+# path it returns the link TARGET-PATH string itself (as blob content), which fails the parser's
+# charset check below and is silently ignored — mirroring codex-review.sh's identical
+# `git show`-based read of this same file. Absence is normal (most targets have no override;
+# `git show` exits non-zero and we skip). GATE keys (FABRICA_DEBATE_EFFORT) are recognized by the
+# parser but never applied from a target override — a target can never lower/change its own
+# manager-debate gate — mc_parse_target_override instead warns (stderr) and sets
+# MC_TARGET_OVERRIDE_GATE_WARNING, folded into the posted issue comment below.
 MC_TARGET_OVERRIDE_GATE_WARNING=0
-if [ -f "$target_models_conf" ]; then
-  mc_parse_target_override < "$target_models_conf"
+if target_models_conf_content="$(git show "${head_commit}:.fabrica/models.conf" 2>/dev/null)"; then
+  # Here-string, NOT a pipe: the rightmost command of a pipe runs in a SUBSHELL under bash 3.2 (no
+  # `lastpipe`), which would silently discard the FABRICA_* assignments the parser makes here.
+  mc_parse_target_override <<<"$target_models_conf_content"
 fi
 
 # Resolve the effective Codex model: the existing -m CLI flag keeps precedence over config (per
