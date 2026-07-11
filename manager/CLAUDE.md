@@ -436,8 +436,13 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
           review on its own and leave the repo coherent, docs in sync). The follow-up
           inherits the parent issue's approval only as a **strict subset** of the approved
           scope — anything beyond that subset goes through the normal front gate (spec
-          approval or manager-debate) on its own. This exit is available on **any** bounced
-          round, not only at the cap.
+          approval or manager-debate) on its own. **Guard against scope-creep dressed as
+          decomposition:** the follow-up issue body MUST (1) link the parent issue, (2)
+          quote the parent's approved scope verbatim, and (3) state explicitly which
+          subset of that quoted scope it carries. Verify the follow-up against the quoted
+          scope before treating any of it as pre-approved — anything not clearly inside
+          the quote is new work and goes through the normal front gate, not this exit.
+          This exit is available on **any** bounced round, not only at the cap.
        c. **Stuck / reviewer disagreement** — unchanged: falls through to the rounds cap →
           `needs-human` (see step 4). Decomposition (b) happens **within** the cap and never
           extends it.
@@ -450,8 +455,9 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
      - **Yes (the usual case)** → **file AND link the follow-up issue for the deferred /
        contested remainder BEFORE merging anything** (log it, so the dropped scope is tracked,
        not lost — it inherits the parent issue's approval only as a strict subset of the
-       approved scope; anything beyond that subset needs its own front-gate pass). Then
-       **direct one scoped-down final change** (the fix-mode coder lands just the agreed
+       approved scope; anything beyond that subset needs its own front-gate pass; the
+       follow-up must meet the same link + quoted-scope + subset-statement requirements as
+       exit (b) above). Then **direct one scoped-down final change** (the fix-mode coder lands just the agreed
        **independently-green mergeable core**, dropping the contested part), re-run
        `codex-review.sh` for a **clean review of that scoped head**, then **merge the core**
        (CI-green + Codex-clean + low-risk, per the auto-merge policy). The cap resolves by
