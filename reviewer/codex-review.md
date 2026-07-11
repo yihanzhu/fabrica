@@ -117,21 +117,41 @@ the script sources `config/models.conf` **resolved relative to its own location*
 control-plane root, following symlinks — never a hardcoded personal path), which sets
 `FABRICA_CODEX_MODEL` (empty by default) and `FABRICA_REVIEW_EFFORT` (`high` by default). A
 missing or unsourceable `config/models.conf` **fails loudly**, pointing at `scripts/doctor.sh`
-check (k), rather than silently reviewing at an unknown effort.
+check (k), rather than silently reviewing at an unknown effort. This is the **control plane's
+own** config — operator-owned and doctor-validated — so sourcing it directly is fine.
 
 If the **reviewed repo** has committed its own [`.fabrica/models.conf`](../templates/.fabrica/models.conf)
-(same format/keys, an opt-in per-target override), it is sourced **after** the shipped defaults —
-but read from the **same fetched worktree the review runs against** (the detached worktree
-checked out at the exact PR head fetched above), never the operator's possibly-stale or dirty
-cwd checkout, so the override always reflects the commit actually under review. An unsourceable
-override also fails loudly, the same way.
+(same format/keys, an opt-in per-target override), it may override the **producer/model keys
+only**. Two properties are security-critical here (a P1 finding from an adversarial review of
+PR #115 — the original design got both wrong):
+
+- **Trust anchor: the gh-bound DEFAULT branch, fetched fresh — never the PR head.** The PR head
+  is the untrusted diff *under review*; reading a config override off it would let a malicious
+  PR gate its own review. So the override is read from the **same class of anchor
+  `manager-review.sh` uses** — the repo's default branch (resolved authoritatively via `gh`,
+  fetched fresh into a private per-run ref), independent of the PR's target branch. The default
+  branch is already-merged, already-gated content, so it is trusted as a config source the same
+  way the manager-debate gate's anchor is.
+- **Parse, don't source.** The override is read as **data**, via a strict line-by-line parser
+  (`mc_parse_target_override` in [`scripts/lib/models-conf.sh`](../scripts/lib/models-conf.sh))
+  — never `source`/`.`/`eval`. Only a line matching exactly `FABRICA_<allowedkey>=<value>` is
+  recognized (value charset-restricted, optionally quoted); every other line — comments, blank
+  lines, shell metacharacters, command substitutions — is silently ignored, never executed. A
+  target-committed file must never run as shell in this non-sandboxed harness. Absence of the
+  file is normal (most targets have no override) and is not an error.
+
+**Gate keys are not target-overridable.** The parser recognizes `FABRICA_REVIEW_EFFORT` in a
+target's override, but **never applies it** — a target can never lower or otherwise change its
+own review gate. Instead it prints a warning and folds a visible **`warning: target override
+attempted to set gate effort — ignored`** line into the posted PR comment, so an attempted
+downgrade is never silent.
 
 Applying the resolved config:
 
 - **`-c model_reasoning_effort="$FABRICA_REVIEW_EFFORT"` is ALWAYS passed** — the gate is never
   class-routed down, so this explicitly raises it to the resolved value (`high` by default)
   instead of silently inheriting whatever the operator's `~/.codex/config.toml` happens to
-  default to (often `low`).
+  default to (often `low`), and a target override can never change this value.
 - **`-m <model>` is passed only when a model is actually resolved.** The script's own `-m` CLI
   flag keeps precedence over `FABRICA_CODEX_MODEL`; if neither is set, no `-m` is passed at all
   (Codex uses its own default model).

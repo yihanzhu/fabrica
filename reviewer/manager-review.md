@@ -253,19 +253,33 @@ missing or unsourceable `config/models.conf` **fails loudly**, pointing at `scri
 check (k), rather than silently debating at an unknown effort.
 
 If the **target repo** has committed its own [`.fabrica/models.conf`](../templates/.fabrica/models.conf)
-(same format/keys, an opt-in per-target override), it is sourced **after** the shipped defaults —
-but read from the **same anchored worktree the debate runs against** (the detached worktree
-checked out at the fetched default-branch commit, step 2 above), never the operator's possibly-
-stale or dirty cwd checkout, so the override always reflects the SAME integrated commit the
-north star was read from and Codex is grounding its judgment in. An unsourceable override also
-fails loudly, the same way.
+(same format/keys, an opt-in per-target override), it may override the **producer/model keys
+only**, applied on top of the shipped defaults. This script's trust anchor was already correct —
+the override is read from the **same anchored worktree the debate runs against** (the detached
+worktree checked out at the fetched default-branch commit, step 2 above), never the operator's
+possibly-stale or dirty cwd checkout, so the override always reflects the SAME integrated commit
+the north star was read from and Codex is grounding its judgment in — but an adversarial review
+of PR #115 found a P1: the override used to be **`source`d directly into this non-sandboxed
+harness shell**, so a target-committed file could run as arbitrary shell with the operator's own
+`gh`/`codex` credentials. It is now read as **data**, via a strict line-by-line parser
+(`mc_parse_target_override` in [`scripts/lib/models-conf.sh`](../scripts/lib/models-conf.sh)) —
+never `source`/`.`/`eval`. Only a line matching exactly `FABRICA_<allowedkey>=<value>` is
+recognized (value charset-restricted, optionally quoted); every other line — comments, blank
+lines, shell metacharacters, command substitutions — is silently ignored, never executed.
+Absence of the file is normal (most targets have no override) and is not an error.
+
+**Gate keys are not target-overridable.** The parser recognizes `FABRICA_DEBATE_EFFORT` in a
+target's override, but **never applies it** — a target can never lower or otherwise change its
+own manager-debate gate. Instead it prints a warning and folds a visible **`warning: target
+override attempted to set gate effort — ignored`** line into the posted issue comment, so an
+attempted downgrade is never silent.
 
 Applying the resolved config:
 
 - **`-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"` is ALWAYS passed** — the gate is never
   class-routed down, so this explicitly raises it to the resolved value (`high` by default)
   instead of silently inheriting whatever the operator's `~/.codex/config.toml` happens to
-  default to (often `low`).
+  default to (often `low`), and a target override can never change this value.
 - **`-m <model>` is passed only when a model is actually resolved.** The script's own `-m` CLI
   flag keeps precedence over `FABRICA_CODEX_MODEL`; if neither is set, no `-m` is passed at all
   (Codex uses its own default model).

@@ -104,3 +104,12 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "ci"
           bash scripts/test/north-star-gate.test.sh
+
+      - name: models.conf parser tests
+        run: |
+          # Hermetic bash asserts for scripts/lib/models-conf.sh (mc_parse_target_override) — the
+          # P1 fix from the adversarial review of PR #115: a target-committed .fabrica/models.conf
+          # is parsed as DATA, never source'd/eval'd, and can never set the gate-effort keys. Plus
+          # static (grep-based) assertions that codex-review.sh/manager-review.sh actually wire in
+          # the trust-anchor + parse-not-source fix. No git/gh/codex harness needed.
+          bash scripts/test/models-conf-parser.test.sh

@@ -24,13 +24,25 @@ set -euo pipefail
 # to that effort (default `high`) instead of silently inheriting whatever the operator's personal
 # `~/.codex/config.toml` happens to default to (often `low`). A `-m <model>` is passed only when
 # one is actually resolved (the CLI `-m` flag keeps precedence; else FABRICA_CODEX_MODEL, empty by
-# default = inherit Codex's own default model) — never downgraded by task class. If the REVIEWED
-# repo has committed its own `.fabrica/models.conf` (see templates/.fabrica/models.conf), it is
-# sourced AFTER the shipped defaults, read from the SAME pinned worktree/commit the review runs
-# against (never the operator's possibly-stale cwd checkout). The resolved model + effort are
-# echoed into the posted PR comment's header (`reviewer: <model> @ <effort>`) so every review
-# documents what gated it. A missing/unsourceable config FAILs loudly (pointing at
-# scripts/doctor.sh) rather than silently reviewing at an unknown effort.
+# default = inherit Codex's own default model) — never downgraded by task class. The resolved
+# model + effort are echoed into the posted PR comment's header (`reviewer: <model> @ <effort>`)
+# so every review documents what gated it. A missing/unsourceable shipped config FAILs loudly
+# (pointing at scripts/doctor.sh) rather than silently reviewing at an unknown effort.
+#
+# PER-TARGET OVERRIDE — TRUST ANCHOR + PARSE-NOT-SOURCE (P1 fix, adversarial review of PR #115).
+# If the REVIEWED repo has committed its own `.fabrica/models.conf` (see
+# templates/.fabrica/models.conf), it may override the PRODUCER/MODEL keys only. Two things
+# changed from the original design here, both security-critical:
+#   - TRUST ANCHOR: the override is read from the gh-BOUND repo's DEFAULT branch, fetched fresh —
+#     the SAME class of anchor manager-review.sh uses — never the PR head worktree. The PR head is
+#     the untrusted diff UNDER review; reading a config override off it would let a malicious PR
+#     gate its own review. The default branch is already-merged, already-gated content, so it is
+#     trusted as a config source the same way manager-review.sh's anchor is.
+#   - PARSE, NOT SOURCE: the override is read as DATA via mc_parse_target_override
+#     (scripts/lib/models-conf.sh) — never `source`/`.`/`eval`. A target-committed file must never
+#     run as shell in this non-sandboxed harness. The parser also refuses to let a target set
+#     FABRICA_REVIEW_EFFORT at all (recognized, but ignored with a visible warning folded into the
+#     posted PR comment) — a target can never lower or otherwise change its own review gate.
 #
 # It operates on the CURRENT repo: gh infers <owner>/<repo> from the cwd's git
 # remote, and the review runs against that repo's PR. Run it from within the target
@@ -71,7 +83,8 @@ usage() {
   echo "  run from within the target repo's clone; reviews the PR on the CURRENT repo" >&2
   echo "  runs 'codex exec review' on the PR and posts Codex's review as a PR comment, verbatim" >&2
   echo "  always runs at config/models.conf's FABRICA_REVIEW_EFFORT (a target's committed" >&2
-  echo "  .fabrica/models.conf may override); -m here keeps precedence over FABRICA_CODEX_MODEL" >&2
+  echo "  .fabrica/models.conf, read from its default branch, may override FABRICA_CODEX_MODEL" >&2
+  echo "  only — it can never lower/change the gate's effort); -m here keeps precedence" >&2
   echo "  -m <model>  optional Codex model override (defaults to the resolved config, else Codex's own default)" >&2
 }
 
@@ -116,6 +129,19 @@ if [ ! -f "$ghr_lib" ]; then
 fi
 # shellcheck source=scripts/lib/gh-remote.sh
 . "$ghr_lib"
+
+# Source the shared PARSER for a target-committed .fabrica/models.conf override (P1 fix, #115) —
+# mc_parse_target_override reads that file as DATA, never as shell (see scripts/lib/models-conf.sh
+# for the full rationale). Located alongside gh-remote.sh, from this script's own location.
+mc_lib="$(dirname "$cr_script_path")/lib/models-conf.sh"
+if [ ! -f "$mc_lib" ]; then
+  echo "error: models-conf helper not found (${mc_lib})" >&2
+  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       restore scripts/lib/models-conf.sh, then re-run" >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/models-conf.sh
+. "$mc_lib"
 
 # This clone's own control-plane root (same derivation as $ghr_lib above, canonicalized via
 # cd/pwd -P) — used below to resolve config/models.conf relative to THIS script's location,
@@ -283,6 +309,33 @@ base_ref="$base_dest_ref"
 # review — a moved base changes the merged integration even when the head is unchanged.
 base_head="$(git rev-parse "$base_ref")"
 
+# TRUST ANCHOR for the per-target .fabrica/models.conf override (P1 fix, adversarial review of PR
+# #115) — fetch the gh-BOUND repo's DEFAULT branch FRESH: the SAME class of anchor
+# manager-review.sh uses. NEVER the PR head/base above — those are the untrusted diff UNDER
+# review, so reading a config override off either would let a malicious PR gate its OWN review
+# (via injected shell, or — even without injection — simply by committing a lowered
+# FABRICA_REVIEW_EFFORT). The default branch is already-merged, already-gated content, so it is
+# trusted as the override's source the same way the manager-debate gate's anchor is. This is
+# independent of the PR's base branch ($base above): a PR can target a non-default branch, so we
+# resolve the default branch AUTHORITATIVELY from gh (ghr_gh_default_branch), never assume it
+# equals $base.
+default_branch="$(ghr_gh_default_branch "$repo")"
+if [ -z "$default_branch" ]; then
+  echo "error: gh could not resolve the default branch of ${repo} (gh repo view --json defaultBranchRef)." >&2
+  echo "       The per-target .fabrica/models.conf override is read from that branch's" >&2
+  echo "       freshly-fetched commit — never the PR head, which is untrusted content under" >&2
+  echo "       review. Confirm 'gh repo view ${repo}' works (auth + network), then re-run." >&2
+  exit 1
+fi
+models_anchor_ref="${run_ref_ns}/models-anchor"
+if ! models_anchor_commit="$(ghr_fetch_default_commit "$selected_remote" "$default_branch" "$models_anchor_ref")" \
+   || [ -z "$models_anchor_commit" ]; then
+  echo "error: failed to fetch the default branch '${default_branch}' from remote '${selected_remote}'" >&2
+  echo "       (${repo}) to read the per-target .fabrica/models.conf override. Confirm network" >&2
+  echo "       access and that the branch exists on the remote, then re-run." >&2
+  exit 1
+fi
+
 # Allocate temp paths in the system temp dir (never inside the repo, so nothing here
 # can be committed): a detached worktree dir and the review output file. Both get a
 # fresh mktemp path each run, so a stale worktree entry from a hard-killed previous run
@@ -292,14 +345,16 @@ worktree="$(mktemp -d)"
 tmp="$(mktemp)"
 
 # Clean up on EVERY exit (success or failure): remove the temp worktree, the temp output
-# file, and the private per-run base ref we own (the head ref was already deleted above once
-# its SHA was captured; the base ref must live until `codex exec review --base` reads it, so
-# it is dropped here). Deleting only this run's own `refs/codex-review/<PR#>-<PID>/base` never
-# disturbs a concurrent run's refs. `git worktree remove --force` drops the worktree even
+# file, and the private per-run base + models-anchor refs we own (the head ref was already
+# deleted above once its SHA was captured; the base ref must live until `codex exec review
+# --base` reads it, and the models-anchor ref until the .fabrica/models.conf override read
+# below, so both are dropped here). Deleting only this run's own `refs/codex-review/<PR#>-<PID>/*`
+# never disturbs a concurrent run's refs. `git worktree remove --force` drops the worktree even
 # though it is at a detached head; the rm -rf fallback covers the case where it was never added.
 cleanup() {
   git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
   git update-ref -d "$base_dest_ref" 2>/dev/null || true
+  git update-ref -d "$models_anchor_ref" 2>/dev/null || true
   rm -f "$tmp"
 }
 trap cleanup EXIT
@@ -310,40 +365,26 @@ trap cleanup EXIT
 git worktree add --detach "$worktree" "$pr_head"
 
 # Per-target override: if the REVIEWED repo has committed a .fabrica/models.conf (same
-# format/keys as config/models.conf — see templates/.fabrica/models.conf), source it AFTER the
-# shipped defaults so it can override specific keys for this target only. Read it from the
-# worktree we just checked out at the EXACT reviewed commit ($pr_head) above — never the
-# operator's cwd checkout (which can sit on a different branch, lag behind, or be dirty) and
-# never an unfetched/stale local ref — so the override always reflects the SAME commit Codex is
-# about to review. Absence is normal (most targets have no override); an unsourceable override
-# fails loudly rather than silently falling back to the shipped defaults.
-target_models_conf="$worktree/.fabrica/models.conf"
-if [ -f "$target_models_conf" ]; then
-  # errexit toggled off around the source call — see the shipped-defaults sourcing above for why
-  # `if ! . file; then` is not reliable here across bash versions.
-  set +e
-  # shellcheck disable=SC1090  # per-target path, resolved at run time from the pinned worktree
-  . "$target_models_conf"
-  target_models_conf_rc=$?
-  set -e
-  if [ "$target_models_conf_rc" -ne 0 ]; then
-    echo "error: ${repo}'s .fabrica/models.conf (at ${pr_head}) failed to source — check it for" >&2
-    echo "       a shell syntax error (bash -n ${target_models_conf}); the review gate refuses to" >&2
-    echo "       run at an unknown/partially-applied config rather than silently ignoring it" >&2
-    exit 1
-  fi
-  if [ -z "${FABRICA_REVIEW_EFFORT:-}" ]; then
-    echo "error: FABRICA_REVIEW_EFFORT is unset/empty after sourcing ${target_models_conf}" >&2
-    echo "       the review gate refuses to run at an unknown reasoning effort; fix ${repo}'s" >&2
-    echo "       .fabrica/models.conf override, then re-run" >&2
-    exit 1
-  fi
+# format/keys as config/models.conf — see templates/.fabrica/models.conf), PARSE it (never
+# source/eval it — see scripts/lib/models-conf.sh for the full P1 rationale) AFTER the shipped
+# defaults, so it can override the PRODUCER/MODEL keys for this target only. Read it from the
+# gh-BOUND DEFAULT BRANCH's freshly-fetched commit ($models_anchor_commit, resolved above) — NEVER
+# the PR head worktree ($worktree, at the untrusted $pr_head under review). Absence is normal
+# (most targets have no override; `git show` exits non-zero and we skip). GATE keys
+# (FABRICA_REVIEW_EFFORT) are recognized by the parser but never applied from a target override —
+# a target can never lower/change its own review gate — mc_parse_target_override instead warns
+# (stderr) and sets MC_TARGET_OVERRIDE_GATE_WARNING, which we fold into the posted PR comment below.
+MC_TARGET_OVERRIDE_GATE_WARNING=0
+if target_models_conf_content="$(git show "${models_anchor_commit}:.fabrica/models.conf" 2>/dev/null)"; then
+  # Here-string, NOT a pipe: the rightmost command of a pipe runs in a SUBSHELL under bash 3.2 (no
+  # `lastpipe`), which would silently discard the FABRICA_* assignments the parser makes here.
+  mc_parse_target_override <<<"$target_models_conf_content"
 fi
 
 # Resolve the effective Codex model: the existing -m CLI flag keeps precedence over config (per
 # #110) — it is only missing when the operator omitted -m, in which case we fall back to
 # FABRICA_CODEX_MODEL (empty by default, meaning "inherit the operator's own Codex CLI/config
-# default"; a target's .fabrica/models.conf override, sourced just above, may have changed it).
+# default"; a target's .fabrica/models.conf override, parsed just above, may have changed it).
 # model_display feeds the resolved-config echo below so every review documents what gated it,
 # even when nothing was explicitly pinned (shown as "operator-default").
 effective_model="$model"
@@ -393,13 +434,18 @@ fi
 # change). A `reviewer: <model> @ <effort>` line records the RESOLVED config (#110) — model
 # and reasoning effort actually applied, after CLI/-m > FABRICA_CODEX_MODEL and any per-target
 # .fabrica/models.conf override — so every review documents what gated it on the record, and
-# personal-config drift (e.g. a stray operator default) is visible in the PR history.
+# personal-config drift (e.g. a stray operator default) is visible in the PR history. If the
+# target's override tried to set FABRICA_REVIEW_EFFORT (rejected by mc_parse_target_override,
+# #115 P1 fix), a visible warning line is folded in here too — never a silent ignore.
 {
   echo "## Codex reviewer (cross-vendor, read-only)"
   echo
   echo "Reviewed-head: ${pr_head}"
   echo "Reviewed-base: ${base_head}"
   echo "reviewer: ${model_display} @ ${FABRICA_REVIEW_EFFORT}"
+  if [ "$MC_TARGET_OVERRIDE_GATE_WARNING" = "1" ]; then
+    echo "warning: target override attempted to set gate effort — ignored"
+  fi
   echo
   echo "_Posted verbatim by \`codex-review.sh\` (\`codex exec review --base ${base_ref}\` in an isolated temp worktree, sandbox forced read-only). Comments only — Codex never pushes, approves, or merges._"
   echo

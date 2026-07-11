@@ -42,14 +42,22 @@ set -euo pipefail
 # effort (default `high`) instead of silently inheriting whatever the operator's personal
 # `~/.codex/config.toml` happens to default to (often `low`). A `-m <model>` is passed only
 # when one is actually resolved (the CLI `-m` flag keeps precedence; else FABRICA_CODEX_MODEL,
-# empty by default = inherit Codex's own default model) — never downgraded by task class. If
-# the TARGET repo has committed its own `.fabrica/models.conf` (see
-# templates/.fabrica/models.conf), it is sourced AFTER the shipped defaults, read from the SAME
-# pinned worktree/commit ($head_commit) the debate runs against (never the operator's
-# possibly-stale cwd checkout). The resolved model + effort are echoed into the posted issue
-# comment's header (`reviewer: <model> @ <effort>`) so every debate documents what gated it. A
-# missing/unsourceable config FAILs loudly (pointing at scripts/doctor.sh) rather than silently
-# debating at an unknown effort.
+# empty by default = inherit Codex's own default model) — never downgraded by task class. The
+# resolved model + effort are echoed into the posted issue comment's header (`reviewer: <model>
+# @ <effort>`) so every debate documents what gated it. A missing/unsourceable shipped config
+# FAILs loudly (pointing at scripts/doctor.sh) rather than silently debating at an unknown effort.
+#
+# PER-TARGET OVERRIDE — PARSE-NOT-SOURCE (P1 fix, adversarial review of PR #115). If the TARGET
+# repo has committed its own `.fabrica/models.conf` (see templates/.fabrica/models.conf), it may
+# override the PRODUCER/MODEL keys only. This script's trust anchor was already correct (the
+# override is read from the SAME pinned worktree/commit, $head_commit, the debate runs against —
+# the gh-bound default branch, fetched fresh, never the operator's possibly-stale cwd checkout),
+# but the override used to be `source`d directly into this non-sandboxed harness shell — a
+# target-committed file must never run as shell here. It is now read as DATA via
+# mc_parse_target_override (scripts/lib/models-conf.sh) — never `source`/`.`/`eval`. The parser
+# also refuses to let a target set FABRICA_DEBATE_EFFORT at all (recognized, but ignored with a
+# visible warning folded into the posted issue comment) — a target can never lower or otherwise
+# change its own manager-debate gate.
 #
 # It operates on the CURRENT repo: gh infers <owner>/<repo> from the cwd's git remote, and
 # the comment is posted to that repo's issue. Run it from within the target repo's clone —
@@ -85,7 +93,8 @@ usage() {
   echo "  runs 'codex exec' read-only with the manager-reviewer prompt + north star + the" >&2
   echo "  issue, and posts Codex's PROCEED/REFINE/DROP verdict as an issue comment, verbatim" >&2
   echo "  always runs at config/models.conf's FABRICA_DEBATE_EFFORT (a target's committed" >&2
-  echo "  .fabrica/models.conf may override); -m here keeps precedence over FABRICA_CODEX_MODEL" >&2
+  echo "  .fabrica/models.conf may override FABRICA_CODEX_MODEL only — it can never lower/change" >&2
+  echo "  the gate's effort); -m here keeps precedence over FABRICA_CODEX_MODEL" >&2
   echo "  -m <model>  optional Codex model override (defaults to the resolved config, else Codex's own default)" >&2
 }
 
@@ -171,6 +180,19 @@ if [ ! -f "$ghr_lib" ]; then
 fi
 # shellcheck source=scripts/lib/gh-remote.sh
 . "$ghr_lib"
+
+# Source the shared PARSER for a target-committed .fabrica/models.conf override (P1 fix, #115) —
+# mc_parse_target_override reads that file as DATA, never as shell (see scripts/lib/models-conf.sh
+# for the full rationale). Located under the same control-plane root.
+mc_lib="${control_plane_root}/scripts/lib/models-conf.sh"
+if [ ! -f "$mc_lib" ]; then
+  echo "error: models-conf helper not found (${mc_lib})" >&2
+  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       restore scripts/lib/models-conf.sh, then re-run" >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/models-conf.sh
+. "$mc_lib"
 
 # Source the shipped model-tiering defaults (config/models.conf, #109) from this clone's own
 # control-plane root ($control_plane_root, resolved above), so the manager-debate gate ALWAYS
@@ -564,41 +586,26 @@ trap cleanup EXIT
 git worktree add --detach "$worktree" "$head_commit"
 
 # Per-target override: if the TARGET repo has committed a .fabrica/models.conf (same
-# format/keys as config/models.conf — see templates/.fabrica/models.conf), source it AFTER the
-# shipped defaults so it can override specific keys for this target only. Read it from the
+# format/keys as config/models.conf — see templates/.fabrica/models.conf), PARSE it (never
+# source/eval it — see scripts/lib/models-conf.sh for the full P1 rationale) AFTER the shipped
+# defaults, so it can override the PRODUCER/MODEL keys for this target only. Read it from the
 # worktree we just checked out at the EXACT anchored commit ($head_commit) above — never the
 # operator's cwd checkout (which can sit on a different branch, lag behind, or be dirty) and
 # never an unfetched/stale local ref — so the override always reflects the SAME commit the
-# debate runs against. Absence is normal (most targets have no override); an unsourceable
-# override fails loudly rather than silently falling back to the shipped defaults.
+# debate runs against. Absence is normal (most targets have no override). GATE keys
+# (FABRICA_DEBATE_EFFORT) are recognized by the parser but never applied from a target override —
+# a target can never lower/change its own manager-debate gate — mc_parse_target_override instead
+# warns (stderr) and sets MC_TARGET_OVERRIDE_GATE_WARNING, folded into the posted issue comment below.
 target_models_conf="$worktree/.fabrica/models.conf"
+MC_TARGET_OVERRIDE_GATE_WARNING=0
 if [ -f "$target_models_conf" ]; then
-  # errexit toggled off around the source call — see the shipped-defaults sourcing above for why
-  # `if ! . file; then` is not reliable here across bash versions.
-  set +e
-  # shellcheck disable=SC1090  # per-target path, resolved at run time from the pinned worktree
-  . "$target_models_conf"
-  target_models_conf_rc=$?
-  set -e
-  if [ "$target_models_conf_rc" -ne 0 ]; then
-    echo "error: ${repo}'s .fabrica/models.conf (at ${head_commit}) failed to source — check it" >&2
-    echo "       for a shell syntax error (bash -n ${target_models_conf}); the manager-debate" >&2
-    echo "       gate refuses to run at an unknown/partially-applied config rather than silently" >&2
-    echo "       ignoring it" >&2
-    exit 1
-  fi
-  if [ -z "${FABRICA_DEBATE_EFFORT:-}" ]; then
-    echo "error: FABRICA_DEBATE_EFFORT is unset/empty after sourcing ${target_models_conf}" >&2
-    echo "       the manager-debate gate refuses to run at an unknown reasoning effort; fix" >&2
-    echo "       ${repo}'s .fabrica/models.conf override, then re-run" >&2
-    exit 1
-  fi
+  mc_parse_target_override < "$target_models_conf"
 fi
 
 # Resolve the effective Codex model: the existing -m CLI flag keeps precedence over config (per
 # #110) — it is only missing when the operator omitted -m, in which case we fall back to
 # FABRICA_CODEX_MODEL (empty by default, meaning "inherit the operator's own Codex CLI/config
-# default"; a target's .fabrica/models.conf override, sourced just above, may have changed it).
+# default"; a target's .fabrica/models.conf override, parsed just above, may have changed it).
 # model_display feeds the resolved-config echo below so every debate documents what gated it,
 # even when nothing was explicitly pinned (shown as "operator-default").
 effective_model="$model"
@@ -705,7 +712,9 @@ printf '%s' "$prompt" | "${review_cmd[@]}" -
 # `reviewer: <model> @ <effort>` line records the RESOLVED config (#110) — model and reasoning
 # effort actually applied, after CLI/-m > FABRICA_CODEX_MODEL and any per-target
 # .fabrica/models.conf override — so every debate documents what gated it on the record, and
-# personal-config drift (e.g. a stray operator default) is visible in the issue history.
+# personal-config drift (e.g. a stray operator default) is visible in the issue history. If the
+# target's override tried to set FABRICA_DEBATE_EFFORT (rejected by mc_parse_target_override,
+# #115 P1 fix), a visible warning line is folded in here too — never a silent ignore.
 comment="$(mktemp)"
 # Re-arm the trap to also remove this second temp file. We re-`git worktree remove` the
 # worktree here too (replacing, not appending to, the EXIT trap) so the worktree cleanup is
@@ -717,6 +726,9 @@ trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree";
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
   echo
   echo "reviewer: ${model_display} @ ${FABRICA_DEBATE_EFFORT}"
+  if [ "$MC_TARGET_OVERRIDE_GATE_WARNING" = "1" ]; then
+    echo "warning: target override attempted to set gate effort — ignored"
+  fi
   echo
   echo "_Posted verbatim by \`manager-review.sh\` (\`codex exec\`, sandbox forced read-only, debating issue #${issue} against the current north star). Comments only — veto-only: Codex never labels \`ready\`, edits the issue, or merges. Proceed only on consensus._"
   echo

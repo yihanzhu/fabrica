@@ -136,8 +136,13 @@ own target.)
 Fabrica ships model-tiering defaults at `config/models.conf` in the fabrica clone (see
 README.md's "Model policy" section). If this target repo wants different values (e.g. a
 different coder ceiling), copy `templates/.fabrica/models.conf` from your fabrica clone into
-this repo as `.fabrica/models.conf` — same format/keys as the shipped defaults, sourced
+this repo as `.fabrica/models.conf` — same format/keys as the shipped defaults, applied
 **after** them — set only the keys you want to change, and commit it. This is optional: skip
 it entirely to inherit the shipped defaults. `scripts/doctor.sh` validates the shipped
-defaults (checks (k) and (l)); it does not yet read this per-target override file (no code
-reads either file's values yet — that wiring is follow-up work).
+defaults (checks (k) and (l)). The review/manager-debate gates (`scripts/codex-review.sh` /
+`scripts/manager-review.sh`) already read this per-target override — but **only the
+producer/model keys** (`FABRICA_CODER_MODEL`, `FABRICA_HANDS_MODEL`, `FABRICA_CODEX_MODEL`):
+`FABRICA_REVIEW_EFFORT` / `FABRICA_DEBATE_EFFORT` can never be set this way (a target can
+never lower or change its own gate — an attempt is ignored with a visible warning in the
+posted PR/issue comment). Wiring the coder-spawn / hands-policy keys into the producers
+themselves is still follow-up work.
