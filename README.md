@@ -137,6 +137,59 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
 > possible later upgrade. It is **not built**; nothing in this repo wires it. The one path
 > that exists today is the in-session loop above.
 
+## Model policy
+
+**Spend by leverage, not by volume.** A run touches far more producer tokens (the
+coder writing code) than gate tokens (a reviewer judging a diff), so naively giving
+everything the same model either overspends on volume or underspends on judgment.
+Fabrica instead routes by the *leverage* of the decision, not by how much text it
+produces:
+
+- **Gates decide → always max.** The code-review gate (`scripts/codex-review.sh`)
+  and the manager-debate gate (`scripts/manager-review.sh`) run at maximum
+  reasoning effort, always — there is no per-task/class routing that would lower
+  them. A bad gate call (approving a broken PR, debating a proposal against the
+  wrong bar) is expensive to unwind later, so gates never get a cheaper tier.
+- **Producers type → fixed ceilings.** The coder subagent and "hands" work
+  (mechanical, low-judgment steps) run at a fixed model ceiling, set once and never
+  escalated at runtime — not even when a task looks hard. A task that seems to need
+  a bigger model is a signal to **decompose the task or fix the spec upstream**,
+  not to reach for more horsepower mid-run. Producer volume is what makes cost add
+  up, so this is where the fixed ceiling lives.
+- **Frontier thinks, never types.** The most capable models are reserved for
+  judgment (gates), not generation (producers) — the opposite of routing by output
+  volume.
+
+**Config: `config/models.conf`.** Shell-sourceable (POSIX `KEY=value`, no bashisms)
+shipped defaults, read by any script here via `. config/models.conf`:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `FABRICA_CODER_MODEL` | `sonnet` | Claude coder subagent model. A floating alias tracks that alias's latest release; a full model ID pins an exact snapshot. Fixed ceiling by design — never escalated at runtime. |
+| `FABRICA_HANDS_MODEL` | `haiku` | Model for mechanical "hands" work. Same never-escalated principle, cheaper ceiling. |
+| `FABRICA_CODEX_MODEL` | *(empty)* | Codex model for the review/debate gates. Empty means inherit the operator's Codex CLI / `~/.codex/config.toml` default (whatever frontier codex that resolves to). Set only to pin a specific model — gates are never downgraded by task class. |
+| `FABRICA_REVIEW_EFFORT` | `high` | Reasoning effort for the code-review gate. Always max. |
+| `FABRICA_DEBATE_EFFORT` | `high` | Reasoning effort for the manager-debate gate. Always max. |
+
+**Per-target override.** A target repo may commit its own `.fabrica/models.conf`
+(same format, same keys — copy it from
+[`templates/.fabrica/models.conf`](templates/.fabrica/models.conf)) to override
+specific keys for that repo. This mirrors where the north star lives (a target's
+own `.fabrica/` directory — see [`templates/.fabrica/north-star.md`](templates/.fabrica/north-star.md)
+and the "Judgment lives at the direction" design decision above), so both kinds of
+per-target committed state — the goal and the model policy — live in the same
+place, owned by the target repo, not the fabrica control-plane clone. The override
+is sourced **after** the shipped defaults, so it only needs to set the keys it
+wants to change, and it is a **static per-repo commitment** — set once and
+committed, never a per-task rescue. `scripts/doctor.sh` check (k) validates the
+shipped defaults (`config/models.conf` present, sourceable, coder/hands values
+non-empty) and check (l) warns if `CLAUDE_CODE_SUBAGENT_MODEL` is set in the
+environment (it would silently override a per-spawn model argument).
+
+**No behavior change yet.** Nothing reads `config/models.conf` or a target's
+`.fabrica/models.conf` today beyond `doctor.sh`'s own static validation — wiring
+the coder spawn, the hands policy, and the gates to this config is follow-up work.
+
 ## Layout
 
 ```
@@ -154,9 +207,12 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .fabrica/north-star.md (or root NORTH_STAR.md for a Fabrica-self run)
+scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
+config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
 templates/faber-command.md Template for the /faber command (path placeholder)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)
 templates/.fabrica/north-star.md  Template each target copies to .fabrica/north-star.md as its own committed north star
+templates/.fabrica/models.conf  Template each target may copy to .fabrica/models.conf to override specific model-tiering keys
 templates/repo-setup.md    Labels + branch protection checklist
 NORTH_STAR.md              Fabrica-self's own target north star + done-signal + log — the resolver returns it only for a Fabrica-self run; other targets keep theirs in .fabrica/north-star.md
 RESTORE.md                 Disaster-recovery runbook: rebuild the team from this repo

@@ -131,3 +131,13 @@ reads the **committed** `.fabrica/north-star.md`; a missing, still-placeholder, 
 star FAILs the gate — so commit your north star after you write it. (When the target is the
 Fabrica control-plane repo itself, its north star is the root `NORTH_STAR.md` — Fabrica is its
 own target.)
+
+## 7. Model tiering override (optional)
+Fabrica ships model-tiering defaults at `config/models.conf` in the fabrica clone (see
+README.md's "Model policy" section). If this target repo wants different values (e.g. a
+different coder ceiling), copy `templates/.fabrica/models.conf` from your fabrica clone into
+this repo as `.fabrica/models.conf` — same format/keys as the shipped defaults, sourced
+**after** them — set only the keys you want to change, and commit it. This is optional: skip
+it entirely to inherit the shipped defaults. `scripts/doctor.sh` validates the shipped
+defaults (checks (k) and (l)); it does not yet read this per-target override file (no code
+reads either file's values yet — that wiring is follow-up work).

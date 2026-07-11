@@ -15,7 +15,9 @@ set -euo pipefail
 # on a Fabrica-self run) is unset or still the shipped Fabrica-self default, and — in
 # the target-repo path — checks the target has PR-triggered CI (the hard merge gate)
 # and reports (advisory only) whether a CLAUDE.md "Stack & commands" override is
-# present (commands are auto-discovered, so it is optional).
+# present (commands are auto-discovered, so it is optional). It also statically
+# validates the model-tiering config (config/models.conf, #109) and warns on an
+# environment override that would silently bypass it.
 #
 # It is STRICTLY READ-ONLY: it never creates, edits, or deletes anything (and the
 # optional label check delegates to setup-target-repo.sh's --check mode, which is
@@ -71,6 +73,16 @@ set -euo pipefail
 #       repo's CI workflows and standard manifests, so a CLAUDE.md is an OPTIONAL override
 #       (pin/disambiguate a non-standard toolchain), NOT a prerequisite. WARN flags its
 #       absence/placeholders as a heads-up, never as a blocker.
+#   (k) config/models.conf (#109's shipped model-tiering defaults) is present and
+#       SOURCEABLE, and — once sourced — FABRICA_CODER_MODEL / FABRICA_HANDS_MODEL are
+#       non-empty. STATIC only: this is doctor's own diagnostic sourcing (isolated to a
+#       subshell), never a live model/API call, and it does NOT read a target's optional
+#       per-target `.fabrica/models.conf` override (that convention is documented, not
+#       enforced by any code yet — see README.md's "Model policy" section).
+#   (l) WARN if `CLAUDE_CODE_SUBAGENT_MODEL` is set in doctor's own environment — that
+#       env var would silently override any per-spawn model argument once coder spawning
+#       is wired to config/models.conf (issue #110), so a stray export is worth flagging
+#       early even though nothing reads it yet.
 #
 # Usage:
 #   scripts/doctor.sh                 run the clone-local checks against this clone
@@ -628,6 +640,53 @@ if [ -n "$target_repo" ]; then
   else
     report 0 "(j) $target_repo CLAUDE.md has a filled-in 'Stack & commands' override (optional; no '<cmd>' placeholders)"
   fi
+fi
+
+# (k) config/models.conf present, sourceable, coder/hands values non-empty --------
+# #109's shipped model-tiering defaults. STATIC check only — no live model/API call,
+# and no functional consumption: nothing else reads this file yet (issues #110-#112
+# wire it up), so doctor sourcing it here is purely diagnostic, same as any other
+# presence/shape check in this script.
+#
+# "Sourceable" is verified by actually sourcing it, isolated inside a command
+# substitution's own subshell so a syntax error can't abort doctor under `set -e`
+# and sourcing it repeatedly across doctor runs never leaks vars into THIS shell.
+# We resolve it at the fixed control-plane path ($repo_root/config/models.conf) —
+# this is the shipped-defaults file, not a per-target one, so it is the same
+# regardless of any <owner>/<repo> target arg.
+#
+# We deliberately do NOT read a target's optional per-target `.fabrica/models.conf`
+# override here: that convention (same format/keys, sourced after these defaults) is
+# documented in README.md's "Model policy" section but not enforced by any code in
+# this PR, doctor included.
+models_conf="$repo_root/config/models.conf"
+if [ ! -f "$models_conf" ]; then
+  report 1 "(k) config/models.conf present and sourceable ($models_conf missing)"
+elif ! models_out="$(
+  # shellcheck source=config/models.conf
+  . "$models_conf" && printf '%s\n%s\n' "${FABRICA_CODER_MODEL:-}" "${FABRICA_HANDS_MODEL:-}"
+)" 2>&1; then
+  report 1 "(k) config/models.conf present but failed to source — check for a shell syntax error (bash -n $models_conf)"
+else
+  models_coder="$(printf '%s\n' "$models_out" | sed -n '1p')"
+  models_hands="$(printf '%s\n' "$models_out" | sed -n '2p')"
+  if [ -z "$models_coder" ] || [ -z "$models_hands" ]; then
+    report 1 "(k) config/models.conf sourceable but has empty required value(s) — FABRICA_CODER_MODEL='$models_coder' FABRICA_HANDS_MODEL='$models_hands' must both be non-empty"
+  else
+    report 0 "(k) config/models.conf present, sourceable, FABRICA_CODER_MODEL=$models_coder FABRICA_HANDS_MODEL=$models_hands"
+  fi
+fi
+
+# (l) CLAUDE_CODE_SUBAGENT_MODEL not set in the environment (WARN only) -----------
+# This env var, if set, would silently override any model param passed to an
+# individual subagent spawn once the coder spawn is wired to config/models.conf
+# (#110) — defeating the fixed-ceiling-by-design guarantee without any visible
+# error. Nothing reads config/models.conf yet, so this can't actually misbehave
+# today; it's an early heads-up so the env is clean before that wiring lands.
+if [ -n "${CLAUDE_CODE_SUBAGENT_MODEL:-}" ]; then
+  report_warn "(l) CLAUDE_CODE_SUBAGENT_MODEL is set in the environment ('$CLAUDE_CODE_SUBAGENT_MODEL') — once coder spawning reads config/models.conf (#110) this would silently override its per-spawn model; unset it unless you deliberately intend that override"
+else
+  report 0 "(l) CLAUDE_CODE_SUBAGENT_MODEL not set in the environment"
 fi
 
 # Final summary ------------------------------------------------------------------
