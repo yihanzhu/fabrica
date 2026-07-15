@@ -49,7 +49,9 @@ scripts/doctor.sh
 # Sourced libraries (not executed directly; sourced by the scripts above)
 scripts/lib/north-star.sh
 scripts/lib/gh-remote.sh
+scripts/lib/models-conf.sh
 
 # Tests (run by CI; also executable — see ci.yml)
 scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh
+scripts/test/models-conf-parser.test.sh

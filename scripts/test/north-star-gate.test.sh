@@ -35,7 +35,9 @@ faber_template="$repo_root/templates/faber-command.md"
 persona="$repo_root/manager/CLAUDE.md"
 ns_template="$repo_root/templates/.fabrica/north-star.md"
 ghr_lib="$repo_root/scripts/lib/gh-remote.sh"   # #102: the shared gh-bound remote-identity helper
-for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib"; do
+models_conf="$repo_root/config/models.conf"     # #110: manager-review.sh now sources this (required)
+mc_lib="$repo_root/scripts/lib/models-conf.sh"  # #115 P1 fix: parses a target's override as data
+for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib" "$models_conf" "$mc_lib"; do
   if [ ! -f "$f" ]; then echo "FAIL: missing $f" >&2; exit 1; fi
 done
 
@@ -322,19 +324,23 @@ advance_remote_default() {
   git -C "$pusher" push -q origin HEAD:main
 }
 
-# make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of BOTH sourced libs
-# (north-star.sh + gh-remote.sh, #102) and manager-review.sh, so ns_fabrica_root (derived from the
-# lib's own location) == this clone's git top-level → the resolver classifies FABRICA_SELF and the
-# gate takes the FABRICA_SELF branch. Remote-backed on default branch `main` (same as make_target)
-# so the #102 gh-bound anchor path is exercised for the self case too. Echoes the clone path; the
-# caller commits + pushes the root NORTH_STAR.md (or whatever the case needs) and runs the COPIED
-# manager-review.sh so its own-location lib derivation lands inside the clone.
+# make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of ALL THREE sourced
+# libs (north-star.sh + gh-remote.sh, #102; models-conf.sh, #115 P1 fix), config/models.conf
+# (#110 — manager-review.sh now sources this from its own control-plane root and FAILs loudly if
+# it's missing), and manager-review.sh, so ns_fabrica_root (derived from the lib's own location)
+# == this clone's git top-level → the resolver classifies FABRICA_SELF and the gate takes the
+# FABRICA_SELF branch. Remote-backed on default branch `main` (same as make_target) so the #102
+# gh-bound anchor path is exercised for the self case too. Echoes the clone path; the caller
+# commits + pushes the root NORTH_STAR.md (or whatever the case needs) and runs the COPIED
+# manager-review.sh so its own-location lib (and config) derivation lands inside the clone.
 make_cp_clone() {
   local name="$1"
   local cp_root="$tmproot/$name"
-  mkdir -p "$cp_root/scripts/lib"
+  mkdir -p "$cp_root/scripts/lib" "$cp_root/config"
   cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
   cp "$repo_root/scripts/lib/gh-remote.sh" "$cp_root/scripts/lib/gh-remote.sh"
+  cp "$repo_root/scripts/lib/models-conf.sh" "$cp_root/scripts/lib/models-conf.sh"
+  cp "$repo_root/config/models.conf" "$cp_root/config/models.conf"
   cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
   git -C "$cp_root" init -q -b main
   setup_remote "$cp_root" "$name"
@@ -2052,6 +2058,93 @@ STAR
   assert_eq "(19) the private per-run anchor ref (refs/manager-review/*) is cleaned up after exit" "" "$leaked"
 }
 
+# ---------------------------------------------------------------------------------
+# (21) TARGET .fabrica/models.conf OVERRIDE — PARSE, NOT SOURCE (adversarial review of #110,
+# P1 fix on PR #115). A target that commits a malicious .fabrica/models.conf — shell injection
+# attempting to touch a sentinel file, PLUS an attempt to downgrade its own FABRICA_DEBATE_EFFORT
+# — must have NEITHER attack succeed: the shell must never execute (mc_parse_target_override
+# reads the file as DATA, never `source`/`.`/`eval`), and the debate must still run at "high"
+# (gate-effort keys are recognized but never applied from a target override). A legitimate
+# producer/model key (FABRICA_CODEX_MODEL) in the SAME file must still apply, and a visible
+# warning about the rejected gate-effort override must appear in the posted issue comment (never
+# a silent ignore). This exercises the REAL manager-review.sh end-to-end (real git, fake gh/codex)
+# — see also scripts/test/models-conf-parser.test.sh for the parser tested in full isolation.
+# ---------------------------------------------------------------------------------
+test_gate_target_models_conf_override_parsed_not_sourced() {
+  local name="models-conf-override"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
+  local sentinel="$tmproot/${name}-sentinel"
+  rm -f "$sentinel"
+  cat > "$repo/.fabrica/models.conf" <<EOF
+FABRICA_DEBATE_EFFORT=low
+FABRICA_CODEX_MODEL=self-set-model
+\$(touch "$sentinel")
+touch "$sentinel"
+EOF
+  git -C "$repo" add .fabrica/models.conf
+  git -C "$repo" commit -q -m "target commits a malicious models.conf override"
+  push_default "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(21) target override with malicious shell + gate-downgrade attempt → gate still PROCEEDs" "0" "$rc"
+  assert_contains "(21) gate reached the verdict" "PROCEED" "$out"
+  if [ -e "$sentinel" ]; then
+    failed=$((failed + 1)); echo "FAIL: (21) malicious shell in a target-committed models.conf EXECUTED (sentinel created)"
+  else
+    passed=$((passed + 1)); echo "pass: (21) malicious shell in a target-committed models.conf never executed (sentinel NOT created)"
+  fi
+  assert_contains "(21) FABRICA_DEBATE_EFFORT stayed 'high' (target cannot downgrade its own gate)" "@ high" "$out"
+  case "$out" in
+    *"@ low"*) failed=$((failed + 1)); echo "FAIL: (21) debate ran at the target-requested 'low' effort" ;;
+    *) passed=$((passed + 1)); echo "pass: (21) debate did NOT run at the target-requested 'low' effort" ;;
+  esac
+  assert_contains "(21) legitimate producer-key override (FABRICA_CODEX_MODEL) still applied" "self-set-model" "$out"
+  assert_contains "(21) visible warning about the rejected gate-effort override is posted" "target override attempted to set gate effort" "$out"
+}
+
+# ---------------------------------------------------------------------------------
+# (22) TARGET .fabrica/models.conf OVERRIDE — SYMLINK-SAFE READ (P2 fix, adversarial review of
+# PR #115, found on the revision). Before this fix, manager-review.sh read the per-target
+# override via `mc_parse_target_override < "$worktree/.fabrica/models.conf"` — a `<`-redirect
+# from the CHECKED-OUT WORKTREE PATH, which FOLLOWS SYMLINKS. A target that commits
+# `.fabrica/models.conf` AS A SYMLINK to an arbitrary sentinel file would pass `[ -f ... ]` and
+# have the parser read the POINTED-TO file's content: a charset-valid `FABRICA_CODEX_MODEL=`
+# line in that sentinel would then leak into the resolved model and the PUBLIC posted issue
+# comment header — a narrow info-leak of an arbitrary local file. The fix reads the override via
+# `git show "${head_commit}:.fabrica/models.conf"` instead (a git blob, never a filesystem path):
+# for a symlinked path this returns only the link's TARGET-PATH STRING, which does not match any
+# `FABRICA_*=` key and is silently ignored — exactly like the analogous north-star symlink guards
+# above (commit_symlink_star), and mirroring codex-review.sh's pre-existing symlink-safe
+# `git show`-based read of this same file. This exercises the REAL manager-review.sh end-to-end
+# (real git, fake gh/codex), proving the sentinel's content never appears in the output.
+# ---------------------------------------------------------------------------------
+test_gate_target_models_conf_symlink_not_dereferenced() {
+  local name="models-conf-symlink"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
+  # A sentinel file OUTSIDE .fabrica/, with a charset-valid FABRICA_CODEX_MODEL= line that WOULD
+  # apply if dereferenced. .fabrica/models.conf is committed as a SYMLINK pointing at it — never
+  # a regular file.
+  printf 'FABRICA_CODEX_MODEL=leaked-sentinel-model\n' > "$repo/decoy-models-target.conf"
+  mkdir -p "$repo/.fabrica"
+  ( cd "$repo" && ln -s "../decoy-models-target.conf" ".fabrica/models.conf" )
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m "commit symlinked models.conf override pointing at a sentinel file"
+  push_default "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(22) target with a SYMLINKED models.conf override → gate still PROCEEDs" "0" "$rc"
+  assert_contains "(22) gate reached the verdict" "PROCEED" "$out"
+  case "$out" in
+    *"leaked-sentinel-model"*)
+      failed=$((failed + 1)); echo "FAIL: (22) sentinel file content DEREFERENCED through the symlinked override into the posted output" ;;
+    *)
+      passed=$((passed + 1)); echo "pass: (22) sentinel file content NOT dereferenced — symlinked override ignored" ;;
+  esac
+  assert_contains "(22) resolved model falls back to operator-default (symlinked override not applied)" "reviewer: operator-default @ high" "$out"
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
@@ -2115,6 +2208,8 @@ test_gate_gh_no_default_branch_fails_closed
 test_default_branch_offline_local_fallback_unit
 test_select_remote_ssh_alias_effective_fallback
 test_gate_no_ref_mutation_after_run
+test_gate_target_models_conf_override_parsed_not_sourced
+test_gate_target_models_conf_symlink_not_dereferenced
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

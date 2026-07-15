@@ -173,22 +173,32 @@ shipped defaults, read by any script here via `. config/models.conf`:
 
 **Per-target override.** A target repo may commit its own `.fabrica/models.conf`
 (same format, same keys — copy it from
-[`templates/.fabrica/models.conf`](templates/.fabrica/models.conf)) to override
-specific keys for that repo. This mirrors where the north star lives (a target's
-own `.fabrica/` directory — see [`templates/.fabrica/north-star.md`](templates/.fabrica/north-star.md)
-and the "Judgment lives at the direction" design decision above), so both kinds of
+[`templates/.fabrica/models.conf`](templates/.fabrica/models.conf)) to override the
+**producer/model keys only** (`FABRICA_CODER_MODEL`, `FABRICA_HANDS_MODEL`,
+`FABRICA_CODEX_MODEL`) for that repo — **`FABRICA_REVIEW_EFFORT` /
+`FABRICA_DEBATE_EFFORT` are never target-overridable**; a target can never lower or
+otherwise change its own review/debate gate. This mirrors where the north star lives
+(a target's own `.fabrica/` directory — see
+[`templates/.fabrica/north-star.md`](templates/.fabrica/north-star.md) and the
+"Judgment lives at the direction" design decision above), so both kinds of
 per-target committed state — the goal and the model policy — live in the same
-place, owned by the target repo, not the fabrica control-plane clone. The override
-is sourced **after** the shipped defaults, so it only needs to set the keys it
-wants to change, and it is a **static per-repo commitment** — set once and
-committed, never a per-task rescue. `scripts/doctor.sh` check (k) validates the
+place, owned by the target repo, not the fabrica control-plane clone. The
+review/debate gates (`scripts/codex-review.sh` / `scripts/manager-review.sh`) apply
+it **after** the shipped defaults, so it only needs to set the keys it wants to
+change, and it is a **static per-repo commitment** — set once and committed, never a
+per-task rescue. Because it is target-committed content, the gates **parse it as
+data** (`scripts/lib/models-conf.sh`) — never `source`/`.`/`eval` it — and
+`codex-review.sh` reads it from the repo's gh-bound default branch (fetched fresh),
+never the untrusted PR head under review. `scripts/doctor.sh` check (k) validates the
 shipped defaults (`config/models.conf` present, sourceable, coder/hands values
 non-empty) and check (l) warns if `CLAUDE_CODE_SUBAGENT_MODEL` is set in the
 environment (it would silently override a per-spawn model argument).
 
-**No behavior change yet.** Nothing reads `config/models.conf` or a target's
-`.fabrica/models.conf` today beyond `doctor.sh`'s own static validation — wiring
-the coder spawn, the hands policy, and the gates to this config is follow-up work.
+**Partial wiring.** The review and manager-debate **gates**
+(`scripts/codex-review.sh` / `scripts/manager-review.sh`) already read
+`config/models.conf` (and a target's `.fabrica/models.conf` override) to resolve the
+Codex model + reasoning effort for every run. Wiring the **coder spawn** and the
+**hands policy** to this config is still follow-up work.
 
 ## Layout
 
