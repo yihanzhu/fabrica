@@ -50,8 +50,10 @@ scripts/doctor.sh
 scripts/lib/north-star.sh
 scripts/lib/gh-remote.sh
 scripts/lib/models-conf.sh
+scripts/lib/codex-degraded.sh
 
 # Tests (run by CI; also executable — see ci.yml)
 scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh
 scripts/test/models-conf-parser.test.sh
+scripts/test/codex-degraded-gate.test.sh

@@ -288,6 +288,25 @@ Applying the resolved config:
   pinned) — so every debate documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the issue history, not just in a log nobody reads.
 
+## Degraded-review detection (#117)
+
+The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
+`PROCEED`/`REFINE`/`DROP` verdict — the same hardening as `codex-review.sh` (#117), sharing its
+detector so the two gates can't diverge on what counts as degraded (real incident and rationale:
+see `codex-review.sh`'s **Degraded-review detection** section and
+[`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh)).
+
+Detection: **`codex` exits non-zero**, OR a **known code-mode/host spawn-failure signal**
+anywhere in the captured stdout (`-o`) or stderr (case-insensitive: "failed to spawn code-mode
+host", "code-mode host", "code-mode-host", "repository inspection tool failed", "execution
+environment failed to start", "failed to start its command host"). A genuine verdict (codex
+ran, read the repo, formed a real judgment) carries neither signal and still posts normally.
+
+On detection: the script exits non-zero and posts `VERDICT: DEGRADED` (never
+`PROCEED`/`REFINE`/`DROP`) under a **different** header line than the real `## Codex
+manager-reviewer (cross-vendor, read-only)` one, so Faber's "proceed only on consensus" rule can
+never read this as a `PROCEED`.
+
 ## The manager-reviewer prompt
 
 The script builds this prompt from the role + the target's current committed north star

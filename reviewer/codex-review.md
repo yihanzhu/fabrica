@@ -160,6 +160,37 @@ Applying the resolved config:
   pinned) — so every review documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the PR history, not just in a log nobody reads.
 
+## Degraded-review detection (#117)
+
+The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
+"clean" verdict. Real incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing
+from a Homebrew codex install); `codex exec review` still "completed" — exit 0, in ~8-14s, at
+confidence ~0.05, with a generic "no actionable findings" — having done **zero** diff
+inspection. Under the standing auto-merge rail, a fake "clean" would auto-merge unreviewed code.
+
+Detection (the REQUIRED robust core, factored into the shared
+[`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) so `codex-review.sh` and
+`manager-review.sh` can't diverge on what counts as degraded):
+
+- **`codex` exits non-zero** → degraded.
+- **A known code-mode/host spawn-failure signal** anywhere in the captured stdout (`-o`) or
+  stderr (a resilient, case-insensitive match: "failed to spawn code-mode host", "code-mode
+  host", "code-mode-host", "repository inspection tool failed", "execution environment failed
+  to start", "failed to start its command host") → degraded.
+
+Neither check gates on confidence/duration — codex's `-o` capture is its clean final message
+only, with no reliably-exposed confidence/duration field to parse, so heuristics there would
+risk false-triggering a genuinely fast, genuinely clean review of a small diff. A genuine clean
+review (codex ran, inspected the diff, found nothing) carries neither signal and still passes.
+
+On detection: the script exits non-zero and posts an explicit DEGRADED marker comment instead —
+`## Codex reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)`, deliberately a
+**different** header line than the real `## Codex reviewer (cross-vendor, read-only)` one, with
+NO `Reviewed-head`/`Reviewed-base` markers. That means `scripts/merge-pr.sh`'s marker parser
+(which matches that exact header line plus those exact marker keys) can never mistake a
+degraded run for a completed review — belt-and-suspenders on top of Faber reading the comment
+text.
+
 ## Invariants (non-negotiable)
 
 - **Cross-vendor.** Coder = Claude, reviewer = Codex. The reviewer's value is being a

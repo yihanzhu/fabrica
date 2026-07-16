@@ -113,3 +113,15 @@ jobs:
           # static (grep-based) assertions that codex-review.sh/manager-review.sh actually wire in
           # the trust-anchor + parse-not-source fix. No git/gh/codex harness needed.
           bash scripts/test/models-conf-parser.test.sh
+
+      - name: Degraded-Codex-review gate tests
+        run: |
+          # Issue #117: both codex-review.sh and manager-review.sh must FAIL LOUDLY on a
+          # degraded/non-substantive Codex run (a code-mode/host spawn failure, or codex exiting
+          # non-zero) instead of posting a fake clean verdict. Unit-tests the shared detector
+          # (scripts/lib/codex-degraded.sh) in isolation, then runs the REAL scripts end to end
+          # with gh/codex stubbed on PATH and real git on throwaway local bare "remotes" — hermetic,
+          # no network/gh/codex auth needed.
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          bash scripts/test/codex-degraded-gate.test.sh

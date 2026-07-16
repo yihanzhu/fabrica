@@ -97,6 +97,20 @@ set -euo pipefail
 # blocks `git worktree add`. No leftover worktrees or temp files. Re-running posts a fresh
 # verdict comment (each round is its own comment) — the issue thread is the durable record.
 #
+# DEGRADED-REVIEW DETECTION (#117) — FAIL LOUDLY instead of posting a fake PROCEED/REFINE/DROP.
+# The same real incident that motivated codex-review.sh's #117 hardening applies here: a codex
+# run whose code-mode/host toolchain failed to spawn can still "complete" (exit 0) with a
+# generic, non-substantive verdict that never actually read the issue/repo. This script catches
+# codex's exit code EXPLICITLY (errexit momentarily off) and greps the captured stdout (`-o`) +
+# stderr for a known code-mode/host spawn-failure signal, via the SHARED detector
+# `cd_degraded_reason` (scripts/lib/codex-degraded.sh — shared with codex-review.sh so the two
+# gates can't diverge on what counts as degraded). On EITHER signal: exit non-zero AND post an
+# explicit DEGRADED marker issue comment — `VERDICT: DEGRADED`, never PROCEED/REFINE/DROP, with
+# a DIFFERENT header line than the real `## Codex manager-reviewer (cross-vendor, read-only)`
+# one — so Faber's "proceed only on consensus" rule can never read this as a PROCEED. A genuine
+# verdict (codex ran, read the repo, formed a real PROCEED/REFINE/DROP judgment) carries neither
+# signal and still posts normally.
+#
 # Usage: scripts/manager-review.sh [-m <model>] <issue#>
 #   (or, with fabrica/scripts on PATH: manager-review.sh [-m <model>] <issue#>)
 
@@ -206,6 +220,21 @@ if [ ! -f "$mc_lib" ]; then
 fi
 # shellcheck source=scripts/lib/models-conf.sh
 . "$mc_lib"
+
+# Source the shared DEGRADED-REVIEW detector (#117) — cd_degraded_reason decides, in ONE place,
+# whether a codex run FAILED TO RUN a genuine debate (non-zero exit, or a known code-mode/host
+# spawn-failure signal in its output/stderr) vs. genuinely ran clean, so manager-review.sh and
+# codex-review.sh can't diverge on what counts as degraded. Located under the same control-plane
+# root as the libs above.
+cd_lib="${control_plane_root}/scripts/lib/codex-degraded.sh"
+if [ ! -f "$cd_lib" ]; then
+  echo "error: codex-degraded helper not found (${cd_lib})" >&2
+  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       restore scripts/lib/codex-degraded.sh, then re-run" >&2
+  exit 1
+fi
+# shellcheck source=scripts/lib/codex-degraded.sh
+. "$cd_lib"
 
 # Source the shipped model-tiering defaults (config/models.conf, #109) from this clone's own
 # control-plane root ($control_plane_root, resolved above), so the manager-debate gate ALWAYS
@@ -572,12 +601,14 @@ issue_comments="$(gh issue view "$issue" --repo "$repo" --json comments \
   -q 'if (.comments | length) == 0 then "(no comments yet)" else (.comments[] | "@\(.author.login) (\(.createdAt)):\n\(.body)\n") end')"
 
 # Allocate temp paths in the system temp dir (never inside the repo, so nothing here can be
-# committed): a detached worktree dir and the Codex output file. Both get a fresh mktemp path
-# each run, so a stale worktree entry from a hard-killed previous run never collides with — or
-# blocks — the `git worktree add` below; that is why no global `git worktree prune` is needed
-# (and we avoid one so unrelated operator worktrees are never touched).
+# committed): a detached worktree dir, the Codex output file, and (#117) a captured-stderr file.
+# All three get a fresh mktemp path each run, so a stale worktree entry from a hard-killed
+# previous run never collides with — or blocks — the `git worktree add` below; that is why no
+# global `git worktree prune` is needed (and we avoid one so unrelated operator worktrees are
+# never touched).
 worktree="$(mktemp -d)"
 tmp="$(mktemp)"
+stderr_tmp="$(mktemp)"
 
 # Clean up on EVERY exit (success or failure): remove the temp worktree, the temp output file,
 # AND the private per-run anchor ref (#102) if the gh-bound fetch created one. `git worktree
@@ -587,7 +618,7 @@ tmp="$(mktemp)"
 # REPLACES the earlier `trap cleanup_anchor_ref EXIT`, so we fold the ref cleanup in here.
 cleanup() {
   git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
-  rm -f "$tmp"
+  rm -f "$tmp" "$stderr_tmp"
   cleanup_anchor_ref
 }
 trap cleanup EXIT
@@ -725,7 +756,57 @@ review_cmd=(codex exec -C "$worktree" -c sandbox_mode="read-only" -c model_reaso
 if [ -n "$effective_model" ]; then
   review_cmd+=(-m "$effective_model")
 fi
-printf '%s' "$prompt" | "${review_cmd[@]}" -
+
+# #117 — run with errexit MOMENTARILY OFF (same pattern as the config-sourcing block above) so a
+# non-zero codex exit is caught HERE, explicitly, instead of aborting the whole script via
+# `set -e`/`pipefail` before we can post the DEGRADED marker below. `pipefail` (set at the top
+# of this script) still makes `$?` reflect codex's own exit status through the stdin pipe
+# (printf is effectively infallible here). Stderr is captured to $stderr_tmp — never discarded —
+# so it can be (a) grepped for a code-mode/host spawn-failure signal and (b) surfaced:
+# re-emitted to the operator's terminal right after, and folded into the posted DEGRADED comment.
+set +e
+printf '%s' "$prompt" | "${review_cmd[@]}" - 2>"$stderr_tmp"
+codex_rc=$?
+set -e
+cat "$stderr_tmp" >&2
+
+# #117 DEGRADED DETECTION — the REQUIRED robust core, via the shared detector
+# (scripts/lib/codex-degraded.sh, sourced above) so this gate and codex-review.sh can't diverge:
+# a non-zero codex exit OR a known code-mode/host spawn-failure signal anywhere in the captured
+# stdout (-o "$tmp") or stderr means codex FAILED TO RUN a genuine debate — it did not actually
+# read the issue/repo — as distinct from a genuine PROCEED/REFINE/DROP verdict (exits 0, no such
+# signal), which must still PASS (no over-triggering).
+if degraded_reason="$(cd_degraded_reason "$codex_rc" "$tmp" "$stderr_tmp")"; then
+  echo "error: Codex manager-review DEGRADED — ${degraded_reason}. NOT posting a PROCEED/REFINE/DROP verdict." >&2
+  degraded_body="$(
+    echo "## Codex manager-reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)"
+    echo
+    echo "VERDICT: DEGRADED (never PROCEED / REFINE / DROP — this run did not genuinely debate the issue)"
+    echo "reviewer: ${model_display} @ ${FABRICA_DEBATE_EFFORT}"
+    echo
+    echo "**This Codex run FAILED TO RUN a genuine debate on issue #${issue}. Treat this as NO"
+    echo "consensus — never as PROCEED. Faber must not advance on the strength of this comment.**"
+    echo
+    echo "Reason: ${degraded_reason}."
+    echo
+    echo "_Posted by \`manager-review.sh\` (#117 hardening): a degraded/non-substantive Codex run_"
+    echo "_is surfaced loudly instead of silently posted as a real verdict. Fix the underlying_"
+    echo "_codex/toolchain issue (see the captured output/stderr below), then re-run_"
+    echo "_\`scripts/manager-review.sh ${issue}\`._"
+    echo
+    echo '```'
+    echo "-- codex stdout/-o capture --"
+    if [ -s "$tmp" ]; then cat "$tmp"; else echo "(empty)"; fi
+    echo
+    echo "-- codex stderr --"
+    if [ -s "$stderr_tmp" ]; then cat "$stderr_tmp"; else echo "(empty)"; fi
+    echo '```'
+  )"
+  echo "$degraded_body"
+  printf '%s\n' "$degraded_body" | gh issue comment "$issue" --repo "$repo" --body-file - || \
+    echo "error: additionally failed to post the DEGRADED marker comment to issue #${issue}" >&2
+  exit 1
+fi
 
 # Compose the issue comment: a short header marking it the cross-vendor manager-reviewer,
 # then Codex's verdict VERBATIM. The header is Faber's prefix — clearly separate from
@@ -744,7 +825,7 @@ comment="$(mktemp)"
 # not lost; it is idempotent / harmless if the worktree is already gone. cleanup_anchor_ref is
 # folded in so the per-run anchor ref (#102) is dropped on exit as well (kept alive until now so
 # the fetched anchor commit stays reachable through the worktree add above).
-trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$comment"; cleanup_anchor_ref' EXIT
+trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$stderr_tmp" "$comment"; cleanup_anchor_ref' EXIT
 {
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
   echo
