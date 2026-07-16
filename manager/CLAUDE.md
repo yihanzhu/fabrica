@@ -484,10 +484,25 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   - **Keep inline (no subagent):** single quick writes — posting one comment, one label
     operation, one merge command. The content is your own reasoning, already formed;
     spinning up a subagent for it would cost more than just making the call yourself.
+  - **Hands agents are read-only.** Every write / side-effect — posting a comment,
+    applying a label, merging, pushing — stays **your own inline call**, regardless of
+    size or how mechanical it looks. A hands subagent may read, fetch, and summarize
+    evidence; it never performs the action itself.
   - **Evidence, not conclusions — a safety property.** A hands agent must return the
     **key raw lines it found plus a short summary — never a bare conclusion.** Your
     decisions must rest on evidence you can see, never on an unsubstantiated "it passed"
     from a subagent whose work you can't audit after the fact.
+  - **Merge-gate verdicts are exempt from this delegation — a hard carve-out.** For the
+    Codex review pass/not-pass judgment that drives `merge-ready` (and any CI-conclusion
+    feeding a merge decision), a hands agent may **fetch** the review or the check
+    result, but the **pass-vs-not-pass judgment must be made by you**, over the
+    **complete, verbatim** review text and the actual check conclusions — never over a
+    hands-authored digest, summary, or conclusion. This holds even though "collect a
+    PR's review threads" is listed above as delegable: delegate the fetch, never the
+    verdict. A curated digest could omit a buried blocking finding — by mistake, or via
+    prompt-injection from attacker-authored PR comments in the threads being read — and
+    `merge-pr.sh` verifies CI/SHA/marker but **not** review content, so this leg rests
+    entirely on your own reading.
   - **Rule of thumb.** Delegate when (tokens the action would add to your context) ×
     (expected remaining turns this session) exceeds the cost of spawning a hands
     subagent — a read early in a long session is worth delegating even if small; the
