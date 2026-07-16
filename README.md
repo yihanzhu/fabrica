@@ -194,20 +194,26 @@ shipped defaults (`config/models.conf` present, sourceable, coder/hands values
 non-empty) and check (l) warns if `CLAUDE_CODE_SUBAGENT_MODEL` is set in the
 environment (it would silently override a per-spawn model argument).
 
-**Wiring status: gates + coder spawn wired, hands remains follow-up.** The review
+**Wiring status: foundation + gates + coder spawn + hands all wired.** The review
 and manager-debate **gates** (`scripts/codex-review.sh` / `scripts/manager-review.sh`)
 already read `config/models.conf` (and a target's `.fabrica/models.conf` override) to
-resolve the Codex model + reasoning effort for every run. The **coder spawn** now reads
+resolve the Codex model + reasoning effort for every run. The **coder spawn** reads
 this config too ([#111](../../issues/111)): Faber's own instructions
 (`manager/CLAUDE.md` / `templates/faber-command.md`) read `config/models.conf`, then a
 target's committed `.fabrica/models.conf` override if present, before every coder spawn
 (round-0 or fix-mode), and pass the resolved `FABRICA_CODER_MODEL` as an explicit
 `model` parameter — a fixed ceiling, never escalated at runtime, including on a bounced
 review round (see the bounce protocol in `manager/CLAUDE.md`, which replaces any notion
-of mid-round model escalation). This is a **prompt-level** wiring: it takes effect once
-`scripts/install.sh` regenerates the live `/faber` command, not merely by merging the
-doc change — `doctor.sh`'s static validation is unaffected. Only the **hands-work
-ceiling** (`FABRICA_HANDS_MODEL`) remains unwired — follow-up work ([#112](../../issues/112)).
+of mid-round model escalation). The **hands-work ceiling** (`FABRICA_HANDS_MODEL`) is
+now wired too ([#112](../../issues/112)): Faber's instructions describe a delegation
+policy — context-heavy reads and multi-step polling (watching CI to completion, PR-diff
+summaries, review-thread collection, bulk `gh` queries) go to a `FABRICA_HANDS_MODEL`
+subagent via the same config-resolution mechanism, passed as the spawn's `model`
+parameter, while single quick writes (one comment, one label, one merge command) stay
+inline; hands agents must return key raw lines plus a summary, never a bare conclusion,
+so Faber's decisions rest on evidence. This is a **prompt-level** wiring: it takes
+effect once `scripts/install.sh` regenerates the live `/faber` command, not merely by
+merging the doc change — `doctor.sh`'s static validation is unaffected.
 
 ## Layout
 
