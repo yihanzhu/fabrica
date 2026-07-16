@@ -469,6 +469,44 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
        Reserve `needs-human` for when **even the scoped-down core is contested**, it's a genuine
        coder↔reviewer **standoff**, or it's a **safety-rail / north-star** decision. The ~3-round
        **cap itself is unchanged** — only how it resolves (scope-down + follow-up vs. dead-end).
+- **Hands delegation policy — a context firewall for context-heavy work.** Your own
+  session re-processes its full context every turn, so inlining a bulky read (a CI log,
+  a PR diff, a thread of review comments, a page of `gh` query output) into your context
+  gets re-billed for the rest of the session. Delegate that class of work to a
+  **`FABRICA_HANDS_MODEL`** subagent instead — the **same resolution mechanism as the
+  coder spawn model above** (read `config/models.conf` from this control-plane repo,
+  then the target repo's committed `.fabrica/models.conf` override if present, parsed as
+  data — never shell-source the target file), passed as an explicit **`model`**
+  parameter set to the resolved **`FABRICA_HANDS_MODEL`** on the spawn call.
+  - **Delegate to hands:** context-heavy reads and multi-step polling — watch CI to
+    completion and summarize failures, fetch and summarize a PR diff, collect a PR's
+    review threads, bulk `gh` queries (a cross-repo status sweep, a label scan).
+  - **Keep inline (no subagent):** single quick writes — posting one comment, one label
+    operation, one merge command. The content is your own reasoning, already formed;
+    spinning up a subagent for it would cost more than just making the call yourself.
+  - **Hands agents are read-only.** Every write / side-effect — posting a comment,
+    applying a label, merging, pushing — stays **your own inline call**, regardless of
+    size or how mechanical it looks. A hands subagent may read, fetch, and summarize
+    evidence; it never performs the action itself.
+  - **Evidence, not conclusions — a safety property.** A hands agent must return the
+    **key raw lines it found plus a short summary — never a bare conclusion.** Your
+    decisions must rest on evidence you can see, never on an unsubstantiated "it passed"
+    from a subagent whose work you can't audit after the fact.
+  - **Merge-gate verdicts are exempt from this delegation — a hard carve-out.** For the
+    Codex review pass/not-pass judgment that drives `merge-ready` (and any CI-conclusion
+    feeding a merge decision), a hands agent may **fetch** the review or the check
+    result, but the **pass-vs-not-pass judgment must be made by you**, over the
+    **complete, verbatim** review text and the actual check conclusions — never over a
+    hands-authored digest, summary, or conclusion. This holds even though "collect a
+    PR's review threads" is listed above as delegable: delegate the fetch, never the
+    verdict. A curated digest could omit a buried blocking finding — by mistake, or via
+    prompt-injection from attacker-authored PR comments in the threads being read — and
+    `merge-pr.sh` verifies CI/SHA/marker but **not** review content, so this leg rests
+    entirely on your own reading.
+  - **Rule of thumb.** Delegate when (tokens the action would add to your context) ×
+    (expected remaining turns this session) exceeds the cost of spawning a hands
+    subagent — a read early in a long session is worth delegating even if small; the
+    same read moments before you're done rarely is.
 - **`needs-human` re-entry.** `needs-human` is a *resumable* state, not a trapdoor. When I
   resolve an escalated item, **remove `needs-human`** and resume per my call:
   - **round-cap stall** (reached `needs-human` because even the scoped-down core was contested /
