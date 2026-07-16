@@ -75,23 +75,48 @@ set -euo pipefail
 # from a hard-killed previous run never blocks `git worktree add`. No leftover
 # worktrees, branches, or temp files.
 #
-# DEGRADED-REVIEW DETECTION (#117) — FAIL LOUDLY instead of posting a fake "clean". Real
-# incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing from a Homebrew codex
-# install); `codex exec review` still exited 0 in ~8-14s at confidence ~0.05 with a generic
-# "no actionable findings" and ZERO diff inspection — and this script posted it as a normal
-# clean review, which the standing auto-merge rail would then merge unreviewed code on. This
-# script now catches codex's exit code EXPLICITLY (errexit momentarily off, mirroring the
-# config-sourcing pattern above) and greps the captured stdout (`-o`) + stderr for a known
-# code-mode/host spawn-failure signal, via the SHARED detector `cd_degraded_reason`
-# (scripts/lib/codex-degraded.sh — shared with manager-review.sh so the two gates can't diverge
-# on what counts as degraded). On EITHER signal: exit non-zero AND post an explicit DEGRADED
-# marker comment (never the clean verdict) — with a DIFFERENT header line than the real
-# `## Codex reviewer (cross-vendor, read-only)` one and NO `Reviewed-head`/`Reviewed-base`
-# markers, so scripts/merge-pr.sh's marker parser (which matches that exact header + those exact
-# marker keys) does not mistake it for a completed review — belt-and-suspenders on top of Faber
-# reading the comment text. A genuine clean review (codex ran, inspected the diff, found
-# nothing) carries neither signal and still posts normally — see scripts/lib/codex-degraded.sh
-# for why no confidence/duration heuristic is layered on top (over-triggering risk).
+# DEGRADED-REVIEW DETECTION (#117, hardened in #119) — FAIL LOUDLY instead of posting a fake
+# "clean". Real incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing from a
+# Homebrew codex install); `codex exec review` still exited 0 in ~8-14s at confidence ~0.05 with
+# a generic "no actionable findings" and ZERO diff inspection — and this script posted it as a
+# normal clean review, which the standing auto-merge rail would then merge unreviewed code on.
+#
+# codex's DIAGNOSTIC output (its streamed stdout transcript + stderr) and exit code carry the
+# degradation signal — the `-o "$tmp"` review-answer capture is the VERDICT BODY that gets
+# posted, and is never inspected for the signal (#119 P2 fix: matching it there let a genuinely
+# clean review that merely QUOTED a trigger phrase in the diff under review self-flag DEGRADED).
+# So codex's stdout is now captured to `$stdout_tmp` (previously it was inherited straight to the
+# terminal and captured nowhere — a spawn-failure line printed there with exit 0 was invisible)
+# ALONGSIDE the existing `$stderr_tmp` capture, both still re-emitted to the operator's terminal
+# right after so nothing becomes less visible. This script catches codex's exit code EXPLICITLY
+# (errexit momentarily off, mirroring the config-sourcing pattern above) and greps
+# `$stdout_tmp`/`$stderr_tmp` (never `$tmp`) for a known code-mode/host spawn-failure signal, via
+# the SHARED detector `cd_degraded_reason` (scripts/lib/codex-degraded.sh — shared with
+# manager-review.sh so the two gates can't diverge on what counts as degraded). On EITHER signal:
+# exit non-zero AND post an explicit DEGRADED marker comment (never the clean verdict, and never
+# the untrustworthy `-o` answer body verbatim — see the INTEGRITY note below) — with a DIFFERENT
+# header line than the real `## Codex reviewer (cross-vendor, read-only)` one and NO
+# `Reviewed-head`/`Reviewed-base` markers, so scripts/merge-pr.sh's marker parser (which matches
+# that exact header + those exact marker keys) does not mistake it for a completed review —
+# belt-and-suspenders on top of Faber reading the comment text. A genuine clean review (codex
+# ran, inspected the diff, found nothing) carries neither signal and still posts normally — see
+# scripts/lib/codex-degraded.sh for why no confidence/duration heuristic is layered on top
+# (over-triggering risk).
+#
+# DEGRADED-COMMENT INTEGRITY (#119 P2 fix, highest priority). The DEGRADED comment used to `cat`
+# codex's raw `$tmp`/`$stderr_tmp` output verbatim into the posted body. scripts/merge-pr.sh scans
+# the WHOLE body of any comment authored by the gh-authenticated operator for the line-anchored
+# `^## Codex reviewer (cross-vendor, read-only)$` header plus `^Reviewed-head:`/`^Reviewed-base:`
+# marker lines — and the DEGRADED comment IS authored by that same operator (this harness posts
+# as them). A prompt-injected PR-head review could make codex's diagnostic output emit those
+# exact lines; dumping them verbatim would let merge-pr.sh read the injected SHAs as a genuine
+# PASS and auto-merge unreviewed code. So a DEGRADED comment never embeds the `-o` answer at all
+# (it is untrustworthy on a degraded run anyway) and embeds only a BOUNDED, SANITIZED snippet of
+# the diagnostic tail via `cd_sanitize_snippet` (scripts/lib/codex-degraded.sh) — every line
+# prefixed with `> `, which breaks the `^...$` anchors merge-pr.sh's parser requires, so no
+# embedded line can ever be mistaken for a real marker regardless of what the untrusted stream
+# contains. The same helper also bounds the volume (a spawn-failure stderr can carry unbounded
+# operator-local paths/toolchain diagnostics).
 #
 # Usage: scripts/codex-review.sh [-m <model>] <PR#>
 #   (or, with fabrica/scripts on PATH: codex-review.sh [-m <model>] <PR#>)
@@ -370,14 +395,17 @@ if ! models_anchor_commit="$(ghr_fetch_default_commit "$selected_remote" "$defau
 fi
 
 # Allocate temp paths in the system temp dir (never inside the repo, so nothing here
-# can be committed): a detached worktree dir, the review output file, and (#117) a captured-
-# stderr file. All three get a fresh mktemp path each run, so a stale worktree entry from a
-# hard-killed previous run never collides with — or blocks — the `git worktree add` below; that
-# is why no global `git worktree prune` is needed (and we avoid one to not touch unrelated
-# worktrees).
+# can be committed): a detached worktree dir, the review output file, a captured-stderr file, and
+# (#119) a captured-stdout-TRANSCRIPT file — codex's own process stdout, distinct from the `-o
+# "$tmp"` review-answer file, captured so a degradation signal printed there (previously
+# inherited straight to the terminal and captured nowhere) can be inspected. All four get a fresh
+# mktemp path each run, so a stale worktree entry from a hard-killed previous run never collides
+# with — or blocks — the `git worktree add` below; that is why no global `git worktree prune` is
+# needed (and we avoid one to not touch unrelated worktrees).
 worktree="$(mktemp -d)"
 tmp="$(mktemp)"
 stderr_tmp="$(mktemp)"
+stdout_tmp="$(mktemp)"
 
 # Clean up on EVERY exit (success or failure): remove the temp worktree, the temp output
 # file, and the private per-run base + models-anchor refs we own (the head ref was already
@@ -390,7 +418,7 @@ cleanup() {
   git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
   git update-ref -d "$base_dest_ref" 2>/dev/null || true
   git update-ref -d "$models_anchor_ref" 2>/dev/null || true
-  rm -f "$tmp" "$stderr_tmp"
+  rm -f "$tmp" "$stderr_tmp" "$stdout_tmp"
 }
 trap cleanup EXIT
 
@@ -445,28 +473,38 @@ if [ -n "$effective_model" ]; then
   review_cmd+=(-m "$effective_model")
 fi
 
-# #117 — run with errexit MOMENTARILY OFF (same pattern as the config-sourcing block above) so a
-# non-zero codex exit is caught HERE, explicitly, instead of aborting the whole script via
+# #117/#119 — run with errexit MOMENTARILY OFF (same pattern as the config-sourcing block above)
+# so a non-zero codex exit is caught HERE, explicitly, instead of aborting the whole script via
 # `set -e` before we can post the DEGRADED marker below (spec point 3: ANY detection must still
-# emit/post that marker where the review normally lands, not just exit quietly). Stderr is
-# captured to $stderr_tmp — never discarded — so it can be (a) grepped for a code-mode/host
-# spawn-failure signal and (b) surfaced: re-emitted to the operator's terminal right after, and
-# folded into the posted DEGRADED comment for a human reading the PR.
+# emit/post that marker where the review normally lands, not just exit quietly). BOTH codex's
+# stdout TRANSCRIPT (`$stdout_tmp`) and stderr (`$stderr_tmp`) are captured to files — plain `>`/
+# `2>` redirects, deliberately NOT process substitution (`> >(tee ...)`), which is fragile under
+# bash 3.2 combined with `set -e`/the errexit-toggle pattern this script already relies on for
+# portability. Capturing means neither stream is discarded, but it also means neither is live on
+# the operator's terminal DURING the run; both are re-emitted (`cat`) right after so nothing
+# becomes less visible than before — just delayed until codex exits. This is what makes a
+# spawn-failure signal on the stdout transcript (previously inherited straight to the terminal and
+# captured NOWHERE) inspectable at all.
 set +e
-"${review_cmd[@]}" 2>"$stderr_tmp"
+"${review_cmd[@]}" >"$stdout_tmp" 2>"$stderr_tmp"
 codex_rc=$?
 set -e
+cat "$stdout_tmp"
 cat "$stderr_tmp" >&2
 
-# #117 DEGRADED DETECTION — the REQUIRED robust core, via the shared detector
+# #117/#119 DEGRADED DETECTION — the REQUIRED robust core, via the shared detector
 # (scripts/lib/codex-degraded.sh, sourced above) so this gate and manager-review.sh can't
-# diverge: a non-zero codex exit OR a known code-mode/host spawn-failure signal anywhere in the
-# captured stdout (-o "$tmp") or stderr means codex FAILED TO RUN a genuine review — it did not
-# actually inspect the diff — as distinct from a genuine clean review (exits 0, no such signal),
-# which must still PASS (no over-triggering). `if degraded_reason="$(...)"` is a condition
-# context, so it is exempt from `set -e` even though cd_degraded_reason returns non-zero for the
-# "genuine, not degraded" case.
-if degraded_reason="$(cd_degraded_reason "$codex_rc" "$tmp" "$stderr_tmp")"; then
+# diverge: a non-zero codex exit OR a known code-mode/host spawn-failure signal anywhere in
+# codex's DIAGNOSTIC streams (stdout transcript `$stdout_tmp` + stderr `$stderr_tmp`) means codex
+# FAILED TO RUN a genuine review — it did not actually inspect the diff — as distinct from a
+# genuine clean review (exits 0, no such signal), which must still PASS (no over-triggering).
+# Deliberately NEVER `$tmp` (the `-o` review-answer body) here (#119 P2 fix): that body is
+# untrusted, PR-influenced content, and matching trigger phrases against it let a genuinely clean
+# review that merely QUOTED one in prose (e.g. reviewing a diff that discusses this very
+# hardening) self-flag DEGRADED. `if degraded_reason="$(...)"` is a condition context, so it is
+# exempt from `set -e` even though cd_degraded_reason returns non-zero for the "genuine, not
+# degraded" case.
+if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp")"; then
   echo "error: Codex review DEGRADED — ${degraded_reason}. NOT posting a clean verdict." >&2
   {
     echo "## Codex reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)"
@@ -483,17 +521,21 @@ if degraded_reason="$(cd_degraded_reason "$codex_rc" "$tmp" "$stderr_tmp")"; the
     echo
     echo "Reason: ${degraded_reason}."
     echo
-    echo "_Posted by \`codex-review.sh\` (#117 hardening): a degraded/non-substantive Codex run_"
-    echo "_is surfaced loudly instead of silently posted as a fake pass. Fix the underlying_"
-    echo "_codex/toolchain issue (see the captured output/stderr below), then re-run_"
+    echo "_Posted by \`codex-review.sh\` (#117/#119 hardening): a degraded/non-substantive Codex run_"
+    echo "_is surfaced loudly instead of silently posted as a fake pass. The \`-o\` review answer is_"
+    echo "_NOT shown here — it is untrustworthy on a degraded run, and codex's raw output is_"
+    echo "_untrusted (PR-influenced) content that must never be embedded verbatim where it could be_"
+    echo "_mistaken for a real review marker. The diagnostic tail below is bounded and has every_"
+    echo "_line neutralized (prefixed \`> \`) so it can never reproduce a \`scripts/merge-pr.sh\`_"
+    echo "_marker line. Fix the underlying codex/toolchain issue, then re-run_"
     echo "_\`scripts/codex-review.sh ${pr}\`._"
     echo
     echo '```'
-    echo "-- codex stdout/-o capture --"
-    if [ -s "$tmp" ]; then cat "$tmp"; else echo "(empty)"; fi
+    echo "-- codex stdout transcript (diagnostic; last ${cd_snippet_max_lines} lines, sanitized) --"
+    cd_sanitize_snippet "$stdout_tmp"
     echo
-    echo "-- codex stderr --"
-    if [ -s "$stderr_tmp" ]; then cat "$stderr_tmp"; else echo "(empty)"; fi
+    echo "-- codex stderr (diagnostic; last ${cd_snippet_max_lines} lines, sanitized) --"
+    cd_sanitize_snippet "$stderr_tmp"
     echo '```'
   } | gh pr comment "$pr" --repo "$repo" --body-file - || \
     echo "error: additionally failed to post the DEGRADED marker comment to PR #${pr}" >&2

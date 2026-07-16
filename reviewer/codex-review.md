@@ -160,7 +160,7 @@ Applying the resolved config:
   pinned) — so every review documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the PR history, not just in a log nobody reads.
 
-## Degraded-review detection (#117)
+## Degraded-review detection (#117, hardened in #119)
 
 The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
 "clean" verdict. Real incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing
@@ -168,13 +168,21 @@ from a Homebrew codex install); `codex exec review` still "completed" — exit 0
 confidence ~0.05, with a generic "no actionable findings" — having done **zero** diff
 inspection. Under the standing auto-merge rail, a fake "clean" would auto-merge unreviewed code.
 
-Detection (the REQUIRED robust core, factored into the shared
-[`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) so `codex-review.sh` and
-`manager-review.sh` can't diverge on what counts as degraded):
+**Detection looks only at codex's diagnostic streams — never the `-o` answer.** codex's own
+process **stdout transcript** (captured to a temp file, `$stdout_tmp`) and **stderr**
+(`$stderr_tmp`) are the diagnostic channels; the `-o <tmpfile>` capture is the **review-answer
+body** that gets posted on a genuine pass — it is untrusted, PR-influenced content, and is never
+phrase-matched. (An earlier version of this detector matched the `-o` body too, which let a
+genuinely clean review that merely *quoted* a trigger phrase in prose — e.g. reviewing a diff
+that discusses this very hardening — self-flag DEGRADED; #119 closed that false-trigger hole.)
+Both streams are re-emitted to the operator's terminal right after codex exits, so nothing is
+less visible than before — just captured first. Detection (the REQUIRED robust core, factored
+into the shared [`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) so
+`codex-review.sh` and `manager-review.sh` can't diverge on what counts as degraded):
 
 - **`codex` exits non-zero** → degraded.
-- **A known code-mode/host spawn-failure signal** anywhere in the captured stdout (`-o`) or
-  stderr (a resilient, case-insensitive match: "failed to spawn code-mode host", "code-mode
+- **A known code-mode/host spawn-failure signal** anywhere in the captured stdout **transcript**
+  or stderr (a resilient, case-insensitive match: "failed to spawn code-mode host", "code-mode
   host", "code-mode-host", "repository inspection tool failed", "execution environment failed
   to start", "failed to start its command host") → degraded.
 
@@ -182,6 +190,8 @@ Neither check gates on confidence/duration — codex's `-o` capture is its clean
 only, with no reliably-exposed confidence/duration field to parse, so heuristics there would
 risk false-triggering a genuinely fast, genuinely clean review of a small diff. A genuine clean
 review (codex ran, inspected the diff, found nothing) carries neither signal and still passes.
+A genuine exit-0 run with an **empty/whitespace-only** `-o` capture (no review content at all)
+is also refused, rather than posting a header-only comment with no findings.
 
 On detection: the script exits non-zero and posts an explicit DEGRADED marker comment instead —
 `## Codex reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)`, deliberately a
@@ -190,6 +200,22 @@ NO `Reviewed-head`/`Reviewed-base` markers. That means `scripts/merge-pr.sh`'s m
 (which matches that exact header line plus those exact marker keys) can never mistake a
 degraded run for a completed review — belt-and-suspenders on top of Faber reading the comment
 text.
+
+**The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix).** The
+DEGRADED comment is posted by, and so is authored as, the same gh-authenticated operator
+`scripts/merge-pr.sh` trusts — so it is exactly the kind of comment that parser's author+header
+match would accept. codex's diagnostic output is untrusted (a prompt-injected PR could make it
+emit lines identical to the real `## Codex reviewer (cross-vendor, read-only)` header plus
+`Reviewed-head:`/`Reviewed-base:` markers), and the `-o` answer is doubly untrustworthy on a
+degraded run — codex may not have inspected the diff at all. So a DEGRADED comment:
+- **Never embeds the `-o` answer.** It reports only the degradation *reason* (the exit code, or
+  which diagnostic stream matched).
+- **Embeds only a bounded, sanitized snippet** of the diagnostic tail (stdout transcript +
+  stderr), via `cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`): capped to the last 40
+  lines / 4000 bytes (overridable via `CD_SNIPPET_MAX_LINES`/`CD_SNIPPET_MAX_BYTES`, mainly for
+  tests), with **every line prefixed `> `**. That prefix breaks the `^...$` line anchors
+  `merge-pr.sh`'s marker parser requires, so no embedded line — regardless of what the untrusted
+  stream contains — can ever be mistaken for a real marker line.
 
 ## Invariants (non-negotiable)
 
