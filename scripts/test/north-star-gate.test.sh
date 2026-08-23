@@ -183,6 +183,7 @@ if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
     exit 64
   fi
   printf '%s\n' \
+    '{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"git status","aggregated_output":"ok","exit_code":0,"status":"completed"}}' \
     '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"VERDICT: PROCEED\\nREASONING: stub.\\nGAP FABER MISSED: none."}}' \
     '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
   exit 0

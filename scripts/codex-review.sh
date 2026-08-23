@@ -84,10 +84,11 @@ set -euo pipefail
 # The harness forces `codex exec review --json`: stdout is a typed JSONL event stream instead of
 # the normal stream that repeats the final, PR-influenced answer. The shared detector validates
 # every event/item type (unknown schema fails closed), requires a final `turn.completed` after an
-# agent message, treats fatal `error` / `turn.failed` as hard failures, and phrase-matches only
-# CLI-authored error/failed-MCP fields — never agent messages, reasoning, command output, or the
-# `-o` answer. It also checks raw stderr for runtime/tracing failures outside JSONL and catches the
-# process exit code explicitly. This structured boundary fixes #119's P1 false-positive: normal
+# agent message PLUS at least one successful structured command_execution (positive proof the
+# repository command host ran), treats fatal `error` / `turn.failed` as hard failures, and
+# phrase-matches only CLI-authored error/failed-MCP fields — never agent messages, command output,
+# or the `-o` answer. It also checks raw stderr and catches the process exit code explicitly.
+# This structured boundary fixes #119's P1 false-positive: normal
 # Codex deliberately writes the final answer to BOTH `-o` and stdout, so unstructured stdout is
 # not diagnostic-only. On any degraded signal or invalid/incomplete JSONL:
 # exit non-zero AND post an explicit DEGRADED marker comment (never the clean verdict, and never
@@ -109,11 +110,9 @@ set -euo pipefail
 # exact lines; dumping them verbatim would let merge-pr.sh read the injected SHAs as a genuine
 # PASS and auto-merge unreviewed code. So a DEGRADED comment never embeds the `-o` answer at all
 # (it is untrustworthy on a degraded run anyway) and embeds only a BOUNDED, SANITIZED snippet of
-# the structured-event/raw-stderr tail via `cd_sanitize_snippet` — every line
-# prefixed with `> `, which breaks the `^...$` anchors merge-pr.sh's parser requires, so no
-# embedded line can ever be mistaken for a real marker regardless of what the untrusted stream
-# contains. The same helper also bounds the volume (a spawn-failure stderr can carry unbounded
-# operator-local paths/toolchain diagnostics).
+# raw-stderr tail via `cd_sanitize_snippet` — every line prefixed with `> `, which breaks the
+# parser anchors. The JSONL stream is NEVER posted: it contains agent/command/repository payloads
+# that sanitizing with a line prefix would not make private. The helper also bounds stderr volume.
 #
 # Usage: scripts/codex-review.sh [-m <model>] <PR#>
 #   (or, with fabrica/scripts on PATH: codex-review.sh [-m <model>] <PR#>)
@@ -482,9 +481,10 @@ cat "$stdout_tmp"
 cat "$stderr_tmp" >&2
 
 # #117/#119 DEGRADED DETECTION — the shared detector requires: exit 0; fully-understood JSONL
-# ending in an agent message + `turn.completed`; no fatal/failed event or host-failure text in a
-# trusted error field; and no host-failure signal in raw stderr. It deliberately excludes JSON
-# agent/command payloads and NEVER sees `$tmp`, closing the P1 false-positive on quoted phrases.
+# ending in an agent message + `turn.completed`; at least one successful command_execution as
+# positive inspection evidence; no fatal/failed event or host-failure text in a trusted error
+# field; and no host-failure signal in raw stderr. It excludes JSON agent/command payloads and
+# NEVER sees `$tmp`, closing both the empty-inspection pass and quoted-phrase false positive.
 if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp")"; then
   echo "error: Codex review DEGRADED — ${degraded_reason}. NOT posting a clean verdict." >&2
   {
@@ -506,14 +506,14 @@ if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp"
     echo "_is surfaced loudly instead of silently posted as a fake pass. The \`-o\` review answer is_"
     echo "_NOT shown here — it is untrustworthy on a degraded run, and codex's raw output is_"
     echo "_untrusted (PR-influenced) content that must never be embedded verbatim where it could be_"
-    echo "_mistaken for a real review marker. The diagnostic tail below is bounded and has every_"
-    echo "_line neutralized (prefixed \`> \`) so it can never reproduce a \`scripts/merge-pr.sh\`_"
-    echo "_marker line. Fix the underlying codex/toolchain issue, then re-run_"
+    echo "_mistaken for a real review marker. JSONL is intentionally omitted because it contains_"
+    echo "_agent/command/repository payloads; only bounded, neutralized raw stderr appears below._"
+    echo "_Fix the underlying codex/toolchain issue, then re-run_"
     echo "_\`scripts/codex-review.sh ${pr}\`._"
     echo
     echo '```'
-    echo "-- codex JSONL events (last ${cd_snippet_max_lines} lines, sanitized) --"
-    cd_sanitize_snippet "$stdout_tmp"
+    echo "-- codex JSONL events --"
+    echo "> (omitted: may contain private agent, command, and repository payloads)"
     echo
     echo "-- codex stderr (diagnostic; last ${cd_snippet_max_lines} lines, sanitized) --"
     cd_sanitize_snippet "$stderr_tmp"

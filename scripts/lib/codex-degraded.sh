@@ -29,7 +29,8 @@
 # The `-o` answer file (the review verdict / PROCEED-REFINE-DROP body that gets posted to the
 # PR/issue) must NEVER be passed here. A genuinely clean review that merely QUOTES a trigger
 # phrase in prose must pass. The JSONL stream is validated against the event/item types supported
-# by this gate and must end in `turn.completed` after an agent message.
+# by this gate, must end in `turn.completed` after an agent message, and must contain at least one
+# successful structured command_execution as positive proof the repository command host ran.
 # Malformed, incomplete, or unknown-schema output fails closed: a newly-added tool item (for
 # example a future `dynamic_tool_call`) cannot silently bypass this detector before its trusted
 # status fields have been reviewed and explicitly added here.
@@ -136,6 +137,27 @@ cd_jsonl_has_degraded_event() {
   printf '%s\n' "$failed_events" | grep -qiE -- "$cd_degraded_pattern" 2>/dev/null
 }
 
+# cd_jsonl_has_successful_command <jsonl_file>
+# Positive proof that Codex's repository-inspection command host actually started and completed
+# at least one command. The 2026-07-11 incident produced only a low-confidence agent answer plus
+# turn.completed after the command host failed to spawn; no command_execution item existed. A
+# final answer + completed turn are therefore insufficient evidence on their own. We trust only
+# CLI-authored structured status/exit fields here — never the model-chosen command string or its
+# output. Individual commands may legitimately fail while Codex recovers, so the requirement is
+# at least ONE success, not zero failures.
+cd_jsonl_has_successful_command() {
+  local f="$1"
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  jq -e -s '
+    any(.[];
+      .type == "item.completed"
+      and .item.type == "command_execution"
+      and .item.status == "completed"
+      and .item.exit_code == 0
+    )
+  ' "$f" >/dev/null 2>&1
+}
+
 # cd_degraded_reason <codex_rc> <stdout_jsonl_file> [<stderr_file>]
 # The single decision both gates call. Prints a short human-readable reason and returns 0 if this
 # codex run must be treated as DEGRADED (failed to run a genuine review/debate) rather than a
@@ -163,11 +185,17 @@ cd_degraded_reason() {
     printf 'a known code-mode/host spawn-failure signal was found in codex'\''s stderr'
     return 0
   fi
+  if ! cd_jsonl_has_successful_command "$out"; then
+    printf 'codex produced no successful command_execution evidence (repository inspection was not proven)'
+    return 0
+  fi
   return 1
 }
 
-# cd_sanitize_snippet <file> — print a BOUNDED, SANITIZED snippet of a diagnostic file (codex's
-# captured JSONL event stream or raw stderr), suitable for embedding in a posted DEGRADED comment.
+# cd_sanitize_snippet <file> — print a BOUNDED, SANITIZED snippet of raw stderr, suitable for
+# embedding in a posted DEGRADED comment. Callers deliberately NEVER pass the JSONL stream:
+# even on a degraded run it contains agent messages, command strings/output, MCP arguments/results,
+# and other repository/operator-local data that must not be published in a PR/issue comment.
 #
 # BOUNDED (P3 fix, #119) — a code-mode/host spawn-failure on stderr can carry unbounded
 # operator-local filesystem paths / toolchain diagnostics; this caps the volume actually posted

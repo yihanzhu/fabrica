@@ -173,16 +173,18 @@ inspection. Under the standing auto-merge rail, a fake "clean" would auto-merge 
 unstructured stdout is not a diagnostic-only stream. The harness therefore forces `--json`:
 stdout becomes typed JSONL. The shared
 [`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) validates every event,
-requires a final `turn.completed` after an agent message, and recognizes only the event/item
-schema this gate understands (unknown future types fail closed). Fatal top-level `error` /
+requires a final `turn.completed` after an agent message **plus at least one successful
+structured `command_execution`** (positive proof the repository command host actually ran), and
+recognizes only the event/item schema this gate understands (unknown future types fail closed).
+Fatal top-level `error` /
 `turn.failed` events are hard failures; host phrases are matched only in CLI-authored error-item
 or failed-MCP error fields. Agent messages, reasoning, command output, MCP arguments/results, and
 other PR-influenced payloads are excluded. The `-o` review body is never inspected. Raw stderr
 is still checked for runtime/tracing failures outside JSONL.
 
 - **`codex` exits non-zero** → degraded.
-- **Invalid/incomplete/unknown-schema JSONL**, or no final agent-message + `turn.completed`
-  record → degraded (fail closed).
+- **Invalid/incomplete/unknown-schema JSONL**, no final agent-message + `turn.completed`, or no
+  successful `command_execution` evidence → degraded (fail closed).
 - **A fatal top-level `error` / `turn.failed` event**, or a known code-mode/host spawn-failure
   signal in a trusted CLI error field or raw stderr → degraded.
 
@@ -210,12 +212,11 @@ emit lines identical to the real `## Codex reviewer (cross-vendor, read-only)` h
 degraded run — codex may not have inspected the diff at all. So a DEGRADED comment:
 - **Never embeds the `-o` answer.** It reports only the degradation *reason* (the exit code, or
   which diagnostic stream matched).
-- **Embeds only a bounded, sanitized snippet** of the JSONL/raw-stderr tail, via
-  `cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`): capped to the last 40
-  lines / 4000 bytes (overridable via `CD_SNIPPET_MAX_LINES`/`CD_SNIPPET_MAX_BYTES`, mainly for
-  tests), with **every line prefixed `> `**. That prefix breaks the `^...$` line anchors
-  `merge-pr.sh`'s marker parser requires, so no embedded line — regardless of what the untrusted
-  stream contains — can ever be mistaken for a real marker line.
+- **Never embeds JSONL.** It contains agent messages, command strings/output, and repository or
+  operator-local payloads; prefixing lines would prevent marker parsing but would not make those
+  payloads private.
+- **Embeds only a bounded, sanitized raw-stderr tail** via `cd_sanitize_snippet`: last 40 lines /
+  4000 bytes, every line prefixed `> ` so marker-shaped diagnostics cannot satisfy parser anchors.
 
 ## Invariants (non-negotiable)
 

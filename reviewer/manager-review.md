@@ -299,14 +299,16 @@ see `codex-review.sh`'s **Degraded-review detection** section and
 **Detection uses the same structured boundary as `codex-review.sh`.** Normal `codex exec -o`
 repeats its final, issue-influenced verdict on stdout, so the harness forces `--json`. The shared
 detector validates every event/item against its understood schema (unknown future types fail
-closed), requires a final `turn.completed` after an agent message, treats fatal top-level
-`error` / `turn.failed` as hard failures, and phrase-matches only CLI-authored error-item or
+closed), requires a final `turn.completed` after an agent message plus at least one successful
+structured `command_execution`, treats fatal top-level `error` / `turn.failed` as hard failures,
+and phrase-matches only CLI-authored error-item or
 failed-MCP error fields. Agent messages, reasoning, command output, MCP arguments/results, and
 the `-o` verdict body are excluded; raw stderr is still checked for failures outside JSONL.
 
-Detection: **non-zero exit**, **invalid/incomplete/unknown-schema JSONL**, **fatal `error` /
-`turn.failed`**, or a known code-mode/host spawn-failure signal in a trusted CLI error field/raw
-stderr → DEGRADED. A genuine completed verdict still posts normally. An
+Detection: **non-zero exit**, **invalid/incomplete/unknown-schema JSONL**, **no successful
+command evidence**, **fatal `error` / `turn.failed`**, or a known code-mode/host spawn-failure
+signal in a trusted CLI error field/raw stderr → DEGRADED. A genuine completed verdict still
+posts normally. An
 **empty/whitespace-only** `-o` capture is also refused rather than posting a header-only comment.
 
 On detection: the script exits non-zero and posts `VERDICT: DEGRADED` (never
@@ -316,8 +318,8 @@ never read this as a `PROCEED`.
 
 **The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix, same
 as `codex-review.sh`).** It never embeds the `-o` verdict answer (untrustworthy on a degraded
-run), and embeds only a bounded, sanitized snippet of the JSONL/raw-stderr tail via
-`cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`) — every line prefixed `> `,
+run), **never embeds JSONL** (it contains private agent/command/repository payloads), and embeds
+only a bounded, sanitized raw-stderr tail via `cd_sanitize_snippet` — every line prefixed `> `,
 which breaks the line anchors a marker parser like `scripts/merge-pr.sh`'s would require. This
 comment is posted by, and authored as, the same gh-authenticated operator, so it must never be
 able to carry an unneutralized marker-shaped line even though `merge-pr.sh` only reads PR

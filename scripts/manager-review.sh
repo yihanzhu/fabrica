@@ -105,10 +105,11 @@ set -euo pipefail
 # The harness forces `codex exec --json`: stdout is a typed JSONL event stream instead of the
 # normal stream that repeats the final, issue-influenced verdict. The shared detector validates
 # every event/item type (unknown schema fails closed), requires a final `turn.completed` after an
-# agent message, treats fatal `error` / `turn.failed` as hard failures, and phrase-matches only
-# CLI-authored error/failed-MCP fields — never agent messages, reasoning, command output, or the
-# `-o` answer. It also checks raw stderr for runtime/tracing failures outside JSONL and catches the
-# process exit code explicitly. This structured boundary fixes #119's P1 false-positive: normal
+# agent message PLUS at least one successful structured command_execution (positive proof the
+# repository command host ran), treats fatal `error` / `turn.failed` as hard failures, and
+# phrase-matches only CLI-authored error/failed-MCP fields — never agent messages, command output,
+# or the `-o` answer. It also checks raw stderr and catches the process exit code explicitly.
+# This structured boundary fixes #119's P1 false-positive: normal
 # Codex writes the final answer to BOTH `-o` and stdout, so unstructured stdout is not
 # diagnostic-only. On any degraded signal or invalid/incomplete JSONL: exit non-zero AND post an
 # explicit DEGRADED marker issue comment (never the untrustworthy `-o` answer body verbatim — see
@@ -128,8 +129,8 @@ set -euo pipefail
 # comment could still carry the exact marker text if codex's diagnostic output were adversarially
 # influenced (e.g. by injected content in the issue body it read); a DEGRADED comment therefore
 # never embeds the `-o` answer at all and embeds only a BOUNDED, SANITIZED snippet of the
-# diagnostic tail via `cd_sanitize_snippet` (scripts/lib/codex-degraded.sh) — every line prefixed
-# `> `, which breaks the `^...$` line anchors that class of parser requires.
+# raw-stderr tail via `cd_sanitize_snippet`; JSONL is never posted because it contains
+# agent/command/repository payloads that a line prefix would not make private.
 #
 # Usage: scripts/manager-review.sh [-m <model>] <issue#>
 #   (or, with fabrica/scripts on PATH: manager-review.sh [-m <model>] <issue#>)
@@ -792,9 +793,10 @@ cat "$stdout_tmp"
 cat "$stderr_tmp" >&2
 
 # #117/#119 DEGRADED DETECTION — the shared detector requires: exit 0; fully-understood JSONL
-# ending in an agent message + `turn.completed`; no fatal/failed event or host-failure text in a
-# trusted error field; and no host-failure signal in raw stderr. It deliberately excludes JSON
-# agent/command payloads and NEVER sees `$tmp`, closing the P1 false-positive on quoted phrases.
+# ending in an agent message + `turn.completed`; at least one successful command_execution as
+# positive inspection evidence; no fatal/failed event or host-failure text in a trusted error
+# field; and no host-failure signal in raw stderr. It excludes JSON agent/command payloads and
+# NEVER sees `$tmp`, closing both the empty-inspection pass and quoted-phrase false positive.
 if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp")"; then
   echo "error: Codex manager-review DEGRADED — ${degraded_reason}. NOT posting a PROCEED/REFINE/DROP verdict." >&2
   degraded_body="$(
@@ -812,14 +814,14 @@ if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp"
     echo "_run is surfaced loudly instead of silently posted as a real verdict. The \`-o\` verdict_"
     echo "_answer is NOT shown here — it is untrustworthy on a degraded run, and codex's raw_"
     echo "_output is untrusted content that must never be embedded verbatim where it could be_"
-    echo "_mistaken for a real review marker. The diagnostic tail below is bounded and has every_"
-    echo "_line neutralized (prefixed \`> \`) so it can never reproduce a marker-shaped line. Fix_"
-    echo "_the underlying codex/toolchain issue, then re-run_"
+    echo "_mistaken for a real review marker. JSONL is intentionally omitted because it contains_"
+    echo "_agent/command/repository payloads; only bounded, neutralized raw stderr appears below._"
+    echo "_Fix the underlying codex/toolchain issue, then re-run_"
     echo "_\`scripts/manager-review.sh ${issue}\`._"
     echo
     echo '```'
-    echo "-- codex JSONL events (last ${cd_snippet_max_lines} lines, sanitized) --"
-    cd_sanitize_snippet "$stdout_tmp"
+    echo "-- codex JSONL events --"
+    echo "> (omitted: may contain private agent, command, and repository payloads)"
     echo
     echo "-- codex stderr (diagnostic; last ${cd_snippet_max_lines} lines, sanitized) --"
     cd_sanitize_snippet "$stderr_tmp"
