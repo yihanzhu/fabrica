@@ -192,7 +192,7 @@ comment to a *different* repo's issue. Then:
    **FAILs before invoking Codex** with an actionable pointer — the debate needs an integrated,
    committed goal to judge against. It also reads the issue's title + body (`gh issue view
    <issue#> --json title,body`).
-2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" -o <tmpfile> [-m <model>] -`** —
+2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> --json -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" -o <tmpfile> [-m <model>] -`** —
    the prompt is fed over **stdin** (the trailing `-`), not as an argv argument, so a large
    issue body + comment thread can't trip `E2BIG` or leak into process listings. Codex forms
    the manager-review with the **manager-reviewer prompt + the north star + the issue +
@@ -287,6 +287,44 @@ Applying the resolved config:
   `reviewer: <model> @ <effort>` (e.g. `reviewer: operator-default @ high` when no model was
   pinned) — so every debate documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the issue history, not just in a log nobody reads.
+
+## Degraded-review detection (#117, hardened in #119)
+
+The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
+`PROCEED`/`REFINE`/`DROP` verdict — the same hardening as `codex-review.sh` (#117), sharing its
+detector so the two gates can't diverge on what counts as degraded (real incident and rationale:
+see `codex-review.sh`'s **Degraded-review detection** section and
+[`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh)).
+
+**Detection uses the same structured boundary as `codex-review.sh`.** Normal `codex exec -o`
+repeats its final, issue-influenced verdict on stdout, so the harness forces `--json`. The shared
+detector validates every event/item against its understood schema (unknown future types fail
+closed), requires a final `turn.completed` after an agent message plus at least one successful
+structured `command_execution`, treats fatal top-level `error` / `turn.failed` as hard failures,
+and phrase-matches only CLI-authored error-item or
+failed-MCP error fields. Agent messages, reasoning, command output, MCP arguments/results, and
+the `-o` verdict body are excluded; raw stderr is still checked for failures outside JSONL.
+
+Detection: **non-zero exit**, **invalid/incomplete/unknown-schema JSONL**, **no successful
+command evidence**, **fatal `error` / `turn.failed`**, or a known code-mode/host spawn-failure
+signal in a trusted CLI error field/raw stderr → DEGRADED. A genuine completed verdict still
+posts normally. An
+**empty/whitespace-only** `-o` capture is also refused rather than posting a header-only comment.
+
+On detection: the script exits non-zero and posts `VERDICT: DEGRADED` (never
+`PROCEED`/`REFINE`/`DROP`) under a **different** header line than the real `## Codex
+manager-reviewer (cross-vendor, read-only)` one, so Faber's "proceed only on consensus" rule can
+never read this as a `PROCEED`.
+
+**The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix, same
+as `codex-review.sh`).** It never embeds the `-o` verdict answer (untrustworthy on a degraded
+run), **never embeds JSONL** (it contains private agent/command/repository payloads), and embeds
+only a bounded, sanitized raw-stderr tail via `cd_sanitize_snippet` — every line prefixed `> `,
+which breaks the line anchors a marker parser like `scripts/merge-pr.sh`'s would require. This
+comment is posted by, and authored as, the same gh-authenticated operator, so it must never be
+able to carry an unneutralized marker-shaped line even though `merge-pr.sh` only reads PR
+comments today — defense-in-depth against codex's diagnostic output being adversarially
+influenced by the issue/repo content it read.
 
 ## The manager-reviewer prompt
 

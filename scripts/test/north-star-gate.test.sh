@@ -37,7 +37,8 @@ ns_template="$repo_root/templates/.fabrica/north-star.md"
 ghr_lib="$repo_root/scripts/lib/gh-remote.sh"   # #102: the shared gh-bound remote-identity helper
 models_conf="$repo_root/config/models.conf"     # #110: manager-review.sh now sources this (required)
 mc_lib="$repo_root/scripts/lib/models-conf.sh"  # #115 P1 fix: parses a target's override as data
-for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib" "$models_conf" "$mc_lib"; do
+cd_lib="$repo_root/scripts/lib/codex-degraded.sh"  # #117: shared degraded-Codex-run detector
+for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib" "$models_conf" "$mc_lib" "$cd_lib"; do
   if [ ! -f "$f" ]; then echo "FAIL: missing $f" >&2; exit 1; fi
 done
 
@@ -150,9 +151,10 @@ GH
 chmod +x "$fakebin/gh"
 
 # Fake codex. Two invocation shapes must be honored WITHOUT crossing wires:
-#   - The real gate call `codex exec -C <wt> -c ... -o <tmp> [-m model] -` pipes the prompt
-#     over stdin (the trailing `-`). It writes a verdict into the -o file and exits 0. Here
-#     we MUST drain stdin so the upstream printf doesn't SIGPIPE.
+#   - The real gate call `codex exec -C <wt> --json -c ... -o <tmp> [-m model] -` pipes the
+#     prompt over stdin (the trailing `-`). It writes a verdict into the -o file, emits valid
+#     JSONL with `turn.completed`, and exits 0. Here we MUST drain stdin so the upstream printf
+#     doesn't SIGPIPE.
 #   - doctor.sh probes `codex login --help` / `codex login status` (and any version probe)
 #     WITHOUT piping stdin. Reading stdin there blocks a local interactive run on terminal
 #     input. So we only drain stdin for the `codex exec … -` path; other subcommands return
@@ -165,8 +167,10 @@ for a in "$@"; do last="$a"; done
 if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
   out=""
   prev=""
+  saw_json="false"
   for a in "$@"; do
     if [ "$prev" = "-o" ]; then out="$a"; fi
+    if [ "$a" = "--json" ]; then saw_json="true"; fi
     prev="$a"
   done
   # Drain stdin (the prompt) so the upstream printf doesn't SIGPIPE.
@@ -174,6 +178,14 @@ if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
   if [ -n "$out" ]; then
     printf 'VERDICT: PROCEED\nREASONING: stub.\nGAP FABER MISSED: none.\n' >"$out"
   fi
+  if [ "$saw_json" != "true" ]; then
+    echo "codex stub: manager-review omitted required --json" >&2
+    exit 64
+  fi
+  printf '%s\n' \
+    '{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"git status","aggregated_output":"ok","exit_code":0,"status":"completed"}}' \
+    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"VERDICT: PROCEED\\nREASONING: stub.\\nGAP FABER MISSED: none."}}' \
+    '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
   exit 0
 fi
 # Non-exec probes (doctor's `login --help` / `login status`, any version check): exit 0 WITHOUT
@@ -324,15 +336,16 @@ advance_remote_default() {
   git -C "$pusher" push -q origin HEAD:main
 }
 
-# make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of ALL THREE sourced
-# libs (north-star.sh + gh-remote.sh, #102; models-conf.sh, #115 P1 fix), config/models.conf
-# (#110 — manager-review.sh now sources this from its own control-plane root and FAILs loudly if
-# it's missing), and manager-review.sh, so ns_fabrica_root (derived from the lib's own location)
-# == this clone's git top-level → the resolver classifies FABRICA_SELF and the gate takes the
-# FABRICA_SELF branch. Remote-backed on default branch `main` (same as make_target) so the #102
-# gh-bound anchor path is exercised for the self case too. Echoes the clone path; the caller
-# commits + pushes the root NORTH_STAR.md (or whatever the case needs) and runs the COPIED
-# manager-review.sh so its own-location lib (and config) derivation lands inside the clone.
+# make_cp_clone <name> — a throwaway CONTROL-PLANE clone: it ships copies of ALL FOUR sourced
+# libs (north-star.sh + gh-remote.sh, #102; models-conf.sh, #115 P1 fix; codex-degraded.sh,
+# #117), config/models.conf (#110 — manager-review.sh now sources this from its own
+# control-plane root and FAILs loudly if it's missing), and manager-review.sh, so
+# ns_fabrica_root (derived from the lib's own location) == this clone's git top-level → the
+# resolver classifies FABRICA_SELF and the gate takes the FABRICA_SELF branch. Remote-backed on
+# default branch `main` (same as make_target) so the #102 gh-bound anchor path is exercised for
+# the self case too. Echoes the clone path; the caller commits + pushes the root NORTH_STAR.md
+# (or whatever the case needs) and runs the COPIED manager-review.sh so its own-location lib
+# (and config) derivation lands inside the clone.
 make_cp_clone() {
   local name="$1"
   local cp_root="$tmproot/$name"
@@ -340,6 +353,7 @@ make_cp_clone() {
   cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
   cp "$repo_root/scripts/lib/gh-remote.sh" "$cp_root/scripts/lib/gh-remote.sh"
   cp "$repo_root/scripts/lib/models-conf.sh" "$cp_root/scripts/lib/models-conf.sh"
+  cp "$repo_root/scripts/lib/codex-degraded.sh" "$cp_root/scripts/lib/codex-degraded.sh"
   cp "$repo_root/config/models.conf" "$cp_root/config/models.conf"
   cp "$manager_review" "$cp_root/scripts/manager-review.sh"; chmod +x "$cp_root/scripts/manager-review.sh"
   git -C "$cp_root" init -q -b main

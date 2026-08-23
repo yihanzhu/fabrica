@@ -67,7 +67,7 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    adds its worktree at a fresh `mktemp` path, a stale entry from a hard-killed previous run
    never blocks a re-run. (It deliberately avoids a global `git worktree prune`, which is
    repo-wide and would touch unrelated operator worktrees.)
-2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile> [-m <model>]`** —
+2. Runs **`codex exec -C <tmpdir> review --json -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile> [-m <model>]`** —
    Codex's built-in review of the PR head diff vs. its **current** (qualified, freshly-fetched) base,
    inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the
    `review` subcommand). The `-c sandbox_mode="read-only"` override **forces** the read-only
@@ -159,6 +159,64 @@ Applying the resolved config:
   `reviewer: <model> @ <effort>` (e.g. `reviewer: operator-default @ high` when no model was
   pinned) — so every review documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the PR history, not just in a log nobody reads.
+
+## Degraded-review detection (#117, hardened in #119)
+
+The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
+"clean" verdict. Real incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing
+from a Homebrew codex install); `codex exec review` still "completed" — exit 0, in ~8-14s, at
+confidence ~0.05, with a generic "no actionable findings" — having done **zero** diff
+inspection. Under the standing auto-merge rail, a fake "clean" would auto-merge unreviewed code.
+
+**Detection uses a structured boundary — never untyped model/tool content.** Normal
+`codex exec -o` writes the final answer to the requested file **and** repeats it on stdout, so
+unstructured stdout is not a diagnostic-only stream. The harness therefore forces `--json`:
+stdout becomes typed JSONL. The shared
+[`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) validates every event,
+requires a final `turn.completed` after an agent message **plus at least one successful
+structured `command_execution`** (positive proof the repository command host actually ran), and
+recognizes only the event/item schema this gate understands (unknown future types fail closed).
+Fatal top-level `error` /
+`turn.failed` events are hard failures; host phrases are matched only in CLI-authored error-item
+or failed-MCP error fields. Agent messages, reasoning, command output, MCP arguments/results, and
+other PR-influenced payloads are excluded. The `-o` review body is never inspected. Raw stderr
+is still checked for runtime/tracing failures outside JSONL.
+
+- **`codex` exits non-zero** → degraded.
+- **Invalid/incomplete/unknown-schema JSONL**, no final agent-message + `turn.completed`, or no
+  successful `command_execution` evidence → degraded (fail closed).
+- **A fatal top-level `error` / `turn.failed` event**, or a known code-mode/host spawn-failure
+  signal in a trusted CLI error field or raw stderr → degraded.
+
+Neither check gates on confidence/duration — codex's `-o` capture is its clean final message
+only, with no reliably-exposed confidence/duration field to parse, so heuristics there would
+risk false-triggering a genuinely fast, genuinely clean review of a small diff. A genuine clean
+review (codex ran, inspected the diff, found nothing) carries neither signal and still passes.
+A genuine exit-0 run with an **empty/whitespace-only** `-o` capture (no review content at all)
+is also refused, rather than posting a header-only comment with no findings.
+
+On detection: the script exits non-zero and posts an explicit DEGRADED marker comment instead —
+`## Codex reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)`, deliberately a
+**different** header line than the real `## Codex reviewer (cross-vendor, read-only)` one, with
+NO `Reviewed-head`/`Reviewed-base` markers. That means `scripts/merge-pr.sh`'s marker parser
+(which matches that exact header line plus those exact marker keys) can never mistake a
+degraded run for a completed review — belt-and-suspenders on top of Faber reading the comment
+text.
+
+**The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix).** The
+DEGRADED comment is posted by, and so is authored as, the same gh-authenticated operator
+`scripts/merge-pr.sh` trusts — so it is exactly the kind of comment that parser's author+header
+match would accept. codex's diagnostic output is untrusted (a prompt-injected PR could make it
+emit lines identical to the real `## Codex reviewer (cross-vendor, read-only)` header plus
+`Reviewed-head:`/`Reviewed-base:` markers), and the `-o` answer is doubly untrustworthy on a
+degraded run — codex may not have inspected the diff at all. So a DEGRADED comment:
+- **Never embeds the `-o` answer.** It reports only the degradation *reason* (the exit code, or
+  which diagnostic stream matched).
+- **Never embeds JSONL.** It contains agent messages, command strings/output, and repository or
+  operator-local payloads; prefixing lines would prevent marker parsing but would not make those
+  payloads private.
+- **Embeds only a bounded, sanitized raw-stderr tail** via `cd_sanitize_snippet`: last 40 lines /
+  4000 bytes, every line prefixed `> ` so marker-shaped diagnostics cannot satisfy parser anchors.
 
 ## Invariants (non-negotiable)
 

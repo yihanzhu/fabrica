@@ -28,6 +28,8 @@ Accounts and access you need before starting:
   personal repos; the Codex CLI must be installed and signed in.
 - **GitHub access** to each target repo, plus the **`gh` CLI authenticated** locally
   (`gh auth status` should show you logged in) for labels and the loop's `gh` calls.
+- **`jq` on `PATH`** — the review/debate gates validate Codex's `--json` event stream with it,
+  and the merge helper parses GitHub check JSON with it.
 - **The personal config you must supply** (keep it parameterized — see the note above):
   - the **target repo name(s)**, e.g. `<owner>/<repo>` — the repo(s) the team works in.
     (Fabrica is its own target repo; add others as you adopt the team elsewhere.)
