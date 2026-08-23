@@ -5,11 +5,14 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check required files exist
         run: |
@@ -50,7 +53,11 @@ jobs:
           # SC2317 vs SC2329), so "clean locally" could land CI-red. Pin it so
           # local↔CI parity is deterministic. Bumping this value is the ONE place
           # the version changes — keep CLAUDE.md / routines/coder*.md in sync.
-          SHELLCHECK_VERSION: "0.9.0"
+          SHELLCHECK_VERSION: "0.11.0"
+          # GitHub's release-asset digest for the linux.x86_64 tar.xz. Version pinning
+          # alone still trusts whatever bytes the download endpoint returns; verify the
+          # immutable expected digest before extracting or sudo-installing the binary.
+          SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
         run: |
           set -euo pipefail
           # Install the exact pinned release rather than trusting the runner's
@@ -59,6 +66,7 @@ jobs:
           url="https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           echo "downloading shellcheck v${SHELLCHECK_VERSION} from $url"
           curl -fsSL "$url" -o /tmp/shellcheck.tar.xz
+          printf '%s  %s\n' "$SHELLCHECK_SHA256" /tmp/shellcheck.tar.xz | sha256sum -c -
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
           # /usr/local/bin is root-owned and this step runs as the unprivileged
           # `runner` user, so a bare `install` is fragile to runner-image drift

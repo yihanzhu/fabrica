@@ -151,7 +151,8 @@ That checklist covers:
     team needs to be reconstructable, add it to that manifest.
   - **Out of scope: `claude.yml`.** `.github/workflows/` also contains
     [`claude.yml`](.github/workflows/claude.yml) — the optional `@claude`-mention helper
-    (`anthropics/claude-code-action@v1`). It is **not part of the team loop** and is not
+    (`anthropics/claude-code-action`, pinned to the full commit SHA for v1). It is **not part
+    of the team loop** and is not
     required to restore the coding team, so it is out of scope for this runbook. If you do
     want it back, note that it needs a `CLAUDE_CODE_OAUTH_TOKEN` repo secret, which lives
     only in GitHub repo settings (not in any file here) and must be re-created by hand.

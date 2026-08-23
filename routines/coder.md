@@ -164,9 +164,9 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      install happens to be. Different versions of the same tool report different findings
      and codes for the same code (e.g. shellcheck SC2317 vs SC2329), so a different local
      version can be "clean locally" yet land CI-red. In **this repo (Fabrica itself)**
-     shellcheck is pinned to **`0.9.0`** (`SHELLCHECK_VERSION` in `.github/workflows/ci.yml`,
+     shellcheck is pinned to **`0.11.0`** (`SHELLCHECK_VERSION` in `.github/workflows/ci.yml`,
      asserted before the sweep); lint with `shellcheck -x -S style` over
-     `find . -name '*.sh' -not -path './.git/*'` using 0.9.0 — grab that static release
+     `find . -name '*.sh' -not -path './.git/*'` using 0.11.0 — grab that static release
      from the shellcheck GitHub releases if your local version differs.
 10. Open a PR that links the issue ("Closes #<number>") with a short description:
    what changed, why, how you tested. Add label `round-0`.
