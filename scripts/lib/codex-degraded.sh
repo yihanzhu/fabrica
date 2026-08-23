@@ -39,10 +39,13 @@
 # it as an ADDITIONAL check here (one place), not in either caller.
 
 # cd_degraded_pattern — case-insensitive extended-regex alternation of known code-mode/host
-# spawn-failure signals (#117). Deliberately over-inclusive on wording (e.g. both "code-mode
-# host" and "code-mode-host") since the exact phrasing of a toolchain error is not a stable
-# contract — a resilient match beats a brittle exact string.
-cd_degraded_pattern='failed to spawn code-mode host|code-mode host|code-mode-host|repository inspection tool failed|execution environment failed to start|failed to start its command host'
+# spawn-failure signals (#117). Every code-mode-host alternative requires explicit FAILURE
+# CONTEXT. A bare component mention ("code-mode host" / "code-mode-host") is ordinary review
+# prose and is not evidence that the host failed; matching it caused PR #119's own substantive
+# review to self-report DEGRADED. Keep the wording resilient inside the failure context (spawn /
+# startup / handshake, spacing or hyphen variants), but never fall back to a component-name-only
+# match.
+cd_degraded_pattern='failed to (spawn|start) (the )?(codex-)?code-mode[- ]host|code-mode[- ]host([[:space:]:-]+)((spawn|startup|handshake)[[:space:]]+)?(failed|failure|crashed|missing|not found|no such file|could not start|unable to start)|repository inspection tool failed|execution environment failed to start|failed to start its command host'
 
 # cd_output_is_degraded <file> [<file2> ...]
 # Returns 0 (a signal was found) if ANY given file contains a case-insensitive match for

@@ -108,11 +108,13 @@ else
   failed=$((failed + 1)); echo "FAIL: (1b) expected degraded for a case-insensitive signal in stderr"
 fi
 
-# Every documented signal string in the spec is individually detected (case-insensitively).
+# Every documented FAILURE signal is individually detected (case-insensitively). Bare component
+# names are tested separately below because they are not failure evidence.
 for sig in \
   'failed to spawn code-mode host' \
-  'code-mode host' \
-  'code-mode-host' \
+  'CODE-MODE-HOST crashed on startup' \
+  'code-mode host handshake failure' \
+  'codex-code-mode-host: no such file' \
   'repository inspection tool failed' \
   'execution environment failed to start' \
   'failed to start its command host'
@@ -125,26 +127,41 @@ do
   fi
 done
 
+# Regression for PR #119's substantive review: Codex may mention the component while explaining
+# or reviewing this detector. Without an actual failure predicate, those ordinary mentions must
+# not turn a successful review into DEGRADED.
+cat >"$out_a" <<'EOF'
+The code-mode host is a component used for repository inspection.
+The code-mode-host name may appear in a successful startup banner or in review prose.
+Restrict detection to actual host failures rather than ordinary component mentions.
+EOF
+: >"$err_a"
+if cd_degraded_reason 0 "$out_a" "$err_a" >/dev/null; then
+  failed=$((failed + 1)); echo "FAIL: (1d) bare code-mode-host mentions were wrongly flagged degraded"
+else
+  passed=$((passed + 1)); echo "pass: (1d) bare code-mode-host mentions are NOT degraded"
+fi
+
 printf 'No actionable findings.\n' >"$out_a"; : >"$err_a"
 if reason="$(cd_degraded_reason 7 "$out_a" "$err_a")"; then
-  assert_contains "(1d) non-zero codex exit alone (no signal in either stream) -> degraded, reason cites the code" "7" "$reason"
+  assert_contains "(1e) non-zero codex exit alone (no signal in either stream) -> degraded, reason cites the code" "7" "$reason"
 else
-  failed=$((failed + 1)); echo "FAIL: (1d) expected degraded on a bare non-zero exit"
+  failed=$((failed + 1)); echo "FAIL: (1e) expected degraded on a bare non-zero exit"
 fi
 
 # Genuine clean run (exit 0, no signal anywhere) must NOT be flagged -- the over-triggering guard.
 printf 'No actionable findings. The diff looks correct and well-tested.\n' >"$out_a"; : >"$err_a"
 if cd_degraded_reason 0 "$out_a" "$err_a" >/dev/null; then
-  failed=$((failed + 1)); echo "FAIL: (1e) a genuine clean review (exit 0, no signal) was wrongly flagged degraded"
+  failed=$((failed + 1)); echo "FAIL: (1f) a genuine clean review (exit 0, no signal) was wrongly flagged degraded"
 else
-  passed=$((passed + 1)); echo "pass: (1e) genuine clean run (exit 0, no signal) is NOT degraded"
+  passed=$((passed + 1)); echo "pass: (1f) genuine clean run (exit 0, no signal) is NOT degraded"
 fi
 
 # Missing/empty capture files never crash the check and are simply "no signal there".
 if cd_degraded_reason 0 "$tmproot/does-not-exist" "" >/dev/null; then
-  failed=$((failed + 1)); echo "FAIL: (1f) a missing/empty capture file was wrongly flagged degraded"
+  failed=$((failed + 1)); echo "FAIL: (1g) a missing/empty capture file was wrongly flagged degraded"
 else
-  passed=$((passed + 1)); echo "pass: (1f) missing/empty capture files (exit 0) are NOT degraded"
+  passed=$((passed + 1)); echo "pass: (1g) missing/empty capture files (exit 0) are NOT degraded"
 fi
 
 # =====================================================================================
