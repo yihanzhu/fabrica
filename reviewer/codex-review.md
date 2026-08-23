@@ -67,7 +67,7 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    adds its worktree at a fresh `mktemp` path, a stale entry from a hard-killed previous run
    never blocks a re-run. (It deliberately avoids a global `git worktree prune`, which is
    repo-wide and would touch unrelated operator worktrees.)
-2. Runs **`codex exec -C <tmpdir> review -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile> [-m <model>]`** —
+2. Runs **`codex exec -C <tmpdir> review --json -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" --base refs/codex-review/<PR#>-<PID>/base -o <tmpfile> [-m <model>]`** —
    Codex's built-in review of the PR head diff vs. its **current** (qualified, freshly-fetched) base,
    inside the temp worktree (`-C` is a flag on the parent `codex exec`, so it precedes the
    `review` subcommand). The `-c sandbox_mode="read-only"` override **forces** the read-only
@@ -168,23 +168,23 @@ from a Homebrew codex install); `codex exec review` still "completed" — exit 0
 confidence ~0.05, with a generic "no actionable findings" — having done **zero** diff
 inspection. Under the standing auto-merge rail, a fake "clean" would auto-merge unreviewed code.
 
-**Detection looks only at codex's diagnostic streams — never the `-o` answer.** codex's own
-process **stdout transcript** (captured to a temp file, `$stdout_tmp`) and **stderr**
-(`$stderr_tmp`) are the diagnostic channels; the `-o <tmpfile>` capture is the **review-answer
-body** that gets posted on a genuine pass — it is untrusted, PR-influenced content, and is never
-phrase-matched. (An earlier version of this detector matched the `-o` body too, which let a
-genuinely clean review that merely *quoted* a trigger phrase in prose — e.g. reviewing a diff
-that discusses this very hardening — self-flag DEGRADED; #119 closed that false-trigger hole.)
-Both streams are re-emitted to the operator's terminal right after codex exits, so nothing is
-less visible than before — just captured first. Detection (the REQUIRED robust core, factored
-into the shared [`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) so
-`codex-review.sh` and `manager-review.sh` can't diverge on what counts as degraded):
+**Detection uses a structured boundary — never untyped model/tool content.** Normal
+`codex exec -o` writes the final answer to the requested file **and** repeats it on stdout, so
+unstructured stdout is not a diagnostic-only stream. The harness therefore forces `--json`:
+stdout becomes typed JSONL. The shared
+[`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh) validates every event,
+requires a final `turn.completed` after an agent message, and recognizes only the event/item
+schema this gate understands (unknown future types fail closed). Fatal top-level `error` /
+`turn.failed` events are hard failures; host phrases are matched only in CLI-authored error-item
+or failed-MCP error fields. Agent messages, reasoning, command output, MCP arguments/results, and
+other PR-influenced payloads are excluded. The `-o` review body is never inspected. Raw stderr
+is still checked for runtime/tracing failures outside JSONL.
 
 - **`codex` exits non-zero** → degraded.
-- **A known code-mode/host spawn-failure signal** anywhere in the captured stdout **transcript**
-  or stderr (a resilient, case-insensitive match: "failed to spawn code-mode host", "code-mode
-  host", "code-mode-host", "repository inspection tool failed", "execution environment failed
-  to start", "failed to start its command host") → degraded.
+- **Invalid/incomplete/unknown-schema JSONL**, or no final agent-message + `turn.completed`
+  record → degraded (fail closed).
+- **A fatal top-level `error` / `turn.failed` event**, or a known code-mode/host spawn-failure
+  signal in a trusted CLI error field or raw stderr → degraded.
 
 Neither check gates on confidence/duration — codex's `-o` capture is its clean final message
 only, with no reliably-exposed confidence/duration field to parse, so heuristics there would
@@ -210,8 +210,8 @@ emit lines identical to the real `## Codex reviewer (cross-vendor, read-only)` h
 degraded run — codex may not have inspected the diff at all. So a DEGRADED comment:
 - **Never embeds the `-o` answer.** It reports only the degradation *reason* (the exit code, or
   which diagnostic stream matched).
-- **Embeds only a bounded, sanitized snippet** of the diagnostic tail (stdout transcript +
-  stderr), via `cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`): capped to the last 40
+- **Embeds only a bounded, sanitized snippet** of the JSONL/raw-stderr tail, via
+  `cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`): capped to the last 40
   lines / 4000 bytes (overridable via `CD_SNIPPET_MAX_LINES`/`CD_SNIPPET_MAX_BYTES`, mainly for
   tests), with **every line prefixed `> `**. That prefix breaks the `^...$` line anchors
   `merge-pr.sh`'s marker parser requires, so no embedded line — regardless of what the untrusted

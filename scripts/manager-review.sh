@@ -102,17 +102,15 @@ set -euo pipefail
 # applies here: a codex run whose code-mode/host toolchain failed to spawn can still "complete"
 # (exit 0) with a generic, non-substantive verdict that never actually read the issue/repo.
 #
-# codex's DIAGNOSTIC output (its streamed stdout transcript + stderr) and exit code carry the
-# degradation signal — the `-o "$tmp"` verdict-answer capture is the BODY that gets posted, and
-# is never inspected for the signal (#119 P2 fix: matching it there let a genuinely clean debate
-# whose verdict prose merely QUOTED a trigger phrase — e.g. discussing this very issue — self-flag
-# DEGRADED). codex's stdout is now captured to `$stdout_tmp` (previously inherited straight to the
-# terminal and captured nowhere) ALONGSIDE the existing `$stderr_tmp` capture, both re-emitted to
-# the operator's terminal right after so nothing becomes less visible. This script catches
-# codex's exit code EXPLICITLY (errexit momentarily off) and greps `$stdout_tmp`/`$stderr_tmp`
-# (never `$tmp`) for a known code-mode/host spawn-failure signal, via the SHARED detector
-# `cd_degraded_reason` (scripts/lib/codex-degraded.sh — shared with codex-review.sh so the two
-# gates can't diverge on what counts as degraded). On EITHER signal: exit non-zero AND post an
+# The harness forces `codex exec --json`: stdout is a typed JSONL event stream instead of the
+# normal stream that repeats the final, issue-influenced verdict. The shared detector validates
+# every event/item type (unknown schema fails closed), requires a final `turn.completed` after an
+# agent message, treats fatal `error` / `turn.failed` as hard failures, and phrase-matches only
+# CLI-authored error/failed-MCP fields — never agent messages, reasoning, command output, or the
+# `-o` answer. It also checks raw stderr for runtime/tracing failures outside JSONL and catches the
+# process exit code explicitly. This structured boundary fixes #119's P1 false-positive: normal
+# Codex writes the final answer to BOTH `-o` and stdout, so unstructured stdout is not
+# diagnostic-only. On any degraded signal or invalid/incomplete JSONL: exit non-zero AND post an
 # explicit DEGRADED marker issue comment (never the untrustworthy `-o` answer body verbatim — see
 # the INTEGRITY note below) — `VERDICT: DEGRADED`, never PROCEED/REFINE/DROP, with a DIFFERENT
 # header line than the real `## Codex manager-reviewer (cross-vendor, read-only)` one — so
@@ -171,8 +169,9 @@ issue="$1"
 #   gh    — GitHub CLI (authenticated); reads the issue and posts the verdict comment
 #   git   — for the detached temp worktree at HEAD
 #   codex — the OpenAI Codex CLI (signed in); forms the manager-review
+#   jq    — validates/filters Codex's `--json` event stream without matching agent content
 missing=()
-for tool in gh git codex; do
+for tool in gh git codex jq; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
@@ -624,7 +623,7 @@ issue_comments="$(gh issue view "$issue" --repo "$repo" --json comments \
 
 # Allocate temp paths in the system temp dir (never inside the repo, so nothing here can be
 # committed): a detached worktree dir, the Codex output file, a captured-stderr file, and (#119)
-# a captured-stdout-TRANSCRIPT file — codex's own process stdout, distinct from the `-o "$tmp"`
+# a captured stdout JSONL-event file (`codex exec --json`), distinct from the `-o "$tmp"`
 # verdict-answer file. All four get a fresh mktemp path each run, so a stale worktree entry from
 # a hard-killed previous run never collides with — or blocks — the `git worktree add` below;
 # that is why no global `git worktree prune` is needed (and we avoid one so unrelated operator
@@ -776,21 +775,15 @@ prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_bo
 # happened to default to (often `low`) to the resolved config's explicit value. `-m` is passed
 # only when a model was actually resolved (CLI flag or FABRICA_CODEX_MODEL); empty means
 # "inherit Codex's own default model".
-review_cmd=(codex exec -C "$worktree" -c sandbox_mode="read-only" -c model_reasoning_effort="$FABRICA_DEBATE_EFFORT" -o "$tmp")
+review_cmd=(codex exec -C "$worktree" --json -c sandbox_mode="read-only" -c model_reasoning_effort="$FABRICA_DEBATE_EFFORT" -o "$tmp")
 if [ -n "$effective_model" ]; then
   review_cmd+=(-m "$effective_model")
 fi
 
-# #117/#119 — run with errexit MOMENTARILY OFF (same pattern as the config-sourcing block above)
-# so a non-zero codex exit is caught HERE, explicitly, instead of aborting the whole script via
-# `set -e`/`pipefail` before we can post the DEGRADED marker below. `pipefail` (set at the top of
-# this script) still makes `$?` reflect codex's own exit status through the stdin pipe (printf is
-# effectively infallible here). BOTH codex's stdout TRANSCRIPT (`$stdout_tmp`) and stderr
-# (`$stderr_tmp`) are captured to files — plain `>`/`2>` redirects, deliberately NOT process
-# substitution (fragile under bash 3.2 combined with the errexit-toggle pattern this script
-# already relies on for portability). Neither stream is discarded, but neither is live on the
-# operator's terminal DURING the run; both are re-emitted (`cat`) right after so nothing becomes
-# less visible than before — just delayed until codex exits.
+# #117/#119 — run with errexit MOMENTARILY OFF so a non-zero Codex exit is caught HERE and can
+# still post the explicit DEGRADED marker. `pipefail` makes `$?` reflect Codex through the stdin
+# pipe. `--json` makes stdout a JSONL event stream; stderr is the remaining raw runtime/tracing
+# channel. Both are captured with bash-3.2-portable redirects and re-emitted after Codex exits.
 set +e
 printf '%s' "$prompt" | "${review_cmd[@]}" - >"$stdout_tmp" 2>"$stderr_tmp"
 codex_rc=$?
@@ -798,15 +791,10 @@ set -e
 cat "$stdout_tmp"
 cat "$stderr_tmp" >&2
 
-# #117/#119 DEGRADED DETECTION — the REQUIRED robust core, via the shared detector
-# (scripts/lib/codex-degraded.sh, sourced above) so this gate and codex-review.sh can't diverge:
-# a non-zero codex exit OR a known code-mode/host spawn-failure signal anywhere in codex's
-# DIAGNOSTIC streams (stdout transcript `$stdout_tmp` + stderr `$stderr_tmp`) means codex FAILED
-# TO RUN a genuine debate — it did not actually read the issue/repo — as distinct from a genuine
-# PROCEED/REFINE/DROP verdict (exits 0, no such signal), which must still PASS (no
-# over-triggering). Deliberately NEVER `$tmp` (the `-o` verdict-answer body) here (#119 P2 fix):
-# matching trigger phrases against it let a genuinely clean debate whose verdict prose merely
-# QUOTED one self-flag DEGRADED.
+# #117/#119 DEGRADED DETECTION — the shared detector requires: exit 0; fully-understood JSONL
+# ending in an agent message + `turn.completed`; no fatal/failed event or host-failure text in a
+# trusted error field; and no host-failure signal in raw stderr. It deliberately excludes JSON
+# agent/command payloads and NEVER sees `$tmp`, closing the P1 false-positive on quoted phrases.
 if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp")"; then
   echo "error: Codex manager-review DEGRADED — ${degraded_reason}. NOT posting a PROCEED/REFINE/DROP verdict." >&2
   degraded_body="$(
@@ -830,7 +818,7 @@ if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp"
     echo "_\`scripts/manager-review.sh ${issue}\`._"
     echo
     echo '```'
-    echo "-- codex stdout transcript (diagnostic; last ${cd_snippet_max_lines} lines, sanitized) --"
+    echo "-- codex JSONL events (last ${cd_snippet_max_lines} lines, sanitized) --"
     cd_sanitize_snippet "$stdout_tmp"
     echo
     echo "-- codex stderr (diagnostic; last ${cd_snippet_max_lines} lines, sanitized) --"
@@ -881,7 +869,7 @@ trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree";
     echo "warning: target override attempted to set gate effort — ignored"
   fi
   echo
-  echo "_Posted verbatim by \`manager-review.sh\` (\`codex exec\`, sandbox forced read-only, debating issue #${issue} against the current north star). Comments only — veto-only: Codex never labels \`ready\`, edits the issue, or merges. Proceed only on consensus._"
+  echo "_Posted verbatim by \`manager-review.sh\` (\`codex exec --json\`, sandbox forced read-only, debating issue #${issue} against the current north star). Comments only — veto-only: Codex never labels \`ready\`, edits the issue, or merges. Proceed only on consensus._"
   echo
   cat "$tmp"
 } >"$comment"

@@ -12,8 +12,8 @@ command, point it at a target repo, and watch one loop run. For the mental model
 ## Prerequisites
 
 - **`gh` CLI authenticated** — `gh auth status` shows you logged in.
-- **`jq` on `PATH`** — needed by the merge helper (`scripts/merge-pr.sh`) to parse `gh`'s
-  CI-check JSON. Without it setup passes but the merge step fails.
+- **`jq` on `PATH`** — needed by the review/debate gates to validate Codex's typed JSONL events,
+  and by `scripts/merge-pr.sh` to parse `gh`'s CI-check JSON.
 - **Codex (OpenAI) CLI signed in** — a ChatGPT plan that includes Codex review is enough
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
 - **Claude Code installed** — the whole team runs in-session (no API key); Faber and the

@@ -151,9 +151,10 @@ GH
 chmod +x "$fakebin/gh"
 
 # Fake codex. Two invocation shapes must be honored WITHOUT crossing wires:
-#   - The real gate call `codex exec -C <wt> -c ... -o <tmp> [-m model] -` pipes the prompt
-#     over stdin (the trailing `-`). It writes a verdict into the -o file and exits 0. Here
-#     we MUST drain stdin so the upstream printf doesn't SIGPIPE.
+#   - The real gate call `codex exec -C <wt> --json -c ... -o <tmp> [-m model] -` pipes the
+#     prompt over stdin (the trailing `-`). It writes a verdict into the -o file, emits valid
+#     JSONL with `turn.completed`, and exits 0. Here we MUST drain stdin so the upstream printf
+#     doesn't SIGPIPE.
 #   - doctor.sh probes `codex login --help` / `codex login status` (and any version probe)
 #     WITHOUT piping stdin. Reading stdin there blocks a local interactive run on terminal
 #     input. So we only drain stdin for the `codex exec … -` path; other subcommands return
@@ -166,8 +167,10 @@ for a in "$@"; do last="$a"; done
 if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
   out=""
   prev=""
+  saw_json="false"
   for a in "$@"; do
     if [ "$prev" = "-o" ]; then out="$a"; fi
+    if [ "$a" = "--json" ]; then saw_json="true"; fi
     prev="$a"
   done
   # Drain stdin (the prompt) so the upstream printf doesn't SIGPIPE.
@@ -175,6 +178,13 @@ if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
   if [ -n "$out" ]; then
     printf 'VERDICT: PROCEED\nREASONING: stub.\nGAP FABER MISSED: none.\n' >"$out"
   fi
+  if [ "$saw_json" != "true" ]; then
+    echo "codex stub: manager-review omitted required --json" >&2
+    exit 64
+  fi
+  printf '%s\n' \
+    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"VERDICT: PROCEED\\nREASONING: stub.\\nGAP FABER MISSED: none."}}' \
+    '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
   exit 0
 fi
 # Non-exec probes (doctor's `login --help` / `login status`, any version check): exit 0 WITHOUT

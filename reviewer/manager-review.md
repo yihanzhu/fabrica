@@ -192,7 +192,7 @@ comment to a *different* repo's issue. Then:
    **FAILs before invoking Codex** with an actionable pointer — the debate needs an integrated,
    committed goal to judge against. It also reads the issue's title + body (`gh issue view
    <issue#> --json title,body`).
-2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" -o <tmpfile> [-m <model>] -`** —
+2. **Runs `printf '%s' "<prompt>" | codex exec -C <worktree> --json -c sandbox_mode="read-only" -c model_reasoning_effort="<effort>" -o <tmpfile> [-m <model>] -`** —
    the prompt is fed over **stdin** (the trailing `-`), not as an argv argument, so a large
    issue body + comment thread can't trip `E2BIG` or leak into process listings. Codex forms
    the manager-review with the **manager-reviewer prompt + the north star + the issue +
@@ -296,22 +296,18 @@ detector so the two gates can't diverge on what counts as degraded (real inciden
 see `codex-review.sh`'s **Degraded-review detection** section and
 [`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh)).
 
-**Detection looks only at codex's diagnostic streams — never the `-o` verdict answer.** codex's
-own process **stdout transcript** (captured to `$stdout_tmp`) and **stderr** (`$stderr_tmp`) are
-the diagnostic channels; the `-o <tmpfile>` capture is the **verdict body** that gets posted on
-a genuine debate — it is untrusted, issue-influenced content and is never phrase-matched (the
-same #119 false-trigger fix as `codex-review.sh`: matching the answer body let a genuinely clean
-`PROCEED`/`REFINE`/`DROP` debate whose prose merely *quoted* a trigger phrase self-flag
-DEGRADED). Both streams are re-emitted to the operator's terminal right after codex exits.
+**Detection uses the same structured boundary as `codex-review.sh`.** Normal `codex exec -o`
+repeats its final, issue-influenced verdict on stdout, so the harness forces `--json`. The shared
+detector validates every event/item against its understood schema (unknown future types fail
+closed), requires a final `turn.completed` after an agent message, treats fatal top-level
+`error` / `turn.failed` as hard failures, and phrase-matches only CLI-authored error-item or
+failed-MCP error fields. Agent messages, reasoning, command output, MCP arguments/results, and
+the `-o` verdict body are excluded; raw stderr is still checked for failures outside JSONL.
 
-Detection: **`codex` exits non-zero**, OR a **known code-mode/host spawn-failure signal**
-anywhere in the captured stdout **transcript** or stderr (case-insensitive: "failed to spawn
-code-mode host", "code-mode host", "code-mode-host", "repository inspection tool failed",
-"execution environment failed to start", "failed to start its command host"). A genuine verdict
-(codex ran, read the repo, formed a real judgment) carries neither signal and still posts
-normally. A genuine exit-0 run with an **empty/whitespace-only** `-o` capture (no verdict
-content at all — mirroring `codex-review.sh`'s equivalent guard) is also refused, rather than
-posting a header-only comment with no `PROCEED`/`REFINE`/`DROP`.
+Detection: **non-zero exit**, **invalid/incomplete/unknown-schema JSONL**, **fatal `error` /
+`turn.failed`**, or a known code-mode/host spawn-failure signal in a trusted CLI error field/raw
+stderr → DEGRADED. A genuine completed verdict still posts normally. An
+**empty/whitespace-only** `-o` capture is also refused rather than posting a header-only comment.
 
 On detection: the script exits non-zero and posts `VERDICT: DEGRADED` (never
 `PROCEED`/`REFINE`/`DROP`) under a **different** header line than the real `## Codex
@@ -320,8 +316,8 @@ never read this as a `PROCEED`.
 
 **The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix, same
 as `codex-review.sh`).** It never embeds the `-o` verdict answer (untrustworthy on a degraded
-run), and embeds only a bounded, sanitized snippet of the diagnostic tail (stdout transcript +
-stderr) via `cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`) — every line prefixed `> `,
+run), and embeds only a bounded, sanitized snippet of the JSONL/raw-stderr tail via
+`cd_sanitize_snippet` (`scripts/lib/codex-degraded.sh`) — every line prefixed `> `,
 which breaks the line anchors a marker parser like `scripts/merge-pr.sh`'s would require. This
 comment is posted by, and authored as, the same gh-authenticated operator, so it must never be
 able to carry an unneutralized marker-shaped line even though `merge-pr.sh` only reads PR
