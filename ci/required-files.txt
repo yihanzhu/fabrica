@@ -52,6 +52,11 @@ scripts/lib/gh-remote.sh
 scripts/lib/models-conf.sh
 scripts/lib/codex-degraded.sh
 
+# v2 guard layer (no agent path to main — see .claude/hooks/no-merge-guard.sh)
+.claude/settings.json
+.claude/hooks/no-merge-guard.sh
+.github/workflows/tripwire.yml
+
 # Tests (run by CI; also executable — see ci.yml)
 scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh
