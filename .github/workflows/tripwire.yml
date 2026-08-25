@@ -1,0 +1,22 @@
+name: tripwire
+
+# Fails loudly when any actor other than the operator lands commits on main.
+# Under the fabrica-main-gate ruleset this should never fire — it is the
+# canary for a misconfigured ruleset, a compromised app token, or an agent
+# that found a path around the guards. A red run here means: stop and audit.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  guard:
+    if: github.actor != 'yihanzhu'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unexpected actor pushed to main
+        run: |
+          echo "::error::Tripwire: '${{ github.actor }}' pushed to main. No non-operator actor should ever land commits on main. Audit the ruleset, app installations, and recent workflow runs immediately."
+          exit 1
