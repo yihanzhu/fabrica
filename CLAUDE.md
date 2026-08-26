@@ -38,6 +38,10 @@ the backlog:
 ## PR rules (enforced by coder + reviewer)
 - **One concern per PR.** Soft size budget ~300–400 net lines; split if bigger.
 - Every PR links its issue (`Closes #<n>`) and keeps README/docs in sync with any change.
+- **Plain language, always** (operator rule, 2026-08-26): every artifact
+  (intent/spec/plan), PR title/description, and review comment is written for a
+  tired human. Short sentences. Everyday words. No jargon where a plain word
+  works. If two phrasings say the same thing, use the shorter one.
 
 ## CRITICAL — self-modification safety
 - The live setup runs from **generated/synced artifacts, not from these files directly.**
