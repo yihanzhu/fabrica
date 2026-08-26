@@ -36,14 +36,21 @@ Each is checkable when done.
   from the intent review).
 - **R6 — website.** The site serves at `ystack.yihanzhu.com`;
   `fabrica.yihanzhu.com` redirects to it; canonical URL, sitemap, robots,
-  and social meta all say ystack.
+  and social meta all say ystack. The social preview image (`website/og.png`)
+  is regenerated with the ystack name and domain — the grep gate can't see
+  inside a PNG, so this is its own requirement.
 - **R7 — chain rebaseline.** Sweeping text inside `work/v2-phase-2/` changes
   its files, so their recorded hashes are refreshed in the same PR (spec.md
-  gets the new intent-blob, plan.md the new spec-blob). The pending-* helpers
-  must report a fresh, quiet chain afterward — never a stale one.
+  gets the new intent-blob, plan.md the new spec-blob). Afterward the
+  pending-* helpers must not report `v2-phase-2` as stale or pending.
+  (Scoped to this initiative: unrelated queued work — e.g.
+  `plain-language-cleanup`, which correctly shows as pending — is expected.)
 - **R8 — conventions.** Branch prefixes become `ystack/*`, env vars
-  `YSTACK_*` (helpers + their tests updated), the `stale` label description
-  and all docs updated. The persona is **yshifu** everywhere.
+  `YSTACK_*` (helpers + their tests updated), and the stage skills
+  (`.claude/skills/{intent,spec,plan}-draft`) stop hardcoding `fabrica/*`
+  branches and `.fabrica/` paths. The persona is **yshifu** everywhere.
+  The live `stale` label on GitHub is external state: after PR a merges,
+  the operator re-runs `setup-target-repo.sh` to reconcile it.
 
 ## Design
 
@@ -55,16 +62,25 @@ Each is checkable when done.
   2. **PR a — code**: `scripts/lib/north-star.sh` (resolver order),
      models-conf lib (key fallback), `gh-remote.sh` (env alias),
      `manager-review.sh` + `doctor.sh` (via resolver, both markers),
-     `scripts/v2/*` + workflows (`YSTACK_*`, ystack branches), the grep-gate
-     script, all hermetic tests.
+     **`codex-review.sh`** (its own anchored read of
+     `.fabrica/models.conf` goes through the same fallback — it is an
+     independent consumer, with anchored-path tests),
+     **`install.sh`** (reads the renamed command template, writes
+     `~/.claude/commands/yshifu.md`), `scripts/v2/*` + workflows
+     (`YSTACK_*`, ystack branches), the grep-gate script, all hermetic tests.
   3. **PR b — words**: README (new identity line replaces the trio — operator
      writes or approves the wording at this PR), QUICKSTART, RESTORE,
      NORTH_STAR, CLAUDE.md, manager/, routines/, reviewer/, templates/
-     (`.ystack/` copies), work/ + proposals/ readmes, `work/v2-phase-2/`
-     sweep + hash rebaseline (R7), website files (R6).
+     (`.ystack/` copies; `faber-command.md` → `yshifu-command.md`),
+     `.claude/skills/` stage skills (branch prefixes + paths —
+     constitution files, operator-driven session), work/ + proposals/
+     readmes, `work/v2-phase-2/` sweep + hash rebaseline (R7), website
+     files including the regenerated `og.png` (R6).
   4. Operator-session ops: move the local clone, update the remote,
-     re-run `install.sh` (→ `/yshifu`), delete the old command file,
-     `doctor.sh` green. Cloudflare custom domain switched + redirect.
+     re-run `install.sh` (→ `/yshifu`), delete the old
+     `~/.claude/commands/faber.md`, re-run `setup-target-repo.sh` (live
+     label reconciliation), `doctor.sh` green. Cloudflare custom domain
+     switched + redirect.
 - **Persona:** `manager/CLAUDE.md` retitled for yshifu (same duties, same
   rails); `templates/faber-command.md` → `templates/yshifu-command.md`.
 - The two PRs keep the size rule; the sweep is mechanical but reviewed like
