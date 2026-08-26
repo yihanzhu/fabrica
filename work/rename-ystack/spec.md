@@ -65,13 +65,17 @@ Each is checkable when done.
      **`codex-review.sh`** (its own anchored read of
      `.fabrica/models.conf` goes through the same fallback — it is an
      independent consumer, with anchored-path tests),
-     **`install.sh`** (reads the renamed command template, writes
-     `~/.claude/commands/yshifu.md`), `scripts/v2/*` + workflows
-     (`YSTACK_*`, ystack branches), the grep-gate script, all hermetic tests.
+     **`install.sh` together with its template** (`templates/faber-command.md`
+     → `templates/yshifu-command.md` — they move in the same PR so the
+     installer never points at a file that doesn't exist), the
+     **no-merge-guard hook** (`.claude/hooks/no-merge-guard.sh` — its runtime
+     messages and ruleset reference are live content, not history),
+     `scripts/v2/*` + workflows (`YSTACK_*`, ystack branches), the grep-gate
+     script, all hermetic tests.
   3. **PR b — words**: README (new identity line replaces the trio — operator
      writes or approves the wording at this PR), QUICKSTART, RESTORE,
      NORTH_STAR, CLAUDE.md, manager/, routines/, reviewer/, templates/
-     (`.ystack/` copies; `faber-command.md` → `yshifu-command.md`),
+     (`.ystack/` copies),
      `.claude/skills/` stage skills (branch prefixes + paths —
      constitution files, operator-driven session), work/ + proposals/
      readmes, `work/v2-phase-2/` sweep + hash rebaseline (R7), website
