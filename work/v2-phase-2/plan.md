@@ -38,7 +38,16 @@ opened only after Stack A merges and the plumbing result is recorded**
 - `.claude/skills/implement/SKILL.md`, `review-pr/SKILL.md`,
   `address-review/SKILL.md` (new): producer skills at the coder ceiling from
   `config/models.conf`; the review skill at high effort; write-rules exclude
-  `.github/**` and `.claude/**`.
+  `.github/**` and `.claude/**`. Two practices adopted from gstack/pstack
+  (2026-08-26 review of both):
+  - **Evidence binding** (gstack): the implement/fix skills paste verify output
+    together with the head SHA it ran against (`verified-head: <sha>`); the
+    review and fix stages treat evidence as stale when the PR head has moved
+    past it — merge-pr.sh's SHA-pinning discipline, extended to test evidence.
+  - **Evidence per change type** (pstack): the implement skill names what
+    counts as proof for each class of change — shell → shellcheck + hermetic
+    tests; workflows → CI green on the PR itself; docs → structure check —
+    instead of one generic "tests pass".
 - `README.md`: replace "Future, not wired" with the two-lane section; correct
   the retired auto-merge claim (Phase 0 ruleset, #122).
 - `QUICKSTART.md`: autonomous-lane setup (secret, labels, ruleset pointer).
@@ -91,5 +100,6 @@ opened only after Stack A merges and the plumbing result is recorded**
   B's own PR (the lane reviews the PR that ships it — same-repo trigger);
   workflow files inspected against R5's invariant list in review.
 - Phase 2 exit test (R1–R4 jointly): the smoke-intent run with operator-only
-  merges, verify output pasted in its impl PR body.
+  merges, verify output pasted in its impl PR body and bound to the verified
+  head SHA (evidence-binding above).
 - R7: README/QUICKSTART diffs read in Stack B review.
