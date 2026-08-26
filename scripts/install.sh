@@ -24,7 +24,7 @@ repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 template="$repo_root/templates/yshifu-command.md"
 commands_dir="$HOME/.claude/commands"
 target="$commands_dir/yshifu.md"
-# Bridge: the docs still say /faber until the docs PR lands, so install BOTH
+# Bridge: the docs still say the legacy /faber until the docs PR lands, so install BOTH
 # names with identical content. Ops 4 deletes the legacy copy. # legacy fallback
 legacy_target="$commands_dir/faber.md" # legacy fallback
 
