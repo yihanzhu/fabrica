@@ -1,0 +1,60 @@
+name: Plumbing test
+
+# Manual probe (v2 plan, step 2): can the Claude app push a branch and open a
+# PR on its own — and do its events trigger other workflows (does CI run on
+# the probe PR)? Run it from the Actions tab. Close the probe PR without
+# merging and delete its branch afterward. Kept as a permanent diagnostic.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: claude-quota
+
+jobs:
+  probe:
+    # Only the operator starts agent runs (spec R5's actor gate). Both actors
+    # checked: on a re-run, github.actor stays the ORIGINAL dispatcher while
+    # triggering_actor is whoever clicked re-run (Codex review of #131, P1).
+    if: github.actor == 'yihanzhu' && github.triggering_actor == 'yihanzhu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Probe — push a branch and open a PR
+        uses: anthropics/claude-code-action@c81e3bc69d1b18badbb63ba39581218f02421678 # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            This is a plumbing probe. Do exactly this and nothing else:
+            1. git checkout -b plumbing-probe-${{ github.run_id }}
+            2. Write one file at the repo root named probe.txt containing:
+               plumbing probe run ${{ github.run_id }}
+            3. Commit it and push the branch.
+            4. Open a PR with gh pr create, titled
+               "plumbing probe ${{ github.run_id }} - close without merging".
+            Do not touch any other file. Report each command's result.
+          claude_args: >-
+            --max-turns 15
+            --allowedTools "Write,Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push origin plumbing-probe:*),Bash(git push -u origin plumbing-probe:*),Bash(gh pr create:*)"
+
+      - name: Assert the probe PR exists (loud failure, never silent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="$(gh pr list --head "plumbing-probe-${{ github.run_id }}" \
+            --json url --jq '.[0].url // empty')"
+          if [ -z "$url" ]; then
+            echo "::error::The probe PR was not created. Record this on #126 and use the spec's fallback for Stack B."
+            exit 1
+          fi
+          echo "Probe PR: $url"
+          echo "Now check that PR: if CI ran on it, app events cascade — record both answers on #126."
