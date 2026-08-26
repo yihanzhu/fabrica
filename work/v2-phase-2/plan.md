@@ -17,8 +17,13 @@ plumbing test (R6) proven between them.
   needs work — the hash-guard idempotency checks (fresh / stale / missing).
 - `scripts/v2/round-cap.sh` (new): read + bump `round-N` labels, emit
   `proceed=`/`stop=`; a PR with no round label counts as round-0.
-- `scripts/v2/quota-preflight.sh` (new): count agent workflow runs in the last
-  5 h via `gh api`; skip over budget (default 6 — tune after measuring).
+- `scripts/v2/quota-preflight.sh` (new): a **runaway backstop, not a
+  throughput ration** (operator decision 2026-08-26): every Phase 2 run is
+  caused by an operator gate-merge or a label-bounded fix round, so legitimate
+  work is already rate-limited by the operator's own clicks — real work is
+  never skipped. The preflight trips only on abnormal volume (default 20
+  runs/5h — a cascade-bug tripwire), fails loudly when it does, and gets a
+  real budget only in Phase 4 when self-triggered runs (no human cause) arrive.
 - `scripts/test/v2-pending-stage.test.sh`, `scripts/test/v2-round-cap.test.sh`
   (new): hermetic, gh/git stubbed on PATH — same idiom as the existing tests.
 - `.github/workflows/plumbing-test.yml` (new, `workflow_dispatch` only): the R6
