@@ -5,13 +5,19 @@ set -euo pipefail
 # (mc_parse_target_override), the P1 fix from the adversarial review of PR #115.
 #
 # BACKGROUND: scripts/codex-review.sh and scripts/manager-review.sh used to `source`/`.` a
-# target repo's committed `.fabrica/models.conf` directly into the operator's non-sandboxed
+# target repo's committed models.conf override directly into the operator's non-sandboxed
 # harness shell. That let (1) a malicious PR/target run arbitrary shell with the operator's own
-# `gh`/`codex` credentials, and (2) ANY target — no injection needed — commit
-# `FABRICA_REVIEW_EFFORT=low` to downgrade its own review gate (the only prior validation was
-# "non-empty"). The fix factors a strict, non-evaluating parser into scripts/lib/models-conf.sh:
-# target-committed content is read as DATA, never as code, and the two gate-effort keys
-# (FABRICA_REVIEW_EFFORT / FABRICA_DEBATE_EFFORT) can never be set by a target override at all.
+# `gh`/`codex` credentials, and (2) ANY target — no injection needed — commit a low review
+# effort to downgrade its own review gate (the only prior validation was "non-empty"). The fix
+# factors a strict, non-evaluating parser into scripts/lib/models-conf.sh: target-committed
+# content is read as DATA, never as code, and the two gate-effort keys (review/debate effort,
+# in either key family) can never be set by a target override at all.
+#
+# KEY FAMILIES: the canonical override file is `.ystack/models.conf` with `YSTACK_*` keys; a
+# legacy `.fabrica/models.conf` with `FABRICA_*` keys is still honored. The parser accepts BOTH
+# families, always writes the canonical `YSTACK_*` variables, and a `YSTACK_*` line wins over a
+# `FABRICA_*` line for the same setting no matter which comes first. The fallback cases below
+# prove that.
 #
 # This suite tests the parser IN ISOLATION (no git/gh/codex harness needed — the function takes
 # plain text on stdin), per the brief: "if a full harness test for codex-review.sh isn't
@@ -23,15 +29,14 @@ set -euo pipefail
 # actually present in the shipped scripts, not just correct in the lib alone.
 #
 # P2 FOLLOW-UP (adversarial review of PR #115, revision): manager-review.sh's parse-not-source fix
-# still read the override via `mc_parse_target_override < "$worktree/.fabrica/models.conf"` — a
-# `<`-redirect from the CHECKED-OUT WORKTREE PATH, which FOLLOWS SYMLINKS. A target-committed
-# `.fabrica/models.conf` SYMLINK to an arbitrary operator-local file would pass `[ -f ]` and leak
-# that file's `FABRICA_CODEX_MODEL=` value into the PUBLIC posted issue comment header. It now
-# reads via `git show "${head_commit}:.fabrica/models.conf"` instead — the SAME anchor commit, but
-# as a git blob (never a filesystem path), mirroring codex-review.sh's pre-existing symlink-safe
-# read of this same file (a symlink's blob content is just the link-target-path string, which
-# fails the parser's charset check and is ignored). See test_scripts_wire_the_fix (h) below for
-# the static assertions, and scripts/test/north-star-gate.test.sh's (22) for the end-to-end case.
+# still read the override via a `<`-redirect from the CHECKED-OUT WORKTREE PATH, which FOLLOWS
+# SYMLINKS. A target-committed models.conf SYMLINK to an arbitrary operator-local file would pass
+# `[ -f ]` and leak that file's codex-model value into the PUBLIC posted issue comment header. It
+# now reads via `git show <anchor-commit>:<path>` instead — the SAME anchor commit, but as a git
+# blob (never a filesystem path), mirroring codex-review.sh's pre-existing symlink-safe read of
+# this same file (a symlink's blob content is just the link-target-path string, which fails the
+# parser's charset check and is ignored). See test_scripts_wire_the_fix (h) below for the static
+# assertions, and scripts/test/north-star-gate.test.sh's (22) for the end-to-end case.
 #
 # Run: scripts/test/models-conf-parser.test.sh   (exits non-zero on the first failed assert)
 
@@ -78,21 +83,21 @@ assert_file_absent() {
 }
 
 # reset_vars — reset every variable the parser can touch to a known baseline BEFORE each case,
-# simulating the shipped config/models.conf already having been sourced (FABRICA_REVIEW_EFFORT /
-# FABRICA_DEBATE_EFFORT at their shipped-default "high"; the producer/model keys empty).
+# simulating the shipped config/models.conf already having been sourced (YSTACK_REVIEW_EFFORT /
+# YSTACK_DEBATE_EFFORT at their shipped-default "high"; the producer/model keys empty).
 reset_vars() {
-  FABRICA_CODER_MODEL=""
-  FABRICA_HANDS_MODEL=""
-  FABRICA_CODEX_MODEL=""
-  FABRICA_REVIEW_EFFORT="high"
-  FABRICA_DEBATE_EFFORT="high"
+  YSTACK_CODER_MODEL=""
+  YSTACK_HANDS_MODEL=""
+  YSTACK_CODEX_MODEL=""
+  YSTACK_REVIEW_EFFORT="high"
+  YSTACK_DEBATE_EFFORT="high"
   MC_TARGET_OVERRIDE_GATE_WARNING=0
 }
 
 # run_parser_herestring <content> — feed <content> via a HERE-STRING, mirroring
 # codex-review.sh's `mc_parse_target_override <<<"$target_models_conf_content"` calling
 # convention (it reads the override via `git show`, not a checked-out file). Runs in the
-# CURRENT shell (not a subshell — a here-string is plain redirection), so the FABRICA_*
+# CURRENT shell (not a subshell — a here-string is plain redirection), so the YSTACK_*
 # assignments the parser makes are observable afterward; stderr is captured to $stderr_tmp
 # (also plain fd redirection, not a pipe/subshell) so warning text can be asserted too.
 run_parser_herestring() {
@@ -104,8 +109,8 @@ run_parser_herestring() {
 # calling convention (`mc_parse_target_override < "$file"`, see scripts/lib/models-conf.sh's
 # calling-convention doc). Neither real script uses this convention anymore as of the P2 fix
 # (adversarial review of PR #115, revision): both codex-review.sh and manager-review.sh now read
-# their target override via `git show <anchor>:.fabrica/models.conf` + a here-string, never a
-# `<`-redirect from a checked-out worktree path (a worktree-path redirect FOLLOWS SYMLINKS — see
+# their target override via `git show <anchor>:<path>` + a here-string, never a `<`-redirect from
+# a checked-out worktree path (a worktree-path redirect FOLLOWS SYMLINKS — see
 # test_scripts_wire_the_fix (h) and scripts/test/north-star-gate.test.sh's (22) end-to-end case).
 # This function still exercises the file-redirection convention directly as a regression guard on
 # the library itself. Same current-shell / no-subshell property as above.
@@ -126,21 +131,21 @@ test_malicious_file_sentinel_not_created() {
   rm -f "$sentinel"
   local content
   content="$(cat <<EOF
-FABRICA_CODER_MODEL=sonnet
+YSTACK_CODER_MODEL=sonnet
 \$(touch "$sentinel")
 \`touch "$sentinel"\`
 touch "$sentinel"
-FABRICA_CODEX_MODEL=\$(touch "$sentinel")
-FABRICA_HANDS_MODEL=haiku; touch "$sentinel"
-FABRICA_CODEX_MODEL=gpt-5-safe
+YSTACK_CODEX_MODEL=\$(touch "$sentinel")
+YSTACK_HANDS_MODEL=haiku; touch "$sentinel"
+YSTACK_CODEX_MODEL=gpt-5-safe
 EOF
 )"
   reset_vars
   run_parser_herestring "$content"
   assert_file_absent "(a) malicious content never executed — sentinel file NOT created" "$sentinel"
-  assert_eq "(a) a plain valid line elsewhere in the SAME malicious file still parses (FABRICA_CODER_MODEL)" "sonnet" "$FABRICA_CODER_MODEL"
-  assert_eq "(a) a command-substitution VALUE is rejected outright — last VALID assignment wins (FABRICA_CODEX_MODEL)" "gpt-5-safe" "$FABRICA_CODEX_MODEL"
-  assert_eq "(a) a semicolon-chained VALUE is rejected — the key is left at its baseline (FABRICA_HANDS_MODEL)" "" "$FABRICA_HANDS_MODEL"
+  assert_eq "(a) a plain valid line elsewhere in the SAME malicious file still parses (YSTACK_CODER_MODEL)" "sonnet" "$YSTACK_CODER_MODEL"
+  assert_eq "(a) a command-substitution VALUE is rejected outright — last VALID assignment wins (YSTACK_CODEX_MODEL)" "gpt-5-safe" "$YSTACK_CODEX_MODEL"
+  assert_eq "(a) a semicolon-chained VALUE is rejected — the key is left at its baseline (YSTACK_HANDS_MODEL)" "" "$YSTACK_HANDS_MODEL"
 }
 
 # (a2) Same malicious-file scenario, but read via a real FILE + the library's file-redirection
@@ -152,48 +157,64 @@ test_malicious_file_sentinel_not_created_via_file() {
   rm -f "$sentinel"
   local conf="$tmproot/malicious.conf"
   {
-    echo 'FABRICA_HANDS_MODEL=haiku'
+    echo 'YSTACK_HANDS_MODEL=haiku'
     echo "\$(touch \"$sentinel\")"
     echo "touch \"$sentinel\""
-    echo "FABRICA_CODEX_MODEL=\$(touch \"$sentinel\")"
+    echo "YSTACK_CODEX_MODEL=\$(touch \"$sentinel\")"
   } > "$conf"
   reset_vars
   run_parser_file "$conf"
   assert_file_absent "(a2) malicious content in a real FILE never executed — sentinel NOT created" "$sentinel"
-  assert_eq "(a2) valid key in the same file still parses (FABRICA_HANDS_MODEL)" "haiku" "$FABRICA_HANDS_MODEL"
-  assert_eq "(a2) command-substitution value rejected — key left at baseline (FABRICA_CODEX_MODEL)" "" "$FABRICA_CODEX_MODEL"
+  assert_eq "(a2) valid key in the same file still parses (YSTACK_HANDS_MODEL)" "haiku" "$YSTACK_HANDS_MODEL"
+  assert_eq "(a2) command-substitution value rejected — key left at baseline (YSTACK_CODEX_MODEL)" "" "$YSTACK_CODEX_MODEL"
 }
 
 # ---------------------------------------------------------------------------------
-# (b) GATE KEYS ARE NOT TARGET-OVERRIDABLE — FABRICA_REVIEW_EFFORT / FABRICA_DEBATE_EFFORT
+# (b) GATE KEYS ARE NOT TARGET-OVERRIDABLE — YSTACK_REVIEW_EFFORT / YSTACK_DEBATE_EFFORT
 # lines are recognized but NEVER applied; a visible warning is emitted and
 # MC_TARGET_OVERRIDE_GATE_WARNING is set so the caller can surface it. A producer/model key in
 # the SAME file is still applied normally.
 # ---------------------------------------------------------------------------------
 test_gate_keys_ignored_with_warning() {
   local content
-  content="$(printf 'FABRICA_REVIEW_EFFORT=low\nFABRICA_DEBATE_EFFORT=low\nFABRICA_CODEX_MODEL=some-model\n')"
+  content="$(printf 'YSTACK_REVIEW_EFFORT=low\nYSTACK_DEBATE_EFFORT=low\nYSTACK_CODEX_MODEL=some-model\n')"
   reset_vars
   run_parser_herestring "$content"
-  assert_eq "(b) FABRICA_REVIEW_EFFORT is NOT lowered by a target override" "high" "$FABRICA_REVIEW_EFFORT"
-  assert_eq "(b) FABRICA_DEBATE_EFFORT is NOT lowered by a target override" "high" "$FABRICA_DEBATE_EFFORT"
+  assert_eq "(b) YSTACK_REVIEW_EFFORT is NOT lowered by a target override" "high" "$YSTACK_REVIEW_EFFORT"
+  assert_eq "(b) YSTACK_DEBATE_EFFORT is NOT lowered by a target override" "high" "$YSTACK_DEBATE_EFFORT"
   assert_eq "(b) MC_TARGET_OVERRIDE_GATE_WARNING is set" "1" "$MC_TARGET_OVERRIDE_GATE_WARNING"
   local warn; warn="$(cat "$stderr_tmp")"
-  assert_contains "(b) warning names FABRICA_REVIEW_EFFORT" "FABRICA_REVIEW_EFFORT" "$warn"
-  assert_contains "(b) warning names FABRICA_DEBATE_EFFORT" "FABRICA_DEBATE_EFFORT" "$warn"
+  assert_contains "(b) warning names YSTACK_REVIEW_EFFORT" "YSTACK_REVIEW_EFFORT" "$warn"
+  assert_contains "(b) warning names YSTACK_DEBATE_EFFORT" "YSTACK_DEBATE_EFFORT" "$warn"
   assert_contains "(b) warning explains a target can never change its own gate" "never lower or change its own" "$warn"
-  assert_eq "(b) a producer/model key in the SAME file still applies (FABRICA_CODEX_MODEL)" "some-model" "$FABRICA_CODEX_MODEL"
+  assert_eq "(b) a producer/model key in the SAME file still applies (YSTACK_CODEX_MODEL)" "some-model" "$YSTACK_CODEX_MODEL"
 }
 
 # (b2) A file with ONLY valid producer keys (no gate-key attempt) never sets the warning flag —
 # the warning is not a false-positive on ordinary, legitimate overrides.
 test_no_gate_key_no_warning() {
   local content
-  content="$(printf 'FABRICA_CODEX_MODEL=gpt-5.1-codex\n')"
+  content="$(printf 'YSTACK_CODEX_MODEL=gpt-5.1-codex\n')"
   reset_vars
   run_parser_herestring "$content"
   assert_eq "(b2) no gate-key attempt -> MC_TARGET_OVERRIDE_GATE_WARNING stays 0" "0" "$MC_TARGET_OVERRIDE_GATE_WARNING"
   assert_eq "(b2) no warning text on stderr" "" "$(cat "$stderr_tmp")"
+}
+
+# (b3) LEGACY FALLBACK — the old FABRICA_* gate keys are just as non-overridable: recognized,
+# warned about by name, never applied. A legacy target can't lower its gate under the old
+# spelling either.
+test_legacy_gate_keys_ignored_with_warning() {
+  local content
+  content="$(printf 'FABRICA_REVIEW_EFFORT=low\nFABRICA_DEBATE_EFFORT=low\n')"
+  reset_vars
+  run_parser_herestring "$content"
+  assert_eq "(b3) legacy FABRICA_REVIEW_EFFORT line does NOT lower YSTACK_REVIEW_EFFORT" "high" "$YSTACK_REVIEW_EFFORT"
+  assert_eq "(b3) legacy FABRICA_DEBATE_EFFORT line does NOT lower YSTACK_DEBATE_EFFORT" "high" "$YSTACK_DEBATE_EFFORT"
+  assert_eq "(b3) MC_TARGET_OVERRIDE_GATE_WARNING is set for legacy gate keys too" "1" "$MC_TARGET_OVERRIDE_GATE_WARNING"
+  local warn; warn="$(cat "$stderr_tmp")"
+  assert_contains "(b3) warning names the legacy FABRICA_REVIEW_EFFORT key" "FABRICA_REVIEW_EFFORT" "$warn"
+  assert_contains "(b3) warning names the legacy FABRICA_DEBATE_EFFORT key" "FABRICA_DEBATE_EFFORT" "$warn"
 }
 
 # ---------------------------------------------------------------------------------
@@ -203,6 +224,26 @@ test_no_gate_key_no_warning() {
 test_valid_producer_override_applied() {
   local content
   content="$(cat <<'EOF'
+YSTACK_CODER_MODEL=opus
+YSTACK_HANDS_MODEL='haiku'
+YSTACK_CODEX_MODEL="gpt-5.1-codex"
+EOF
+)"
+  reset_vars
+  run_parser_herestring "$content"
+  assert_eq "(c) YSTACK_CODER_MODEL applied (unquoted value)" "opus" "$YSTACK_CODER_MODEL"
+  assert_eq "(c) YSTACK_HANDS_MODEL applied (single-quoted value, unquoted)" "haiku" "$YSTACK_HANDS_MODEL"
+  assert_eq "(c) YSTACK_CODEX_MODEL applied (double-quoted value, unquoted)" "gpt-5.1-codex" "$YSTACK_CODEX_MODEL"
+  assert_eq "(c) gate keys untouched by a producer-only override" "high" "$YSTACK_REVIEW_EFFORT"
+  assert_eq "(c) no gate-key warning on a producer-only override" "0" "$MC_TARGET_OVERRIDE_GATE_WARNING"
+}
+
+# (c2) LEGACY FALLBACK — a legacy override written entirely with FABRICA_* keys still works: each
+# legacy producer key lands in its canonical YSTACK_* variable, so the callers (which read only
+# YSTACK_*) see the target's values.
+test_legacy_producer_override_applied() {
+  local content
+  content="$(cat <<'EOF'
 FABRICA_CODER_MODEL=opus
 FABRICA_HANDS_MODEL='haiku'
 FABRICA_CODEX_MODEL="gpt-5.1-codex"
@@ -210,11 +251,54 @@ EOF
 )"
   reset_vars
   run_parser_herestring "$content"
-  assert_eq "(c) FABRICA_CODER_MODEL applied (unquoted value)" "opus" "$FABRICA_CODER_MODEL"
-  assert_eq "(c) FABRICA_HANDS_MODEL applied (single-quoted value, unquoted)" "haiku" "$FABRICA_HANDS_MODEL"
-  assert_eq "(c) FABRICA_CODEX_MODEL applied (double-quoted value, unquoted)" "gpt-5.1-codex" "$FABRICA_CODEX_MODEL"
-  assert_eq "(c) gate keys untouched by a producer-only override" "high" "$FABRICA_REVIEW_EFFORT"
-  assert_eq "(c) no gate-key warning on a producer-only override" "0" "$MC_TARGET_OVERRIDE_GATE_WARNING"
+  assert_eq "(c2) legacy FABRICA_CODER_MODEL lands in YSTACK_CODER_MODEL" "opus" "$YSTACK_CODER_MODEL"
+  assert_eq "(c2) legacy FABRICA_HANDS_MODEL lands in YSTACK_HANDS_MODEL" "haiku" "$YSTACK_HANDS_MODEL"
+  assert_eq "(c2) legacy FABRICA_CODEX_MODEL lands in YSTACK_CODEX_MODEL" "gpt-5.1-codex" "$YSTACK_CODEX_MODEL"
+  assert_eq "(c2) gate keys untouched by a legacy producer-only override" "high" "$YSTACK_REVIEW_EFFORT"
+  assert_eq "(c2) no gate-key warning on a legacy producer-only override" "0" "$MC_TARGET_OVERRIDE_GATE_WARNING"
+}
+
+# (c3) BOTH FAMILIES, YSTACK_* FIRST — the YSTACK_* value wins; the later FABRICA_* line for the
+# same setting is ignored. A key set only under the legacy name still applies.
+test_both_families_ystack_first_wins() {
+  local content
+  content="$(cat <<'EOF'
+YSTACK_CODEX_MODEL=new-model
+FABRICA_CODEX_MODEL=old-model
+FABRICA_HANDS_MODEL=legacy-hands
+EOF
+)"
+  reset_vars
+  run_parser_herestring "$content"
+  assert_eq "(c3) YSTACK_ line first, FABRICA_ line after -> YSTACK_ value wins" "new-model" "$YSTACK_CODEX_MODEL"
+  assert_eq "(c3) a setting present ONLY under the legacy name still applies" "legacy-hands" "$YSTACK_HANDS_MODEL"
+}
+
+# (c4) BOTH FAMILIES, FABRICA_* FIRST — order must not matter: the YSTACK_* line wins even when
+# the legacy line comes first, and a later legacy line can't take the setting back.
+test_both_families_fabrica_first_still_loses() {
+  local content
+  content="$(cat <<'EOF'
+FABRICA_CODEX_MODEL=old-model
+YSTACK_CODEX_MODEL=new-model
+FABRICA_CODEX_MODEL=old-model-again
+EOF
+)"
+  reset_vars
+  run_parser_herestring "$content"
+  assert_eq "(c4) FABRICA_ line first, YSTACK_ line after -> YSTACK_ value still wins" "new-model" "$YSTACK_CODEX_MODEL"
+}
+
+# (c5) a YSTACK_* line whose VALUE is rejected (charset) never "claims" the setting — a valid
+# legacy line for the same setting still applies. Rejected lines are ignored entirely, in either
+# family.
+test_rejected_ystack_line_does_not_block_legacy() {
+  local content
+  # shellcheck disable=SC2016  # literal $(...) on purpose: the parser must reject it, never run it
+  content="$(printf 'YSTACK_CODEX_MODEL=$(bad value)\nFABRICA_CODEX_MODEL=legacy-ok\n')"
+  reset_vars
+  run_parser_herestring "$content"
+  assert_eq "(c5) rejected YSTACK_ value does not block a valid legacy line" "legacy-ok" "$YSTACK_CODEX_MODEL"
 }
 
 # ---------------------------------------------------------------------------------
@@ -224,51 +308,58 @@ EOF
 test_charset_and_quoting_edge_cases() {
   reset_vars
   # Mismatched quote (only a leading quote) -> rejected.
-  run_parser_herestring 'FABRICA_CODEX_MODEL="unterminated'
-  assert_eq "(d) mismatched leading-quote-only value rejected" "" "$FABRICA_CODEX_MODEL"
+  run_parser_herestring 'YSTACK_CODEX_MODEL="unterminated'
+  assert_eq "(d) mismatched leading-quote-only value rejected" "" "$YSTACK_CODEX_MODEL"
 
   reset_vars
   # Embedded quote surviving the one-layer strip -> rejected by the charset check.
-  run_parser_herestring 'FABRICA_CODEX_MODEL="foo"bar"'
-  assert_eq "(d) embedded-quote value rejected" "" "$FABRICA_CODEX_MODEL"
+  run_parser_herestring 'YSTACK_CODEX_MODEL="foo"bar"'
+  assert_eq "(d) embedded-quote value rejected" "" "$YSTACK_CODEX_MODEL"
 
   reset_vars
   # A value with a slash/space (path-like injection attempt) -> rejected.
-  run_parser_herestring 'FABRICA_CODEX_MODEL=/etc/passwd oops'
-  assert_eq "(d) value with space/slash rejected" "" "$FABRICA_CODEX_MODEL"
+  run_parser_herestring 'YSTACK_CODEX_MODEL=/etc/passwd oops'
+  assert_eq "(d) value with space/slash rejected" "" "$YSTACK_CODEX_MODEL"
 
   reset_vars
   # An explicit empty value is VALID (means "unset -> inherit default"), not rejected.
-  run_parser_herestring 'FABRICA_CODEX_MODEL='
-  assert_eq "(d) explicit empty value is accepted as empty" "" "$FABRICA_CODEX_MODEL"
+  run_parser_herestring 'YSTACK_CODEX_MODEL='
+  assert_eq "(d) explicit empty value is accepted as empty" "" "$YSTACK_CODEX_MODEL"
 
   reset_vars
   # Dots/dashes/underscores/digits are all in the allowed charset.
-  run_parser_herestring 'FABRICA_CODER_MODEL=claude-sonnet-4-5-20250929'
-  assert_eq "(d) full pinned model id (dots/dashes/digits) accepted" "claude-sonnet-4-5-20250929" "$FABRICA_CODER_MODEL"
+  run_parser_herestring 'YSTACK_CODER_MODEL=claude-sonnet-4-5-20250929'
+  assert_eq "(d) full pinned model id (dots/dashes/digits) accepted" "claude-sonnet-4-5-20250929" "$YSTACK_CODER_MODEL"
+
+  reset_vars
+  # The same charset guard applies to the legacy family — a bad legacy value is rejected too.
+  run_parser_herestring 'FABRICA_CODEX_MODEL=/etc/passwd oops'
+  assert_eq "(d) legacy-key value with space/slash rejected" "" "$YSTACK_CODEX_MODEL"
 }
 
 # ---------------------------------------------------------------------------------
 # (e) NON-MATCHING LINES are silently ignored: comments, blank lines, unknown/unallowed keys,
-# and a key name that is merely a PREFIX/suffix collision with an allowed key.
+# and a key name that is merely a PREFIX/suffix collision with an allowed key (in either family).
 # ---------------------------------------------------------------------------------
 test_non_matching_lines_ignored() {
   local content
   content="$(cat <<'EOF'
 # just a comment
 
+YSTACK_UNKNOWN_KEY=whatever
 FABRICA_UNKNOWN_KEY=whatever
-export FABRICA_CODEX_MODEL=exported-form-not-matched
- FABRICA_CODER_MODEL=leading-space-not-matched
-FABRICA_CODER_MODELX=suffix-collision-not-matched
+export YSTACK_CODEX_MODEL=exported-form-not-matched
+ YSTACK_CODER_MODEL=leading-space-not-matched
+YSTACK_CODER_MODELX=suffix-collision-not-matched
+FABRICA_CODER_MODELX=legacy-suffix-collision-not-matched
 PATH=/evil
 EOF
 )"
   reset_vars
   run_parser_herestring "$content"
-  assert_eq "(e) unknown FABRICA_ key ignored (FABRICA_CODEX_MODEL untouched)" "" "$FABRICA_CODEX_MODEL"
-  assert_eq "(e) 'export KEY=' form not matched (no bare assignment) (FABRICA_CODEX_MODEL)" "" "$FABRICA_CODEX_MODEL"
-  assert_eq "(e) leading-whitespace line not matched (FABRICA_CODER_MODEL)" "" "$FABRICA_CODER_MODEL"
+  assert_eq "(e) unknown keys in either family ignored (YSTACK_CODEX_MODEL untouched)" "" "$YSTACK_CODEX_MODEL"
+  assert_eq "(e) 'export KEY=' form not matched (no bare assignment) (YSTACK_CODEX_MODEL)" "" "$YSTACK_CODEX_MODEL"
+  assert_eq "(e) leading-whitespace / suffix-collision lines not matched (YSTACK_CODER_MODEL)" "" "$YSTACK_CODER_MODEL"
   assert_eq "(e) no warning/side effect from any of these" "0" "$MC_TARGET_OVERRIDE_GATE_WARNING"
 }
 
@@ -281,7 +372,7 @@ EOF
 # the realistic guard pattern used by both scripts behaves as expected here.
 # ---------------------------------------------------------------------------------
 test_absent_override_guard_pattern() {
-  local missing="$tmproot/does-not-exist/.fabrica/models.conf"
+  local missing="$tmproot/does-not-exist/.ystack/models.conf"
   if [ -f "$missing" ]; then
     failed=$((failed + 1)); echo "FAIL: (f) sanity: missing path unexpectedly exists"
   else
@@ -298,9 +389,9 @@ test_absent_override_guard_pattern() {
 test_pipe_calling_convention_loses_assignments() {
   reset_vars
   # shellcheck disable=SC2030  # the subshell-scoping IS the point being demonstrated
-  printf 'FABRICA_CODER_MODEL=should-not-persist\n' | mc_parse_target_override
+  printf 'YSTACK_CODER_MODEL=should-not-persist\n' | mc_parse_target_override
   # shellcheck disable=SC2031  # asserting the OUTER (caller) scope was NOT mutated by the pipe
-  assert_eq "(g) piping into the parser (wrong convention) does NOT persist assignments to the caller" "" "$FABRICA_CODER_MODEL"
+  assert_eq "(g) piping into the parser (wrong convention) does NOT persist assignments to the caller" "" "$YSTACK_CODER_MODEL"
 }
 
 # ---------------------------------------------------------------------------------
@@ -341,27 +432,32 @@ test_scripts_wire_the_fix() {
   case "$cr" in *"ghr_fetch_default_commit"*) passed=$((passed + 1)); echo "pass: (h) codex-review.sh fetches the default branch fresh via ghr_fetch_default_commit" ;;
     *) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh does not fetch the default branch fresh" ;; esac
 
-  # The .fabrica/models.conf override in codex-review.sh is read from the ANCHOR commit (via
-  # `git show`), never from the PR-head worktree path.
+  # The models.conf override in codex-review.sh is read from the ANCHOR commit (via `git show`),
+  # never from the PR-head worktree path — the canonical .ystack/ path first, with the legacy
+  # .fabrica/ path as a fallback for targets that have not renamed yet.
   # shellcheck disable=SC2016  # literal source-text needle; must not expand.
-  case "$cr" in *'git show "${models_anchor_commit}:.fabrica/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) codex-review.sh reads the override from the fetched default-branch anchor commit" ;;
-    *) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh does not read the override from the anchor commit" ;; esac
+  case "$cr" in *'git show "${models_anchor_commit}:.ystack/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) codex-review.sh reads the .ystack override from the fetched default-branch anchor commit" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh does not read the .ystack override from the anchor commit" ;; esac
   # shellcheck disable=SC2016  # literal source-text needle; must not expand.
-  case "$cr" in *'$worktree/.fabrica/models.conf'*) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh STILL reads the override from the PR-head worktree" ;;
+  case "$cr" in *'git show "${models_anchor_commit}:.fabrica/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) codex-review.sh keeps the legacy .fabrica fallback read, same anchor commit" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh dropped the legacy .fabrica fallback read" ;; esac
+  # shellcheck disable=SC2016  # literal source-text needle; must not expand.
+  case "$cr" in *'$worktree/.ystack/models.conf'*|*'$worktree/.fabrica/models.conf'*) failed=$((failed + 1)); echo "FAIL: (h) codex-review.sh STILL reads the override from the PR-head worktree" ;;
     *) passed=$((passed + 1)); echo "pass: (h) codex-review.sh no longer reads the override from the PR-head worktree" ;; esac
 
   # manager-review.sh's SYMLINK-SAFE fix (P2, adversarial review of PR #115, revision): the
-  # .fabrica/models.conf override is read from the anchored $head_commit via `git show` — a git
-  # blob, never a filesystem path — so a target-committed SYMLINK yields only the link's
-  # target-path string (fails the parser's charset check, silently ignored) instead of following
-  # the link to an arbitrary operator-local file. It must NEVER go back to a `<`-redirect from the
-  # checked-out worktree path, which follows symlinks. See also
-  # scripts/test/north-star-gate.test.sh's (22) end-to-end case.
+  # models.conf override is read from the anchored commit via `git show` — a git blob, never a
+  # filesystem path — so a target-committed SYMLINK yields only the link's target-path string
+  # (fails the parser's charset check, silently ignored) instead of following the link to an
+  # arbitrary operator-local file. It must NEVER go back to a `<`-redirect from the checked-out
+  # worktree path, which follows symlinks. Canonical .ystack/ read plus the legacy .fabrica/
+  # fallback, both anchored. See also scripts/test/north-star-gate.test.sh's (22) end-to-end case.
+  case "$mr" in *':.ystack/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) manager-review.sh reads the .ystack override from an anchored commit via git show (symlink-safe)" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh does not read the .ystack override via an anchored git show" ;; esac
+  case "$mr" in *':.fabrica/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) manager-review.sh keeps the legacy .fabrica fallback read via an anchored git show" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh dropped the legacy .fabrica fallback read" ;; esac
   # shellcheck disable=SC2016  # literal source-text needle; must not expand.
-  case "$mr" in *'git show "${head_commit}:.fabrica/models.conf"'*) passed=$((passed + 1)); echo "pass: (h) manager-review.sh reads the override from the anchored head_commit via git show (symlink-safe)" ;;
-    *) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh does not read the override from head_commit via git show" ;; esac
-  # shellcheck disable=SC2016  # literal source-text needle; must not expand.
-  case "$mr" in *'$worktree/.fabrica/models.conf'*) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh STILL reads the override from the checked-out worktree path (follows symlinks)" ;;
+  case "$mr" in *'$worktree/.ystack/models.conf'*|*'$worktree/.fabrica/models.conf'*) failed=$((failed + 1)); echo "FAIL: (h) manager-review.sh STILL reads the override from the checked-out worktree path (follows symlinks)" ;;
     *) passed=$((passed + 1)); echo "pass: (h) manager-review.sh no longer reads the override from the checked-out worktree path" ;; esac
 
   # Both scripts fold the gate-key-override warning into the posted comment/header — never a
@@ -377,7 +473,12 @@ test_malicious_file_sentinel_not_created
 test_malicious_file_sentinel_not_created_via_file
 test_gate_keys_ignored_with_warning
 test_no_gate_key_no_warning
+test_legacy_gate_keys_ignored_with_warning
 test_valid_producer_override_applied
+test_legacy_producer_override_applied
+test_both_families_ystack_first_wins
+test_both_families_fabrica_first_still_loses
+test_rejected_ystack_line_does_not_block_legacy
 test_charset_and_quoting_edge_cases
 test_non_matching_lines_ignored
 test_absent_override_guard_pattern

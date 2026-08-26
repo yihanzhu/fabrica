@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Creates the labels the review loop uses as its state (each coder spawn is stateless).
 # Idempotent: re-running on a repo that already has the labels updates them instead of
-# failing. Branch protection, CI, the /faber command, and the Codex CLI reviewer are NOT
+# failing. Branch protection, CI, the /yshifu command, and the Codex CLI reviewer are NOT
 # scriptable here — see the manual follow-ups printed at the end and
 # templates/repo-setup.md.
 #
@@ -47,7 +47,7 @@ fi
 
 repo="$1"
 
-# Resolve THIS Fabrica clone's repo root from the script's own location, following
+# Resolve THIS ystack clone's repo root from the script's own location, following
 # symlinks, so the CLAUDE.md template reminder below can print an ABSOLUTE path. This
 # script is run by absolute path FROM the target repo (per QUICKSTART/install.sh), so a
 # relative "templates/target-CLAUDE.md" would misresolve against the target repo where
@@ -99,7 +99,7 @@ fi
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
   "debating|fbca04|Issue under manager-debate; not yet approved"
-  "ready|0e8a16|Cleared to run (user approval OR consensus); Faber's cue to spawn the coder"
+  "ready|0e8a16|Cleared to run (user approval OR consensus); yshifu's cue to spawn the coder"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
   "round-2|4a90d9|Review-loop counter: revision 2"
@@ -201,18 +201,18 @@ done
 
 cat <<EOF
 
-Labels done. Note: running this by hand is OPTIONAL — Faber creates/reconciles these labels
-itself on its first-loop-action bootstrap when you run /faber in the target repo, so
-adoption is 'cd repo -> /faber -> go'. This manual run is a pre-flight / drift-reconcile.
+Labels done. Note: running this by hand is OPTIONAL — yshifu creates/reconciles these labels
+itself on its first-loop-action bootstrap when you run /yshifu in the target repo, so
+adoption is 'cd repo -> /yshifu -> go'. This manual run is a pre-flight / drift-reconcile.
 
 Manual follow-ups this script can't do (see templates/repo-setup.md):
   1. Branch protection on main — UI-only, and unavailable on free private repos.
   2. CI workflow — a PR check that runs tests + lint (the hard merge gate). This is the ONE
-     real precondition; Faber's readiness self-check (doctor.sh, run on first use) flags a
+     real precondition; yshifu's readiness self-check (doctor.sh, run on first use) flags a
      missing PR-CI as an advisory warning. You no longer have to wire it yourself: if the repo
-     has no PR CI, Faber can BOOTSTRAP it — it scaffolds a pull_request workflow from your
+     has no PR CI, yshifu can BOOTSTRAP it — it scaffolds a pull_request workflow from your
      auto-discovered toolchain as the first 'add PR CI' issue. That CI-bootstrap PR is
-     HUMAN-MERGE-ONLY: Faber classifies it as such and does NOT run merge-pr.sh on it at all — a
+     HUMAN-MERGE-ONLY: yshifu classifies it as such and does NOT run merge-pr.sh on it at all — a
      same-repo bootstrap PR that adds the workflow can run it on its own PR and self-report green,
      so the human, not the tooling, is the gate — YOU approve and merge it by hand. Or wire it
      yourself. Either way CI-on-PRs stays the hard gate.
@@ -220,17 +220,17 @@ Manual follow-ups this script can't do (see templates/repo-setup.md):
      install/lint/build/test commands from the repo's CI workflows and standard manifests.
      A filled-in CLAUDE.md "Stack & commands" is an OPTIONAL override — add one only to
      pin or disambiguate a non-standard toolchain auto-discovery wouldn't get right.
-     Template (under your Fabrica clone): ${target_claude_template}.
-  4. Install the /faber command: run scripts/install.sh from your fabrica clone.
-  5. Connect the Codex CLI (signed in) so Faber can run scripts/codex-review.sh on this repo.
-  6. Set THIS target's north star — create it yourself: copy templates/.fabrica/north-star.md
-     (from your fabrica clone) into this repo as .fabrica/north-star.md, replace the placeholder
-     with your own direction, remove the '<!-- fabrica-shipped-default -->' marker, then commit it
+     Template (under your ystack clone): ${target_claude_template}.
+  4. Install the /yshifu command: run scripts/install.sh from your ystack clone.
+  5. Connect the Codex CLI (signed in) so yshifu can run scripts/codex-review.sh on this repo.
+  6. Set THIS target's north star — create it yourself: copy templates/.ystack/north-star.md
+     (from your ystack clone) into this repo as .ystack/north-star.md, replace the placeholder
+     with your own direction, remove the '<!-- ystack-shipped-default -->' marker, then commit it
      (this script does NOT seed the star — it only creates the loop labels above). Then approve it
-     with Faber once you run /faber (this unlocks proactive autonomous mode). Approve it to Faber
+     with yshifu once you run /yshifu (this unlocks proactive autonomous mode). Approve it to yshifu
      in-session, not by editing the file — the shipped approval note is the prior owner's history,
-     not a token that approves the goal for you. Until it's set + committed + approved, Faber acts
-     only on issues you direct (your one-liner -> Faber drafts the spec -> you approve that drafted
-     spec -> ready). (Fabrica-self is its own target: running against the control-plane repo uses
+     not a token that approves the goal for you. Until it's set + committed + approved, yshifu acts
+     only on issues you direct (your one-liner -> yshifu drafts the spec -> you approve that drafted
+     spec -> ready). (ystack-self is its own target: running against the control-plane repo uses
      its root NORTH_STAR.md instead.)
 EOF

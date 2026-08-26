@@ -4,8 +4,15 @@ set -euo pipefail
 # north-star-gate.test.sh — integration asserts for the ATOMIC per-target north-star flip
 # (issue #98a): the manager-review.sh consensus GATE and doctor.sh check (h) both read the
 # TARGET's north star, and the gate reads it COMMITTED (never an uncommitted working-tree edit).
-# (Seeding a target's .fabrica/north-star.md is adoption scope — deferred to #98b — so this
+# (Seeding a target's .ystack/north-star.md is adoption scope — deferred to #98b — so this
 # suite no longer drives setup-target-repo.sh.)
+#
+# The ystack rename (this PR) keeps old targets working. The (23*) cases prove the fallbacks:
+# the gate still reads a legacy `.fabrica/north-star.md`, still FAILs on the legacy
+# `fabrica-shipped-default` marker, prefers the canonical `.ystack/` star when both exist,
+# honors the legacy FABRICA_ALLOW_LOCAL_MIRROR env var as an alias for
+# YSTACK_ALLOW_LOCAL_MIRROR, and still applies (and limits) a legacy `.fabrica/models.conf`
+# override with FABRICA_* keys.
 #
 # These complement scripts/test/north-star-resolver.test.sh, which asserts the resolver lib in
 # isolation. This suite asserts the CONSUMERS now wired to that resolver by #98a — the part
@@ -16,7 +23,7 @@ set -euo pipefail
 # `gh` and `codex` STUBBED on PATH — testing the actual pinned committed-read code path, not a
 # reimplementation of it. The safety-critical assertions (from the manager-debate GAP) are the
 # COMMITTED-vs-uncommitted pair, in BOTH directions:
-#   - a worktree-only .fabrica/north-star.md (not committed) does NOT authorize (gate FAILs); and
+#   - a worktree-only .ystack/north-star.md (not committed) does NOT authorize (gate FAILs); and
 #   - a HEAD-committed star STILL authorizes even if the working-tree copy is deleted or modified.
 # Plus: LOCAL committed star → debates; LOCAL + shipped-default marker → FAIL; UNSET → FAIL;
 # doctor UNSET → WARN and doctor LOCAL committed → pass; and the SOURCE-IDENTITY assert
@@ -31,14 +38,16 @@ repo_root="$(cd "$test_dir/../.." && pwd -P)"
 manager_review="$repo_root/scripts/manager-review.sh"
 doctor="$repo_root/scripts/doctor.sh"
 setup_script="$repo_root/scripts/setup-target-repo.sh"
-faber_template="$repo_root/templates/faber-command.md"
+yshifu_template="$repo_root/templates/yshifu-command.md"
 persona="$repo_root/manager/CLAUDE.md"
-ns_template="$repo_root/templates/.fabrica/north-star.md"
+ns_template="$repo_root/templates/.ystack/north-star.md"
+# The template moves from templates/.fabrica/ in this same PR; accept the pre-rename spot.
+[ -f "$ns_template" ] || ns_template="$repo_root/templates/.fabrica/north-star.md"
 ghr_lib="$repo_root/scripts/lib/gh-remote.sh"   # #102: the shared gh-bound remote-identity helper
 models_conf="$repo_root/config/models.conf"     # #110: manager-review.sh now sources this (required)
 mc_lib="$repo_root/scripts/lib/models-conf.sh"  # #115 P1 fix: parses a target's override as data
 cd_lib="$repo_root/scripts/lib/codex-degraded.sh"  # #117: shared degraded-Codex-run detector
-for f in "$manager_review" "$doctor" "$setup_script" "$faber_template" "$persona" "$ns_template" "$ghr_lib" "$models_conf" "$mc_lib" "$cd_lib"; do
+for f in "$manager_review" "$doctor" "$setup_script" "$yshifu_template" "$persona" "$ns_template" "$ghr_lib" "$models_conf" "$mc_lib" "$cd_lib"; do
   if [ ! -f "$f" ]; then echo "FAIL: missing $f" >&2; exit 1; fi
 done
 
@@ -70,8 +79,8 @@ assert_contains() {
 # --- fake gh / codex on PATH -------------------------------------------------------
 # Fake gh: the identity that the #102 gh-bound anchor pattern needs.
 #   - `repo view [<repo>] --json nameWithOwner` → a slug keyed off the CWD's git top-level
-#     basename (`someone/<basename>`), so a throwaway target repo and the real Fabrica clone get
-#     DIFFERENT slugs (the resolver's Fabrica-self check must not false-match).
+#     basename (`someone/<basename>`), so a throwaway target repo and the real ystack clone get
+#     DIFFERENT slugs (the resolver's ystack-self check must not false-match).
 #   - `repo view [<repo>] --json url` → the matching web URL `https://github.com/someone/<basename>`
 #     (#102). ghr_gh_repo_id reads the HOST off this url and re-appends the slug, so the gate's
 #     canonical identity is `github.com/someone/<basename>` — which the remote-backed target's
@@ -176,7 +185,7 @@ if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
   # Drain stdin (the prompt) so the upstream printf doesn't SIGPIPE.
   cat >/dev/null 2>&1 || true
   if [ -n "$out" ]; then
-    printf 'VERDICT: PROCEED\nREASONING: stub.\nGAP FABER MISSED: none.\n' >"$out"
+    printf 'VERDICT: PROCEED\nREASONING: stub.\nGAP YSHIFU MISSED: none.\n' >"$out"
   fi
   if [ "$saw_json" != "true" ]; then
     echo "codex stub: manager-review omitted required --json" >&2
@@ -184,7 +193,7 @@ if [ "$1" = "exec" ] && [ "$last" = "-" ]; then
   fi
   printf '%s\n' \
     '{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"git status","aggregated_output":"ok","exit_code":0,"status":"completed"}}' \
-    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"VERDICT: PROCEED\\nREASONING: stub.\\nGAP FABER MISSED: none."}}' \
+    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"VERDICT: PROCEED\\nREASONING: stub.\\nGAP YSHIFU MISSED: none."}}' \
     '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
   exit 0
 fi
@@ -200,17 +209,17 @@ chmod +x "$fakebin/codex"
 # PATH; echo "<rc>|<combined-output>". codex/gh are faked; git is real. issue# is 1 (validated
 # as a bare integer by the script). FAKE_GH_NO_REPO (if exported by a caller) passes through.
 #
-# FABRICA_ALLOW_LOCAL_MIRROR (#102 round-2 FIX 1): the hermetic harness rewrites each target's https
+# YSTACK_ALLOW_LOCAL_MIRROR (#102 round-2 FIX 1): the hermetic harness rewrites each target's https
 # identity url to a local `file://` bare for offline transport, so the EFFECTIVE fetch URL is a local
 # mirror (unprovable GitHub identity). The round-2 effective-identity gate FAILs closed on that
 # UNLESS the operator opts into a local mirror. So the standard runner exports the opt-in — this IS
 # the deliberate-local-mirror case the flag exists for. A caller can DISABLE it (to exercise the
-# fail-closed path) by exporting FABRICA_ALLOW_LOCAL_MIRROR=0 before calling; we honor that override.
+# fail-closed path) by exporting YSTACK_ALLOW_LOCAL_MIRROR=0 before calling; we honor that override.
 run_gate() {
-  local repo_dir="$1" rc out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
+  local repo_dir="$1" rc out allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$manager_review" 1 2>&1
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$manager_review" 1 2>&1
   )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
@@ -262,7 +271,7 @@ push_default() {
     git -C "$repo" remote set-head origin --auto >/dev/null 2>&1 || true
 }
 
-# make_target <name> — a throwaway non-Fabrica git repo on default branch `main` with one commit,
+# make_target <name> — a throwaway non-ystack git repo on default branch `main` with one commit,
 # backed by a matching gh-bound remote (so the #102 gate can anchor + fetch fresh); echo its path.
 make_target() {
   local name="$1"
@@ -275,24 +284,24 @@ make_target() {
   echo "$path"
 }
 
-# commit_star <repo> <content...> — write .fabrica/north-star.md, COMMIT it, and PUSH to the
+# commit_star <repo> <content...> — write .ystack/north-star.md, COMMIT it, and PUSH to the
 # remote default branch (so the gate's fetched-fresh anchor carries it).
 commit_star() {
   local repo="$1"; shift
-  mkdir -p "$repo/.fabrica"
-  printf '%s\n' "$*" > "$repo/.fabrica/north-star.md"
-  git -C "$repo" add .fabrica/north-star.md
+  mkdir -p "$repo/.ystack"
+  printf '%s\n' "$*" > "$repo/.ystack/north-star.md"
+  git -C "$repo" add .ystack/north-star.md
   git -C "$repo" commit -q -m "set north star"
   push_default "$repo"
 }
 
-# commit_star_raw <repo> — read EXACT .fabrica/north-star.md bytes from stdin, COMMIT, and PUSH
+# commit_star_raw <repo> — read EXACT .ystack/north-star.md bytes from stdin, COMMIT, and PUSH
 # (so a test can pin whitespace/tab/multiline-split marker variants printf can't).
 commit_star_raw() {
   local repo="$1"
-  mkdir -p "$repo/.fabrica"
-  cat > "$repo/.fabrica/north-star.md"
-  git -C "$repo" add .fabrica/north-star.md
+  mkdir -p "$repo/.ystack"
+  cat > "$repo/.ystack/north-star.md"
+  git -C "$repo" add .ystack/north-star.md
   git -C "$repo" commit -q -m "set north star"
   push_default "$repo"
 }
@@ -313,7 +322,7 @@ commit_symlink_star() {
 }
 
 # advance_remote_default <name> <star-content...> — advance the bare remote <name>.git's default
-# branch (main) to a NEW commit whose .fabrica/north-star.md is <star-content>, WITHOUT touching the
+# branch (main) to a NEW commit whose .ystack/north-star.md is <star-content>, WITHOUT touching the
 # original target's local remote-tracking cache (so that cache goes STALE). Used by the fetch-fresh
 # tests. Portable: it builds a throwaway "pusher" repo wired to the bare remote the SAME way as the
 # targets (insteadOf transport rewrite to a canonical `file://<abspath>` URL, push by remote NAME) —
@@ -329,9 +338,9 @@ advance_remote_default() {
   git -C "$pusher" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
   git -C "$pusher" fetch -q origin main
   git -C "$pusher" checkout -q -B main FETCH_HEAD
-  mkdir -p "$pusher/.fabrica"
-  printf '%s\n' "$*" > "$pusher/.fabrica/north-star.md"
-  git -C "$pusher" add .fabrica/north-star.md
+  mkdir -p "$pusher/.ystack"
+  printf '%s\n' "$*" > "$pusher/.ystack/north-star.md"
+  git -C "$pusher" add .ystack/north-star.md
   git -C "$pusher" commit -q -m "advance remote default"
   git -C "$pusher" push -q origin HEAD:main
 }
@@ -340,8 +349,8 @@ advance_remote_default() {
 # libs (north-star.sh + gh-remote.sh, #102; models-conf.sh, #115 P1 fix; codex-degraded.sh,
 # #117), config/models.conf (#110 — manager-review.sh now sources this from its own
 # control-plane root and FAILs loudly if it's missing), and manager-review.sh, so
-# ns_fabrica_root (derived from the lib's own location) == this clone's git top-level → the
-# resolver classifies FABRICA_SELF and the gate takes the FABRICA_SELF branch. Remote-backed on
+# ns_ystack_root (derived from the lib's own location) == this clone's git top-level → the
+# resolver classifies YSTACK_SELF and the gate takes the YSTACK_SELF branch. Remote-backed on
 # default branch `main` (same as make_target) so the #102 gh-bound anchor path is exercised for
 # the self case too. Echoes the clone path; the caller commits + pushes the root NORTH_STAR.md
 # (or whatever the case needs) and runs the COPIED manager-review.sh so its own-location lib
@@ -365,10 +374,10 @@ make_cp_clone() {
 # fakes on PATH; echo "<rc>|<combined-output>". Sets the local-mirror opt-in for the hermetic
 # file:// transport, same as run_gate (#102 round-2 FIX 1).
 run_cp_gate() {
-  local cp_root="$1" rc out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
+  local cp_root="$1" rc out allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$cp_root"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$cp_root/scripts/manager-review.sh" 1 2>&1
   )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
@@ -376,22 +385,26 @@ run_cp_gate() {
 # ---------------------------------------------------------------------------------
 # (1) SOURCE IDENTITY — approval source == gate source. Operator approval is not
 # machine-readable, so we pin the SOURCE identity: manager-review.sh's gate, the persona, and
-# the /faber template all name the SAME per-target source (.fabrica/north-star.md via the
+# the /yshifu template all name the SAME per-target source (.ystack/north-star.md via the
 # resolver), and the gate reads it COMMITTED (git show at the pinned HEAD).
 # ---------------------------------------------------------------------------------
 test_source_identity() {
-  local mr persona_txt faber_txt
-  mr="$(cat "$manager_review")"; persona_txt="$(cat "$persona")"; faber_txt="$(cat "$faber_template")"
+  local mr persona_txt yshifu_txt
+  mr="$(cat "$manager_review")"; persona_txt="$(cat "$persona")"; yshifu_txt="$(cat "$yshifu_template")"
 
-  # The gate resolves via the shared resolver and reads .fabrica/north-star.md committed.
+  # The gate resolves via the shared resolver and reads .ystack/north-star.md committed.
   case "$mr" in *"ns_resolve"*) passed=$((passed + 1)); echo "pass: (1) gate resolves via ns_resolve (shared resolver)" ;;
     *) failed=$((failed + 1)); echo "FAIL: (1) gate does not call ns_resolve" ;; esac
   # The single-quoted needles are LITERAL source text we search for in manager-review.sh's
   # content — the `${head_commit}` / `$worktree` inside them must NOT expand (they are the exact
   # bytes the script contains), so single quotes are deliberate; SC2016 doesn't apply.
   # shellcheck disable=SC2016
-  case "$mr" in *'git show "${head_commit}:.fabrica/north-star.md"'*) passed=$((passed + 1)); echo "pass: (1) gate reads .fabrica/north-star.md COMMITTED at the pinned head_commit" ;;
-    *) failed=$((failed + 1)); echo "FAIL: (1) gate does not read the committed .fabrica/north-star.md at head_commit" ;; esac
+  case "$mr" in *'git show "${head_commit}:.ystack/north-star.md"'*) passed=$((passed + 1)); echo "pass: (1) gate reads .ystack/north-star.md COMMITTED at the pinned head_commit" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (1) gate does not read the committed .ystack/north-star.md at head_commit" ;; esac
+  # The rename fallback: the gate ALSO keeps the legacy committed read for old targets.
+  # shellcheck disable=SC2016  # literal source-text needle; must not expand (see above).
+  case "$mr" in *'git show "${head_commit}:.fabrica/north-star.md"'*) passed=$((passed + 1)); echo "pass: (1) gate keeps the LEGACY .fabrica/north-star.md committed read as a fallback" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (1) gate lost the legacy .fabrica/north-star.md fallback read" ;; esac
 
   # The pin is the SAME commit the review worktree is materialized at: `git worktree add ...
   # "$head_commit"` and `git show "${head_commit}:..."` both use head_commit (captured once).
@@ -399,12 +412,12 @@ test_source_identity() {
   case "$mr" in *'git worktree add --detach "$worktree" "$head_commit"'*) passed=$((passed + 1)); echo "pass: (1) review worktree is pinned to the SAME head_commit as the committed read" ;;
     *) failed=$((failed + 1)); echo "FAIL: (1) review worktree is not pinned to head_commit" ;; esac
 
-  # The persona + /faber approval/logging reference the per-target .fabrica/north-star.md, NOT
-  # {{FABRICA_ROOT}}/NORTH_STAR.md as the operator-approval source.
-  case "$persona_txt" in *".fabrica/north-star.md"*) passed=$((passed + 1)); echo "pass: (1) persona references the target's .fabrica/north-star.md (approval source)" ;;
-    *) failed=$((failed + 1)); echo "FAIL: (1) persona does not reference .fabrica/north-star.md" ;; esac
-  case "$faber_txt" in *".fabrica/north-star.md"*) passed=$((passed + 1)); echo "pass: (1) /faber template references the target's .fabrica/north-star.md (approval source)" ;;
-    *) failed=$((failed + 1)); echo "FAIL: (1) /faber template does not reference .fabrica/north-star.md" ;; esac
+  # The persona + /yshifu approval/logging reference the per-target .ystack/north-star.md, NOT
+  # {{YSTACK_ROOT}}/NORTH_STAR.md as the operator-approval source.
+  case "$persona_txt" in *".ystack/north-star.md"*) passed=$((passed + 1)); echo "pass: (1) persona references the target's .ystack/north-star.md (approval source)" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (1) persona does not reference .ystack/north-star.md" ;; esac
+  case "$yshifu_txt" in *".ystack/north-star.md"*) passed=$((passed + 1)); echo "pass: (1) /yshifu template references the target's .ystack/north-star.md (approval source)" ;;
+    *) failed=$((failed + 1)); echo "FAIL: (1) /yshifu template does not reference .ystack/north-star.md" ;; esac
 
   # Gate source ≡ approval source is stated explicitly so the two never silently diverge.
   case "$persona_txt" in *"gate source ≡ approval source"*|*"gate reads — gate source"*|*"same committed source"*) passed=$((passed + 1)); echo "pass: (1) persona pins gate-source == approval-source" ;;
@@ -415,13 +428,13 @@ test_source_identity() {
 # (2) COMMITTED vs UNCOMMITTED — the safety-critical pair, BOTH directions.
 # ---------------------------------------------------------------------------------
 
-# (2a) A worktree-only .fabrica/north-star.md (written but NOT committed) does NOT authorize:
+# (2a) A worktree-only .ystack/north-star.md (written but NOT committed) does NOT authorize:
 # the gate reads HEAD, sees no committed star, and FAILs (UNSET) before any verdict.
 test_worktree_only_does_not_authorize() {
   local repo; repo="$(make_target "wt-only")"
   # Write the star but DO NOT commit it — an uncommitted working-tree edit.
-  mkdir -p "$repo/.fabrica"
-  echo "an unreviewed local goal" > "$repo/.fabrica/north-star.md"
+  mkdir -p "$repo/.ystack"
+  echo "an unreviewed local goal" > "$repo/.ystack/north-star.md"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(2a) worktree-only star: gate FAILs (does NOT authorize)" "1" "$rc"
@@ -433,7 +446,7 @@ test_worktree_only_does_not_authorize() {
 test_committed_authorizes_even_if_worktree_deleted() {
   local repo; repo="$(make_target "committed-del")"
   commit_star "$repo" "### our real committed north star · status: **active**"
-  rm -f "$repo/.fabrica/north-star.md"   # working-tree copy gone; HEAD still has it
+  rm -f "$repo/.ystack/north-star.md"   # working-tree copy gone; HEAD still has it
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(2b) committed star authorizes even with the worktree copy DELETED (gate proceeds)" "0" "$rc"
@@ -447,7 +460,7 @@ test_committed_authorizes_even_if_worktree_modified() {
   local repo; repo="$(make_target "committed-mod")"
   commit_star "$repo" "### our real committed north star · status: **active**"
   # Dirty the working tree with a placeholder marker — the gate must ignore this and read HEAD.
-  printf 'placeholder <!-- fabrica-shipped-default -->\n' > "$repo/.fabrica/north-star.md"
+  printf 'placeholder <!-- ystack-shipped-default -->\n' > "$repo/.ystack/north-star.md"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(2b') committed star authorizes even with the worktree copy MODIFIED to a placeholder" "0" "$rc"
@@ -455,58 +468,58 @@ test_committed_authorizes_even_if_worktree_modified() {
 }
 
 # ---------------------------------------------------------------------------------
-# (2c) FIX 1 (round-2) — FABRICA_SELF authorizes off the COMMITTED root NORTH_STAR.md even when
+# (2c) FIX 1 (round-2) — YSTACK_SELF authorizes off the COMMITTED root NORTH_STAR.md even when
 # the working-tree copy is DELETED. We build a throwaway control-plane clone that CONTAINS a copy
 # of the resolver lib + manager-review.sh, init it as git, COMMIT a root NORTH_STAR.md, then delete
-# the worktree copy. ns_fabrica_root derives from the lib's own location, so run FROM this clone
-# and its git top-level == ns_fabrica_root → the resolver reports FABRICA_SELF off committed state
+# the worktree copy. ns_ystack_root derives from the lib's own location, so run FROM this clone
+# and its git top-level == ns_ystack_root → the resolver reports YSTACK_SELF off committed state
 # and the gate reads `git show HEAD:NORTH_STAR.md` — proceeding despite the deleted worktree copy.
-# The gate's FABRICA_SELF branch is EXEMPT from the placeholder-FAIL, so a marker in the committed
-# root star does not block it (Fabrica's own root star legitimately carries the shipped-default
+# The gate's YSTACK_SELF branch is EXEMPT from the placeholder-FAIL, so a marker in the committed
+# root star does not block it (ystack's own root star legitimately carries the shipped-default
 # marker). This is the self analogue of (2b) and directly exercises the resolver/gate agreement.
 # ---------------------------------------------------------------------------------
-test_fabrica_self_committed_worktree_deleted_proceeds() {
-  local cp_root; cp_root="$(make_cp_clone "gate-fabrica-self-committed-del")"
+test_ystack_self_committed_worktree_deleted_proceeds() {
+  local cp_root; cp_root="$(make_cp_clone "gate-ystack-self-committed-del")"
   # Commit a root NORTH_STAR.md + push it to the anchored default branch, then delete the worktree
   # copy: the gate must read the fetched default-branch commit, not the (deleted) worktree file.
-  printf '### Fabrica goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
+  printf '### ystack goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
   git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/manager-review.sh
   git -C "$cp_root" commit -q -m "cp init with committed root star"
   push_default "$cp_root"
   rm -f "$cp_root/NORTH_STAR.md"   # worktree copy gone; the anchored commit still has it
   local res rc out
   res="$(run_cp_gate "$cp_root")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(2c) FABRICA_SELF authorizes off COMMITTED root star with the worktree copy DELETED (gate proceeds)" "0" "$rc"
-  assert_contains "(2c) Fabrica-self gate reached the verdict" "PROCEED" "$out"
+  assert_eq "(2c) YSTACK_SELF authorizes off COMMITTED root star with the worktree copy DELETED (gate proceeds)" "0" "$rc"
+  assert_contains "(2c) ystack-self gate reached the verdict" "PROCEED" "$out"
 }
 
 # ---------------------------------------------------------------------------------
-# (2d) [P2, round-3] Fabrica-self is CLASSIFIED by PATH identity UNCONDITIONALLY — a missing
+# (2d) [P2, round-3] ystack-self is CLASSIFIED by PATH identity UNCONDITIONALLY — a missing
 # committed root NORTH_STAR.md FAILs at the GATE (authorization), it does NOT fall through to a
-# stray `.fabrica/north-star.md`. We build a throwaway control-plane clone (contains the lib +
-# manager-review.sh, so ns_fabrica_root == its git top-level → the resolver classifies FABRICA_SELF),
-# but commit NO root NORTH_STAR.md and DO commit a stray `.fabrica/north-star.md`. Under round-2 the
+# stray `.ystack/north-star.md`. We build a throwaway control-plane clone (contains the lib +
+# manager-review.sh, so ns_ystack_root == its git top-level → the resolver classifies YSTACK_SELF),
+# but commit NO root NORTH_STAR.md and DO commit a stray `.ystack/north-star.md`. Under round-2 the
 # resolver's committed-existence gate would have fallen through to the LOCAL branch and the gate
-# would have PROCEEDED against `.fabrica`. Now the resolver returns FABRICA_SELF (path-only), the gate
-# takes the FABRICA_SELF branch, its `git show HEAD:NORTH_STAR.md` read FAILs cleanly (root not
-# committed) with an actionable message, and it NEVER authorizes off the stray `.fabrica` star.
+# would have PROCEEDED against `.ystack`. Now the resolver returns YSTACK_SELF (path-only), the gate
+# takes the YSTACK_SELF branch, its `git show HEAD:NORTH_STAR.md` read FAILs cleanly (root not
+# committed) with an actionable message, and it NEVER authorizes off the stray `.ystack` star.
 # ---------------------------------------------------------------------------------
-test_fabrica_self_no_committed_root_fails_not_local() {
-  local cp_root; cp_root="$(make_cp_clone "gate-fabrica-self-no-root")"
-  # NO root NORTH_STAR.md. A STRAY .fabrica/north-star.md IS committed + pushed (must NOT authorize).
-  mkdir -p "$cp_root/.fabrica"
-  printf '### Stray goal · status: **active** — must NOT authorize Fabrica-self\nbody\n' > "$cp_root/.fabrica/north-star.md"
-  git -C "$cp_root" add scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/manager-review.sh .fabrica/north-star.md
+test_ystack_self_no_committed_root_fails_not_local() {
+  local cp_root; cp_root="$(make_cp_clone "gate-ystack-self-no-root")"
+  # NO root NORTH_STAR.md. A STRAY .ystack/north-star.md IS committed + pushed (must NOT authorize).
+  mkdir -p "$cp_root/.ystack"
+  printf '### Stray goal · status: **active** — must NOT authorize ystack-self\nbody\n' > "$cp_root/.ystack/north-star.md"
+  git -C "$cp_root" add scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/manager-review.sh .ystack/north-star.md
   git -C "$cp_root" commit -q -m "cp init: stray local star, NO root star"
   push_default "$cp_root"
   local res rc out
   res="$(run_cp_gate "$cp_root")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(2d) FABRICA_SELF with no committed root NORTH_STAR.md → gate FAILs (does NOT fall back to .fabrica)" "1" "$rc"
-  assert_contains "(2d) FABRICA_SELF missing-root FAIL cites NORTH_STAR.md not committed at HEAD" "NORTH_STAR.md is not committed at HEAD" "$out"
-  # And it must NOT have proceeded against the stray .fabrica star.
+  assert_eq "(2d) YSTACK_SELF with no committed root NORTH_STAR.md → gate FAILs (does NOT fall back to .ystack)" "1" "$rc"
+  assert_contains "(2d) YSTACK_SELF missing-root FAIL cites NORTH_STAR.md not committed at HEAD" "NORTH_STAR.md is not committed at HEAD" "$out"
+  # And it must NOT have proceeded against the stray .ystack star.
   case "$out" in
-    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (2d) gate must NOT reach a verdict off the stray .fabrica star"; echo "      actual: [$out]" ;;
-    *) passed=$((passed + 1)); echo "pass: (2d) gate did NOT authorize off the stray .fabrica star" ;;
+    *PROCEED*) failed=$((failed + 1)); echo "FAIL: (2d) gate must NOT reach a verdict off the stray .ystack star"; echo "      actual: [$out]" ;;
+    *) passed=$((passed + 1)); echo "pass: (2d) gate did NOT authorize off the stray .ystack star" ;;
   esac
 }
 
@@ -530,7 +543,7 @@ test_local_marker_fails() {
   local repo; repo="$(make_target "local-marker")"
   # The marker rides on the active HEADING (as in the shipped template), so the heading-anchored
   # active-region scan (round-3 FIX 2) opens on it and the placeholder is detected.
-  commit_star "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
+  commit_star "$repo" "### Placeholder status: **active** <!-- ystack-shipped-default --> replace me"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(3b) LOCAL committed star with shipped-default marker → gate FAILs" "1" "$rc"
@@ -539,7 +552,7 @@ test_local_marker_fails() {
 
 # (3c) UNSET — a non-empty target with no committed star → FAIL with an actionable pointer.
 test_unset_fails() {
-  local repo; repo="$(make_target "unset")"   # committed init, no .fabrica/north-star.md
+  local repo; repo="$(make_target "unset")"   # committed init, no .ystack/north-star.md
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(3c) UNSET target (no committed star) → gate FAILs" "1" "$rc"
@@ -569,14 +582,14 @@ test_gate_marker_variants_fail() {
 
   # reflow-SPLIT: marker on the line just below the active heading
   local r2; r2="$(make_target "marker-split")"
-  printf '### Goal · status: **active**\n<!-- fabrica-shipped-default -->\nbody\n' \
+  printf '### Goal · status: **active**\n<!-- ystack-shipped-default -->\nbody\n' \
     | commit_star_raw "$r2"
   res="$(run_gate "$r2")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(3d-i) reflow-split marker (line below active heading) → gate FAILs" "1" "$rc"
 
   # TAB-separated marker on the active heading
   local r3; r3="$(make_target "marker-tab")"
-  printf '### Goal status: active\t<!--\tfabrica-shipped-default\t-->\nbody\n' \
+  printf '### Goal status: active\t<!--\tystack-shipped-default\t-->\nbody\n' \
     | commit_star_raw "$r3"
   res="$(run_gate "$r3")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(3d-i) tab-separated marker variant → gate FAILs" "1" "$rc"
@@ -587,7 +600,7 @@ test_gate_marker_variants_fail() {
 test_gate_correctly_replaced_proceeds() {
   local repo; repo="$(make_target "marker-prose-only")"
   # Mirrors the shipped template shape: prose NAMES the marker, but the active heading is clean.
-  printf 'Intro: the shipped default carries a <!-- fabrica-shipped-default --> marker; remove it when you set your own.\n\n### Ship widget v2 by Q3 · status: **active** — our real approved goal\nbody\n' \
+  printf 'Intro: the shipped default carries a <!-- ystack-shipped-default --> marker; remove it when you set your own.\n\n### Ship widget v2 by Q3 · status: **active** — our real approved goal\nbody\n' \
     | commit_star_raw "$repo"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
@@ -597,12 +610,12 @@ test_gate_correctly_replaced_proceeds() {
 
 # (3d-iii) FIX 2 (round-2) — a DELIMITER-FREE prose mention of the token WITHIN THE ACTIVE REGION
 # (the operator removed the real `<!-- … -->` comment but the active heading/body still SAYS
-# "fabrica-shipped-default" in prose) must PROCEED. Round-1's bare-token-anywhere match wrongly
+# "ystack-shipped-default" in prose) must PROCEED. Round-1's bare-token-anywhere match wrongly
 # FAILed this valid star; the comment-form match requires the `<!-- … -->` delimiters, so a
 # delimiter-free prose token in the active region does NOT trip the placeholder-FAIL.
 test_gate_prose_token_in_active_region_proceeds() {
   local repo; repo="$(make_target "marker-prose-in-active")"
-  printf '### Ship widget v2 by Q3 · status: **active** — our real goal; we removed the fabrica-shipped-default marker from this line.\nbody\n' \
+  printf '### Ship widget v2 by Q3 · status: **active** — our real goal; we removed the ystack-shipped-default marker from this line.\nbody\n' \
     | commit_star_raw "$repo"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
@@ -651,38 +664,38 @@ test_gate_linked_worktree_ok() {
 
 # ---------------------------------------------------------------------------------
 # (7) FIX 4 (round-2) — the gate REJECTS a committed SYMLINK north star (git mode 120000) BEFORE
-# the marker check, in BOTH the LOCAL and the FABRICA_SELF branches. A committed symlink makes
+# the marker check, in BOTH the LOCAL and the YSTACK_SELF branches. A committed symlink makes
 # `git show <commit>:<path>` return the link's target-path string, not content, so it would bypass
 # the marker check and let the gate authorize off a meaningless string (and diverge from the file
 # Codex reviews). The decoy target the link points at has REAL non-placeholder content, so a
 # symlink-following gate would wrongly PROCEED — the guard must FAIL with the symlink message.
 # ---------------------------------------------------------------------------------
 
-# (7a) LOCAL committed symlink .fabrica/north-star.md → gate FAILs with the symlink message.
+# (7a) LOCAL committed symlink .ystack/north-star.md → gate FAILs with the symlink message.
 test_gate_local_symlink_fails() {
   local repo; repo="$(make_target "local-symlink")"
-  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  commit_symlink_star "$repo" ".ystack/north-star.md"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(7a) LOCAL committed symlink north star → gate FAILs" "1" "$rc"
   assert_contains "(7a) LOCAL symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
 }
 
-# (7b) FABRICA_SELF committed symlink NORTH_STAR.md → gate FAILs with the symlink message. Built
+# (7b) YSTACK_SELF committed symlink NORTH_STAR.md → gate FAILs with the symlink message. Built
 # like (2c): a throwaway control-plane clone that ships the lib + manager-review.sh, so
-# ns_fabrica_root == the cwd's top-level → the gate takes the FABRICA_SELF branch.
-test_gate_fabrica_self_symlink_fails() {
-  local cp_root; cp_root="$(make_cp_clone "gate-fabrica-self-symlink")"
+# ns_ystack_root == the cwd's top-level → the gate takes the YSTACK_SELF branch.
+test_gate_ystack_self_symlink_fails() {
+  local cp_root; cp_root="$(make_cp_clone "gate-ystack-self-symlink")"
   # Commit NORTH_STAR.md as a SYMLINK to a decoy real file, then push.
-  printf '### Real fabrica goal · status: **active** — decoy content\nbody\n' > "$cp_root/decoy-root.md"
+  printf '### Real ystack goal · status: **active** — decoy content\nbody\n' > "$cp_root/decoy-root.md"
   ( cd "$cp_root" && ln -s "decoy-root.md" "NORTH_STAR.md" )
   git -C "$cp_root" add -A
   git -C "$cp_root" commit -q -m "cp init with SYMLINK root star"
   push_default "$cp_root"
   local res rc out
   res="$(run_cp_gate "$cp_root")"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(7b) FABRICA_SELF committed symlink NORTH_STAR.md → gate FAILs" "1" "$rc"
-  assert_contains "(7b) FABRICA_SELF symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
+  assert_eq "(7b) YSTACK_SELF committed symlink NORTH_STAR.md → gate FAILs" "1" "$rc"
+  assert_contains "(7b) YSTACK_SELF symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
 }
 
 # ---------------------------------------------------------------------------------
@@ -699,10 +712,10 @@ test_gate_fabrica_self_symlink_fails() {
 # (typically a subdirectory of the target), so we exercise the subdir-invocation code path. Sets
 # the local-mirror opt-in for the hermetic file:// transport, same as run_gate (#102 round-2 FIX 1).
 run_gate_from() {
-  local dir="$1" rc out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
+  local dir="$1" rc out allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$dir"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$manager_review" 1 2>&1
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$manager_review" 1 2>&1
   )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
@@ -724,7 +737,7 @@ test_gate_subdir_regular_star_proceeds() {
 # (the top-level pathspec resolution correctly finds the symlink mode from the subdir too).
 test_gate_subdir_symlink_still_fails() {
   local repo; repo="$(make_target "subdir-symlink")"
-  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  commit_symlink_star "$repo" ".ystack/north-star.md"
   local sub="$repo/deeply/nested/dir"
   mkdir -p "$sub"
   local res rc out
@@ -744,7 +757,7 @@ test_gate_subdir_symlink_still_fails() {
 # is not bypassed by an early prose region-start).
 test_gate_prose_active_before_heading_still_fails() {
   local repo; repo="$(make_target "prose-before-heading")"
-  printf 'Front-matter: shipped default status: active until you set your own.\n\n### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
+  printf 'Front-matter: shipped default status: active until you set your own.\n\n### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me\nbody\n' \
     | commit_star_raw "$repo"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
@@ -794,15 +807,15 @@ test_gate_no_active_entry_fails() {
 
 # run_doctor_h <repo_dir> — run doctor.sh from inside <repo_dir> with the fakes on PATH; echo
 # only its (h) VERDICT line (pass/warn/fail), NOT the informational `info: (h) north-star anchor:`
-# line (#102) that now precedes it. doctor may exit non-zero on unrelated hard fails (no /faber
+# line (#102) that now precedes it. doctor may exit non-zero on unrelated hard fails (no /yshifu
 # etc.), so capture output regardless of rc.
 run_doctor_h() {
   # Local-mirror opt-in for the hermetic file:// transport, same as run_gate (#102 round-2 FIX 1);
   # a caller can override to 0 to exercise the doctor fail-closed WARN/degrade path.
-  local repo_dir="$1" out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
+  local repo_dir="$1" out allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
   )"
   printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true
 }
@@ -810,10 +823,10 @@ run_doctor_h() {
 # run_doctor_h_anchor <repo_dir> — like run_doctor_h but echo the informational anchor line
 # (`info: (h) north-star anchor: …`) so a test can assert HOW doctor resolved the anchor.
 run_doctor_h_anchor() {
-  local repo_dir="$1" out allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
+  local repo_dir="$1" out allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$doctor" 2>&1 || true
   )"
   printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true
 }
@@ -837,10 +850,10 @@ test_doctor_local_marker_warns() {
   local repo; repo="$(make_target "doctor-marker")"
   # Marker on the active HEADING (shipped-template shape) so the heading-anchored region scan
   # (round-3 FIX 2) opens on it and doctor (h) WARNs on the still-shipped-default placeholder.
-  commit_star "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
+  commit_star "$repo" "### Placeholder status: **active** <!-- ystack-shipped-default --> replace me"
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4c) doctor (h) on a still-shipped-default LOCAL star WARNs" "warn:" "$line"
-  assert_contains "(4c) doctor (h) shipped-default WARN cites the marker" "fabrica-shipped-default" "$line"
+  assert_contains "(4c) doctor (h) shipped-default WARN cites the marker" "ystack-shipped-default" "$line"
 }
 
 # (4d) FIX E — doctor (h) drives its verdict off the COMMITTED star, matching the gate. A star
@@ -849,7 +862,7 @@ test_doctor_local_marker_warns() {
 test_doctor_h_committed_worktree_deleted() {
   local repo; repo="$(make_target "doctor-committed-del")"
   commit_star "$repo" "### Ship v2 · status: **active** — our real committed goal"
-  rm -f "$repo/.fabrica/north-star.md"   # worktree copy gone; HEAD still has it
+  rm -f "$repo/.ystack/north-star.md"   # worktree copy gone; HEAD still has it
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4d) doctor (h) reads the COMMITTED star even when the worktree copy is deleted → pass" "pass:" "$line"
 }
@@ -859,23 +872,23 @@ test_doctor_h_committed_worktree_deleted() {
 test_doctor_h_committed_worktree_modified() {
   local repo; repo="$(make_target "doctor-committed-mod")"
   commit_star "$repo" "### Ship v2 · status: **active** — our real committed goal"
-  printf 'placeholder <!-- fabrica-shipped-default -->\n' > "$repo/.fabrica/north-star.md"
+  printf 'placeholder <!-- ystack-shipped-default -->\n' > "$repo/.ystack/north-star.md"
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4d') doctor (h) reads the COMMITTED (clean) star despite a dirty placeholder worktree edit → pass" "pass:" "$line"
   assert_contains "(4d') doctor (h) notes the working-tree copy differs from the anchored committed version" "differs from the anchored committed version" "$line"
 }
 
-# (4d'') FIX 1 (round-3) — the head-vs-worktree drift note must fire for FABRICA_SELF too. doctor
+# (4d'') FIX 1 (round-3) — the head-vs-worktree drift note must fire for YSTACK_SELF too. doctor
 # drives the note off $committed_relpath (the exact path the gate reads), NOT a hardcoded
-# .fabrica-relative path — so an uncommitted edit to the control plane's ROOT NORTH_STAR.md is
+# .ystack-relative path — so an uncommitted edit to the control plane's ROOT NORTH_STAR.md is
 # surfaced as "differs from HEAD / the gate reads the committed version", not swallowed as a
 # silent clean pass. (manager-review.sh reads HEAD:NORTH_STAR.md and ignores the working tree, so
 # a dirty root star that doctor reported clean would be misleading.) We build a throwaway
-# control-plane clone (contains doctor.sh + the resolver lib, so ns_fabrica_root == its git
-# top-level → the resolver classifies FABRICA_SELF → committed_relpath = NORTH_STAR.md), commit a
+# control-plane clone (contains doctor.sh + the resolver lib, so ns_ystack_root == its git
+# top-level → the resolver classifies YSTACK_SELF → committed_relpath = NORTH_STAR.md), commit a
 # real root star, then DIRTY the working-tree copy and run doctor from the clone.
-test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
-  local name="doctor-fabrica-self-mod"
+test_doctor_h_ystack_self_worktree_modified_notes_drift() {
+  local name="doctor-ystack-self-mod"
   local cp_root="$tmproot/$name"
   mkdir -p "$cp_root/scripts/lib"
   cp "$repo_root/scripts/lib/north-star.sh" "$cp_root/scripts/lib/north-star.sh"
@@ -884,21 +897,21 @@ test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
   git -C "$cp_root" init -q -b main
   setup_remote "$cp_root" "$name"
   # A real (non-placeholder) committed root star, pushed to the anchored default → PASS clean.
-  printf '### Fabrica goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
+  printf '### ystack goal · status: **active** — our own committed control-plane star\nbody\n' > "$cp_root/NORTH_STAR.md"
   git -C "$cp_root" add NORTH_STAR.md scripts/lib/north-star.sh scripts/lib/gh-remote.sh scripts/doctor.sh
   git -C "$cp_root" commit -q -m "cp init with committed root star"
   push_default "$cp_root"
   # Now DIRTY the working-tree root copy (uncommitted edit the gate would ignore).
-  printf '### Fabrica goal · status: **active** — uncommitted local edit\nbody CHANGED\n' > "$cp_root/NORTH_STAR.md"
+  printf '### ystack goal · status: **active** — uncommitted local edit\nbody CHANGED\n' > "$cp_root/NORTH_STAR.md"
   # Local-mirror opt-in for the hermetic file:// transport, same as run_doctor_h (#102 round-2 FIX 1).
-  local line allow="${FABRICA_ALLOW_LOCAL_MIRROR:-1}"
+  local line allow="${YSTACK_ALLOW_LOCAL_MIRROR:-1}"
   line="$(
     cd "$cp_root"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR="$allow" bash "$cp_root/scripts/doctor.sh" 2>&1 || true
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR="$allow" bash "$cp_root/scripts/doctor.sh" 2>&1 || true
   )"
   line="$(printf '%s' "$line" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true)"
-  assert_contains "(4d'') doctor (h) on Fabrica-self reads the COMMITTED root star despite a dirty worktree edit → pass" "pass:" "$line"
-  assert_contains "(4d'') doctor (h) notes the Fabrica-self ROOT working-tree copy differs from the anchored committed version" "differs from the anchored committed version" "$line"
+  assert_contains "(4d'') doctor (h) on ystack-self reads the COMMITTED root star despite a dirty worktree edit → pass" "pass:" "$line"
+  assert_contains "(4d'') doctor (h) notes the ystack-self ROOT working-tree copy differs from the anchored committed version" "differs from the anchored committed version" "$line"
 }
 
 # (4f) FIX 4 (round-2) — doctor (h) diagnoses a committed SYMLINK north star as a WARN (symmetric
@@ -906,7 +919,7 @@ test_doctor_h_fabrica_self_worktree_modified_notes_drift() {
 # star; it WARNs that a regular file is required.
 test_doctor_h_committed_symlink_warns() {
   local repo; repo="$(make_target "doctor-symlink")"
-  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  commit_symlink_star "$repo" ".ystack/north-star.md"
   local line; line="$(run_doctor_h "$repo")"
   assert_contains "(4f) doctor (h) on a committed SYMLINK north star WARNs" "warn:" "$line"
   assert_contains "(4f) doctor (h) symlink WARN says a regular file is required (not a symlink)" "SYMLINK" "$line"
@@ -919,7 +932,7 @@ test_doctor_missing_lib_reports_and_summarizes() {
   # Build a throwaway clone of the control-plane tree with the lib removed. Copy only what doctor
   # needs to run past its early checks; the point is the MISSING lib, so remove it after copying.
   local fake_root="$tmproot/doctor-nolib-root"
-  mkdir -p "$fake_root/scripts/lib" "$fake_root/scripts/test" "$fake_root/ci" "$fake_root/templates/.fabrica"
+  mkdir -p "$fake_root/scripts/lib" "$fake_root/scripts/test" "$fake_root/ci" "$fake_root/templates/.ystack"
   cp "$doctor" "$fake_root/scripts/doctor.sh"; chmod +x "$fake_root/scripts/doctor.sh"
   cp "$setup_script" "$fake_root/scripts/setup-target-repo.sh"; chmod +x "$fake_root/scripts/setup-target-repo.sh"
   cp "$repo_root/ci/required-files.txt" "$fake_root/ci/required-files.txt"
@@ -949,9 +962,9 @@ test_gate_anchors_to_default_not_feature_branch() {
   commit_star "$repo" "### Ship v2 by Q3 · status: **active** — our real integrated goal"
   # Now check out a FEATURE branch and commit a PLACEHOLDER star there (NOT pushed to main).
   git -C "$repo" checkout -q -b feature
-  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
-    > "$repo/.fabrica/north-star.md"
-  git -C "$repo" add .fabrica/north-star.md
+  printf '### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me\nbody\n' \
+    > "$repo/.ystack/north-star.md"
+  git -C "$repo" add .ystack/north-star.md
   git -C "$repo" commit -q -m "feature-branch placeholder star (must NOT authorize)"
   # HEAD is now the feature branch. The gate must anchor to main (the pushed real star) → PROCEED.
   local res rc out
@@ -967,14 +980,14 @@ test_gate_default_placeholder_feature_real_fails() {
   local repo; repo="$(make_target "anchor-default-placeholder")"
   # main gets a PLACEHOLDER star (pushed → the anchored default carries it).
   commit_star_raw "$repo" <<'STAR'
-### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me
 body
 STAR
   # A feature branch has a REAL star, but it never reaches the default branch.
   git -C "$repo" checkout -q -b feature
   printf '### Ship v2 · status: **active** — real feature-branch star (not on default)\nbody\n' \
-    > "$repo/.fabrica/north-star.md"
-  git -C "$repo" add .fabrica/north-star.md
+    > "$repo/.ystack/north-star.md"
+  git -C "$repo" add .ystack/north-star.md
   git -C "$repo" commit -q -m "feature real star (not integrated to default)"
   local res rc out
   res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
@@ -994,7 +1007,7 @@ test_gate_fetches_fresh_not_stale_cache() {
   local repo; repo="$(make_target "$name")"
   # v1 on main = a PLACEHOLDER star, pushed → the target's refs/remotes/origin/main now caches v1.
   commit_star_raw "$repo" <<'STAR'
-### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me
 body
 STAR
   # Confirm the cache is populated at the placeholder commit (belt-and-suspenders).
@@ -1069,10 +1082,10 @@ test_gate_fork_selects_upstream_not_origin() {
   git init -q -b main "$forkclone"
   git -C "$forkclone" remote add origin "https://github.com/me/${name}-fork.git"
   git -C "$forkclone" config "url.file://${fork_bare}.insteadOf" "https://github.com/me/${name}-fork.git"
-  mkdir -p "$forkclone/.fabrica"
-  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' \
-    > "$forkclone/.fabrica/north-star.md"
-  git -C "$forkclone" add .fabrica/north-star.md
+  mkdir -p "$forkclone/.ystack"
+  printf '### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me\nbody\n' \
+    > "$forkclone/.ystack/north-star.md"
+  git -C "$forkclone" add .ystack/north-star.md
   git -C "$forkclone" commit -q -m "fork placeholder star"
   git -C "$forkclone" push -q origin HEAD:main
   git --git-dir="$fork_bare" symbolic-ref HEAD refs/heads/main
@@ -1206,7 +1219,7 @@ test_doctor_h_reads_local_not_fresh_remote() {
   local name="doctor-readonly-local"
   local repo; repo="$(make_target "$name")"
   commit_star_raw "$repo" <<'STAR'
-### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me
 body
 STAR
   # Advance the bare remote's default to a REAL star; the target's LOCAL refs/heads/main stays at the
@@ -1216,7 +1229,7 @@ STAR
   local line; line="$(run_doctor_h "$repo")"
   # READ-ONLY: reads the LOCAL placeholder, so it WARNs (does NOT read the fresh remote real star).
   assert_contains "(4g-ii') doctor (h) reads the LOCAL committed placeholder (not the fresh remote) → WARN" "warn:" "$line"
-  assert_contains "(4g-ii') WARN cites the local placeholder's shipped-default marker" "fabrica-shipped-default" "$line"
+  assert_contains "(4g-ii') WARN cites the local placeholder's shipped-default marker" "ystack-shipped-default" "$line"
   # And confirm the read really was local-only: no FETCH_HEAD was written.
   local fh_after; fh_after="$([ -e "$repo/.git/FETCH_HEAD" ] && echo yes || echo no)"
   assert_eq "(4g-ii') doctor (h) wrote NO .git/FETCH_HEAD while reading the local placeholder" "no" "$fh_after"
@@ -1247,7 +1260,7 @@ test_doctor_h_local_fallback_visible() {
 # redirects the fetch to a DIFFERENT GitHub identity FAILs (read repo B, post to gh's repo A); a
 # rewrite to a local path / file:// / ext:: (unprovable identity, normalizes empty) ALSO FAILs by
 # default (round-2 — "empty ⇒ trusted" was the re-attack hole), and is allowed ONLY under the
-# explicit FABRICA_ALLOW_LOCAL_MIRROR=1 opt-in. A same-identity transport rewrite (https↔ssh for the
+# explicit YSTACK_ALLOW_LOCAL_MIRROR=1 opt-in. A same-identity transport rewrite (https↔ssh for the
 # SAME repo, normalizes to the same id) PASSES.
 # ---------------------------------------------------------------------------------
 
@@ -1425,13 +1438,13 @@ test_gate_case_insensitive_owner_repo_selected() {
 }
 
 # (17a) UNIT — ghr_assert_effective_identity directly, FAIL-CLOSED (#102 round-2 FIX 1). Deterministic
-# (no network): we only vary the insteadOf (and the FABRICA_ALLOW_LOCAL_MIRROR opt-in) and check the
+# (no network): we only vary the insteadOf (and the YSTACK_ALLOW_LOCAL_MIRROR opt-in) and check the
 # helper's rc + message, since it is a pure derivation over `git remote get-url`. Covers: no insteadOf
 # → OK; cross-repo GitHub substitution → FAIL (even under the opt-in); same-identity https↔ssh rewrite
 # → OK; local file:// mirror (unprovable identity) → FAIL by default, OK only under the explicit opt-in.
 # run_effid <repo_dir> <gh_id> [allow_local_mirror] — source the lib in a subshell cd'd into
 # <repo_dir> and run ghr_assert_effective_identity against `origin`; echo "<rc>|<stderr>". The
-# optional third arg sets FABRICA_ALLOW_LOCAL_MIRROR for THAT call (default unset → fail-closed). A
+# optional third arg sets YSTACK_ALLOW_LOCAL_MIRROR for THAT call (default unset → fail-closed). A
 # standalone helper (like run_gate) so the subshell reads only its OWN positional args — no outer
 # `$repo` shared across the subshell boundary, so shellcheck's SC2030/SC2031 heuristic never fires.
 run_effid() {
@@ -1439,7 +1452,7 @@ run_effid() {
   # A PREFIX assignment on the function call scopes the opt-in to that single invocation (no subshell
   # var-modification for shellcheck to flag), while still exercising the flag the callers vary.
   # shellcheck source=scripts/lib/gh-remote.sh
-  out="$( cd "$rd" && . "$ghr_lib" && FABRICA_ALLOW_LOCAL_MIRROR="$allow" ghr_assert_effective_identity origin "$ghid" 2>&1 )" && rc=0 || rc=$?
+  out="$( cd "$rd" && . "$ghr_lib" && YSTACK_ALLOW_LOCAL_MIRROR="$allow" ghr_assert_effective_identity origin "$ghid" 2>&1 )" && rc=0 || rc=$?
   printf '%s|%s' "$rc" "$out"
 }
 
@@ -1464,7 +1477,7 @@ test_effective_identity_helper_unit() {
   # A cross-repo GitHub substitution FAILs EVEN under the local-mirror opt-in (the opt-in is only for
   # unprovable local transports, never for redirecting to a different GitHub repo).
   res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
-  assert_eq "(17a-ii) cross-repo insteadOf FAILs even with FABRICA_ALLOW_LOCAL_MIRROR=1 (rc 1)" "1" "$rc"
+  assert_eq "(17a-ii) cross-repo insteadOf FAILs even with YSTACK_ALLOW_LOCAL_MIRROR=1 (rc 1)" "1" "$rc"
   git -C "$repo" config --unset "url.https://github.com/attacker/evil.git.insteadOf"
 
   # (iii) SAME-IDENTITY transport rewrite (https→ssh for the SAME repo) → normalizes to the same id → OK.
@@ -1475,11 +1488,11 @@ test_effective_identity_helper_unit() {
 
   # (iv) LOCAL file:// mirror (unprovable GitHub identity) → FAIL-CLOSED BY DEFAULT (round-2 FIX 1:
   # empty is no longer trusted — an attacker's `url.<local>.insteadOf` could silently redirect the
-  # fetch). It is allowed ONLY under the explicit FABRICA_ALLOW_LOCAL_MIRROR=1 opt-in.
+  # fetch). It is allowed ONLY under the explicit YSTACK_ALLOW_LOCAL_MIRROR=1 opt-in.
   git -C "$repo" config "url.file:///srv/mirror/widget.git.insteadOf" "https://github.com/someone/widget.git"
   res="$(run_effid "$repo" "$gh_id")"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17a-iv) local file:// mirror insteadOf → FAILs closed by default (rc 1)" "1" "$rc"
-  assert_contains "(17a-iv) FAIL explains the unprovable transport + names the opt-in" "FABRICA_ALLOW_LOCAL_MIRROR=1" "$out"
+  assert_contains "(17a-iv) FAIL explains the unprovable transport + names the opt-in" "YSTACK_ALLOW_LOCAL_MIRROR=1" "$out"
   res="$(run_effid "$repo" "$gh_id" 1)"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17a-iv) local file:// mirror insteadOf → OK under the explicit opt-in (rc 0)" "0" "$rc"
   git -C "$repo" config --unset "url.file:///srv/mirror/widget.git.insteadOf"
@@ -1495,7 +1508,7 @@ test_effective_identity_helper_unit() {
   git -C "$repo" config --unset "url./srv/mirror/widget.git.insteadOf"
 
   # (vi) ext:: exotic transport substitution (normalizes empty) → FAIL-CLOSED by default AND — the
-  # #102 round-5 [P2] fix — STILL FAILs even WITH FABRICA_ALLOW_LOCAL_MIRROR=1: the opt-in relaxes
+  # #102 round-5 [P2] fix — STILL FAILs even WITH YSTACK_ALLOW_LOCAL_MIRROR=1: the opt-in relaxes
   # ONLY genuinely-local (file://+path) transports, NEVER an ext::/fd::/remote-helper that runs an
   # arbitrary transport against an arbitrary source while the verdict binds to gh's repo.
   git -C "$repo" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/widget.git"
@@ -1533,9 +1546,9 @@ test_gate_insteadof_cross_repo_fails() {
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
   # A committed real star locally (so ONLY the insteadOf guard — not a missing star — can be the FAIL).
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   # origin matches gh's identity (someone/<basename>) so ghr_select_remote picks it...
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
@@ -1555,7 +1568,7 @@ test_gate_insteadof_cross_repo_fails() {
 # (17c) END-TO-END — a deliberate local-mirror transport insteadOf still WORKS UNDER THE OPT-IN: the
 # hermetic targets (built by make_target) rewrite the configured https identity url to a local file://
 # bare for transport. The effective url is a local mirror (unprovable GitHub identity) — which now
-# FAILs closed by default (round-2 FIX 1) — so the operator opts in with FABRICA_ALLOW_LOCAL_MIRROR=1
+# FAILs closed by default (round-2 FIX 1) — so the operator opts in with YSTACK_ALLOW_LOCAL_MIRROR=1
 # (set by run_gate for the whole hermetic suite). This is the positive control: the opt-in lets the
 # legitimate local mirror the loop depends on proceed, while the DEFAULT stays fail-closed (17e).
 test_gate_insteadof_same_identity_transport_works() {
@@ -1569,16 +1582,16 @@ test_gate_insteadof_same_identity_transport_works() {
 
 # (17e) END-TO-END — WITHOUT the opt-in, the hermetic local-mirror target FAILs CLOSED (round-2
 # FIX 1: "empty ⇒ trusted" is the re-attack hole). Same setup as 17c, but run with
-# FABRICA_ALLOW_LOCAL_MIRROR=0 so the effective file:// url is unprovable → gate FAILs before
+# YSTACK_ALLOW_LOCAL_MIRROR=0 so the effective file:// url is unprovable → gate FAILs before
 # fetching, never reaching a verdict. This is the security control for FIX 1 (the insteadOf→file://
 # case); 17c is its opt-in counterpart.
 test_gate_insteadof_local_mirror_no_optin_fails() {
   local repo; repo="$(make_target "insteadof-local-nooptin")"
   commit_star "$repo" "### Ship v2 · status: **active** — real committed star behind a local mirror"
   local res rc out
-  res="$( FABRICA_ALLOW_LOCAL_MIRROR=0 run_gate "$repo" )"; rc="${res%%|*}"; out="${res#*|}"
+  res="$( YSTACK_ALLOW_LOCAL_MIRROR=0 run_gate "$repo" )"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17e) local-mirror insteadOf WITHOUT the opt-in → gate FAILs closed (rc 1)" "1" "$rc"
-  assert_contains "(17e) FAIL explains the unprovable transport + names the opt-in" "FABRICA_ALLOW_LOCAL_MIRROR=1" "$out"
+  assert_contains "(17e) FAIL explains the unprovable transport + names the opt-in" "YSTACK_ALLOW_LOCAL_MIRROR=1" "$out"
   case "$out" in
     *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17e) gate must NOT reach a verdict on an unprovable local mirror without the opt-in"; echo "      actual: [$out]" ;;
     *) passed=$((passed + 1)); echo "pass: (17e) gate did NOT authorize on the unprovable local mirror without the opt-in" ;;
@@ -1594,14 +1607,14 @@ test_gate_insteadof_ext_transport_no_optin_fails() {
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
   git -C "$path" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/${name}.git"
   local res rc out
-  res="$( FABRICA_ALLOW_LOCAL_MIRROR=0 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
+  res="$( YSTACK_ALLOW_LOCAL_MIRROR=0 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17f) ext:: transport insteadOf WITHOUT the opt-in → gate FAILs closed (rc 1)" "1" "$rc"
   case "$out" in
     *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17f) gate must NOT reach a verdict on an ext:: transport"; echo "      actual: [$out]" ;;
@@ -1610,7 +1623,7 @@ test_gate_insteadof_ext_transport_no_optin_fails() {
 }
 
 # (17f') END-TO-END — insteadOf → ext:: exotic transport STILL FAILs closed even WITH the opt-in
-# (#102 round-5 [P2]). The FABRICA_ALLOW_LOCAL_MIRROR=1 opt-in relaxes ONLY genuinely-local
+# (#102 round-5 [P2]). The YSTACK_ALLOW_LOCAL_MIRROR=1 opt-in relaxes ONLY genuinely-local
 # (file://+path) transports; an ext:: remote-helper runs an arbitrary transport, so it must remain
 # fail-closed even under the opt-in — otherwise `insteadOf → ext::<cmd>` would let the gate fetch
 # from anywhere while binding its verdict to gh's repo. Same setup as 17f, run under the opt-in.
@@ -1620,15 +1633,15 @@ test_gate_insteadof_ext_transport_optin_still_fails() {
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
   git -C "$path" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/${name}.git"
   local res rc out
   # Explicit opt-in ON — the ext:: transport must STILL fail closed.
-  res="$( FABRICA_ALLOW_LOCAL_MIRROR=1 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
+  res="$( YSTACK_ALLOW_LOCAL_MIRROR=1 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17f') ext:: transport insteadOf WITH the opt-in → STILL FAILs closed (rc 1; opt-in is local-only)" "1" "$rc"
   case "$out" in
     *PROCEED*) failed=$((failed + 1)); echo "FAIL: (17f') gate must NOT authorize an ext:: transport even under the opt-in"; echo "      actual: [$out]" ;;
@@ -1676,9 +1689,9 @@ test_gate_insteadof_userinfo_path_host_trick_fails() {
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   # origin matches gh's identity (someone/<basename>) so ghr_select_remote picks it...
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
@@ -1687,7 +1700,7 @@ test_gate_insteadof_userinfo_path_host_trick_fails() {
   # effective id's host is evil.example, not gh's github.com → FAIL closed.
   git -C "$path" config "url.https://evil.example/x@github.com/someone/${name}.git.insteadOf" "https://github.com/someone/${name}.git"
   local res rc out
-  res="$( FABRICA_ALLOW_LOCAL_MIRROR=0 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
+  res="$( YSTACK_ALLOW_LOCAL_MIRROR=0 run_gate "$path" )"; rc="${res%%|*}"; out="${res#*|}"
   assert_eq "(17h) userinfo-path host trick → gate FAILs closed (host read from authority, not path)" "1" "$rc"
   # The FAIL must come from the IDENTITY gate (host parsed as evil.example ≠ gh's github.com), BEFORE
   # any fetch — not merely because the bogus host was unreachable. Assert the effective id it derived
@@ -1709,9 +1722,9 @@ test_doctor_h_insteadof_cross_repo_warns() {
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
   git -C "$path" config "url.https://github.com/attacker/evil.git.insteadOf" "https://github.com/someone/${name}.git"
@@ -1740,9 +1753,9 @@ test_doctor_h_ghbound_no_matching_remote_warns() {
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed local star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed local star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   # origin points at a DIFFERENT repo identity than gh resolves (gh → someone/<basename>).
   git -C "$path" remote add origin "https://github.com/someone-else/unrelated.git"
@@ -1784,7 +1797,7 @@ test_doctor_target_arg_non_target_skips_anchor() {
   local out anchorline hline
   out="$(
     cd "$repo"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 bash "$doctor" "$target" 2>&1 || true
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR=1 bash "$doctor" "$target" 2>&1 || true
   )"
   anchorline="$(printf '%s' "$out" | grep 'north-star anchor:' | head -n1 || true)"
   # Anchor block skipped → the anchor stays the plain local-HEAD DEFAULT (never the resolved-remote
@@ -1822,9 +1835,9 @@ test_doctor_h_empty_default_fallback_warns() {
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" commit -q --allow-empty -m init
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — real committed local star\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — real committed local star\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "set star"
   # origin matches gh's identity (fake gh reads it → someone/<name>) via the insteadOf transport.
   git init -q --bare "$bare"
@@ -1837,7 +1850,7 @@ test_doctor_h_empty_default_fallback_warns() {
   local out hline warnline anchorline
   out="$(
     cd "$path"
-    FAKE_GH_NO_DEFAULT=1 PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 bash "$doctor" 2>&1 || true
+    FAKE_GH_NO_DEFAULT=1 PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR=1 bash "$doctor" 2>&1 || true
   )"
   # A WARN must be present (not a silent pass:). run_doctor_h-style: the first (h) line is the WARN.
   hline="$(printf '%s' "$out" | grep -E '^(pass|warn|fail): \(h\)' | head -n1 || true)"
@@ -1877,9 +1890,9 @@ test_gate_default_repoint_uses_lsremote_not_stale_symref() {
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
   git -C "$path" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
   # develop carries a PLACEHOLDER star; push it and make the remote default = develop.
-  mkdir -p "$path/.fabrica"
-  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "develop placeholder star"
   git -C "$path" push -q -f origin develop:refs/heads/develop
   git --git-dir="$bare" symbolic-ref HEAD refs/heads/develop
@@ -1888,8 +1901,8 @@ test_gate_default_repoint_uses_lsremote_not_stale_symref() {
   git -C "$path" remote set-head origin develop >/dev/null 2>&1 || true
   # Now REPOINT the remote default to `main` with the REAL star (out of band; local symref stays stale).
   git -C "$path" checkout -q -b main
-  printf '### Ship v2 by Q3 · status: **active** — the real integrated goal on the NEW default\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  printf '### Ship v2 by Q3 · status: **active** — the real integrated goal on the NEW default\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "main real star"
   git -C "$path" push -q -f origin main:refs/heads/main
   git --git-dir="$bare" symbolic-ref HEAD refs/heads/main   # remote default repointed → main
@@ -1918,16 +1931,16 @@ test_gate_spoofed_local_symref_ignored() {
   git -C "$path" remote add origin "https://github.com/someone/${name}.git"
   git -C "$path" config "url.file://${bare}.insteadOf" "https://github.com/someone/${name}.git"
   # main = the REAL star; push it and make it the remote default.
-  mkdir -p "$path/.fabrica"
-  printf '### Ship v2 · status: **active** — the real integrated star on main\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  mkdir -p "$path/.ystack"
+  printf '### Ship v2 · status: **active** — the real integrated star on main\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "main real star"
   git -C "$path" push -q -f origin main:refs/heads/main
   git --git-dir="$bare" symbolic-ref HEAD refs/heads/main
   # Create a `sneaky` branch with a PLACEHOLDER star, push it, and SPOOF the local symref at it.
   git -C "$path" checkout -q -b sneaky
-  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' > "$path/.fabrica/north-star.md"
-  git -C "$path" add .fabrica/north-star.md
+  printf '### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me\nbody\n' > "$path/.ystack/north-star.md"
+  git -C "$path" add .ystack/north-star.md
   git -C "$path" commit -q -m "sneaky placeholder star"
   git -C "$path" push -q -f origin sneaky:refs/heads/sneaky
   git -C "$path" fetch -q origin
@@ -2046,7 +2059,7 @@ test_gate_no_ref_mutation_after_run() {
   # main = a PLACEHOLDER star locally-cached, then advance the remote OUT OF BAND to a REAL star so a
   # tracking-ref-mutating fetch WOULD move refs/remotes/origin/main (making the mutation observable).
   commit_star_raw "$repo" <<'STAR'
-### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me
+### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me
 body
 STAR
   # Populate the local tracking cache at the placeholder tip.
@@ -2073,13 +2086,13 @@ STAR
 }
 
 # ---------------------------------------------------------------------------------
-# (21) TARGET .fabrica/models.conf OVERRIDE — PARSE, NOT SOURCE (adversarial review of #110,
-# P1 fix on PR #115). A target that commits a malicious .fabrica/models.conf — shell injection
-# attempting to touch a sentinel file, PLUS an attempt to downgrade its own FABRICA_DEBATE_EFFORT
+# (21) TARGET .ystack/models.conf OVERRIDE — PARSE, NOT SOURCE (adversarial review of #110,
+# P1 fix on PR #115). A target that commits a malicious .ystack/models.conf — shell injection
+# attempting to touch a sentinel file, PLUS an attempt to downgrade its own YSTACK_DEBATE_EFFORT
 # — must have NEITHER attack succeed: the shell must never execute (mc_parse_target_override
 # reads the file as DATA, never `source`/`.`/`eval`), and the debate must still run at "high"
 # (gate-effort keys are recognized but never applied from a target override). A legitimate
-# producer/model key (FABRICA_CODEX_MODEL) in the SAME file must still apply, and a visible
+# producer/model key (YSTACK_CODEX_MODEL) in the SAME file must still apply, and a visible
 # warning about the rejected gate-effort override must appear in the posted issue comment (never
 # a silent ignore). This exercises the REAL manager-review.sh end-to-end (real git, fake gh/codex)
 # — see also scripts/test/models-conf-parser.test.sh for the parser tested in full isolation.
@@ -2090,13 +2103,13 @@ test_gate_target_models_conf_override_parsed_not_sourced() {
   commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
   local sentinel="$tmproot/${name}-sentinel"
   rm -f "$sentinel"
-  cat > "$repo/.fabrica/models.conf" <<EOF
-FABRICA_DEBATE_EFFORT=low
-FABRICA_CODEX_MODEL=self-set-model
+  cat > "$repo/.ystack/models.conf" <<EOF
+YSTACK_DEBATE_EFFORT=low
+YSTACK_CODEX_MODEL=self-set-model
 \$(touch "$sentinel")
 touch "$sentinel"
 EOF
-  git -C "$repo" add .fabrica/models.conf
+  git -C "$repo" add .ystack/models.conf
   git -C "$repo" commit -q -m "target commits a malicious models.conf override"
   push_default "$repo"
   local res rc out
@@ -2108,25 +2121,25 @@ EOF
   else
     passed=$((passed + 1)); echo "pass: (21) malicious shell in a target-committed models.conf never executed (sentinel NOT created)"
   fi
-  assert_contains "(21) FABRICA_DEBATE_EFFORT stayed 'high' (target cannot downgrade its own gate)" "@ high" "$out"
+  assert_contains "(21) YSTACK_DEBATE_EFFORT stayed 'high' (target cannot downgrade its own gate)" "@ high" "$out"
   case "$out" in
     *"@ low"*) failed=$((failed + 1)); echo "FAIL: (21) debate ran at the target-requested 'low' effort" ;;
     *) passed=$((passed + 1)); echo "pass: (21) debate did NOT run at the target-requested 'low' effort" ;;
   esac
-  assert_contains "(21) legitimate producer-key override (FABRICA_CODEX_MODEL) still applied" "self-set-model" "$out"
+  assert_contains "(21) legitimate producer-key override (YSTACK_CODEX_MODEL) still applied" "self-set-model" "$out"
   assert_contains "(21) visible warning about the rejected gate-effort override is posted" "target override attempted to set gate effort" "$out"
 }
 
 # ---------------------------------------------------------------------------------
-# (22) TARGET .fabrica/models.conf OVERRIDE — SYMLINK-SAFE READ (P2 fix, adversarial review of
+# (22) TARGET .ystack/models.conf OVERRIDE — SYMLINK-SAFE READ (P2 fix, adversarial review of
 # PR #115, found on the revision). Before this fix, manager-review.sh read the per-target
-# override via `mc_parse_target_override < "$worktree/.fabrica/models.conf"` — a `<`-redirect
+# override via `mc_parse_target_override < "$worktree/.ystack/models.conf"` — a `<`-redirect
 # from the CHECKED-OUT WORKTREE PATH, which FOLLOWS SYMLINKS. A target that commits
-# `.fabrica/models.conf` AS A SYMLINK to an arbitrary sentinel file would pass `[ -f ... ]` and
-# have the parser read the POINTED-TO file's content: a charset-valid `FABRICA_CODEX_MODEL=`
+# `.ystack/models.conf` AS A SYMLINK to an arbitrary sentinel file would pass `[ -f ... ]` and
+# have the parser read the POINTED-TO file's content: a charset-valid `YSTACK_CODEX_MODEL=`
 # line in that sentinel would then leak into the resolved model and the PUBLIC posted issue
 # comment header — a narrow info-leak of an arbitrary local file. The fix reads the override via
-# `git show "${head_commit}:.fabrica/models.conf"` instead (a git blob, never a filesystem path):
+# `git show "${head_commit}:.ystack/models.conf"` instead (a git blob, never a filesystem path):
 # for a symlinked path this returns only the link's TARGET-PATH STRING, which does not match any
 # `FABRICA_*=` key and is silently ignored — exactly like the analogous north-star symlink guards
 # above (commit_symlink_star), and mirroring codex-review.sh's pre-existing symlink-safe
@@ -2137,12 +2150,12 @@ test_gate_target_models_conf_symlink_not_dereferenced() {
   local name="models-conf-symlink"
   local repo; repo="$(make_target "$name")"
   commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
-  # A sentinel file OUTSIDE .fabrica/, with a charset-valid FABRICA_CODEX_MODEL= line that WOULD
-  # apply if dereferenced. .fabrica/models.conf is committed as a SYMLINK pointing at it — never
+  # A sentinel file OUTSIDE .ystack/, with a charset-valid YSTACK_CODEX_MODEL= line that WOULD
+  # apply if dereferenced. .ystack/models.conf is committed as a SYMLINK pointing at it — never
   # a regular file.
-  printf 'FABRICA_CODEX_MODEL=leaked-sentinel-model\n' > "$repo/decoy-models-target.conf"
-  mkdir -p "$repo/.fabrica"
-  ( cd "$repo" && ln -s "../decoy-models-target.conf" ".fabrica/models.conf" )
+  printf 'YSTACK_CODEX_MODEL=leaked-sentinel-model\n' > "$repo/decoy-models-target.conf"
+  mkdir -p "$repo/.ystack"
+  ( cd "$repo" && ln -s "../decoy-models-target.conf" ".ystack/models.conf" )
   git -C "$repo" add -A
   git -C "$repo" commit -q -m "commit symlinked models.conf override pointing at a sentinel file"
   push_default "$repo"
@@ -2159,15 +2172,194 @@ test_gate_target_models_conf_symlink_not_dereferenced() {
   assert_contains "(22) resolved model falls back to operator-default (symlinked override not applied)" "reviewer: operator-default @ high" "$out"
 }
 
+
+# ---------------------------------------------------------------------------------
+# (23) RENAME FALLBACKS — targets still on the LEGACY names must keep working end-to-end.
+# The product rename moved the per-target star to `.ystack/north-star.md`, the marker to
+# `ystack-shipped-default`, the opt-in env var to YSTACK_ALLOW_LOCAL_MIRROR, and the per-target
+# override to `.ystack/models.conf` with YSTACK_* keys. Old targets still carry the `.fabrica/`
+# paths, the `fabrica-shipped-default` marker, and FABRICA_* keys — each case below proves the
+# legacy form still behaves exactly like the canonical one (same authorizations, same FAILs,
+# same guards), and that the canonical form wins when both are present.
+# ---------------------------------------------------------------------------------
+
+# commit_star_legacy <repo> <content...> — like commit_star but writes the LEGACY
+# .fabrica/north-star.md (a target that has not renamed yet), commits, and pushes.
+commit_star_legacy() {
+  local repo="$1"; shift
+  mkdir -p "$repo/.fabrica"
+  printf '%s\n' "$*" > "$repo/.fabrica/north-star.md"
+  git -C "$repo" add .fabrica/north-star.md
+  git -C "$repo" commit -q -m "set legacy north star"
+  push_default "$repo"
+}
+
+# (23a) A LEGACY committed star (.fabrica/north-star.md, no .ystack/) still authorizes.
+test_gate_legacy_star_debates() {
+  local repo; repo="$(make_target "legacy-star-ok")"
+  commit_star_legacy "$repo" "### ship the widget v2 by Q3 · status: **active** — legacy-path star"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23a) LEGACY .fabrica committed star (no .ystack) → gate still debates (exit 0)" "0" "$rc"
+  assert_contains "(23a) legacy-path gate reached the verdict" "PROCEED" "$out"
+}
+
+# (23b) A LEGACY placeholder still FAILs: legacy path + legacy marker. An old un-replaced
+# template must not slip through just because the names changed.
+test_gate_legacy_marker_fails() {
+  local repo; repo="$(make_target "legacy-marker")"
+  commit_star_legacy "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23b) LEGACY path + LEGACY marker placeholder → gate still FAILs" "1" "$rc"
+  assert_contains "(23b) legacy placeholder FAIL cites the shipped placeholder" "shipped placeholder" "$out"
+}
+
+# (23b2) The LEGACY marker inside a CANONICAL .ystack star also still FAILs — the marker
+# fallback holds on its own, apart from the path fallback.
+test_gate_legacy_marker_on_canonical_path_fails() {
+  local repo; repo="$(make_target "legacy-marker-canonical-path")"
+  commit_star "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23b2) LEGACY marker in a canonical .ystack star → gate still FAILs" "1" "$rc"
+  assert_contains "(23b2) FAIL cites the shipped placeholder" "shipped placeholder" "$out"
+}
+
+# (23c) When BOTH stars are committed, the CANONICAL .ystack star is the one the gate reads:
+# real .ystack + placeholder .fabrica → PROCEED; placeholder .ystack + real .fabrica → FAIL.
+test_gate_canonical_wins_over_legacy() {
+  local r1; r1="$(make_target "both-canonical-real")"
+  mkdir -p "$r1/.ystack" "$r1/.fabrica"
+  printf '### Ship v2 · status: **active** — the real canonical star\nbody\n' > "$r1/.ystack/north-star.md"
+  printf '### Placeholder · status: **active** · <!-- fabrica-shipped-default --> replace me\nbody\n' > "$r1/.fabrica/north-star.md"
+  git -C "$r1" add .ystack/north-star.md .fabrica/north-star.md
+  git -C "$r1" commit -q -m "both stars: canonical real, legacy placeholder"
+  push_default "$r1"
+  local res rc out
+  res="$(run_gate "$r1")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23c) canonical real + legacy placeholder → gate reads the CANONICAL star → PROCEEDs" "0" "$rc"
+  assert_contains "(23c) gate reached the verdict off the canonical star" "PROCEED" "$out"
+
+  local r2; r2="$(make_target "both-canonical-placeholder")"
+  mkdir -p "$r2/.ystack" "$r2/.fabrica"
+  printf '### Placeholder · status: **active** · <!-- ystack-shipped-default --> replace me\nbody\n' > "$r2/.ystack/north-star.md"
+  printf '### Ship v2 · status: **active** — a real legacy star that must NOT be read\nbody\n' > "$r2/.fabrica/north-star.md"
+  git -C "$r2" add .ystack/north-star.md .fabrica/north-star.md
+  git -C "$r2" commit -q -m "both stars: canonical placeholder, legacy real"
+  push_default "$r2"
+  res="$(run_gate "$r2")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23c) canonical placeholder + legacy real → gate reads the CANONICAL star → FAILs" "1" "$rc"
+  assert_contains "(23c) FAIL cites the canonical star's shipped placeholder" "shipped placeholder" "$out"
+}
+
+# (23d) A LEGACY committed SYMLINK star is still rejected — the legacy fallback path keeps the
+# symlink guard (the fallback must not become a way around it).
+test_gate_legacy_symlink_fails() {
+  local repo; repo="$(make_target "legacy-symlink")"
+  commit_symlink_star "$repo" ".fabrica/north-star.md"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23d) LEGACY committed symlink star → gate still FAILs" "1" "$rc"
+  assert_contains "(23d) legacy symlink FAIL says it must be a regular file, not a symlink" "not a symlink" "$out"
+}
+
+# (23e) doctor (h) still WARNs on a LEGACY placeholder (legacy path + legacy marker), and its
+# message names the legacy path it read — proving doctor picked the legacy relpath.
+test_doctor_legacy_marker_warns() {
+  local repo; repo="$(make_target "doctor-legacy-marker")"
+  commit_star_legacy "$repo" "### Placeholder status: **active** <!-- fabrica-shipped-default --> replace me"
+  local line; line="$(run_doctor_h "$repo")"
+  assert_contains "(23e) doctor (h) on a LEGACY still-shipped-default star WARNs" "warn:" "$line"
+  assert_contains "(23e) legacy-placeholder WARN cites the shipped default" "shipped" "$line"
+  assert_contains "(23e) doctor read the LEGACY path (.fabrica/north-star.md)" ".fabrica/north-star.md" "$line"
+}
+
+# run_effid_legacy <repo_dir> <gh_id> [allow] — like run_effid, but sets ONLY the legacy
+# FABRICA_ALLOW_LOCAL_MIRROR alias (the canonical YSTACK_ALLOW_LOCAL_MIRROR stays unset).
+run_effid_legacy() {
+  local rd="$1" ghid="$2" allow="${3:-}" rc out
+  # shellcheck source=scripts/lib/gh-remote.sh
+  out="$( cd "$rd" && . "$ghr_lib" && FABRICA_ALLOW_LOCAL_MIRROR="$allow" ghr_assert_effective_identity origin "$ghid" 2>&1 )" && rc=0 || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+
+# (23f) UNIT — the legacy FABRICA_ALLOW_LOCAL_MIRROR env var still enables the local-mirror
+# opt-in (an alias for YSTACK_ALLOW_LOCAL_MIRROR): a file:// mirror is allowed under the legacy
+# flag alone, and an ext:: transport still FAILs even under it (the alias widens nothing).
+test_effective_identity_legacy_alias_unit() {
+  local repo="$tmproot/effid-legacy-alias"
+  mkdir -p "$repo"
+  git -C "$repo" init -q -b main
+  git -C "$repo" remote add origin "https://github.com/someone/widget.git"
+  local gh_id="github.com/someone/widget"
+  local res rc
+  git -C "$repo" config "url.file:///srv/mirror/widget.git.insteadOf" "https://github.com/someone/widget.git"
+  # Legacy alias unset → still fail-closed.
+  res="$(run_effid_legacy "$repo" "$gh_id")"; rc="${res%%|*}"
+  assert_eq "(23f) local file:// mirror, no opt-in (legacy alias unset) → FAILs closed (rc 1)" "1" "$rc"
+  # Legacy alias ON → allowed, same as the canonical flag.
+  res="$(run_effid_legacy "$repo" "$gh_id" 1)"; rc="${res%%|*}"
+  assert_eq "(23f) local file:// mirror under LEGACY FABRICA_ALLOW_LOCAL_MIRROR=1 → OK (rc 0)" "0" "$rc"
+  git -C "$repo" config --unset "url.file:///srv/mirror/widget.git.insteadOf"
+  # The legacy alias must NOT bless a non-local transport either.
+  git -C "$repo" config "url.ext::sh -c evil.insteadOf" "https://github.com/someone/widget.git"
+  res="$(run_effid_legacy "$repo" "$gh_id" 1)"; rc="${res%%|*}"
+  assert_eq "(23f) ext:: transport STILL FAILs under the legacy alias (rc 1)" "1" "$rc"
+  git -C "$repo" config --unset "url.ext::sh -c evil.insteadOf"
+}
+
+# (23g) END-TO-END — a whole gate run under ONLY the legacy alias (the canonical var unset):
+# the hermetic local-mirror target still PROCEEDs, so operators who still export the old flag
+# are not broken by the rename.
+test_gate_legacy_alias_end_to_end() {
+  local repo; repo="$(make_target "legacy-alias-e2e")"
+  commit_star "$repo" "### Ship v2 · status: **active** — real committed star behind a local mirror"
+  local rc out
+  out="$(
+    cd "$repo"
+    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 bash "$manager_review" 1 2>&1
+  )" && rc=0 || rc=$?
+  assert_eq "(23g) gate under ONLY the legacy FABRICA_ALLOW_LOCAL_MIRROR=1 → PROCEEDs (alias honored)" "0" "$rc"
+  assert_contains "(23g) legacy-alias gate reached the verdict" "PROCEED" "$out"
+}
+
+# (23h) LEGACY models.conf override — a target still committing .fabrica/models.conf with
+# FABRICA_* keys: the producer key still applies, and the gate-effort key is still rejected
+# with the visible warning (legacy keys get no extra power).
+test_gate_legacy_models_conf_override() {
+  local name="legacy-models-conf"
+  local repo; repo="$(make_target "$name")"
+  commit_star "$repo" "### ship the widget v2 by Q3 · status: **active**"
+  mkdir -p "$repo/.fabrica"
+  cat > "$repo/.fabrica/models.conf" <<'EOF'
+FABRICA_DEBATE_EFFORT=low
+FABRICA_CODEX_MODEL=legacy-set-model
+EOF
+  git -C "$repo" add .fabrica/models.conf
+  git -C "$repo" commit -q -m "legacy-path models.conf override with legacy keys"
+  push_default "$repo"
+  local res rc out
+  res="$(run_gate "$repo")"; rc="${res%%|*}"; out="${res#*|}"
+  assert_eq "(23h) legacy-path/legacy-key override → gate still PROCEEDs" "0" "$rc"
+  assert_contains "(23h) legacy producer key (FABRICA_CODEX_MODEL) still applied" "legacy-set-model" "$out"
+  assert_contains "(23h) gate effort stayed 'high' (legacy key cannot downgrade the gate)" "@ high" "$out"
+  assert_contains "(23h) visible warning about the rejected gate-effort override is posted" "target override attempted to set gate effort" "$out"
+}
+
 echo "== north-star gate/consumer tests =="
 test_source_identity
 test_worktree_only_does_not_authorize
 test_committed_authorizes_even_if_worktree_deleted
 test_committed_authorizes_even_if_worktree_modified
-test_fabrica_self_committed_worktree_deleted_proceeds
-test_fabrica_self_no_committed_root_fails_not_local
+test_ystack_self_committed_worktree_deleted_proceeds
+test_ystack_self_no_committed_root_fails_not_local
 test_local_committed_debates
+test_gate_legacy_star_debates
+test_gate_canonical_wins_over_legacy
 test_local_marker_fails
+test_gate_legacy_marker_fails
+test_gate_legacy_marker_on_canonical_path_fails
 test_unset_fails
 test_gate_marker_variants_fail
 test_gate_correctly_replaced_proceeds
@@ -2175,7 +2367,8 @@ test_gate_prose_token_in_active_region_proceeds
 test_gate_nested_repo_fails
 test_gate_linked_worktree_ok
 test_gate_local_symlink_fails
-test_gate_fabrica_self_symlink_fails
+test_gate_legacy_symlink_fails
+test_gate_ystack_self_symlink_fails
 test_gate_subdir_regular_star_proceeds
 test_gate_subdir_symlink_still_fails
 test_gate_prose_active_before_heading_still_fails
@@ -2192,9 +2385,10 @@ test_gate_local_greenfield_visible_fallback_authorizes
 test_doctor_unset_warns
 test_doctor_local_committed_passes
 test_doctor_local_marker_warns
+test_doctor_legacy_marker_warns
 test_doctor_h_committed_worktree_deleted
 test_doctor_h_committed_worktree_modified
-test_doctor_h_fabrica_self_worktree_modified_notes_drift
+test_doctor_h_ystack_self_worktree_modified_notes_drift
 test_doctor_h_committed_symlink_warns
 test_doctor_missing_lib_reports_and_summarizes
 test_doctor_h_anchor_logs_ghbound
@@ -2205,8 +2399,10 @@ test_normalize_repo_id_authority_and_schemes
 test_gate_uppercase_scheme_remote_selected
 test_gate_case_insensitive_owner_repo_selected
 test_effective_identity_helper_unit
+test_effective_identity_legacy_alias_unit
 test_gate_insteadof_cross_repo_fails
 test_gate_insteadof_same_identity_transport_works
+test_gate_legacy_alias_end_to_end
 test_gate_insteadof_local_mirror_no_optin_fails
 test_gate_insteadof_ext_transport_no_optin_fails
 test_gate_insteadof_ext_transport_optin_still_fails
@@ -2223,6 +2419,7 @@ test_default_branch_offline_local_fallback_unit
 test_select_remote_ssh_alias_effective_fallback
 test_gate_no_ref_mutation_after_run
 test_gate_target_models_conf_override_parsed_not_sourced
+test_gate_legacy_models_conf_override
 test_gate_target_models_conf_symlink_not_dereferenced
 
 echo "-- $passed passed, $failed failed --"

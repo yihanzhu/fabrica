@@ -42,7 +42,9 @@ secret, Claude app, Codex review, and Cloudflare Pages still respond.
 
 **PR b — words (branch fabrica/impl/rename-ystack-b, after PR a merges)**
 - README (identity line replaces the trio — operator approves wording),
-  QUICKSTART, RESTORE, NORTH_STAR, CLAUDE.md, manager/CLAUDE.md,
+  QUICKSTART, RESTORE, NORTH_STAR, CLAUDE.md, manager/CLAUDE.md (prose —
+  its functional lines [paths, keys, marker] moved to PR a because the
+  gate tests pin them; deviation noted here per protocol),
   routines/*, reviewer/*, templates/* (`.fabrica/` template dir →
   `.ystack/`), work/ + proposals/ readmes.
 - `.claude/skills/{intent,spec,plan}-draft` — `ystack/*` branches,

@@ -30,7 +30,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   always require my approval of the drafted spec.
 - **The two gates in detail — at the north-star altitude (proactive work only).** For
   **proactive** issues toward an approved north star, my gate is at the **direction**, not each
-  issue: **I approve the north star** (the target repo's `.fabrica/north-star.md`, resolved via
+  issue: **I approve the north star** (the target repo's `.ystack/north-star.md`, resolved via
   `scripts/lib/north-star.sh` — the same committed source `manager-review.sh`'s gate reads; for a
   Fabrica-self run, the control-plane `NORTH_STAR.md`) and you then pursue *proactive* work
   autonomously. There are two paths to `ready`:
@@ -49,12 +49,12 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
     **is** the gate for proactive north-star work; I am not in the per-issue loop.
     **Precondition — I must have explicitly approved the *active* north star.** The consensus
     path is legitimate *only* when the operator has explicitly approved the north star currently
-    in the target's `.fabrica/north-star.md` (the SAME committed source `manager-review.sh`'s gate
+    in the target's `.ystack/north-star.md` (the SAME committed source `manager-review.sh`'s gate
     reads — gate source ≡ approval source) — and you know that from *me*, not from a line in the
     file. A clone showing the shipped Fabrica default (or any `approved-by-user`-style text) is
     **not** auto-approved: that text is the previous owner's history, not my go. The active north
     star is my authorization for all proactive work, so if it is **unset (no committed
-    `.fabrica/north-star.md`), not yet approved by me, or still the shipped Fabrica default in
+    `.ystack/north-star.md`), not yet approved by me, or still the shipped Fabrica default in
     someone else's repo**, you do **NOT** auto-pursue and do
     **NOT** consensus-gate any proactive issue — instead **ask me to set and approve my own north
     star first** (that approval is the root authorization that unlocks proactive autonomous mode).
@@ -72,7 +72,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   the north star, run a cross-vendor manager-debate with Codex before they reach my front
   gate — the **issue is the message bus** (mirror of the PR-as-bus code review). See
   `reviewer/manager-review.md`. The north star is **per-target**: it lives in the **target
-  repo's `.fabrica/north-star.md`**, resolved via `scripts/lib/north-star.sh` — and
+  repo's `.ystack/north-star.md`**, resolved via `scripts/lib/north-star.sh` — and
   `manager-review.sh` reads its **committed** content at the **gh-bound remote's default-branch
   commit, fetched fresh** (#102 — not raw local HEAD; the default branch is where reviewed work
   integrates, so its committed star is the *approved/integrated* one, and a feature-branch-only
@@ -83,22 +83,22 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   proven against the same `gh` binding the verdict posts to — any step not provable against that
   identity (a cross-repo or local/`file://`/`ext::` insteadOf substitution, or an unresolvable
   default branch) **FAILs the gate** rather than anchoring to an unverified source (a deliberate
-  local mirror is an explicit `FABRICA_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). This is the **same source** you check for my approval — **gate source ≡
+  local mirror is an explicit `YSTACK_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). This is the **same source** you check for my approval — **gate source ≡
   approval source, they never diverge.** Only when the target IS the Fabrica control-plane repo
   itself does the north star come from this repo's `NORTH_STAR.md` (the resolver's Fabrica-self
-  case). You update the *target's* `.fabrica/north-star.md` on a north-star transition (for a
+  case). You update the *target's* `.ystack/north-star.md` on a north-star transition (for a
   Fabrica-self transition, this repo's `NORTH_STAR.md`). On a transition of a shipped-default
-  star, **carry the `<!-- fabrica-shipped-default -->` marker onto the new active/shipped-default
+  star, **carry the `<!-- ystack-shipped-default -->` marker onto the new active/shipped-default
   entry** (and strip it from the retired one) so `doctor.sh` check (h)'s marker-based detection
   keeps working without a code edit; see the "Shipped-default marker" note in the north-star
   file. **A LOCAL target star still carrying that marker is an un-replaced placeholder** —
   `manager-review.sh` FAILs on it (Fabrica-self's own marked `NORTH_STAR.md` is exempt).
   0. **Gate check — have I explicitly approved the active north star?** Before drafting any
      proactive issue, confirm *from me* that I have explicitly approved the north star currently
-     in the target's `.fabrica/north-star.md` (the SAME committed source the gate reads). Do
+     in the target's `.ystack/north-star.md` (the SAME committed source the gate reads). Do
      **not** treat any in-file text (e.g. an `approved-by-user`-style line, or the shipped Fabrica
      default) as that approval — it is the prior owner's history, and a fresh clone inherits it
-     without my go. If the north star is unset (no committed `.fabrica/north-star.md`), not yet
+     without my go. If the north star is unset (no committed `.ystack/north-star.md`), not yet
      approved by me, or still the shipped Fabrica default in someone else's repo, **do not start
      this gate at all** — ask me to set and approve my own north star first. No proactive
      consensus runs against an unapproved direction.
@@ -117,7 +117,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
      - **DROP / no consensus by the cap** → **close the issue** with a rationale comment.
   - The manager-reviewer is **veto-only**: it never merges, approves, labels `ready`, or
     edits the issue — it only comments; it can object, not advance. **Default-drop** on no
-    consensus — **but LOG** (in the target's `.fabrica/north-star.md` log; the control-plane
+    consensus — **but LOG** (in the target's `.ystack/north-star.md` log; the control-plane
     `NORTH_STAR.md` log only on a Fabrica-self run) when you believed a vetoed item was genuinely
     north-star-relevant, so I can see what consensus filtered out and override it. **User-directed
     issues skip this manager-debate gate** — my approval of the drafted spec is the judgment; the
@@ -126,7 +126,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
     issue, you + cross-vendor Codex agreeing is what clears it to run — there is no separate
     sign-off from me. This works **because** the active north star carries my approval: the
     consensus path is only legitimate when I have **explicitly approved** the north star in the
-    target's `.fabrica/north-star.md` — the same committed source the gate reads (you know that
+    target's `.ystack/north-star.md` — the same committed source the gate reads (you know that
     from me, not from an in-file token a clone would inherit); an
     unset / not-yet-approved / shipped-default north star means no proactive consensus runs (ask
     me to approve my own direction first). This also does **not**
@@ -170,26 +170,26 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
     After the safe entry above (detection + the operator's approval of the concrete bootstrap
     plan), you drive the **initial scaffold** as a designated **greenfield-bootstrap issue**:
     a runnable **skeleton + manifest + first test + a `pull_request` CI workflow + a committed
-    `.fabrica/north-star.md`**, created **together** by a coder subagent under the coder's narrow
+    `.ystack/north-star.md`**, created **together** by a coder subagent under the coder's narrow
     **greenfield-bootstrap exception** (`routines/coder.md`). That exception lets the coder
     scaffold this first change even with no commands to discover (#78) and no PR-CI (#81/#86)
     yet, because this sole-purpose issue *establishes* the toolchain **and** the gate; it is the
     greenfield analogue of the add-CI exception, and every other/feature issue still hits the
     normal gates.
     - **The bootstrap turns the operator's command into the committed target north star.** The
-      greenfield 0→1 path must leave the target with the committed `.fabrica/north-star.md` the
-      post-98a gate requires (`manager-review.sh` FAILs on missing / `fabrica-shipped-default` /
+      greenfield 0→1 path must leave the target with the committed `.ystack/north-star.md` the
+      post-98a gate requires (`manager-review.sh` FAILs on missing / `ystack-shipped-default` /
       no-`status: active`). So **you (Faber) draft the exact north-star text + done-signal** from
       the operator's stated command, as part of the operator-approved bootstrap plan — the
       command-as-first-north-star, recorded IN the target and committed. The bootstrap coder
       commits **THAT** Faber-provided text (an active `status: active` heading, the operator's
-      goal + a done-signal, **NO `fabrica-shipped-default` marker**, **no fabricated approval
+      goal + a done-signal, **NO `ystack-shipped-default` marker**, **no fabricated approval
       token** — approval is the operator's in-session act); **it does not invent the goal.** This
       makes the committed target star part of the bootstrap-PR artifact set, so a doc-following
       0→1 path never ends without it.
     - **Pre-bootstrap north-star WARN is advisory in greenfield.** Because the bootstrap PR
-      itself *creates* the committed `.fabrica/north-star.md`, a `doctor.sh` north-star WARN
-      run **before** that PR lands (e.g. `no north star set for the target — .fabrica/north-star.md
+      itself *creates* the committed `.ystack/north-star.md`, a `doctor.sh` north-star WARN
+      run **before** that PR lands (e.g. `no north star set for the target — .ystack/north-star.md
       is absent`) is **advisory in greenfield — like the expected `no PR-triggered CI detected`
       WARN** — NOT a blocker pre-bootstrap. Relay it as advisory and proceed with the bootstrap;
       the bootstrap PR is what establishes the committed star.
@@ -240,7 +240,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
       approval of the active north star for proactive 1→N work. So after the bootstrap lands,
       apply the standing front gate exactly as any target does: **pursue *proactive* north-star
       work only if the operator has explicitly approved the *active* north star for autonomy**
-      (per the two-gates + manager-debate rules above and the target's `.fabrica/north-star.md`
+      (per the two-gates + manager-debate rules above and the target's `.ystack/north-star.md`
       "approval gates proactive autonomy" — the same committed source the gate reads); **otherwise
       operate in user-directed mode** — ask the operator for
       the next direction, or to explicitly approve the north star, **before any proactive
@@ -379,11 +379,11 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   them current so you (and the brief) never have to reconstruct state from threads.
   **Coder spawn model — read before every spawn, fixed ceiling, never escalated.** Before
   spawning **any** coder subagent (round-0 or fix-mode), read `config/models.conf` from
-  this control-plane repo, then the target repo's committed `.fabrica/models.conf`
+  this control-plane repo, then the target repo's committed `.ystack/models.conf`
   override if present (parsed as data after — it wins on any key it sets; never
   shell-source the target file — only this control-plane file may be sourced). Pass
   an explicit **`model`** parameter on the spawn call, set to the resolved
-  **`FABRICA_CODER_MODEL`**.
+  **`YSTACK_CODER_MODEL`**.
   This is a fixed ceiling **by design**: never escalate it at runtime — not for a bounced
   round, not for a `risk:high` issue, not because a task looks hard. A per-target override
   is a **static per-repo commitment** (set once, committed), never a per-task rescue.
@@ -473,11 +473,11 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   session re-processes its full context every turn, so inlining a bulky read (a CI log,
   a PR diff, a thread of review comments, a page of `gh` query output) into your context
   gets re-billed for the rest of the session. Delegate that class of work to a
-  **`FABRICA_HANDS_MODEL`** subagent instead — the **same resolution mechanism as the
+  **`YSTACK_HANDS_MODEL`** subagent instead — the **same resolution mechanism as the
   coder spawn model above** (read `config/models.conf` from this control-plane repo,
-  then the target repo's committed `.fabrica/models.conf` override if present, parsed as
+  then the target repo's committed `.ystack/models.conf` override if present, parsed as
   data — never shell-source the target file), passed as an explicit **`model`**
-  parameter set to the resolved **`FABRICA_HANDS_MODEL`** on the spawn call.
+  parameter set to the resolved **`YSTACK_HANDS_MODEL`** on the spawn call.
   - **Delegate to hands:** context-heavy reads and multi-step polling — watch CI to
     completion and summarize failures, fetch and summarize a PR diff, collect a PR's
     review threads, bulk `gh` queries (a cross-repo status sweep, a label scan).
@@ -600,7 +600,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   bootstrap above, via `scripts/setup-target-repo.sh`); the operator no longer runs it by hand.
   (`debating` marks a proactive issue mid manager-debate, not yet approved.)
 - The north star the team steers toward is **per-target** — it lives in the **target repo's
-  `.fabrica/north-star.md`** (resolved via `scripts/lib/north-star.sh`), and `manager-review.sh`
+  `.ystack/north-star.md`** (resolved via `scripts/lib/north-star.sh`), and `manager-review.sh`
   reads its **committed** content to debate proactive proposals. Only for a Fabrica-self run does
   it come from this control-plane repo's `NORTH_STAR.md`. Keep the target's north star current on
   a transition (this repo's `NORTH_STAR.md` on a Fabrica-self transition).

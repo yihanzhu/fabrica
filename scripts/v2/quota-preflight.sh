@@ -23,15 +23,18 @@ set -euo pipefail
 # elsewhere: every real review/fix cycle starts from a counted stage run or an
 # operator push, round labels cap the fix loop, and the probe is manual.
 #
-#   FABRICA_RUN_BACKSTOP    runs allowed per window (default 20)
-#   FABRICA_RUN_WINDOW_H    window in hours (default 5)
-#   FABRICA_LANE_WORKFLOWS  comma-separated workflow files to count
+#   YSTACK_RUN_BACKSTOP    runs allowed per window (default 20)
+#   YSTACK_RUN_WINDOW_H    window in hours (default 5)
+#   YSTACK_LANE_WORKFLOWS  comma-separated workflow files to count
+#
+# The legacy FABRICA_* names still work as fallbacks, so targets that have not
+# renamed yet keep working. When both names are set, YSTACK_* wins.
 #
 # Needs gh with access to the current repo.
 
-backstop="${FABRICA_RUN_BACKSTOP:-20}"
-window_h="${FABRICA_RUN_WINDOW_H:-5}"
-lane="${FABRICA_LANE_WORKFLOWS:-spec-on-intent.yml,implement-on-spec.yml}"
+backstop="${YSTACK_RUN_BACKSTOP:-${FABRICA_RUN_BACKSTOP:-20}}" # legacy fallback
+window_h="${YSTACK_RUN_WINDOW_H:-${FABRICA_RUN_WINDOW_H:-5}}" # legacy fallback
+lane="${YSTACK_LANE_WORKFLOWS:-${FABRICA_LANE_WORKFLOWS:-spec-on-intent.yml,implement-on-spec.yml}}" # legacy fallback
 
 # Fetch enough runs per workflow to actually reach the backstop — a fixed 100
 # would silently under-count when the backstop is set higher (Codex, #131).

@@ -91,10 +91,10 @@ grep -q "means a bug" "$tmp/err" || fail "over-backstop failure must be loud"
 
 # Backstop override.
 set +e
-GH_STUB_RUNS="spec-on-intent.yml=4" FABRICA_RUN_BACKSTOP=4 "$qp" >/dev/null 2>&1
+GH_STUB_RUNS="spec-on-intent.yml=4" YSTACK_RUN_BACKSTOP=4 "$qp" >/dev/null 2>&1
 code=$?
 set -e
-[ "$code" -eq 1 ] || fail "FABRICA_RUN_BACKSTOP override must apply (got $code)"
+[ "$code" -eq 1 ] || fail "YSTACK_RUN_BACKSTOP override must apply (got $code)"
 
 # gh completely down: refuse to guess, exit 1.
 set +e
@@ -134,10 +134,63 @@ echo "ok: skip-prone workflows stay uncounted"
 # plateaus below the backstop and the brake never trips (Codex, #131). The
 # stub echoes the received --limit back as the count when asked to.
 set +e
-out="$(GH_STUB_RUNS="spec-on-intent.yml=LIMIT" FABRICA_RUN_BACKSTOP=150 "$qp" 2>/dev/null)"
+out="$(GH_STUB_RUNS="spec-on-intent.yml=LIMIT" YSTACK_RUN_BACKSTOP=150 "$qp" 2>/dev/null)"
 code=$?
 set -e
 [ "$code" -eq 1 ] || fail "151 fetched runs with backstop 150 must trip (got $code)"
 printf '%s\n' "$out" | grep -qx "runs=151" || fail "fetch limit must scale with backstop (got: $out)"
 
 echo "ok: fetch limit scales with the backstop"
+
+# Legacy FABRICA_* names still work: a target that has not renamed yet must
+# keep braking exactly as before.
+set +e
+GH_STUB_RUNS="spec-on-intent.yml=4" FABRICA_RUN_BACKSTOP=4 "$qp" >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "FABRICA_RUN_BACKSTOP alias must apply (got $code)"
+
+# When both names are set, YSTACK_* wins.
+set +e
+GH_STUB_RUNS="spec-on-intent.yml=4" YSTACK_RUN_BACKSTOP=99 FABRICA_RUN_BACKSTOP=4 \
+  "$qp" >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "YSTACK_RUN_BACKSTOP must win over the alias (got $code)"
+
+# Window: the legacy name is honored (the window shows in the trip message)...
+set +e
+GH_STUB_RUNS="spec-on-intent.yml=20" FABRICA_RUN_WINDOW_H=7 "$qp" >/dev/null 2>"$tmp/err"
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "window alias run must still trip (got $code)"
+grep -q "last 7h" "$tmp/err" || fail "FABRICA_RUN_WINDOW_H alias must apply"
+
+# ...and the canonical name wins when both are set.
+set +e
+GH_STUB_RUNS="spec-on-intent.yml=20" YSTACK_RUN_WINDOW_H=9 FABRICA_RUN_WINDOW_H=7 \
+  "$qp" >/dev/null 2>"$tmp/err"
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "window override run must still trip (got $code)"
+grep -q "last 9h" "$tmp/err" || fail "YSTACK_RUN_WINDOW_H must win over the alias"
+
+# Lane list: the legacy name is honored...
+set +e
+out="$(GH_STUB_RUNS="legacy-lane.yml=2" FABRICA_LANE_WORKFLOWS="legacy-lane.yml" "$qp")"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "lane alias run must pass (got $code)"
+printf '%s\n' "$out" | grep -qx "runs=2" || fail "FABRICA_LANE_WORKFLOWS alias must apply (got: $out)"
+
+# ...and the canonical name wins when both are set: only the canonical lane
+# may be queried (the stub fails loudly on the forbidden legacy one).
+set +e
+out="$(GH_STUB_RUNS="new-lane.yml=3" GH_STUB_FORBID="legacy-lane.yml" \
+  YSTACK_LANE_WORKFLOWS="new-lane.yml" FABRICA_LANE_WORKFLOWS="legacy-lane.yml" "$qp")"
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "lane override run must pass (got $code)"
+printf '%s\n' "$out" | grep -qx "runs=3" || fail "YSTACK_LANE_WORKFLOWS must win over the alias (got: $out)"
+
+echo "ok: legacy FABRICA_* aliases behave"

@@ -34,7 +34,7 @@ reviewer/manager-review.md
 # Templates (drop-in files for target repos)
 templates/target-CLAUDE.md
 templates/repo-setup.md
-templates/faber-command.md
+templates/yshifu-command.md
 templates/.fabrica/north-star.md
 templates/.fabrica/models.conf
 
@@ -66,6 +66,7 @@ proposals/README.md
 .github/workflows/tripwire.yml
 
 # v2 lane helpers (deterministic; used by the Stack B workflows)
+scripts/check-rename.sh
 scripts/v2/pending-spec.sh
 scripts/v2/pending-impl.sh
 scripts/v2/round-cap.sh
@@ -73,6 +74,7 @@ scripts/v2/quota-preflight.sh
 .github/workflows/plumbing-test.yml
 
 # Tests (run by CI; also executable — see ci.yml)
+scripts/test/v2-check-rename.test.sh
 scripts/test/v2-pending-stage.test.sh
 scripts/test/v2-quota-preflight.test.sh
 scripts/test/v2-round-cap.test.sh

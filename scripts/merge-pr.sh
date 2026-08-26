@@ -7,12 +7,12 @@ set -euo pipefail
 # review on a low-risk PR. It is READ-ONLY until the final `gh pr merge`: every step before
 # that only reads PR state, and any failed guard refuses (non-zero) without mutating anything.
 #
-# WIRING: this is invoked by Faber's in-session auto-merge flow — for a clean, low-risk,
-# in-session-reviewed PR, Faber runs this script to merge instead of stopping at the human
-# merge gate (the Faber sources manager/CLAUDE.md and templates/faber-command.md encode
-# that). High-risk PRs still go to the human gate; Faber never calls this for them. The
+# WIRING: this is invoked by yshifu's in-session auto-merge flow — for a clean, low-risk,
+# in-session-reviewed PR, yshifu runs this script to merge instead of stopping at the human
+# merge gate (the yshifu sources manager/CLAUDE.md and templates/yshifu-command.md encode
+# that). High-risk PRs still go to the human gate; yshifu never calls this for them. The
 # unattended status-scan / cross-repo auto-merge path (a daemon merging many repos' PRs
-# without a Faber session) is a FUTURE EXTENSION — see the note below.
+# without a yshifu session) is a FUTURE EXTENSION — see the note below.
 #
 # What it enforces (the MECHANICAL safety — not judgment):
 #   1. SHA-pin     — it merges only the exact commit Codex reviewed. It reads the
@@ -46,7 +46,7 @@ set -euo pipefail
 #                    holds: never merge with a failing REQUIRED check, never merge with zero
 #                    passing checks, and never merge when we could not determine the checks.
 #   3b. Review-gate — if the base branch requires ≥1 APPROVING review (the PR's
-#                    reviewDecision is REVIEW_REQUIRED), it refuses: Fabrica's reviewer is
+#                    reviewDecision is REVIEW_REQUIRED), it refuses: ystack's reviewer is
 #                    comments-only and never approves, so that protection is incompatible
 #                    with the in-session auto-merge path — it hands to the human merge gate.
 #   3c. Merge-method — it detects the repo's allowed merge methods (squash / merge / rebase)
@@ -65,25 +65,25 @@ set -euo pipefail
 # the script alone cannot eliminate the race.
 #
 # What it deliberately does NOT do: it does NOT judge whether the Codex review passed,
-# nor whether the PR is low/high-risk. That judgment is Faber's (Faber invokes this only
+# nor whether the PR is low/high-risk. That judgment is yshifu's (yshifu invokes this only
 # for a clean review + low-risk PR; high-risk → human). This script is the mechanical
 # backstop, not the decision-maker.
 #
 # It operates on the CURRENT repo only and merges in-session: run it from within the
 # target repo's clone, after running scripts/codex-review.sh on the same PR in this
 # session. The unattended status-scan / cross-repo auto-merge path (a daemon that scans
-# many repos' PRs and merges without a Faber session) is a FUTURE EXTENSION of this
+# many repos' PRs and merges without a yshifu session) is a FUTURE EXTENSION of this
 # mechanism — it is NOT supported yet; do not assume it here.
 #
 # Usage: scripts/merge-pr.sh <PR#>
-#   (or, with fabrica/scripts on PATH: merge-pr.sh <PR#>)
+#   (or, with ystack/scripts on PATH: merge-pr.sh <PR#>)
 
 usage() {
   echo "usage: $0 <PR#>" >&2
   echo "  run from within the target repo's clone, after scripts/codex-review.sh on the same PR" >&2
   echo "  refuses unless: a Reviewed-head marker exists, the PR head still equals it, CI is green" >&2
   echo "  (required checks if the PR rollup reports any, else ≥1 pass / no fail), and the" >&2
-  echo "  PR does not need an approving review (Fabrica's reviewer is comments-only)" >&2
+  echo "  PR does not need an approving review (ystack's reviewer is comments-only)" >&2
   echo "  then merges (squash if allowed, else a permitted method), pinned to the reviewed SHA" >&2
 }
 
@@ -187,7 +187,7 @@ if [ "$current_head" != "$reviewed_sha" ]; then
 fi
 
 # Approving-review protection (additive guard). GitHub's `reviewDecision` is REVIEW_REQUIRED
-# when the base branch's protection requires ≥1 approving review and none is present. Fabrica's
+# when the base branch's protection requires ≥1 approving review and none is present. ystack's
 # Codex reviewer is COMMENTS-ONLY and never approves, so `gh pr merge` would be rejected
 # server-side with no actionable message. Refuse early and clearly: this protection is
 # incompatible with the in-session auto-merge path — the PR must go to the human merge gate.
@@ -196,7 +196,7 @@ fi
 review_decision="$(gh pr view "$pr" --repo "$repo" --json reviewDecision -q .reviewDecision 2>/dev/null || true)"
 if [ "$review_decision" = "REVIEW_REQUIRED" ]; then
   echo "error: PR #$pr requires an approving review (reviewDecision=REVIEW_REQUIRED); refusing to merge" >&2
-  echo "       Fabrica's reviewer (codex-review.sh) is comments-only and never approves, so this" >&2
+  echo "       ystack's reviewer (codex-review.sh) is comments-only and never approves, so this" >&2
   echo "       branch-protection shape is incompatible with the in-session auto-merge path" >&2
   echo "       hand this PR to the human merge gate, or switch protection to required status checks" >&2
   echo "       (see templates/repo-setup.md > Branch protection)" >&2
