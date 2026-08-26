@@ -44,6 +44,16 @@ if [ -z "$entry" ]; then
   exit 1
 fi
 val="${entry#*=}"
+if [ "$val" = "LIMIT" ]; then
+  lim=""
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--limit" ]; then lim="$a"; fi
+    prev="$a"
+  done
+  echo "$lim"
+  exit 0
+fi
 if [ "$val" = "ERR" ]; then
   echo "HTTP 500: something went wrong" >&2
   exit 1
@@ -65,7 +75,7 @@ printf '%s\n' "$out" | grep -qx "runs=5" || fail "should sum per-workflow counts
 
 # Missing workflows (pre-Stack-B) count as zero, not as an error.
 set +e
-out="$(GH_STUB_RUNS="plumbing-test.yml=1" "$qp")"
+out="$(GH_STUB_RUNS="implement-on-spec.yml=1" "$qp")"
 code=$?
 set -e
 [ "$code" -eq 0 ] || fail "missing workflows must not fail the brake (got $code)"
@@ -113,9 +123,21 @@ echo "ok: transient-failure case behaves"
 # forbidden workflow, which would surface as a loud non-zero here.
 set +e
 GH_STUB_RUNS="spec-on-intent.yml=1" \
-  GH_STUB_FORBID="review-on-pr.yml,fix-on-review.yml" "$qp" >/dev/null 2>&1
+  GH_STUB_FORBID="review-on-pr.yml,fix-on-review.yml,plumbing-test.yml" "$qp" >/dev/null 2>&1
 code=$?
 set -e
 [ "$code" -eq 0 ] || fail "brake must not query skip-prone workflows (got $code)"
 
 echo "ok: skip-prone workflows stay uncounted"
+
+# A backstop above 100 must raise the per-workflow fetch limit, or counting
+# plateaus below the backstop and the brake never trips (Codex, #131). The
+# stub echoes the received --limit back as the count when asked to.
+set +e
+out="$(GH_STUB_RUNS="spec-on-intent.yml=LIMIT" FABRICA_RUN_BACKSTOP=150 "$qp" 2>/dev/null)"
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "151 fetched runs with backstop 150 must trip (got $code)"
+printf '%s\n' "$out" | grep -qx "runs=151" || fail "fetch limit must scale with backstop (got: $out)"
+
+echo "ok: fetch limit scales with the backstop"

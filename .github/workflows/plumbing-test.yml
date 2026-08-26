@@ -13,8 +13,10 @@ concurrency:
 
 jobs:
   probe:
-    # Only the operator dispatches agent runs (spec R5's actor gate).
-    if: github.actor == 'yihanzhu'
+    # Only the operator starts agent runs (spec R5's actor gate). Both actors
+    # checked: on a re-run, github.actor stays the ORIGINAL dispatcher while
+    # triggering_actor is whoever clicked re-run (Codex review of #131, P1).
+    if: github.actor == 'yihanzhu' && github.triggering_actor == 'yihanzhu'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
