@@ -65,7 +65,16 @@ proposals/README.md
 .claude/hooks/no-merge-guard.sh
 .github/workflows/tripwire.yml
 
+# v2 lane helpers (deterministic; used by the Stack B workflows)
+scripts/v2/pending-spec.sh
+scripts/v2/pending-impl.sh
+scripts/v2/round-cap.sh
+scripts/v2/quota-preflight.sh
+.github/workflows/plumbing-test.yml
+
 # Tests (run by CI; also executable — see ci.yml)
+scripts/test/v2-pending-stage.test.sh
+scripts/test/v2-round-cap.test.sh
 scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh
 scripts/test/models-conf-parser.test.sh

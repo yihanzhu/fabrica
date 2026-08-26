@@ -133,3 +133,17 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "ci"
           bash scripts/test/codex-degraded-gate.test.sh
+
+      - name: v2 pending-stage tests
+        run: |
+          # Hermetic asserts for scripts/v2/pending-spec.sh + pending-impl.sh —
+          # throwaway git repos, no gh, no network.
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          bash scripts/test/v2-pending-stage.test.sh
+
+      - name: v2 round-cap tests
+        run: |
+          # Hermetic asserts for scripts/v2/round-cap.sh — gh stubbed on PATH,
+          # no network.
+          bash scripts/test/v2-round-cap.test.sh
