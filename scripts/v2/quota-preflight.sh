@@ -12,6 +12,16 @@ set -euo pipefail
 # (ci, tripwire) can never crowd lane runs out of the sample. Workflows that
 # don't exist yet count as zero — expected until Stack B lands.
 #
+# Only workflows where a run ALWAYS means the agent actually executed are
+# counted: the stage workflows (push-to-main triggered — only operator merges
+# cause them) and the dispatch-gated probe. review-on-pr and fix-on-review are
+# deliberately NOT counted: their triggers (any PR, any comment) create runs
+# whose job is skipped — fork PRs, ordinary comments — so counting them would
+# let cost-free noise, or deliberate comment spam, trip the brake and block
+# real work (Codex cloud review of #131). Their genuine volume is bounded
+# elsewhere: every real review/fix cycle starts from a counted stage run or an
+# operator push, and the round labels cap the fix loop per PR.
+#
 #   FABRICA_RUN_BACKSTOP    runs allowed per window (default 20)
 #   FABRICA_RUN_WINDOW_H    window in hours (default 5)
 #   FABRICA_LANE_WORKFLOWS  comma-separated workflow files to count
@@ -20,7 +30,7 @@ set -euo pipefail
 
 backstop="${FABRICA_RUN_BACKSTOP:-20}"
 window_h="${FABRICA_RUN_WINDOW_H:-5}"
-lane="${FABRICA_LANE_WORKFLOWS:-spec-on-intent.yml,implement-on-spec.yml,review-on-pr.yml,fix-on-review.yml,plumbing-test.yml}"
+lane="${FABRICA_LANE_WORKFLOWS:-spec-on-intent.yml,implement-on-spec.yml,plumbing-test.yml}"
 
 # Cutoff timestamp: GNU date (CI runners) first, BSD date (macOS) as fallback.
 cutoff="$(date -u -d "${window_h} hours ago" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \

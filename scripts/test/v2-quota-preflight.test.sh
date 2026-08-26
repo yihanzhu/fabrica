@@ -30,6 +30,12 @@ if [ -z "$wf" ]; then
   echo "[]"
   exit 0
 fi
+case ",${GH_STUB_FORBID:-}," in
+  *",${wf},"*)
+    echo "FORBIDDEN: queried ${wf}" >&2
+    exit 9
+    ;;
+esac
 # Look up "<wf>=<count>" in GH_STUB_RUNS. Unknown workflows fail with real
 # gh's missing-workflow message; a value of ERR simulates a transient outage.
 entry="$(printf '%s\n' "${GH_STUB_RUNS:-}" | tr ',' '\n' | grep "^${wf}=" || true)"
@@ -51,7 +57,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # Under the backstop: report the summed count, exit 0.
 set +e
-out="$(GH_STUB_RUNS="spec-on-intent.yml=3,review-on-pr.yml=2" "$qp")"
+out="$(GH_STUB_RUNS="spec-on-intent.yml=3,implement-on-spec.yml=2" "$qp")"
 code=$?
 set -e
 [ "$code" -eq 0 ] || fail "under backstop must exit 0 (got $code)"
@@ -93,10 +99,23 @@ echo "ok: quota-preflight behaves"
 # A transient per-workflow failure (not a missing workflow) must fail loudly,
 # never count as zero (Codex review of #131).
 set +e
-GH_STUB_RUNS="spec-on-intent.yml=2,review-on-pr.yml=ERR" "$qp" >/dev/null 2>"$tmp/err"
+GH_STUB_RUNS="spec-on-intent.yml=2,implement-on-spec.yml=ERR" "$qp" >/dev/null 2>"$tmp/err"
 code=$?
 set -e
 [ "$code" -eq 1 ] || fail "transient count failure must exit 1 (got $code)"
 grep -q "fails open" "$tmp/err" || fail "transient failure must be loud"
 
 echo "ok: transient-failure case behaves"
+
+# Comment/PR-triggered workflows must never be queried: their runs can be
+# skips (fork PRs, ordinary comments), so counting them would let cost-free
+# noise trip the brake (Codex cloud review of #131). The stub exits 9 on a
+# forbidden workflow, which would surface as a loud non-zero here.
+set +e
+GH_STUB_RUNS="spec-on-intent.yml=1" \
+  GH_STUB_FORBID="review-on-pr.yml,fix-on-review.yml" "$qp" >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -eq 0 ] || fail "brake must not query skip-prone workflows (got $code)"
+
+echo "ok: skip-prone workflows stay uncounted"
