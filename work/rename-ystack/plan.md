@@ -64,6 +64,12 @@ at `~/git/fabrica/scripts` moves to the new path, and the live Claude
 project's pasted persona (per RESTORE.md) is replaced with the yshifu
 version — repo changes don't propagate there by themselves.
 
+**Bridge deviations (Codex review of PR a, adopted):** doctor accepts the
+legacy installed /faber command until Ops 4; install.sh writes both command
+names during the bridge (Ops 4 deletes the legacy copy); the
+`templates/.fabrica/` → `templates/.ystack/` move happens in PR a so the
+installer's printed instructions never point at a missing file.
+
 ## Order of work
 
 1. Ops 1 → verify → PR a (build, test, dual review, operator merges).

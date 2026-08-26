@@ -191,10 +191,17 @@ report_warn() {
 
 # (a) /yshifu points at this clone -------------------------------------------------
 yshifu_cmd="$HOME/.claude/commands/yshifu.md"
+faber_cmd="$HOME/.claude/commands/faber.md" # legacy fallback: installed before the rename
 # Match a path BOUNDARY ("$repo_root/"), not a bare prefix: the generated command
 # embeds paths like "<root>/manager/CLAUDE.md", so the trailing slash anchors the
 # match to a path component and stops a clone whose path is a prefix of another's
 # (e.g. /work/ystack vs an installed /work/ystack-old) from false-passing.
+if [ ! -f "$yshifu_cmd" ] && [ -f "$faber_cmd" ]; then # legacy fallback
+  # An install from before the rename still works during the bridge; Ops 4
+  # replaces it. Point at the resolved-path check on the legacy file.
+  yshifu_cmd="$faber_cmd" # legacy fallback
+  report 0 "(a) legacy /faber command found — still valid during the bridge; re-run scripts/install.sh at Ops 4"
+fi
 if [ ! -f "$yshifu_cmd" ]; then
   report 1 "(a) /yshifu command installed at $yshifu_cmd (missing — run scripts/install.sh)"
 elif grep -qF -- "$repo_root/" "$yshifu_cmd"; then

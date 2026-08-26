@@ -24,6 +24,9 @@ repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 template="$repo_root/templates/yshifu-command.md"
 commands_dir="$HOME/.claude/commands"
 target="$commands_dir/yshifu.md"
+# Bridge: the docs still say /faber until the docs PR lands, so install BOTH
+# names with identical content. Ops 4 deletes the legacy copy. # legacy fallback
+legacy_target="$commands_dir/faber.md" # legacy fallback
 
 if [ ! -f "$template" ]; then
   echo "error: template not found: $template" >&2
@@ -55,6 +58,14 @@ else
   echo "Created: $target"
   action="created"
 fi
+
+# Bridge copy under the legacy name, so the documented /faber keeps working
+# until the docs PR and Ops 4. Same content, same backup rule. # legacy fallback
+if [ -f "$legacy_target" ] && [ "$rendered" != "$(cat "$legacy_target")" ]; then
+  cp "$legacy_target" "$legacy_target.bak" # legacy fallback
+fi
+printf '%s\n' "$rendered" >"$legacy_target" # legacy fallback
+echo "Bridge copy (legacy /faber, removed at Ops 4): $legacy_target"
 
 cat <<EOF
 

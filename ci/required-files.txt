@@ -35,8 +35,8 @@ reviewer/manager-review.md
 templates/target-CLAUDE.md
 templates/repo-setup.md
 templates/yshifu-command.md
-templates/.fabrica/north-star.md
-templates/.fabrica/models.conf
+templates/.ystack/north-star.md
+templates/.ystack/models.conf
 
 # Scripts (must also be executable — see ci.yml)
 scripts/install.sh
