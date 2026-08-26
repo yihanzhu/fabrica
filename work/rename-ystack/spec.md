@@ -65,13 +65,20 @@ Each is checkable when done.
      **`codex-review.sh`** (its own anchored read of
      `.fabrica/models.conf` goes through the same fallback — it is an
      independent consumer, with anchored-path tests),
-     **`install.sh` together with its template** (`templates/faber-command.md`
-     → `templates/yshifu-command.md` — they move in the same PR so the
-     installer never points at a file that doesn't exist), the
+     **`install.sh` together with its template AND the manifest**
+     (`templates/faber-command.md` → `templates/yshifu-command.md` plus the
+     matching `ci/required-files.txt` line — all in one PR, so neither the
+     installer nor the structure check ever points at a deleted file),
+     **`config/models.conf`** (shipped defaults become `YSTACK_*`; the
+     parser's fallback covers targets still on `FABRICA_*`),
+     **`setup-target-repo.sh`** (label text, `/yshifu`, `.ystack/` setup
+     instructions — it must be clean before the operator re-runs it), the
      **no-merge-guard hook** (`.claude/hooks/no-merge-guard.sh` — its runtime
      messages and ruleset reference are live content, not history),
-     `scripts/v2/*` + workflows (`YSTACK_*`, ystack branches), the grep-gate
-     script, all hermetic tests.
+     `scripts/v2/*` + workflows (`YSTACK_*`, ystack branches), and the
+     grep-gate script — **authored in PR a but wired into ci.yml only in
+     PR b**, after the sweep, so PR a passes its own CI and the final repo
+     still enforces R3. All hermetic tests updated alongside.
   3. **PR b — words**: README (new identity line replaces the trio — operator
      writes or approves the wording at this PR), QUICKSTART, RESTORE,
      NORTH_STAR, CLAUDE.md, manager/, routines/, reviewer/, templates/
