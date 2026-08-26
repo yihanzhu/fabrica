@@ -40,3 +40,6 @@ Template — keep all six sections and headings exact:
 
     ## Open questions
     <what the operator or the design stage must still answer>
+
+**Write in plain language.** Short sentences, everyday words — the reader is a
+tired human, not another agent (see CLAUDE.md > PR rules).

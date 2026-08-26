@@ -36,3 +36,6 @@ Slug: `$0`
 6. On branch `fabrica/spec/$0` (reuse if it exists — update, never duplicate),
    commit and open/update a PR titled `spec: $0`. The operator merging it is
    **G2**: approval to build.
+
+**Write in plain language.** Short sentences, everyday words — the reader is a
+tired human, not another agent (see CLAUDE.md > PR rules).
