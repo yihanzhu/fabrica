@@ -28,10 +28,24 @@ today (MapleFolio)**.
 
 ## Constraints
 
+(Extended after Codex's review of this PR — 7 findings folded in.)
+
 - Runs after Stack A (#131) merges and before Stack B, so the lane's four
   workflows are born with the right names.
-- Target repos must not break: the resolver reads `.ystack/` first and falls
-  back to `.fabrica/` until targets migrate.
+- Target repos must not break. Back-compat covers everything that reads
+  legacy names, not just the north-star resolver: the `.fabrica/` fallback,
+  the `fabrica-shipped-default` marker check (shared by doctor and the
+  manager gate), `.fabrica/models.conf` with its `FABRICA_*` keys, and a
+  `FABRICA_ALLOW_LOCAL_MIRROR` alias — all honored until targets migrate.
+- Every consumer moves together: the manager gate and doctor read through the
+  resolver (no hardcoded `.fabrica/` paths left behind), and `install.sh`
+  regenerates the installed command after the clone moves (the old
+  `~/.claude/commands/faber.md` is removed, not orphaned).
+- Website: `fabrica.yihanzhu.com` → `ystack.yihanzhu.com` with redirects —
+  canonical URL, sitemap, robots, and social meta all move.
+- Chain hygiene: renaming text inside `work/v2-phase-2/` breaks its recorded
+  hashes — the rename rebaselines those artifacts so Stack B starts from a
+  fresh chain, never a stale one.
 - Verify after the repo rename: Cloudflare Pages, the Claude GitHub app,
   Codex code review, and the CLAUDE_CODE_OAUTH_TOKEN secret all still work
   (they follow the repo, but check, don't assume).
