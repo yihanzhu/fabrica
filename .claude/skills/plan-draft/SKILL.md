@@ -39,3 +39,6 @@ Slug: `$0`
 5. The bar: someone who never saw this conversation could implement from the plan
    alone. Commit it as the **first commit** on `fabrica/impl/$0`. If implementation
    later departs from the plan, update `plan.md` in the same commit that departs.
+
+**Write in plain language.** Short sentences, everyday words — the reader is a
+tired human, not another agent (see CLAUDE.md > PR rules).
