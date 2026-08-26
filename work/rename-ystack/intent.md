@@ -12,9 +12,9 @@ The project is becoming my personal SDLC stack, and the name should say so.
 
 The project is named **ystack** everywhere: repo name, docs, website, branch
 prefixes, env vars, markers. One clean sweep — no half-renamed leftovers.
-The console persona is renamed too: **Faber becomes yhz** — the operator's
-initials (Yi-Han-Zhu), three keystrokes, one family with ystack. The `/faber`
-command becomes `/yhz`.
+The console persona is renamed too: **Faber becomes yshifu** — the y-family
+prefix plus shifu (师傅, the master craftsman you hand work to). Speakable in
+any language, collision-free. The `/faber` command becomes `/yshifu`.
 
 ## Affected users and systems
 
@@ -24,7 +24,7 @@ and the website, branch conventions (`fabrica/*` → `ystack/*`), env vars
 tests), the `fabrica-shipped-default` marker and doctor's check for it, the
 `fabrica-main-gate` ruleset name, my local clone path, the persona files
 (`manager/CLAUDE.md`, `templates/faber-command.md`, `install.sh` — Faber →
-yhz, `/faber` → `/yhz`), and **target repos that carry `.fabrica/` dirs
+yshifu, `/faber` → `/yshifu`), and **target repos that carry `.fabrica/` dirs
 today (MapleFolio)**.
 
 ## Constraints
