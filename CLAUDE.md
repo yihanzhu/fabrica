@@ -57,6 +57,23 @@ the backlog:
   (for *proactive* work the user's gate is at the north-star altitude; user-directed issues
   still need the user's spec approval).
 
+## v2 artifact chain (work/)
+- One initiative = one dir: `work/<slug>/` holding `intent.md` → `spec.md` → `plan.md`.
+  Each artifact lands via its own PR and the operator's merge IS the gate: G1 accepts
+  the intent, G2 approves the spec, G3 approves the implementation PR (which carries
+  `plan.md` + code + tests). Details: `work/README.md`; review policy: `REVIEW.md`.
+- Skills: `/intent-draft`, `/spec-draft`, `/plan-draft` hold the templates and stage rules.
+- **Hash discipline:** `spec.md` frontmatter records `intent-blob` (`git hash-object` of
+  the intent it was drafted from); `plan.md` records `spec-blob`. On mismatch with main's
+  current upstream file, label the PR `stale` and stop — never build on a moved artifact.
+- **Stage rules (autonomous lane):** the spec stage writes only `work/<slug>/spec.md`;
+  the implement stage never touches `intent.md`/`spec.md`; unattended agents never write
+  `.github/**` or `.claude/**` — such changes land as patches under `proposals/` that the
+  operator applies. Operator-driven sessions are exempt; Phase 3 hooks enforce this
+  mechanically via `FABRICA_STAGE`.
+- Deterministic branches: `fabrica/intent/<slug>`, `fabrica/spec/<slug>`,
+  `fabrica/impl/<slug>` — re-runs update the existing PR, never open a second.
+
 ## Reusability goal
 - No hardcoded personal values (usernames, repo names) in shipped templates — keep the
   reusable path parameterized. Personal config stays out of it.

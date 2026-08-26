@@ -52,6 +52,14 @@ scripts/lib/gh-remote.sh
 scripts/lib/models-conf.sh
 scripts/lib/codex-degraded.sh
 
+# v2 artifact-chain spine
+REVIEW.md
+work/README.md
+proposals/README.md
+.claude/skills/intent-draft/SKILL.md
+.claude/skills/spec-draft/SKILL.md
+.claude/skills/plan-draft/SKILL.md
+
 # v2 guard layer (no agent path to main — see .claude/hooks/no-merge-guard.sh)
 .claude/settings.json
 .claude/hooks/no-merge-guard.sh

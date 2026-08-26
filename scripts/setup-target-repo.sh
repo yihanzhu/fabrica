@@ -27,7 +27,7 @@ set -euo pipefail
 
 usage() {
   echo "usage: $0 [--check] <owner>/<repo>" >&2
-  echo "  bootstraps the loop labels (debating, ready, round-0..3, needs-human, merge-ready) on the target repo" >&2
+  echo "  bootstraps the loop labels (debating, ready, round-0..3, needs-human, merge-ready, stale) on the target repo" >&2
   echo "  --check  read-only drift report: per label print matches/differs/missing; mutate nothing;" >&2
   echo "           exit non-zero if anything is missing or differs, zero if all match" >&2
 }
@@ -106,6 +106,7 @@ labels=(
   "round-3|1f6fc0|Review-loop counter: revision 3 (cap)"
   "needs-human|d93f0b|Escalation: round cap hit, ambiguous spec, oversized PR, or failure"
   "merge-ready|5319e7|Current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge"
+  "stale|e4a11b|v2 chain: artifact built from an outdated upstream (frontmatter hash mismatch); do not act on it"
 )
 
 if [ "$check_mode" -eq 1 ]; then
