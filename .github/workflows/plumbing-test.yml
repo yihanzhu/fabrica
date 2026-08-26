@@ -13,6 +13,8 @@ concurrency:
 
 jobs:
   probe:
+    # Only the operator dispatches agent runs (spec R5's actor gate).
+    if: github.actor == 'yihanzhu'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -40,7 +42,7 @@ jobs:
             Do not touch any other file. Report each command's result.
           claude_args: >-
             --max-turns 15
-            --allowedTools "Write,Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*)"
+            --allowedTools "Write,Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push origin plumbing-probe:*),Bash(git push -u origin plumbing-probe:*),Bash(gh pr create:*)"
 
       - name: Assert the probe PR exists (loud failure, never silent)
         env:

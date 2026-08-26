@@ -74,6 +74,7 @@ scripts/v2/quota-preflight.sh
 
 # Tests (run by CI; also executable — see ci.yml)
 scripts/test/v2-pending-stage.test.sh
+scripts/test/v2-quota-preflight.test.sh
 scripts/test/v2-round-cap.test.sh
 scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh

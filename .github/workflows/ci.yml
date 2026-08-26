@@ -147,3 +147,10 @@ jobs:
           # Hermetic asserts for scripts/v2/round-cap.sh — gh stubbed on PATH,
           # no network.
           bash scripts/test/v2-round-cap.test.sh
+
+      - name: v2 quota-preflight tests
+        run: |
+          # Hermetic asserts for scripts/v2/quota-preflight.sh — gh stubbed on
+          # PATH, no network. Covers the fail-open hazards the Stack A review
+          # found: silent zero-counts and gh outages.
+          bash scripts/test/v2-quota-preflight.test.sh

@@ -17,14 +17,17 @@ for dir in work/*/; do
   plan="work/${slug}/plan.md"
   [ -f "$spec" ] || continue
 
-  # Chain freshness first: never build on a spec whose intent has moved.
-  if [ -f "$intent" ]; then
-    want_intent="$(git hash-object "$intent")"
-    have_intent="$(awk '/^intent-blob:/ {print $2; exit}' "$spec")"
-    if [ "$have_intent" != "$want_intent" ]; then
-      echo "stale=${slug}"
-      exit 0
-    fi
+  # Chain freshness first: never build on a spec whose intent has moved —
+  # or vanished. A spec without its intent is orphaned, not fresh.
+  if [ ! -f "$intent" ]; then
+    echo "stale=${slug}"
+    exit 0
+  fi
+  want_intent="$(git hash-object "$intent")"
+  have_intent="$(awk '/^intent-blob:/ {print $2; exit}' "$spec")"
+  if [ "$have_intent" != "$want_intent" ]; then
+    echo "stale=${slug}"
+    exit 0
   fi
 
   if [ ! -f "$plan" ]; then

@@ -31,6 +31,7 @@ while IFS= read -r label; do
     round-*)
       n="${label#round-}"
       case "$n" in ''|*[!0-9]*) continue ;; esac
+      n=$((10#$n)) # base-10: a zero-padded label like round-08 must not read as octal
       if [ "$n" -gt "$round" ]; then round="$n"; fi
       ;;
   esac
@@ -52,7 +53,9 @@ case "$mode" in
       exit 3
     fi
     # Add the new label first, then drop the old one. If we crash in between,
-    # the higher round wins — the counter can overcount but never undercount.
+    # the higher round wins — a crash can overcount, never undercount.
+    # Concurrent bumps could undercount, but lane jobs are serialized by the
+    # claude-quota concurrency group; this script assumes that holds.
     gh pr edit "$pr" --add-label "round-${next}" >/dev/null
     gh pr edit "$pr" --remove-label "round-${round}" >/dev/null 2>&1 || true
     echo "round=${next}"

@@ -60,3 +60,10 @@ out="$("$pending_spec")"
 [ "$out" = "slug=alpha" ] || fail "dir without intent must be ignored (got: '$out')"
 
 echo "ok: pending-spec / pending-impl behave"
+
+# A spec whose intent was deleted is orphaned — stale, never fresh.
+rm work/alpha/intent.md
+out="$("$pending_impl")"
+[ "$out" = "stale=alpha" ] || fail "deleted intent must read stale (got: '$out')"
+
+echo "ok: orphaned-spec case behaves"

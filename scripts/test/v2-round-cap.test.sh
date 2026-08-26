@@ -70,3 +70,10 @@ printf '%s\n' "$out" | grep -qx "capped=true" || fail "bump at cap must say capp
 [ ! -s "$GH_STUB_LOG" ] || fail "bump at cap must not edit labels"
 
 echo "ok: round-cap behaves"
+
+# A zero-padded label must parse as decimal, not crash as octal.
+out="$(GH_STUB_LABELS="round-08" "$rc" check 1)"
+printf '%s\n' "$out" | grep -qx "round=8" || fail "round-08 reads as 8 (got: $out)"
+printf '%s\n' "$out" | grep -qx "proceed=false" || fail "round 8 is past the cap"
+
+echo "ok: zero-padded label behaves"
