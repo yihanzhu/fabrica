@@ -28,7 +28,11 @@ secret, Claude app, Codex review, and Cloudflare Pages still respond.
   `templates/yshifu-command.md` + the matching manifest line — one PR,
   nothing dangling.
 - `scripts/setup-target-repo.sh` — label text, `/yshifu`, `.ystack/` steps.
-- `config/models.conf` — shipped defaults become `YSTACK_*`.
+- `config/models.conf` — ships BOTH names during the bridge: `YSTACK_*`
+  canonical plus `FABRICA_*` mirrors, because the live manager still asks
+  for the old keys until PR b updates it (Codex P1, post-merge). PR b
+  removes the mirrors when manager/CLAUDE.md switches keys.
+- `scripts/merge-pr.sh` — its operator-facing messages say ystack/yshifu.
 - `scripts/v2/*.sh`, `.github/workflows/plumbing-test.yml`,
   `.claude/hooks/no-merge-guard.sh` — `YSTACK_*`, `ystack/*` branches,
   guard messages say ystack.
@@ -52,7 +56,11 @@ secret, Claude app, Codex review, and Cloudflare Pages still respond.
 **Ops 4 (after PR b):** move clone to `~/git/ystack`, update the remote,
 re-run `install.sh` (→ `/yshifu`), delete `~/.claude/commands/faber.md`,
 re-run `setup-target-repo.sh` (live label), `doctor.sh` green, Cloudflare:
-custom domain `ystack.yihanzhu.com` + redirect from the old one.
+custom domain `ystack.yihanzhu.com` + redirect from the old one. Plus two
+external-state fixes (Codex, post-merge): any shell-rc PATH entry pointing
+at `~/git/fabrica/scripts` moves to the new path, and the live Claude
+project's pasted persona (per RESTORE.md) is replaced with the yshifu
+version — repo changes don't propagate there by themselves.
 
 ## Order of work
 
