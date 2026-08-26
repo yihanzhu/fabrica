@@ -80,7 +80,7 @@ command, point it at a target repo, and watch one loop run. For the mental model
 
 4. **Set your own north star** — in the **target repo**, at `.fabrica/north-star.md`. Your
    north star is committed in and owned by *your* repo, not the fabrica control-plane clone.
-   Once you've cloned the target (next step), copy `templates/.fabrica/north-star.md` from
+   Once you've cloned the target (next step), copy `templates/.ystack/north-star.md` from
    your fabrica clone into it as `.fabrica/north-star.md`, replace the placeholder with *your*
    direction, remove the `<!-- fabrica-shipped-default -->` marker, and **commit** it — the
    proactive manager-debate reads the *committed* file, and a missing / still-placeholder /

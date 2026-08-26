@@ -38,6 +38,15 @@ while IFS= read -r -d '' file; do
   esac
   # Skip paths that are not plain files (deleted in the worktree, submodules).
   [ -f "$file" ] || continue
+  # The pathname itself must be clean too — a renamed file's content can be
+  # perfect while its old filename survives user-visibly.
+  lower_path="$(printf '%s' "$file" | tr '[:upper:]' '[:lower:]')"
+  case "$lower_path" in
+    *fabrica*|*faber*)
+      printf '%s: (pathname carries an old name)\n' "$file"
+      hits=$((hits + 1))
+      ;;
+  esac
   # -I skips binary files, -i ignores case, -n prints the line number.
   case "$file" in
     scripts/test/*) continue ;;                        # fixtures exercise the fallbacks

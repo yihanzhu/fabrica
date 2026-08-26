@@ -159,7 +159,7 @@ That checklist covers:
 - **North star (per target)** — the team steers by the target's **committed**
   `.fabrica/north-star.md` (resolved via `scripts/lib/north-star.sh`; the manager-debate gate
   reads its committed content). Restore it in the target repo: copy
-  [`templates/.fabrica/north-star.md`](templates/.fabrica/north-star.md) to
+  [`templates/.ystack/north-star.md`](templates/.ystack/north-star.md) to
   `.fabrica/north-star.md`, replace the placeholder with your direction, **remove the
   `<!-- fabrica-shipped-default -->` marker**, and **commit** it — a missing / still-marked /
   no-`status: active` star FAILs the proactive gate (`manager-review.sh`) and WARNs in

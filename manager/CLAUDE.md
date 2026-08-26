@@ -379,7 +379,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   them current so you (and the brief) never have to reconstruct state from threads.
   **Coder spawn model — read before every spawn, fixed ceiling, never escalated.** Before
   spawning **any** coder subagent (round-0 or fix-mode), read `config/models.conf` from
-  this control-plane repo, then the target repo's committed `.ystack/models.conf`
+  this control-plane repo, then the target repo's committed `.ystack/models.conf (legacy .fabrica/models.conf still honored)`
   override if present (parsed as data after — it wins on any key it sets; never
   shell-source the target file — only this control-plane file may be sourced). Pass
   an explicit **`model`** parameter on the spawn call, set to the resolved
@@ -475,7 +475,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   gets re-billed for the rest of the session. Delegate that class of work to a
   **`YSTACK_HANDS_MODEL`** subagent instead — the **same resolution mechanism as the
   coder spawn model above** (read `config/models.conf` from this control-plane repo,
-  then the target repo's committed `.ystack/models.conf` override if present, parsed as
+  then the target repo's committed `.ystack/models.conf (legacy .fabrica/models.conf still honored)` override if present, parsed as
   data — never shell-source the target file), passed as an explicit **`model`**
   parameter set to the resolved **`YSTACK_HANDS_MODEL`** on the spawn call.
   - **Delegate to hands:** context-heavy reads and multi-step polling — watch CI to

@@ -162,3 +162,15 @@ test_work_dir_ignored
 echo
 echo "passed: $passed, failed: $failed"
 [ "$failed" -eq 0 ]
+
+# A clean-content file with an old name in its PATH must still be flagged.
+repo3="$(mktemp -d)"
+( cd "$repo3" && git init -q . && git config user.email t@e.c && git config user.name t
+  echo "clean content" > faber-notes.md && git add -A && git commit -qm f )
+set +e
+out="$(cd "$repo3" && bash "$gate" 2>&1)"; code=$?
+set -e
+[ "$code" -eq 1 ] || fail "old name in pathname must exit 1 (got $code)"
+printf '%s\n' "$out" | grep -q "faber-notes.md" || fail "pathname hit must be listed"
+rm -rf "$repo3"
+echo "ok: pathname check behaves"
