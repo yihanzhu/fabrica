@@ -33,15 +33,39 @@ if ! gh run list --limit 1 --json databaseId >/dev/null; then
   exit 1
 fi
 
+errf="$(mktemp)"
+trap 'rm -f "$errf"' EXIT
+
 count=0
 old_ifs="$IFS"
 IFS=','
 for wf in $lane; do
   IFS="$old_ifs"
-  # A missing workflow (pre-Stack-B) is fine; anything else was caught above.
-  n="$(gh run list --workflow "$wf" --created ">=${cutoff}" --limit 100 \
-        --json databaseId --jq 'length' 2>/dev/null || echo 0)"
-  count=$((count + n))
+  # A workflow that doesn't exist yet (pre-Stack-B) counts as zero. Any OTHER
+  # failure — outage, rate limit — must fail loudly: converting errors to zero
+  # would make the brake fail open during a cascade (Codex review of #131).
+  if n="$(gh run list --workflow "$wf" --created ">=${cutoff}" --limit 100 \
+        --json databaseId --jq 'length' 2>"$errf")"; then
+    case "$n" in
+      ''|*[!0-9]*)
+        echo "quota-preflight: unexpected count for ${wf}: '${n}' — refusing to guess." >&2
+        exit 1
+        ;;
+    esac
+    count=$((count + n))
+  else
+    msg="$(cat "$errf")"
+    case "$msg" in
+      *"could not find any workflows"*|*"no such workflow"*|*"HTTP 404"*)
+        : # not created yet — expected until Stack B lands
+        ;;
+      *)
+        echo "quota-preflight: counting ${wf} failed: ${msg}" >&2
+        echo "Refusing to guess — a brake that undercounts fails open." >&2
+        exit 1
+        ;;
+    esac
+  fi
 done
 IFS="$old_ifs"
 

@@ -30,14 +30,19 @@ if [ -z "$wf" ]; then
   echo "[]"
   exit 0
 fi
-# Look up "<wf>=<count>" in GH_STUB_RUNS; unknown workflows fail like a
-# missing workflow does in real gh.
+# Look up "<wf>=<count>" in GH_STUB_RUNS. Unknown workflows fail with real
+# gh's missing-workflow message; a value of ERR simulates a transient outage.
 entry="$(printf '%s\n' "${GH_STUB_RUNS:-}" | tr ',' '\n' | grep "^${wf}=" || true)"
 if [ -z "$entry" ]; then
-  echo "gh: no such workflow" >&2
+  echo "could not find any workflows named ${wf}" >&2
   exit 1
 fi
-echo "${entry#*=}"
+val="${entry#*=}"
+if [ "$val" = "ERR" ]; then
+  echo "HTTP 500: something went wrong" >&2
+  exit 1
+fi
+echo "$val"
 STUB
 chmod +x "$tmp/gh"
 export PATH="$tmp:$PATH"
@@ -84,3 +89,14 @@ set -e
 grep -q "refusing to guess" "$tmp/err" || fail "gh-down failure must be loud"
 
 echo "ok: quota-preflight behaves"
+
+# A transient per-workflow failure (not a missing workflow) must fail loudly,
+# never count as zero (Codex review of #131).
+set +e
+GH_STUB_RUNS="spec-on-intent.yml=2,review-on-pr.yml=ERR" "$qp" >/dev/null 2>"$tmp/err"
+code=$?
+set -e
+[ "$code" -eq 1 ] || fail "transient count failure must exit 1 (got $code)"
+grep -q "fails open" "$tmp/err" || fail "transient failure must be loud"
+
+echo "ok: transient-failure case behaves"

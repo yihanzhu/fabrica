@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# pending-impl.sh — which approved spec still needs an implementation?
+# pending-impl.sh — which approved specs still need an implementation?
 #
 # A slug needs implementation when work/<slug>/spec.md exists but plan.md is
 # missing from main, or the plan was drafted from an older spec. A slug whose
-# spec is itself stale (built from an older intent) is broken upstream: report
-# "stale=<name>" and do not build on it — the spec stage will redo it first.
-# Prints at most one line, or nothing when everything is done and fresh.
+# spec is stale (built from an older or deleted intent) is broken upstream:
+# it is reported as "stale=<name>" and never built on.
+#
+# Prints ALL findings, one line per slug — never just the first, so a second
+# initiative merged while the first is in flight is visible, not stranded
+# (Codex review of #131). The caller takes the first "slug=" line and re-runs
+# after finishing it to drain the rest. Prints nothing when everything is
+# done and fresh.
 
 for dir in work/*/; do
   [ -d "$dir" ] || continue
@@ -21,25 +26,24 @@ for dir in work/*/; do
   # or vanished. A spec without its intent is orphaned, not fresh.
   if [ ! -f "$intent" ]; then
     echo "stale=${slug}"
-    exit 0
+    continue
   fi
   want_intent="$(git hash-object "$intent")"
   have_intent="$(awk '/^intent-blob:/ {print $2; exit}' "$spec")"
   if [ "$have_intent" != "$want_intent" ]; then
     echo "stale=${slug}"
-    exit 0
+    continue
   fi
 
   if [ ! -f "$plan" ]; then
     echo "slug=${slug}"
-    exit 0
+    continue
   fi
 
   want_spec="$(git hash-object "$spec")"
   have_spec="$(awk '/^spec-blob:/ {print $2; exit}' "$plan")"
   if [ "$have_spec" != "$want_spec" ]; then
     echo "slug=${slug}"
-    exit 0
   fi
 done
 exit 0

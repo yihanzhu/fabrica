@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# pending-spec.sh — which initiative still needs a spec?
+# pending-spec.sh — which initiatives still need a spec?
 #
 # Looks at every work/<slug>/intent.md in the current checkout (run it on main).
 # A slug needs a spec when spec.md is missing, or when the spec was drafted from
 # an older intent (its intent-blob line no longer matches the intent's hash).
-# Prints the first such slug as "slug=<name>" (ready for $GITHUB_OUTPUT), or
-# prints nothing. Re-runs are safe: once a fresh spec is on main, the slug
-# stops being reported.
+#
+# Prints ALL pending slugs, one "slug=<name>" line each — never just the first,
+# so a second initiative merged while the first is in flight is visible, not
+# stranded (Codex review of #131). The caller takes the first line and re-runs
+# after finishing it to drain the rest. Prints nothing when all specs are fresh.
 
 for dir in work/*/; do
   [ -d "$dir" ] || continue
@@ -19,14 +21,13 @@ for dir in work/*/; do
 
   if [ ! -f "$spec" ]; then
     echo "slug=${slug}"
-    exit 0
+    continue
   fi
 
   want="$(git hash-object "$intent")"
   have="$(awk '/^intent-blob:/ {print $2; exit}' "$spec")"
   if [ "$have" != "$want" ]; then
     echo "slug=${slug}"
-    exit 0
   fi
 done
 exit 0

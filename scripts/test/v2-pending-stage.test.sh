@@ -67,3 +67,28 @@ out="$("$pending_impl")"
 [ "$out" = "stale=alpha" ] || fail "deleted intent must read stale (got: '$out')"
 
 echo "ok: orphaned-spec case behaves"
+
+# Two initiatives pending at once must BOTH be listed — a second intent merged
+# while the first is in flight must never be stranded (Codex review of #131).
+mkdir -p work/beta work/gamma
+echo "# Intent: alpha" > work/alpha/intent.md
+blob="$(git hash-object work/alpha/intent.md)"
+printf -- '---\nintent-blob: %s\n---\nspec body\n' "$blob" > work/alpha/spec.md
+sblob="$(git hash-object work/alpha/spec.md)"
+printf -- '---\nspec-blob: %s\n---\nplan body\n' "$sblob" > work/alpha/plan.md
+echo "# Intent: beta" > work/beta/intent.md
+echo "# Intent: gamma" > work/gamma/intent.md
+
+out="$("$pending_spec")"
+[ "$out" = "slug=beta
+slug=gamma" ] || fail "both pending specs must be listed (got: '$out')"
+
+# pending-impl: one buildable, one stale — both visible.
+bblob="$(git hash-object work/beta/intent.md)"
+printf -- '---\nintent-blob: %s\n---\nspec body\n' "$bblob" > work/beta/spec.md
+printf -- '---\nintent-blob: 0000000000000000000000000000000000000000\n---\nspec\n' > work/gamma/spec.md
+out="$("$pending_impl")"
+[ "$out" = "slug=beta
+stale=gamma" ] || fail "impl must list buildable and stale together (got: '$out')"
+
+echo "ok: multi-slug draining behaves"
