@@ -12,7 +12,8 @@ The project is becoming my personal SDLC stack, and the name should say so.
 
 The project is named **ystack** everywhere: repo name, docs, website, branch
 prefixes, env vars, markers. One clean sweep — no half-renamed leftovers.
-Faber stays as the console persona (a name, not a brand).
+The console persona is renamed too: **Faber becomes Shifu** (师傅 — the master
+craftsman you hand work to). The `/faber` command becomes `/shifu`.
 
 ## Affected users and systems
 
@@ -20,8 +21,10 @@ The repo (rename to `yihanzhu/ystack`; GitHub redirects old URLs), all docs
 and the website, branch conventions (`fabrica/*` → `ystack/*`), env vars
 (`FABRICA_*` → `YSTACK_*`, including models.conf keys and their parser +
 tests), the `fabrica-shipped-default` marker and doctor's check for it, the
-`fabrica-main-gate` ruleset name, my local clone path, and **target repos
-that carry `.fabrica/` dirs today (MapleFolio)**.
+`fabrica-main-gate` ruleset name, my local clone path, the persona files
+(`manager/CLAUDE.md`, `templates/faber-command.md`, `install.sh` — Faber →
+Shifu, `/faber` → `/shifu`), and **target repos that carry `.fabrica/` dirs
+today (MapleFolio)**.
 
 ## Constraints
 
@@ -40,4 +43,3 @@ that carry `.fabrica/` dirs today (MapleFolio)**.
 - What replaces the "Otium · Valor · Fabrica" trio line in the README?
 - Rename the ruleset (`fabrica-main-gate` → `ystack-main-gate`) in the same
   pass, or leave it (cosmetic, API-side only)?
-- Keep the `/faber` command name exactly, or alias `/y` to it?
