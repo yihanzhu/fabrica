@@ -1,5 +1,5 @@
 ---
-spec-blob: 3e9f9d30449b95f2d70b6d79b00d2a876e01171e
+spec-blob: 12146606051813a671d3c7bc874b0ba88e78a46e
 drafted: 2026-08-26
 ---
 
