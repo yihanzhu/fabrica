@@ -82,7 +82,12 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   by dispatch** — closing a PR or dismissing an approval fires no event, so the
   push-triggered stages would otherwise never wake and the slug would sit stranded.
   Both stage workflows therefore carry `workflow_dispatch` alongside their push
-  trigger, gated to the operator like every other dispatch here. An approved PR
+  trigger, gated to the operator like every other dispatch here. **The runaway
+  brake counts push-triggered runs only** (`--event push`): a dispatch by anyone
+  who fails the actor gate still records a run whose job was skipped, and counting
+  those would let a collaborator spam dispatches until the brake trips and starves
+  the lane. Push-to-main runs keep the property the brake needs — the ruleset means
+  only an operator merge causes them, so such a run always means the agent ran. An approved PR
   belongs to the operator, so the lane never edits one behind them; and a stale one
   is rebuilt, never merged.
 - **R6 — plumbing proven first.** Before the three workflows are finalized, a
