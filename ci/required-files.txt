@@ -71,6 +71,7 @@ scripts/v2/pending-spec.sh
 scripts/v2/pending-impl.sh
 scripts/v2/round-cap.sh
 scripts/v2/quota-preflight.sh
+scripts/v2/probe-publish.sh
 .github/workflows/plumbing-test.yml
 
 # Tests (run by CI; also executable — see ci.yml)

@@ -174,3 +174,15 @@ set -e
 printf '%s\n' "$out" | grep -q "faber-notes.md" || fail "pathname hit must be listed"
 rm -rf "$repo3"
 echo "ok: pathname check behaves"
+
+# probe-publish refuses anything but digit arguments — the branch name and the
+# single staged file are fixed by the script, not by the agent's prompt.
+pp="$test_dir/../v2/probe-publish.sh"
+for bad in "main; rm -rf /" "../evil" ""; do
+  set +e
+  ( cd "$(mktemp -d)" && bash "$pp" "$bad" 1 ) >/dev/null 2>&1
+  code=$?
+  set -e
+  [ "$code" -ne 0 ] || fail "probe-publish must refuse non-numeric run_id: '$bad'"
+done
+echo "ok: probe-publish argument guard behaves"
