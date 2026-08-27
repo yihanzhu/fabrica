@@ -12,8 +12,10 @@ deferred fix stage lands (see the amendment note).
 
 **Amended 2026-08-27 (operator ruling at the review cap).** This phase ships three
 workflows, not four: the fix loop (R4) is deferred to its own intent. Two reasons,
-stated here so this spec stands on its own: the fix stage needed a third
-`claude[bot]` trigger edge where R5 allows two, and it was the one job holding write
+stated here so this spec stands on its own: R5 allows two `claude[bot]` trigger
+edges — review-of-agent-PRs, and the fix-on-review comment. The fix stage needed
+both of those **plus** a third, the dispatch that re-runs review after a push-back
+that changes no code; and it was the one job holding write
 credentials, running PR-authored code, and reading untrusted PR text at once — it
 earns a design from scratch rather than patches.
 
@@ -57,8 +59,9 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
 - **R5 — safety invariants (all three workflows in this phase).** One global `claude-quota`
   concurrency group serializes every agent job; explicit actor gates
   (`github.actor == operator`, or `allowed_bots: claude[bot]` only on deliberately
-  opened bot edges — this phase opens exactly one, review-of-agent-PRs; the second
-  edge R5 allowed served the deferred fix stage);
+  opened bot edges — this phase opens exactly one, review-of-agent-PRs. R5's second
+  allowed edge, the fix-on-review comment, went with the deferred stage, and the
+  third edge that stage would also have needed is precisely why it was deferred);
   `timeout-minutes` and `--max-turns` on every job; PR-creation steps assert the
   PR exists and fail loudly; stage write-limits stated in the stage skills
   (mechanical enforcement arrives with Phase 3 hooks). **No stage pushes to a PR
@@ -68,9 +71,13 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   silently move what they approved. When a producer stage would have to update an
   already-approved PR — the upstream artifact moved while the PR sat approved and
   unmerged — it does not push. It labels the PR `stale`, says so in one comment,
-  and stops. The operator then merges it, dismisses the approval, or closes it;
-  the stage runs again once the PR is theirs to rebuild. An approved PR belongs to
-  the operator, so the lane never edits one behind them.
+  and stops. **Merging it is not one of the ways out:** its recorded upstream hash
+  no longer matches main, so merging would land an artifact the chain reads as
+  stale and no stage would rebuild it — the merge changes the artifact, not the
+  upstream that moved. The operator closes the stale PR (or dismisses the approval
+  and lets the stage rebuild it from the current upstream). An approved PR belongs
+  to the operator, so the lane never edits one behind them; and a stale one is
+  rebuilt, never merged.
 - **R6 — plumbing proven first.** Before the three workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
