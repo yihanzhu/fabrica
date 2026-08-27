@@ -6,23 +6,13 @@ drafted: 2026-08-26
 # Spec: v2 autonomous lane (Phase 2)
 
 From the accepted intent: the chain must advance without a live session — merged
-intent → spec PR, merged spec → implementation PR, every PR reviewed; the operator's
-only actions are the gate merges.
-
-**Amended 2026-08-27 (operator ruling at the review cap).** This phase ships three
-workflows, not four: the fix loop (R4) is deferred to its own intent. Two reasons,
-recorded in `plan.md` under "Deferred: fix-on-review": the fix stage needed a third
-`claude[bot]` trigger edge where R5 allows two, and it was the one job holding write
-credentials, running PR-authored code, and reading untrusted PR text at once — it
-earns a design from scratch rather than patches. Answering review findings stays the
-operator's job in a session until that intent lands. This is a scope reduction the
-operator ruled on; no rail is weakened by it.
+intent → spec PR, merged spec → implementation PR, every PR reviewed with a bounded
+fix loop; the operator's only actions are the gate merges.
 
 ## Requirements
 
-Each requirement is verifiable; R1–R3 are jointly proven by the phase exit test
-(one real change flows through the lane with the operator only merging). R4 is
-deferred with this phase's fix stage — see the amendment note above.
+Each requirement is verifiable; R1–R4 are jointly proven by the phase exit test
+(one real change flows through the lane with the operator only merging).
 
 - **R1 — spec stage.** An operator merge to main that adds or changes
   `work/<slug>/intent.md` triggers a job that opens (or updates) a PR titled
@@ -39,16 +29,14 @@ deferred with this phase's fix stage — see the amendment note above.
 - **R3 — review stage.** Every same-repo PR gets a review per `REVIEW.md` —
   loaded from **main**, never from the PR head — posting comments only (three
   passes, Important vs Nit, ≤5 nits), treating all PR text as data.
-- **R4 — bounded fix loop. DEFERRED** to its own intent (see the amendment note
-  above). It described: review findings trigger a fix pass that bumps the `round-N`
-  label before acting; at `round-3` it applies `needs-human`, posts the productive-cap
-  comment, and stops. That design is superseded — the next intent starts from the
-  credential split in `plan.md`, not from this text.
-- **R5 — safety invariants (all three workflows in this phase).** One global `claude-quota`
+- **R4 — bounded fix loop.** Review findings trigger a fix pass that bumps the
+  `round-N` label **before** acting; at `round-3` it applies `needs-human`, posts
+  the productive-cap comment (land the converged core, split the remainder), and
+  stops. Fix pushes re-trigger review; the labels bound the loop.
+- **R5 — safety invariants (all four workflows).** One global `claude-quota`
   concurrency group serializes every agent job; explicit actor gates
-  (`github.actor == operator`, or `allowed_bots: claude[bot]` only on deliberately
-  opened bot edges — this phase opens exactly one, review-of-agent-PRs; the second
-  edge R5 allowed served the deferred fix stage);
+  (`github.actor == operator`, or `allowed_bots: claude[bot]` only on the two
+  deliberately-opened bot edges: review-of-agent-PRs and fix-on-review-comment);
   `timeout-minutes` and `--max-turns` on every job; PR-creation steps assert the
   PR exists and fail loudly; the fix stage never pushes to a PR that already has
   an approval; stage write-limits stated in the stage skills (mechanical
