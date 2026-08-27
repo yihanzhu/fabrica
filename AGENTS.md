@@ -24,6 +24,8 @@ changing anything:
   unless the operator is driving the session.
 - **Prove it.** Run the checks the plan names, paste the output, and say
   which commit you ran them on. Old proof on a new commit is stale.
-- **Old names are gone.** `scripts/check-rename.sh` fails on "fabrica" or
-  "faber" anywhere in tracked files; a line documenting real back-compat
-  must carry the word "legacy".
+- **Old names are gone.** The project and its manager were renamed;
+  `scripts/check-rename.sh` fails CI if either old name survives in a
+  tracked file. A line that documents real back-compat must carry the word
+  "legacy" — that is how the gate tells intent from leftovers. Run the
+  script to see what it accepts.

@@ -11,6 +11,7 @@
 # Top-level docs
 README.md
 CLAUDE.md
+AGENTS.md
 QUICKSTART.md
 RESTORE.md
 NORTH_STAR.md
