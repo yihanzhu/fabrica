@@ -64,10 +64,13 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   person who pressed re-run appears only in `github.triggering_actor`. So any gate
   written on `github.actor` alone lets a write-capable collaborator re-run someone
   else's job — an operator's dispatch, or a bot-triggered review — and spend the
-  operator's subscription under a passing check. Every job in this lane therefore
-  requires the triggering actor to be the operator (or, on the bot edge, the bot
-  itself), alongside whatever `github.actor` or `allowed_bots` allows. The probe
-  workflow already carries both checks; this rule exists so no new job forgets it.
+  operator's subscription under a passing check. So every job in this lane checks
+  the triggering actor as well, and accepts exactly two: **the operator** — who may
+  re-run anything by hand, including a bot-originated review that failed
+  transiently — **or `claude[bot]` itself**, which is what the triggering actor is
+  on a run the lane started. Anyone else is refused, whatever `github.actor` or
+  `allowed_bots` says. The probe workflow already carries both checks; this rule
+  exists so no new job forgets them.
 
   Which gates: the two stage jobs and any dispatch are operator-gated; the review
   job opens exactly one bot edge, review-of-agent-PRs (`allowed_bots: claude[bot]`).
