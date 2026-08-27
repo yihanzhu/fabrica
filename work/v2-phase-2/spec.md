@@ -58,7 +58,11 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   from any plan written for the four-workflow shape.
 - **R5 — safety invariants (all three workflows in this phase).** One global `claude-quota`
   concurrency group serializes every agent job; explicit actor gates
-  (`github.actor == operator`, or `allowed_bots: claude[bot]` only on deliberately
+  (`github.actor == operator` **and `github.triggering_actor == operator`** — on a
+  re-run `github.actor` stays whoever dispatched originally, so the first check
+  alone lets any write-capable collaborator re-run an operator's dispatch and spend
+  their subscription; the probe workflow already carries both checks for exactly
+  this reason — or `allowed_bots: claude[bot]` only on deliberately
   opened bot edges — this phase opens exactly one, review-of-agent-PRs. R5's second
   allowed edge, the fix-on-review comment, went with the deferred stage, and the
   third edge that stage would also have needed is precisely why it was deferred);
