@@ -74,10 +74,13 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   and stops. **Merging it is not one of the ways out:** its recorded upstream hash
   no longer matches main, so merging would land an artifact the chain reads as
   stale and no stage would rebuild it — the merge changes the artifact, not the
-  upstream that moved. The operator closes the stale PR (or dismisses the approval
-  and lets the stage rebuild it from the current upstream). An approved PR belongs
-  to the operator, so the lane never edits one behind them; and a stale one is
-  rebuilt, never merged.
+  upstream that moved. The operator closes the stale PR, then **re-runs the stage
+  by dispatch** — closing a PR or dismissing an approval fires no event, so the
+  push-triggered stages would otherwise never wake and the slug would sit stranded.
+  Both stage workflows therefore carry `workflow_dispatch` alongside their push
+  trigger, gated to the operator like every other dispatch here. An approved PR
+  belongs to the operator, so the lane never edits one behind them; and a stale one
+  is rebuilt, never merged.
 - **R6 — plumbing proven first.** Before the three workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
@@ -99,8 +102,9 @@ At the file/component altitude; order of work belongs to `plan.md`.
 
 - **Workflows** (`.github/workflows/`): `spec-on-intent.yml`,
   `implement-on-spec.yml`, `review-on-pr.yml` — push-to-main path triggers for
-  the two stage jobs, and `pull_request` (same-repo guard, per-PR
-  `cancel-in-progress`) for review. All use `claude_code_oauth_token`, no
+  the two stage jobs **plus `workflow_dispatch` on each, so the operator can
+  restart a stage after clearing a stale PR** (see the approved-PR rule in R5),
+  and `pull_request` (same-repo guard, per-PR `cancel-in-progress`) for review. All use `claude_code_oauth_token`, no
   `github_token` input (app-token events must cascade), and invoke stage skills
   as their prompt. (`fix-on-review.yml` and its `issue_comment` trigger belonged
   to the deferred R4 — see the amendment note.)
