@@ -155,6 +155,14 @@ jobs:
           # found: silent zero-counts and gh outages.
           bash scripts/test/v2-quota-preflight.test.sh
 
+      - name: v2 rename-gate + probe-wrapper guard tests
+        run: |
+          # Hermetic asserts for scripts/check-rename.sh and the probe
+          # wrapper's argument guard — no network, throwaway git repos.
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+          bash scripts/test/v2-check-rename.test.sh
+
       - name: Rename gate
         run: |
           # Patrols tracked files for old names left over from the rename.

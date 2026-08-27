@@ -25,6 +25,18 @@ attempt="$2"
 case "$run_id" in ''|*[!0-9]*) echo "error: run_id must be digits" >&2; exit 1 ;; esac
 case "$attempt" in ''|*[!0-9]*) echo "error: attempt must be digits" >&2; exit 1 ;; esac
 
+# Bind to THIS run. Inside Actions the workflow's own ids are authoritative,
+# so invented values are refused — the wrapper can publish one branch per run
+# attempt and nothing else, even if the model calls it repeatedly.
+if [ -n "${GITHUB_RUN_ID:-}" ] && [ "$run_id" != "$GITHUB_RUN_ID" ]; then
+  echo "error: run_id ${run_id} is not this run (${GITHUB_RUN_ID})" >&2
+  exit 1
+fi
+if [ -n "${GITHUB_RUN_ATTEMPT:-}" ] && [ "$attempt" != "$GITHUB_RUN_ATTEMPT" ]; then
+  echo "error: attempt ${attempt} is not this attempt (${GITHUB_RUN_ATTEMPT})" >&2
+  exit 1
+fi
+
 branch="plumbing-probe-${run_id}-${attempt}"
 
 printf 'plumbing probe run %s attempt %s\n' "$run_id" "$attempt" > probe.txt

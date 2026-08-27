@@ -186,3 +186,16 @@ for bad in "main; rm -rf /" "../evil" ""; do
   [ "$code" -ne 0 ] || fail "probe-publish must refuse non-numeric run_id: '$bad'"
 done
 echo "ok: probe-publish argument guard behaves"
+
+# Inside a run, the wrapper refuses ids that are not this run's.
+set +e
+( cd "$(mktemp -d)" && GITHUB_RUN_ID=111 GITHUB_RUN_ATTEMPT=1 bash "$pp" 222 1 ) >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -ne 0 ] || fail "probe-publish must refuse a run_id that is not this run"
+set +e
+( cd "$(mktemp -d)" && GITHUB_RUN_ID=111 GITHUB_RUN_ATTEMPT=2 bash "$pp" 111 1 ) >/dev/null 2>&1
+code=$?
+set -e
+[ "$code" -ne 0 ] || fail "probe-publish must refuse a stale attempt number"
+echo "ok: probe-publish run-binding behaves"
