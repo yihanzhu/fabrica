@@ -38,4 +38,4 @@ Slug: `$0`
    **G2**: approval to build.
 
 **Write in plain language.** Short sentences, everyday words — the reader is a
-tired human, not another agent (see CLAUDE.md > PR rules).
+tired human, not another agent (see AGENTS.md > PR rules).

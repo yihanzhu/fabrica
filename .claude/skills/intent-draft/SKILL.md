@@ -42,4 +42,4 @@ Template — keep all six sections and headings exact:
     <what the operator or the design stage must still answer>
 
 **Write in plain language.** Short sentences, everyday words — the reader is a
-tired human, not another agent (see CLAUDE.md > PR rules).
+tired human, not another agent (see AGENTS.md > PR rules).

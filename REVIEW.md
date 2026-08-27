@@ -28,7 +28,7 @@ nits.
 
 Report at most five nits per review; summarize the rest as a count.
 Jargon-heavy or hard-to-follow writing in artifacts and PR text is a nit —
-plain language is a repo rule (CLAUDE.md > PR rules).
+plain language is a repo rule (AGENTS.md > PR rules).
 
 ## Do not report
 
