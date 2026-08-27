@@ -9,6 +9,14 @@ name: Claude Code
 # pressed re-run appears only in github.triggering_actor, so checking one alone
 # lets a collaborator re-run someone else's job.
 #
+# AUTHOR GATE — the actor gate alone is not enough. It says who triggered the
+# event, not who wrote the text the agent will then read. On `issues: assigned`
+# the actor is the operator doing triage while the issue body belongs to
+# whoever opened it, so a stranger's issue containing "@claude" plus
+# instructions would run the moment it is assigned. Issue events therefore also
+# require the ISSUE AUTHOR to be the operator. (Comment events need no separate
+# check: there the actor IS the author.)
+#
 # Bots stay refused: the action rejects bot actors unless they are listed in
 # allowed_bots, and no bot edge is opened here on purpose. A cross-vendor
 # reviewer belongs in a review workflow that fires on every PR, not in a
@@ -34,7 +42,9 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issues' &&
+        github.event.issue.user.login == 'yihanzhu' &&
+        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
       )
     runs-on: ubuntu-latest
     permissions:
