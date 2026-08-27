@@ -15,7 +15,7 @@ Run three passes and tag each finding with its pass:
 - **Compliance**: the diff matches `work/<slug>/plan.md` and `spec.md` (when the PR
   belongs to a chain); safety rails intact — reviewer stays comments-only, round
   cap and `needs-human` escalation intact, no-merge guards untouched, constitution
-  paths (`.github/**`, `.claude/**`, `CLAUDE.md`, `REVIEW.md`) changed only by the
+  paths (`.github/**`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`, `REVIEW.md`) changed only by the
   operator or via `proposals/`.
 
 ## What Important means here
@@ -28,7 +28,7 @@ nits.
 
 Report at most five nits per review; summarize the rest as a count.
 Jargon-heavy or hard-to-follow writing in artifacts and PR text is a nit —
-plain language is a repo rule (CLAUDE.md > PR rules).
+plain language is a repo rule (AGENTS.md > PR rules).
 
 ## Do not report
 

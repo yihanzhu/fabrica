@@ -86,8 +86,11 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    **`reviewer: <model> @ <effort>`** line recording the RESOLVED config that gated this review
    (see **model policy** below). The marker and reviewer lines are part of
    yshifu's header prefix, clearly separate from Codex's verbatim body, so the review stays
-   read-only / comments-only / verbatim. [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) is
-   the first consumer: it reads the `Reviewed-head`/`Reviewed-base` markers, confirms the PR's
+   read-only / comments-only / verbatim. The markers tie the review to one exact commit, and
+   two readers use them. yshifu checks them before it applies `merge-ready` and hands the PR to
+   the operator — a head that has moved since the review voids the label. And
+   [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) — the **operator's own** merge helper, which
+   no agent runs — reads the same `Reviewed-head`/`Reviewed-base` markers, confirms the PR's
    current head still equals it and that CI is green, then squash-merges pinned to that SHA
    (`--match-head-commit`).
 
@@ -167,7 +170,8 @@ The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posti
 "clean" verdict. Real incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing
 from a Homebrew codex install); `codex exec review` still "completed" — exit 0, in ~8-14s, at
 confidence ~0.05, with a generic "no actionable findings" — having done **zero** diff
-inspection. Under the standing auto-merge rail, a fake "clean" would auto-merge unreviewed code.
+inspection. A fake "clean" is how unreviewed code gets labeled `merge-ready` and handed to the
+operator as if a reviewer had passed it.
 
 **Detection uses a structured boundary — never untyped model/tool content.** Normal
 `codex exec -o` writes the final answer to the requested file **and** repeats it on stdout, so
@@ -199,14 +203,15 @@ is also refused, rather than posting a header-only comment with no findings.
 On detection: the script exits non-zero and posts an explicit DEGRADED marker comment instead —
 `## Codex reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)`, deliberately a
 **different** header line than the real `## Codex reviewer (cross-vendor, read-only)` one, with
-NO `Reviewed-head`/`Reviewed-base` markers. That means `scripts/merge-pr.sh`'s marker parser
-(which matches that exact header line plus those exact marker keys) can never mistake a
-degraded run for a completed review — belt-and-suspenders on top of yshifu reading the comment
-text.
+NO `Reviewed-head`/`Reviewed-base` markers. That means the marker parser in the operator's
+`scripts/merge-pr.sh` (which matches that exact header line plus those exact marker keys) can
+never mistake a degraded run for a completed review — belt-and-suspenders on top of yshifu
+reading the comment text before it labels anything `merge-ready`.
 
 **The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix).** The
-DEGRADED comment is posted by, and so is authored as, the same gh-authenticated operator
-`scripts/merge-pr.sh` trusts — so it is exactly the kind of comment that parser's author+header
+DEGRADED comment is posted by, and so is authored as, the same gh-authenticated operator the
+operator's own `scripts/merge-pr.sh` trusts — so it is exactly the kind of comment that
+parser's author+header
 match would accept. codex's diagnostic output is untrusted (a prompt-injected PR could make it
 emit lines identical to the real `## Codex reviewer (cross-vendor, read-only)` header plus
 `Reviewed-head:`/`Reviewed-base:` markers), and the `-o` answer is doubly untrustworthy on a
@@ -246,21 +251,24 @@ yshifu runs codex-review.sh <PR#>  (by absolute path, from the target repo's clo
    (script posts Codex's verdict to the PR, verbatim)
         ↓
 yshifu reads the Codex comment
-        ├── pass      →  yshifu merges if low-risk (CI green); else hands to the human
+        ├── pass      →  yshifu labels the PR `merge-ready` (CI green + this exact head
+        │                passed) and hands it to the operator, who merges
         └── not pass  →  yshifu spawns coder (fix mode) to address comments
                               ↓
                          yshifu re-runs codex-review.sh   (bump round-N)
                               ↺  repeat
                               └── ~3-round cap → SCOPE DOWN + FOLLOW-UP (productive):
                                     land the converged core (one scoped-down change →
-                                    clean review → merge) + open a follow-up issue for the
-                                    contested remainder; reserve needs-human → yshifu pings you
-                                    for a genuine standoff / safety-rail / north-star
+                                    clean review → `merge-ready` → the operator merges) +
+                                    open a follow-up issue for the contested remainder;
+                                    reserve needs-human → yshifu pings you for a genuine
+                                    standoff / safety-rail / north-star
 ```
 
 yshifu, not the reviewer, drives each step; Claude and Codex never talk directly — the
 **PR is the message bus**. Rounds + escalation live in the **labels**
-(`round-0..3`, `needs-human`), not in any agent's memory.
+(`round-0..3`, `merge-ready`, `needs-human`), not in any agent's memory. **No agent merges** —
+the loop ends at the handoff, and the operator merges.
 
 ## Future / alternatives (not wired)
 

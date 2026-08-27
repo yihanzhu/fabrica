@@ -323,11 +323,11 @@ never read this as a `PROCEED`.
 as `codex-review.sh`).** It never embeds the `-o` verdict answer (untrustworthy on a degraded
 run), **never embeds JSONL** (it contains private agent/command/repository payloads), and embeds
 only a bounded, sanitized raw-stderr tail via `cd_sanitize_snippet` — every line prefixed `> `,
-which breaks the line anchors a marker parser like `scripts/merge-pr.sh`'s would require. This
-comment is posted by, and authored as, the same gh-authenticated operator, so it must never be
-able to carry an unneutralized marker-shaped line even though `merge-pr.sh` only reads PR
-comments today — defense-in-depth against codex's diagnostic output being adversarially
-influenced by the issue/repo content it read.
+which breaks the line anchors a marker parser like the one in the operator's
+`scripts/merge-pr.sh` would require. This comment is posted by, and authored as, the same
+gh-authenticated operator, so it must never be able to carry an unneutralized marker-shaped
+line even though that script only reads PR comments today — defense-in-depth against codex's
+diagnostic output being adversarially influenced by the issue/repo content it read.
 
 ## The manager-reviewer prompt
 

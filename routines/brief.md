@@ -9,14 +9,13 @@ Scan my repos by LABEL (the labels are the state) and send me ONE short message,
 action-first:
 
 - PRs labeled `merge-ready` whose CI is now green (with links): this report is read-only —
-  it surfaces state, it does not merge. Report any low-risk ones as **awaiting merge** — they
-  get merged when yshifu reviews them **in-session** (auto-merge happens back-to-back with a
-  review, not on a scan), or when I merge. (A status/Tracking pass is read-only too; neither
-  the brief nor a scan auto-merges — that unattended path is deferred to #46.) `merge-ready`
-  means the reviewed head passed, so if a PR's head changed after the label was applied, flag
-  it as **stale — needs a fresh Codex review of the current head**. Call out the ones held
-  for me — high-risk (auth / migrations / shared repos / security-sensitive), safety-rail, or
-  north-star — as waiting on my merge gate
+  it surfaces state, it does not merge. Nothing else merges either: yshifu applies
+  `merge-ready` once CI is green and the reviewer passed that head, then hands the PR to me.
+  **I merge, always.** So report every one of these as **waiting on my merge**.
+  `merge-ready` means the reviewed head passed, so if a PR's head changed after the label was
+  applied, flag it as **stale — needs a fresh Codex review of the current head**. Call out
+  the ones that need my judgment on top of the review — high-risk (auth / migrations /
+  shared repos / security-sensitive), safety-rail, or north-star
 - Items labeled `needs-human` — the escalation comment's short reason says which
   (`round-cap` / `ambiguous-spec` / `oversized` / `failure`); say which and why.
   Skip anything I've already acted on: once resolved, `needs-human` is cleared, so

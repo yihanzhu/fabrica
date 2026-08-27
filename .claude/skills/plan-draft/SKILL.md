@@ -41,4 +41,4 @@ Slug: `$0`
    later departs from the plan, update `plan.md` in the same commit that departs.
 
 **Write in plain language.** Short sentences, everyday words — the reader is a
-tired human, not another agent (see CLAUDE.md > PR rules).
+tired human, not another agent (see AGENTS.md > PR rules).
