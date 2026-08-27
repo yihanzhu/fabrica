@@ -15,6 +15,7 @@ AGENTS.md
 QUICKSTART.md
 RESTORE.md
 NORTH_STAR.md
+ROADMAP.md
 
 # Manager persona
 manager/CLAUDE.md

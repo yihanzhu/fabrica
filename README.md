@@ -4,15 +4,19 @@ A small autonomous coding team. **yshifu** (the manager) runs the shop in a Clau
 session: you approve specs, and yshifu spawns a Claude coder subagent to build and runs a
 Codex reviewer to review.
 
-This repo is the **control plane** — it defines *how the team works*. It is **not**
-where the team writes code. The team works in separate **target repos**; this repo
-holds the prompts, roles, and templates you edit to set up and evolve the team.
+Claude Code + Codex + GitHub are the **current default profile**, not product
+requirements. The portable target architecture and rollout live in
+[`ROADMAP.md`](ROADMAP.md).
+
+This repo is the **control plane** — it defines *how the team works*. Target product
+code normally lives in separate repos; ystack is intentionally its own target when
+the team is improving the control plane itself.
 
 **ystack** — Yihan's stack for the AI-native SDLC: an autonomous coding team, gated by human judgment.
 
-**Get started →** [QUICKSTART.md](QUICKSTART.md)
+**Get started →** [QUICKSTART.md](QUICKSTART.md) · **Direction →** [ROADMAP.md](ROADMAP.md)
 
-## The team
+## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
 within that session — spawning the coder and running the reviewer — so there is no
@@ -66,12 +70,12 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
 
 ## Design decisions (the "why")
 
-- **4 roles, fixed** (2 vendors). Manager = the PM (no separate PM). Add an agent only for a
-  distinct *job + trigger + tool surface* — not per discipline (no FE/BE split;
-  specialize via each target repo's `CLAUDE.md`).
-- **Cross-vendor by design.** Claude codes, Codex reviews — different training/
-  architecture = decorrelated blind spots. A reviewer's value is being *different*,
-  not a second copy.
+- **Responsibilities are stable; adapters are replaceable.** Add a role only for a
+  distinct *job + trigger + tool surface* — not per discipline. The current profile
+  maps those responsibilities to Claude and Codex.
+- **Cross-vendor review is a preference, not a requirement.** The requirement is an
+  independent reviewer identity, context, and permission boundary. A different vendor
+  is the preferred default because it can reduce common blind spots.
 - **Reviewer is read-only, comments only, never the author.** Non-negotiable.
 - **Judgment lives at the direction (front gate at the north-star altitude), not the diff.**
   You approve the **north star** — each target repo's own committed
@@ -92,7 +96,10 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   [`reviewer/manager-review.md`](reviewer/manager-review.md)). For *proactive* work you are
   pulled back in only at the north-star altitude: **north-star achieved**, **goal drift /
   transition**, and `needs-human` escalations — user-directed issues still come to you for the
-  drafted-spec approval.
+  drafted-spec approval. The accepted roadmap adds a risk-tiered plan gate after intake:
+  high-risk proactive or user-directed work will return to you for plan approval before
+  code. That gate is not wired into the current manager yet; `ready` must not be described
+  as plan approval.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
 - **yshifu never merges — it labels, then hands you the PR.** Merging is the operator's,
@@ -128,17 +135,18 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   scoped-down core is contested, it's a genuine coder↔reviewer standoff, or it's a
   safety-rail / north-star decision — only then does the cap reach you. The cap **count** is
   unchanged; only how it resolves.
-- **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
-  the last round, so rounds + escalation live in **labels** (`round-0..3`, `needs-human`)
-  that yshifu reads and bumps each round.
+- **The current profile projects state into labels, not memory.** Each coder is a fresh
+  subagent, so `round-0..3`, `needs-human`, and `merge-ready` currently survive in forge
+  labels. The portable core moves canonical stage, retry, stale, and decision state into
+  durable records; labels remain a UI projection rather than a second state machine.
 - **Runs on the plan** in an ordinary Claude Code session (Claude coder subagents) plus
   Codex's built-in review via `scripts/codex-review.sh` — compliant ordinary use, metered.
   Prototype on personal repos; apply terms diligence before any work/shared repo.
 
-> **Autonomous lane: being built.** The autonomous lane is being built through the v2
-> chain — committed intent → spec → plan artifacts, each gated by the operator's merge.
-> Stack A (the artifact chain) is merged; the GitHub Actions workflows land next. Until
-> they do, the in-session loop above is the one path that runs.
+> **Autonomous write is paused for re-planning.** The artifact spine is useful, but draft
+> PR #146 bound the lane to one harness/forge and exposed missing credential, eval, and
+> reconciliation controls. It must not merge. The portable core and control foundation in
+> [`ROADMAP.md`](ROADMAP.md) come before any autonomous write is enabled.
 
 ## Model policy
 
@@ -222,6 +230,7 @@ merging the doc change — `doctor.sh`'s static validation is unaffected.
 
 ```
 QUICKSTART.md              The ~10-min golden path: stand the team up from scratch
+ROADMAP.md                 Portable architecture, control objectives, and rollout order
 CLAUDE.md                  Repo conventions + self-modification safety rails (vs manager/CLAUDE.md = yshifu's persona)
 manager/CLAUDE.md          yshifu's persistent role (paste into Claude Code)
 routines/coder.md          Coder baseline instructions yshifu passes to a spawned coder subagent
@@ -257,7 +266,7 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
   drift. Both the **brief** and a **status / Tracking pass** are **read-only — they surface
   `merge-ready` PRs, they never merge**. No agent merges: `main` needs a pull request plus an
   approving review the comments-only reviewer cannot give, and no agent has a bypass.
-- **Phase 3** — widen what the loop takes on as it proves out (the autonomous lane in the v2
-  chain); always back-look high-risk work (auth, migrations, shared repos). **The merge gate
-  does not widen** — the operator merges, in every phase. There is no agent merge path, now
-  or planned.
+- **Next** — migrate the current profile behind portable adapters, establish the
+  control/eval/reconciliation foundation, then enable bounded writes one stage at a
+  time. [`ROADMAP.md`](ROADMAP.md) is authoritative. **The merge gate does not widen** —
+  the operator merges in every phase.

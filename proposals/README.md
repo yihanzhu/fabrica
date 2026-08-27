@@ -1,7 +1,7 @@
 # proposals/
 
 Patches to the constitution paths — `.github/**`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`,
-`REVIEW.md` — which unattended agents may not write directly.
+`REVIEW.md`, `ROADMAP.md` — which unattended agents may not write directly.
 
 An autonomous-lane agent that wants to change how the machinery itself works saves
 a unified diff here (`proposals/<slug>-<short-title>.patch`) with a one-paragraph
