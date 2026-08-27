@@ -32,7 +32,35 @@ rule):
 - `.github/workflows/ci.yml` — run the two new tests.
 - `ci/required-files.txt` — list the new files.
 
-**PR B — the lane** (only after PR A merges and the plumbing test passes)
+**PR B — the lane** (PR A merged; the plumbing test PASSED — run 33088639117:
+the agent published a branch and opened PR #140 as `app/claude` with zero
+denials, and that PR triggered CI by itself. App events cascade, so the lane
+uses the direct path and the spec's PR-creation fallback is retired.)
+
+**Rules the probe cost us five failures to learn — every workflow below obeys
+them, and a reviewer should reject any that does not:**
+1. **Allowlist by command prefix, never by argument text.** `Bash(git push:*)`
+   matches; `Bash(git push -u origin some-branch:*)` matches nothing and the
+   call is silently denied.
+2. **Put writes behind a deterministic wrapper and allowlist only that.** See
+   `scripts/v2/probe-publish.sh`: it fixes the branch name, the files it
+   stages, and the refspec, and refuses arguments that are not this run's.
+   Each stage gets its own wrapper in the same shape.
+3. **Assert side effects.** A denied write still reports `is_error: false`, so
+   every job ends with a step that checks the PR/branch really exists and
+   fails loudly when it does not.
+4. **Verify secrets through the API, never by assuming a paste landed** —
+   auth resolves at execution time, so a bad token looks like a working
+   workflow until the run dies.
+5. **`workflow_dispatch` executes only from the default branch** — a
+   dispatch-triggered change cannot be tested before it merges.
+
+**Reviewer-loop rules learned the same way (they belong in `fix-on-review`):**
+- Fence every reviewer verdict to the head it judged: a verdict whose
+  timestamp precedes the push is about the previous code.
+- Let a verdict settle (~8 minutes) before acting on it — the reviewer
+  acknowledges a push within seconds and posts real findings minutes later.
+- Bump the round label BEFORE acting, and count only post-fence verdicts.
 
 - Four workflows: `spec-on-intent`, `implement-on-spec`, `review-on-pr`,
   `fix-on-review`. Every job: one agent at a time, hard time and turn limits,
