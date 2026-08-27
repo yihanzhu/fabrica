@@ -16,9 +16,19 @@ hash against main's current upstream file: on mismatch, label the PR `stale` and
 stop — never build on a moved artifact.
 
 **Deterministic branches:** `ystack/intent/<slug>`, `ystack/spec/<slug>`,
-`ystack/impl/<slug>`. A re-run updates the existing branch/PR; it never opens a
-second PR for the same slug.
+`ystack/impl/<slug>`. A re-run updates the existing open branch/PR. A closed PR
+is history; after closing a stale PR, an operator dispatch may open a fresh one
+for that slug.
 
-Today the stages run by hand (`/intent-draft`, `/spec-draft`, `/plan-draft` in a
-Claude Code session); Phase 2 wires them to GitHub events. The gates never change
-either way.
+If upstream moves after the operator approves an open PR, the stage labels it
+`stale`, comments once, and stops. Close it, then dispatch the stage to rebuild.
+Never merge the stale PR.
+
+**Two lanes run the same chain.** In a Claude Code session, `/intent-draft`,
+`/spec-draft`, and `/plan-draft` run by hand. The autonomous lane uses
+`.github/workflows/spec-on-intent.yml` after an intent merge,
+`.github/workflows/implement-on-spec.yml` after a spec merge, and
+`.github/workflows/review-on-pr.yml` on every same-repo PR. Both lanes keep the
+same hash checks and operator merge gates. Autonomous review posts comments
+only; until the deferred fix stage lands, the operator handles findings in a
+session.

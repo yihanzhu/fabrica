@@ -1,0 +1,819 @@
+name: Implement on spec
+
+# The pinned Claude action rejects push events. The path-filtered push run is
+# the quota record; after that exact commit passes ci, workflow_run starts the
+# supported agent event. The change check below binds the two runs.
+
+on:
+  push:
+    branches: [main]
+    paths: [work/*/spec.md]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  configuration:
+    if: vars.YSTACK_OPERATOR == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: |
+          echo '::error::Set the YSTACK_OPERATOR repository variable before enabling the lane.'
+          exit 1
+
+  record-push:
+    if: >-
+      github.event_name == 'push' &&
+      vars.YSTACK_OPERATOR != '' &&
+      github.actor == vars.YSTACK_OPERATOR &&
+      github.triggering_actor == vars.YSTACK_OPERATOR
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo 'Spec merge recorded; the agent starts after ci succeeds.'
+
+  discover:
+    if: >-
+      github.event_name != 'push' &&
+      vars.YSTACK_OPERATOR != '' &&
+      github.actor == vars.YSTACK_OPERATOR &&
+      github.triggering_actor == vars.YSTACK_OPERATOR &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.actor.login == vars.YSTACK_OPERATOR &&
+          github.event.workflow_run.triggering_actor.login == vars.YSTACK_OPERATOR
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      items: ${{ steps.pending.outputs.items || steps.change.outputs.items }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.event.repository.default_branch }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Confirm the matching path-filtered push run
+        id: change
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          matched=true
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            runs="$(gh run list --workflow implement-on-spec.yml --event push \
+              --commit "$HEAD_SHA" --limit 10 --json databaseId --jq 'length')"
+            if [ "$runs" -eq 0 ]; then
+              matched=false
+              echo 'items=[{"kind":"none","slug":"__none__"}]' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "matched=${matched}" >> "$GITHUB_OUTPUT"
+
+      - name: Push-only quota brake
+        if: steps.change.outputs.matched == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cutoff="$(date -u -d '5 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+          total=0
+          for workflow in spec-on-intent.yml implement-on-spec.yml; do
+            count="$(gh run list --all --event push --workflow "$workflow" \
+              --created ">=${cutoff}" --limit 100 --json databaseId --jq 'length')"
+            total=$((total + count))
+          done
+          echo "push-triggered lane runs in the last 5h: ${total}"
+          if [ "$total" -ge 20 ]; then
+            echo "::error::${total} lane runs in 5h means a cascade bug. Stop and investigate."
+            exit 1
+          fi
+
+      - name: Find pending implementations
+        if: steps.change.outputs.matched == 'true'
+        id: pending
+        run: |
+          set -euo pipefail
+          items="$(scripts/v2/pending-impl.sh | jq -Rsc '
+            split("\n") | map(select(length > 0)) |
+            map(capture("^(?<kind>slug|stale)=(?<slug>[a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9])$")) |
+            if length == 0 then [{"kind":"none","slug":"__none__"}] else . end')"
+          echo "items=${items}" >> "$GITHUB_OUTPUT"
+          echo "pending implementation matrix: ${items}"
+
+  build:
+    needs: discover
+    if: >-
+      vars.YSTACK_OPERATOR != '' &&
+      github.actor == vars.YSTACK_OPERATOR &&
+      github.triggering_actor == vars.YSTACK_OPERATOR &&
+      needs.discover.outputs.items != '[{"kind":"none","slug":"__none__"}]'
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        item: ${{ fromJSON(needs.discover.outputs.items) }}
+    concurrency:
+      group: claude-quota
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-latest
+    environment: ystack-lane
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the chain, open PR, and approval rail
+        id: preflight
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          FINDING_KIND: ${{ matrix.item.kind }}
+          GH_TOKEN: ${{ github.token }}
+          OPERATOR_LOGIN: ${{ vars.YSTACK_OPERATOR }}
+          REPO: ${{ github.repository }}
+          STAGE_SLUG: ${{ matrix.item.slug }}
+        run: |
+          set -euo pipefail
+          case "$STAGE_SLUG" in
+            ''|*[!a-z0-9-]*|-*|*-) echo "::error::invalid slug: $STAGE_SLUG"; exit 1 ;;
+          esac
+
+          base_sha="$(git rev-parse HEAD)"
+          if [ "$EVENT_NAME" = workflow_run ] && [ "$base_sha" != "$EVENT_HEAD_SHA" ]; then
+            green="$(gh run list --workflow ci.yml --event push --commit "$base_sha" \
+              --status success --limit 10 --json databaseId --jq 'length')"
+            if [ "$green" -eq 0 ]; then
+              echo "Main advanced to a push whose ci is not green yet; its completion will retry."
+              {
+                echo 'run_agent=false'
+                echo 'before_head='
+                echo 'expected='
+                echo "base_sha=${base_sha}"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          current_finding="$(scripts/v2/pending-impl.sh | \
+            awk -F= -v slug="$STAGE_SLUG" '$2 == slug {print $1; exit}')"
+          if [ -z "$current_finding" ]; then
+            echo "${STAGE_SLUG} is no longer pending; no Claude invocation."
+            {
+              echo 'run_agent=false'
+              echo 'before_head='
+              echo 'expected='
+              echo "base_sha=$(git rev-parse HEAD)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FINDING_KIND="$current_finding"
+
+          intent="work/${STAGE_SLUG}/intent.md"
+          spec="work/${STAGE_SLUG}/spec.md"
+          plan="work/${STAGE_SLUG}/plan.md"
+          branch="ystack/impl/${STAGE_SLUG}"
+          expected="$(git hash-object "$spec")"
+          chain_fresh=true
+          if [ ! -f "$intent" ] || \
+             [ "$(awk '/^intent-blob:/ {print $2; exit}' "$spec")" != "$(git hash-object "$intent" 2>/dev/null || true)" ]; then
+            chain_fresh=false
+          fi
+
+          owner="${REPO%%/*}"
+          prs="$(gh api --method GET "repos/${REPO}/pulls" \
+            -f state=open -f head="${owner}:${branch}" -f per_page=100 | \
+            jq --arg repo "$REPO" '[.[] | select(.head.repo.full_name == $repo)]')"
+          wrong_base="$(jq --arg base "$DEFAULT_BRANCH" \
+            '[.[] | select(.base.ref != $base)] | length' <<< "$prs")"
+          [ "$wrong_base" -eq 0 ] || { echo "::error::the stage branch already targets another base"; exit 1; }
+          prs="$(jq --arg base "$DEFAULT_BRANCH" '[.[] | select(.base.ref == $base) |
+            {number, headRefOid: .head.sha, url: .html_url, labels, isDraft: .draft, title}]' <<< "$prs")"
+          count="$(jq 'length' <<< "$prs")"
+          if [ "$count" -gt 1 ]; then
+            echo "::error::more than one open PR uses $branch"
+            exit 1
+          fi
+
+          run_agent=true
+          before_head=
+          if [ "$count" -eq 1 ]; then
+            pr="$(jq -r '.[0].number' <<< "$prs")"
+            before_head="$(jq -r '.[0].headRefOid' <<< "$prs")"
+            already_stale="$(jq '[.[0].labels[] | select(.name == "stale")] | length' <<< "$prs")"
+            if [ "$already_stale" -gt 0 ]; then
+              echo "PR #${pr} is already stale. Close it, then dispatch this stage."
+              run_agent=false
+            fi
+          fi
+
+          if [ "$FINDING_KIND" = stale ] || [ "$chain_fresh" != true ]; then
+            if [ "$count" -eq 1 ]; then
+              marker="<!-- ystack-stale stage=implement slug=${STAGE_SLUG} -->"
+              gh pr edit "$pr" --add-label stale
+              comments="$(gh api --method GET "repos/${REPO}/issues/${pr}/comments" -f per_page=100)"
+              if [ "$(jq --arg marker "$marker" \
+                  '[.[] | select(.body | contains($marker))] | length' <<< "$comments")" -eq 0 ]; then
+                body="$RUNNER_TEMP/stale-comment.md"
+                printf '%s\n\n%s\n' "$marker" \
+                  "The artifact chain moved upstream. I did not push. Close this stale PR, fix or replace the spec, then dispatch Implement on spec." > "$body"
+                gh pr comment "$pr" --body-file "$body"
+              fi
+            fi
+            echo "Stale chain for ${STAGE_SLUG}; no Claude invocation."
+            run_agent=false
+          elif [ "$count" -eq 1 ] && [ "$run_agent" = true ]; then
+            tmp="$RUNNER_TEMP/open-plan.md"
+            have=
+            if gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${REPO}/contents/${plan}?ref=${branch}" > "$tmp"; then
+              have="$(awk '/^spec-blob:/ {print $2; exit}' "$tmp")"
+            fi
+            body="$(gh pr view "$pr" --json body --jq .body)"
+            safe_diff=true
+            while IFS= read -r file; do
+              case "$file" in
+                .github/*|.claude/*|AGENTS.md|CLAUDE.md|REVIEW.md|work/*/intent.md|work/*/spec.md)
+                  safe_diff=false
+                  ;;
+              esac
+            done < <(gh pr diff "$pr" --name-only)
+            first="$(gh api "repos/${REPO}/pulls/${pr}/commits" --paginate --jq '.[0].sha')"
+            first_files=
+            if [ -n "$first" ]; then
+              first_files="$(gh api "repos/${REPO}/commits/${first}" --jq '.files[].filename')"
+            fi
+            if [ "$have" = "$expected" ] && [ "$safe_diff" = true ] && \
+               [ "$first_files" = "$plan" ] && \
+               grep -Fq "verified-head: ${before_head}" <<< "$body"; then
+              if [ "$(jq -r '.[0].title' <<< "$prs")" != "impl: ${STAGE_SLUG}" ]; then
+                gh pr edit "$pr" --title "impl: ${STAGE_SLUG}"
+              fi
+              if [ "$(jq -r '.[0].isDraft' <<< "$prs")" = true ]; then
+                gh pr ready "$pr"
+              fi
+              echo "Fresh open implementation PR #${pr}; no Claude invocation."
+              run_agent=false
+            else
+              reviews="$(gh pr view "$pr" --json reviews)"
+              approvals="$(jq --arg operator "$OPERATOR_LOGIN" \
+                '[.reviews[] | select(.state == "APPROVED" and .author.login == $operator)] | length' <<< "$reviews")"
+              if [ "$approvals" -gt 0 ]; then
+                marker="<!-- ystack-stale stage=implement slug=${STAGE_SLUG} -->"
+                gh pr edit "$pr" --add-label stale
+                comments="$(gh api --method GET "repos/${REPO}/issues/${pr}/comments" -f per_page=100)"
+                if [ "$(jq --arg marker "$marker" \
+                    '[.[] | select(.body | contains($marker))] | length' <<< "$comments")" -eq 0 ]; then
+                  note="$RUNNER_TEMP/stale-comment.md"
+                  printf '%s\n\n%s\n' "$marker" \
+                    "The spec moved after this PR was approved. I did not push. Close this stale PR, then dispatch Implement on spec to rebuild it." > "$note"
+                  gh pr comment "$pr" --body-file "$note"
+                fi
+                echo "Approved PR #${pr} is stale; no push and no Claude invocation."
+                run_agent=false
+              fi
+              if [ "$run_agent" = true ]; then
+                if [ "$(jq -r '.[0].isDraft' <<< "$prs")" != true ]; then
+                  gh pr ready "$pr" --undo
+                fi
+                reviews="$(gh pr view "$pr" --json reviews)"
+                approvals="$(jq --arg operator "$OPERATOR_LOGIN" \
+                  '[.reviews[] | select(.state == "APPROVED" and .author.login == $operator)] | length' <<< "$reviews")"
+                [ "$approvals" -eq 0 ] || { echo "::error::operator approval raced the draft lock"; exit 1; }
+              fi
+            fi
+          fi
+
+          {
+            echo "run_agent=${run_agent}"
+            echo "before_head=${before_head}"
+            echo "expected=${expected}"
+            echo "base_sha=${base_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install this stage's deterministic publisher
+        if: steps.preflight.outputs.run_agent == 'true'
+        env:
+          PUBLISHER: ${{ runner.temp }}/implement-publish.sh
+        run: |
+          cat > "$PUBLISHER" <<'PUBLISHER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          if [ "$#" -ne 6 ]; then
+            echo "usage: $0 <plan|commit|verify|publish> <slug> <spec-blob> <base-sha> <run-id> <attempt>" >&2
+            exit 1
+          fi
+          command="$1"
+          slug="$2"
+          expected="$3"
+          base_sha="$4"
+          run_id="$5"
+          attempt="$6"
+          case "$command" in plan|commit|verify|publish) ;; *) echo "publisher: invalid command" >&2; exit 1 ;; esac
+          case "${PUBLISH_PHASE:-}:${command}" in
+            build:plan|build:commit|verify:verify|publish:publish) ;;
+            *) echo "publisher: ${command} is not allowed in this credential phase" >&2; exit 1 ;;
+          esac
+          [ "$slug" = "$STAGE_SLUG" ] || { echo "publisher: wrong slug" >&2; exit 1; }
+          [ "$expected" = "$UPSTREAM_BLOB" ] || { echo "publisher: wrong spec blob" >&2; exit 1; }
+          [ "$base_sha" = "$TRUSTED_BASE_SHA" ] || { echo "publisher: wrong base" >&2; exit 1; }
+          [ "$run_id" = "$GITHUB_RUN_ID" ] || { echo "publisher: wrong run id" >&2; exit 1; }
+          [ "$attempt" = "$GITHUB_RUN_ATTEMPT" ] || { echo "publisher: wrong attempt" >&2; exit 1; }
+          case "$slug" in ''|*[!a-z0-9-]*|-*|*-) echo "publisher: invalid slug" >&2; exit 1 ;; esac
+
+          intent="work/${slug}/intent.md"
+          spec="work/${slug}/spec.md"
+          plan="work/${slug}/plan.md"
+          branch="ystack/impl/${slug}"
+          default_branch="${GITHUB_DEFAULT_BRANCH:-main}"
+          state="${RUNNER_TEMP}/ystack-impl-${run_id}-${attempt}-${slug}"
+          marker="<!-- ystack-stale stage=implement slug=${slug} -->"
+
+          open_prs() {
+            owner="${GITHUB_REPOSITORY%%/*}"
+            data="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
+              -f state=open -f head="${owner}:${branch}" -f per_page=100 | \
+              jq --arg repo "$GITHUB_REPOSITORY" \
+                '[.[] | select(.head.repo.full_name == $repo)]')"
+            wrong="$(jq --arg base "$default_branch" \
+              '[.[] | select(.base.ref != $base)] | length' <<< "$data")"
+            [ "$wrong" -eq 0 ] || { echo "publisher: stage branch targets another base" >&2; return 1; }
+            jq --arg base "$default_branch" '[.[] | select(.base.ref == $base) |
+              {number, headRefOid: .head.sha, labels, isDraft: .draft}]' <<< "$data"
+          }
+
+          current_main_fresh() {
+            current_base="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${default_branch}" --jq .object.sha)"
+            current_spec="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${spec}?ref=${default_branch}" --jq .sha)"
+            current_intent="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${intent}?ref=${default_branch}" --jq .sha)"
+            api_spec="$state/main-spec.md"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${GITHUB_REPOSITORY}/contents/${spec}?ref=${default_branch}" > "$api_spec"
+            recorded_intent="$(awk '/^intent-blob:/ {print $2; exit}' "$api_spec")"
+            [ "$current_base" = "$base_sha" ] && [ "$current_spec" = "$expected" ] &&
+              [ "$recorded_intent" = "$current_intent" ]
+          }
+
+          fresh_chain() {
+            [ -f "$intent" ] && [ -f "$spec" ] &&
+              [ "$(git hash-object "$spec")" = "$expected" ] &&
+              [ "$(awk '/^intent-blob:/ {print $2; exit}' "$spec")" = "$(git hash-object "$intent")" ]
+          }
+
+          valid_plan() {
+            [ -f "$plan" ] && [ ! -L "$plan" ] &&
+              [ "$(awk '/^spec-blob:/ {print $2; exit}' "$plan")" = "$expected" ]
+          }
+
+          configure_identity() {
+            git config user.name 'claude[bot]'
+            git config user.email '41898282+claude[bot]@users.noreply.github.com'
+          }
+
+          case "$command" in
+            plan)
+              [ "$(git rev-parse HEAD)" = "$base_sha" ] || { echo "publisher: checkout moved before plan" >&2; exit 1; }
+              fresh_chain || { echo "publisher: artifact chain is stale" >&2; exit 1; }
+              [ ! -e "$state" ] || { echo "publisher: plan already prepared" >&2; exit 1; }
+              valid_plan || {
+                echo "publisher: plan records the wrong spec blob" >&2; exit 1;
+              }
+              status="$(git status --porcelain=v1 --untracked-files=all)"
+              [ -n "$status" ] || { echo "publisher: no plan was written" >&2; exit 1; }
+              bad="$(printf '%s\n' "$status" | awk -v ok="$plan" 'substr($0,4) != ok {print}')"
+              [ -z "$bad" ] || { printf 'publisher: code appeared before the plan commit:\n%s\n' "$bad" >&2; exit 1; }
+              mkdir -p "$state"
+              configure_identity
+              git switch -c "ystack-run-${run_id}-${attempt}-${slug}"
+              git add "$plan"
+              git commit -m "plan: ${slug}"
+              plan_head="$(git rev-parse HEAD)"
+              [ "$(git diff-tree --no-commit-id --name-only -r "$plan_head")" = "$plan" ] || {
+                echo "publisher: first commit is not plan-only" >&2; exit 1;
+              }
+              printf '%s\n' "$plan_head" > "$state/plan-head"
+              printf '%s\n' "$plan_head" > "$state/head"
+              echo "implement-publish: plan-only commit ${plan_head}"
+              ;;
+
+            commit)
+              [ -f "$state/plan-head" ] && [ -f "$state/head" ] || { echo "publisher: call plan first" >&2; exit 1; }
+              [ "$(git rev-parse HEAD)" = "$(cat "$state/head")" ] || { echo "publisher: HEAD moved outside the wrapper" >&2; exit 1; }
+              fresh_chain || { echo "publisher: artifact chain is stale" >&2; exit 1; }
+              valid_plan || { echo "publisher: plan is missing, linked, or records the wrong spec" >&2; exit 1; }
+              paths_file="$state/changed-paths"
+              {
+                git diff --name-only -z HEAD
+                git ls-files --others --exclude-standard -z
+              } > "$paths_file"
+              [ -s "$paths_file" ] || { echo "publisher: no implementation changes" >&2; exit 1; }
+              has_code=false
+              while IFS= read -r -d '' path; do
+                case "$path" in
+                  .github/*|.claude/*|AGENTS.md|CLAUDE.md|REVIEW.md|work/*/intent.md|work/*/spec.md)
+                    echo "publisher: constitution or upstream write refused: $path" >&2
+                    exit 1
+                    ;;
+                  work/*/plan.md)
+                    [ "$path" = "$plan" ] || { echo "publisher: another plan changed: $path" >&2; exit 1; }
+                    ;;
+                  *) has_code=true ;;
+                esac
+                case "$path" in scripts/*.sh) [ ! -f "$path" ] || chmod 0755 "$path" ;; esac
+              done < "$paths_file"
+              [ "$has_code" = true ] || { echo "publisher: a plan change needs matching code" >&2; exit 1; }
+              configure_identity
+              git add -A
+              git commit -m "impl: ${slug}"
+              head="$(git rev-parse HEAD)"
+              [ -z "$(git status --porcelain=v1 --untracked-files=all)" ] || { echo "publisher: dirty tree after commit" >&2; exit 1; }
+              printf '%s\n' "$head" > "$state/head"
+              rm -f "$state/verify.md"
+              echo "implement-publish: code commit ${head}"
+              ;;
+
+            verify)
+              [ -f "$state/head" ] || { echo "publisher: call plan and commit first" >&2; exit 1; }
+              valid_plan || { echo "publisher: plan is missing, linked, or records the wrong spec" >&2; exit 1; }
+              head="$(cat "$state/head")"
+              [ "$(git rev-parse HEAD)" = "$head" ] || { echo "publisher: HEAD moved before proof" >&2; exit 1; }
+              [ "$head" != "$(cat "$state/plan-head")" ] || { echo "publisher: no code commit" >&2; exit 1; }
+              [ -z "$(git status --porcelain=v1 --untracked-files=all)" ] || { echo "publisher: proof requires a clean tree" >&2; exit 1; }
+              proof_tmp="$state/verify.tmp"
+              proof_tree="$state/proof-tree"
+              proof_script="$state/proof.sh"
+              rm -rf "$proof_tree"
+              git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+                clone --quiet --no-hardlinks "$PWD" "$proof_tree"
+              git -C "$proof_tree" checkout --quiet --detach "$head"
+              cat > "$proof_script" <<'VERIFY'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo '$ shellcheck --version'
+          shellcheck --version
+          version="$(shellcheck --version | awk '/^version:/ {print $2}')"
+          [ "$version" = 0.11.0 ]
+          echo '$ find . -name *.sh ... | xargs shellcheck -x -S style'
+          find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 shellcheck -x -S style
+          git config --global user.email 'ci@example.com'
+          git config --global user.name 'ci'
+          for test_file in scripts/test/*.test.sh; do
+            echo
+            echo "$ bash ${test_file}"
+            bash "$test_file"
+          done
+          echo
+          echo '$ structure check'
+          manifest=ci/required-files.txt
+          while IFS= read -r file || [ -n "$file" ]; do
+            case "$file" in ''|'#'*) continue ;; esac
+            [ -f "$file" ]
+            case "$file" in scripts/*.sh) [ -x "$file" ] ;; esac
+          done < "$manifest"
+          echo 'structure ok'
+          echo
+          echo '$ bash scripts/check-rename.sh'
+          bash scripts/check-rename.sh
+          [ -z "$(git status --porcelain=v1 --untracked-files=all)" ]
+          VERIFY
+              chmod 0500 "$proof_script"
+              bwrap_args=(
+                --unshare-all --new-session --die-with-parent
+                --ro-bind /usr /usr
+                --ro-bind /bin /bin
+                --ro-bind /lib /lib
+                --ro-bind /etc /etc
+                --dev /dev --proc /proc
+                --tmpfs /tmp --tmpfs /home --dir /home/runner
+                --bind "$proof_tree" /repo
+                --dir /tooling
+                --ro-bind "$(command -v shellcheck)" /tooling/shellcheck
+                --ro-bind "$proof_script" /tooling/proof.sh
+                --chdir /repo
+                --clearenv
+                --setenv PATH /tooling:/usr/bin:/bin
+                --setenv HOME /home/runner
+                --setenv GIT_CONFIG_GLOBAL /tmp/gitconfig
+              )
+              if [ -d /lib64 ]; then
+                bwrap_args+=(--ro-bind /lib64 /lib64)
+              fi
+              if {
+                echo "verified-head: ${head}"
+                echo
+                bwrap "${bwrap_args[@]}" /bin/bash /tooling/proof.sh
+              } > "$proof_tmp" 2>&1; then
+                if grep -Eq '(gh[pousr]_[A-Za-z0-9_]+|sk-ant-[A-Za-z0-9_-]+|x-access-token:)' "$proof_tmp"; then
+                  echo "publisher: proof output resembles a credential; refusing to publish it" >&2
+                  rm -rf "$proof_tree" "$proof_tmp"
+                  exit 1
+                fi
+                [ "$(wc -c < "$proof_tmp")" -le 50000 ] || {
+                  echo "publisher: proof output exceeds 50 KB" >&2
+                  rm -rf "$proof_tree" "$proof_tmp"
+                  exit 1
+                }
+                mv "$proof_tmp" "$state/verify.md"
+                rm -rf "$proof_tree"
+                sed 's/^/proof: /' "$state/verify.md"
+              else
+                status=$?
+                sed 's/^/proof: /' "$proof_tmp" >&2
+                rm -rf "$proof_tree"
+                rm -f "$proof_tmp" "$state/verify.md"
+                exit "$status"
+              fi
+              ;;
+
+            publish)
+              [ -f "$state/head" ] && [ -s "$state/verify.md" ] || { echo "publisher: verified proof is missing" >&2; exit 1; }
+              head="$(cat "$state/head")"
+              [ "$(git rev-parse HEAD)" = "$head" ] || { echo "publisher: HEAD moved after proof" >&2; exit 1; }
+              [ "$(sed -n 's/^verified-head: //p' "$state/verify.md" | head -1)" = "$head" ] || {
+                echo "publisher: proof belongs to another commit" >&2; exit 1;
+              }
+              [ -z "$(git status --porcelain=v1 --untracked-files=all)" ] || { echo "publisher: dirty tree after proof" >&2; exit 1; }
+              fresh_chain || { echo "publisher: artifact chain moved before push" >&2; exit 1; }
+              valid_plan || { echo "publisher: plan is missing, linked, or records the wrong spec" >&2; exit 1; }
+              repo="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .full_name)"
+              [ "$repo" = "$GITHUB_REPOSITORY" ] || { echo "publisher: app token resolved another repo" >&2; exit 1; }
+              current_main_fresh || { echo "publisher: main or the artifact chain moved during this run" >&2; exit 1; }
+              prs="$(open_prs)"
+              [ "$(jq 'length' <<< "$prs")" -le 1 ] || { echo "publisher: duplicate open PRs" >&2; exit 1; }
+              if [ "$(jq 'length' <<< "$prs")" -eq 1 ]; then
+                pr="$(jq -r '.[0].number' <<< "$prs")"
+                current="$(jq -r '.[0].headRefOid' <<< "$prs")"
+                [ "$current" = "$BEFORE_HEAD" ] || { echo "publisher: PR head moved" >&2; exit 1; }
+                stale="$(jq '[.[0].labels[] | select(.name == "stale")] | length' <<< "$prs")"
+                [ "$(jq -r '.[0].isDraft' <<< "$prs")" = true ] || { echo "publisher: existing PR lost its draft lock" >&2; exit 1; }
+                reviews="$(gh pr view "$pr" --json reviews)"
+                approvals="$(jq --arg operator "$OPERATOR_LOGIN" \
+                  '[.reviews[] | select(.state == "APPROVED" and .author.login == $operator)] | length' <<< "$reviews")"
+                if [ "$stale" -gt 0 ] || [ "$approvals" -gt 0 ]; then
+                  gh pr edit "$pr" --add-label stale
+                  comments="$(gh api --method GET \
+                    "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" -f per_page=100)"
+                  if [ "$(jq --arg marker "$marker" \
+                      '[.[] | select(.body | contains($marker))] | length' <<< "$comments")" -eq 0 ]; then
+                    note="$state/stale-comment.md"
+                    printf '%s\n\n%s\n' "$marker" \
+                      "The spec moved after approval. No push was made. Close this PR and dispatch the stage again." > "$note"
+                    gh pr comment "$pr" --body-file "$note"
+                  fi
+                  echo "publisher: stale or approved PR cannot be updated" >&2
+                  exit 1
+                fi
+              elif [ -n "$BEFORE_HEAD" ]; then
+                echo "publisher: expected open PR disappeared" >&2
+                exit 1
+              fi
+
+              remote_head="$(git ls-remote --heads origin "refs/heads/${branch}" | awk '{print $1}')"
+              current_main_fresh || { echo "publisher: main or the artifact chain moved before push" >&2; exit 1; }
+              if [ -n "$BEFORE_HEAD" ] && [ "$remote_head" != "$BEFORE_HEAD" ]; then
+                echo "publisher: remote branch moved" >&2
+                exit 1
+              fi
+              if [ -n "$remote_head" ]; then
+                git push -u --force-with-lease="refs/heads/${branch}:${remote_head}" \
+                  origin "${head}:refs/heads/${branch}"
+              else
+                git push -u origin "${head}:refs/heads/${branch}"
+              fi
+
+              body="$state/pr-body.md"
+              {
+                echo "Autonomous implementation of \`work/${slug}/spec.md\`."
+                echo
+                echo "The first branch commit contains only \`work/${slug}/plan.md\`."
+                echo
+                echo '## Verify evidence'
+                echo
+                cat "$state/verify.md"
+                echo
+                echo 'New commits make this proof stale. CI must be green on the same head before merge.'
+              } > "$body"
+              open_pr="$(open_prs | jq -r '.[0].number // empty')"
+              if [ -n "$open_pr" ]; then
+                gh pr edit "$open_pr" --title "impl: ${slug}" --body-file "$body"
+              else
+                gh pr create --draft --base "$default_branch" --head "$branch" \
+                  --title "impl: ${slug}" --body-file "$body"
+                open_pr="$(open_prs | jq -r '.[0].number // empty')"
+              fi
+              [ -n "$open_pr" ] || { echo "publisher: PR creation did not land" >&2; exit 1; }
+              gh pr edit "$open_pr" --add-label round-0
+              gh pr ready "$open_pr"
+              echo "implement-publish: published ${branch} at ${head}"
+              ;;
+          esac
+          PUBLISHER
+          chmod 0500 "$PUBLISHER"
+
+      - name: Install pinned shellcheck for exact-head proof
+        if: steps.preflight.outputs.run_agent == 'true'
+        run: |
+          set -euo pipefail
+          version=0.11.0
+          digest=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          archive="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${version}/shellcheck-v${version}.linux.x86_64.tar.xz" -o "$archive"
+          printf '%s  %s\n' "$digest" "$archive" | sha256sum -c -
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$RUNNER_TEMP/shellcheck-v${version}/shellcheck" "$RUNNER_TEMP/bin/shellcheck"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Install the credential-free proof sandbox
+        if: steps.preflight.outputs.run_agent == 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v bwrap >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends bubblewrap
+          fi
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --version
+
+      - name: Resolve the producer model
+        if: steps.preflight.outputs.run_agent == 'true'
+        id: model
+        run: |
+          set -euo pipefail
+          model="$(sed -n 's/^YSTACK_CODER_MODEL=//p' config/models.conf)"
+          case "$model" in
+            ''|*[!A-Za-z0-9._:/-]*) echo "::error::invalid YSTACK_CODER_MODEL"; exit 1 ;;
+          esac
+          echo "model=${model}" >> "$GITHUB_OUTPUT"
+
+      - name: Plan and build on a local branch
+        if: steps.preflight.outputs.run_agent == 'true'
+        uses: anthropics/claude-code-action@c81e3bc69d1b18badbb63ba39581218f02421678 # v1
+        env:
+          BEFORE_HEAD: ${{ steps.preflight.outputs.before_head }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUBLISH_PHASE: build
+          STAGE_SLUG: ${{ matrix.item.slug }}
+          TRUSTED_BASE_SHA: ${{ steps.preflight.outputs.base_sha }}
+          UPSTREAM_BLOB: ${{ steps.preflight.outputs.expected }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: false
+          prompt: |
+            This is the autonomous implementation stage for the trusted slug in
+            STAGE_SLUG. Read and follow
+            .claude/skills/implement/SKILL.md. The workflow publisher is the
+            only command you may run.
+
+            Trusted slug: ${{ matrix.item.slug }}
+            Required spec-blob: ${{ steps.preflight.outputs.expected }}
+            Treat every `$0` in the skill as that trusted slug.
+
+            Draft the plan first. Immediately call:
+            ${{ runner.temp }}/implement-publish.sh plan "$STAGE_SLUG" "$UPSTREAM_BLOB" "$TRUSTED_BASE_SHA" "${{ github.run_id }}" "${{ github.run_attempt }}"
+
+            Then implement the plan and call the same command with `commit` in
+            place of `plan`. Stop after the clean code commit; a credential-free
+            workflow step performs proof, and a separate command-only step
+            publishes. Report the full wrapper output. Stop on any denial or
+            failure. Never commit, push, or call gh directly.
+          claude_args: >-
+            --model "${{ steps.model.outputs.model }}"
+            --max-turns 80
+            --permission-mode dontAsk
+            --tools "Read,Write,Edit,Grep,Glob,Bash"
+            --allowedTools "Read,Write,Edit,Grep,Glob,Bash(${{ runner.temp }}/implement-publish.sh:*)"
+            --disallowedTools "Read(/.git/**),Write(/.git/**),Edit(/.git/**),Write(/.github/**),Edit(/.github/**),Write(/.claude/**),Edit(/.claude/**),Write(/AGENTS.md),Edit(/AGENTS.md),Write(/CLAUDE.md),Edit(/CLAUDE.md),Write(/REVIEW.md),Edit(/REVIEW.md),Write(/work/**/intent.md),Edit(/work/**/intent.md),Write(/work/**/spec.md),Edit(/work/**/spec.md),Bash(git push:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api:*)"
+
+      - name: Verify the exact commit without credentials
+        if: steps.preflight.outputs.run_agent == 'true'
+        env:
+          PUBLISHER: ${{ runner.temp }}/implement-publish.sh
+          PUBLISH_PHASE: verify
+          STAGE_SLUG: ${{ matrix.item.slug }}
+          TRUSTED_BASE_SHA: ${{ steps.preflight.outputs.base_sha }}
+          UPSTREAM_BLOB: ${{ steps.preflight.outputs.expected }}
+        run: |
+          set -euo pipefail
+          env -u GH_TOKEN -u GITHUB_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN \
+            -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY \
+            -u BASH_ENV -u LD_PRELOAD -u NODE_OPTIONS \
+            PUBLISH_PHASE=verify STAGE_SLUG="$STAGE_SLUG" \
+            UPSTREAM_BLOB="$UPSTREAM_BLOB" TRUSTED_BASE_SHA="$TRUSTED_BASE_SHA" \
+            "$PUBLISHER" verify "$STAGE_SLUG" "$UPSTREAM_BLOB" \
+              "$TRUSTED_BASE_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+
+      - name: Publish the verified branch
+        if: steps.preflight.outputs.run_agent == 'true'
+        uses: anthropics/claude-code-action@c81e3bc69d1b18badbb63ba39581218f02421678 # v1
+        env:
+          BEFORE_HEAD: ${{ steps.preflight.outputs.before_head }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OPERATOR_LOGIN: ${{ vars.YSTACK_OPERATOR }}
+          PUBLISH_PHASE: publish
+          STAGE_SLUG: ${{ matrix.item.slug }}
+          TRUSTED_BASE_SHA: ${{ steps.preflight.outputs.base_sha }}
+          UPSTREAM_BLOB: ${{ steps.preflight.outputs.expected }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: false
+          prompt: |
+            Publish the already-built and verified branch. Run exactly this one
+            command and report its full output:
+
+            ${{ runner.temp }}/implement-publish.sh publish "$STAGE_SLUG" "$UPSTREAM_BLOB" "$TRUSTED_BASE_SHA" "${{ github.run_id }}" "${{ github.run_attempt }}"
+
+            Do nothing else. Stop on any denial or failure.
+          claude_args: >-
+            --model "${{ steps.model.outputs.model }}"
+            --max-turns 6
+            --permission-mode dontAsk
+            --tools "Bash"
+            --allowedTools "Bash(${{ runner.temp }}/implement-publish.sh:*)"
+            --disallowedTools "Bash(git push:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh api:*)"
+
+      - name: Assert this run moved a verified implementation PR
+        if: steps.preflight.outputs.run_agent == 'true'
+        env:
+          BEFORE_HEAD: ${{ steps.preflight.outputs.before_head }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED: ${{ steps.preflight.outputs.expected }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          STAGE_SLUG: ${{ matrix.item.slug }}
+        run: |
+          set -euo pipefail
+          branch="ystack/impl/${STAGE_SLUG}"
+          plan="work/${STAGE_SLUG}/plan.md"
+          owner="${REPO%%/*}"
+          prs="$(gh api --method GET "repos/${REPO}/pulls" \
+            -f state=open -f head="${owner}:${branch}" -f base="$DEFAULT_BRANCH" -f per_page=100 | \
+            jq --arg repo "$REPO" '[.[] | select(.head.repo.full_name == $repo) |
+              {number, headRefOid: .head.sha, title, url: .html_url, body, isDraft: .draft}]')"
+          [ "$(jq 'length' <<< "$prs")" -eq 1 ] || { echo "::error::stage did not leave exactly one open PR"; exit 1; }
+          pr="$(jq -r '.[0].number' <<< "$prs")"
+          head="$(jq -r '.[0].headRefOid' <<< "$prs")"
+          expected_head_file="$RUNNER_TEMP/ystack-impl-${RUN_ID}-${RUN_ATTEMPT}-${STAGE_SLUG}/head"
+          [ -s "$expected_head_file" ] || { echo "::error::publisher did not record its head"; exit 1; }
+          expected_head="$(cat "$expected_head_file")"
+          [ "$head" = "$expected_head" ] || { echo "::error::PR head is not the publisher's commit"; exit 1; }
+          [ "$head" != "$BEFORE_HEAD" ] || { echo "::error::stage did not move the branch"; exit 1; }
+          [ "$(jq -r '.[0].title' <<< "$prs")" = "impl: ${STAGE_SLUG}" ] || { echo "::error::wrong PR title"; exit 1; }
+          [ "$(jq -r '.[0].isDraft' <<< "$prs")" = false ] || { echo "::error::implementation PR is still draft"; exit 1; }
+          grep -Fq "verified-head: ${head}" <<< "$(jq -r '.[0].body' <<< "$prs")" || {
+            echo "::error::PR body has no proof for its head"; exit 1;
+          }
+          first="$(gh api "repos/${REPO}/pulls/${pr}/commits" --paginate --jq '.[0].sha')"
+          first_files="$(gh api "repos/${REPO}/commits/${first}" --jq '.files[].filename')"
+          [ "$first_files" = "$plan" ] || { echo "::error::first branch commit is not plan-only"; exit 1; }
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${REPO}/contents/${plan}?ref=${branch}" > "$RUNNER_TEMP/published-plan.md"
+          have="$(awk '/^spec-blob:/ {print $2; exit}' "$RUNNER_TEMP/published-plan.md")"
+          [ "$have" = "$EXPECTED" ] || { echo "::error::published plan has the wrong spec blob"; exit 1; }
+          while IFS= read -r file; do
+            case "$file" in
+              .github/*|.claude/*|AGENTS.md|CLAUDE.md|REVIEW.md|work/*/intent.md|work/*/spec.md)
+                echo "::error::implementation PR crossed its write boundary: $file"
+                exit 1
+                ;;
+            esac
+          done < <(gh pr diff "$pr" --name-only)
+          echo "Implementation PR: $(jq -r '.[0].url' <<< "$prs")"
+          echo "Verified head: $head"
