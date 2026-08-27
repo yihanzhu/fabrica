@@ -118,9 +118,11 @@ At the file/component altitude; order of work belongs to `plan.md`.
   (`address-review` belonged to the deferred R4.)
 - **Helpers** (`scripts/v2/`, each with a hermetic test in `scripts/test/`):
   `pending-spec.sh` / `pending-impl.sh` (which slug needs work — the
-  hash-comparison idempotency guards), `round-cap.sh` (read/bump round labels,
-  emit proceed/stop), `quota-preflight.sh` (count recent agent runs, skip over
-  budget). Deterministic bash, no model calls.
+  hash-comparison idempotency guards) and `quota-preflight.sh` (count recent
+  agent runs, stop over budget). Deterministic bash, no model calls.
+  (`round-cap.sh` is already merged and stays in the repo, but nothing in this
+  phase calls it: round labels bound the fix loop, which is deferred. It wakes
+  again with that intent.)
 - **Model policy:** stage skills carry it — producer stages (`implement`) at the
   fixed coder ceiling from `config/models.conf`; gate stages (`review-pr`) at
   high effort, never downgraded (v1 tiering, unchanged).
