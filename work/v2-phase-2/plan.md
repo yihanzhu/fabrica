@@ -46,21 +46,42 @@ them, and a reviewer should reject any that does not:**
    `scripts/v2/probe-publish.sh`: it fixes the branch name, the files it
    stages, and the refspec, and refuses arguments that are not this run's.
    Each stage gets its own wrapper in the same shape.
-3. **Assert side effects.** A denied write still reports `is_error: false`, so
-   every job ends with a step that checks the PR/branch really exists and
-   fails loudly when it does not.
+3. **Assert the side effect THIS stage was supposed to have** — not merely
+   that a PR exists. For `spec-on-intent` and `implement-on-spec` the new
+   branch and PR are the effect. For `review-on-pr` the PR already exists, so
+   assert a review marker naming the head it reviewed. For `fix-on-review`
+   assert a new head SHA (or a posted push-back). A denied write still
+   reports `is_error: false`, so a vacuous assert means a green job that did
+   nothing.
 4. **Verify secrets through the API, never by assuming a paste landed** —
    auth resolves at execution time, so a bad token looks like a working
    workflow until the run dies.
-5. **`workflow_dispatch` executes only from the default branch** — a
-   dispatch-triggered change cannot be tested before it merges.
+5. **A brand-new workflow can only be dispatched once its file is on the
+   default branch.** After that, `gh workflow run <file> --ref <branch>` runs
+   the branch's version fine — so changes to an existing workflow CAN be
+   tested before merge. (An earlier draft of this plan claimed dispatch never
+   works off-default; that was a wrong inference from a run that actually
+   failed on the allowlist.)
+6. **Load write wrappers from a trusted revision.** A same-repo PR can edit
+   `scripts/v2/*.sh`; a job that checks out the PR head and then allowlists
+   that path runs the PR's script, not the audited one, with the job's write
+   credentials. Review and fix jobs read their wrappers from the default
+   branch — the same trust-anchor rule the v1 review harness already uses for
+   committed config.
 
-**Reviewer-loop rules learned the same way (they belong in `fix-on-review`):**
-- Fence every reviewer verdict to the head it judged: a verdict whose
-  timestamp precedes the push is about the previous code.
-- Let a verdict settle (~8 minutes) before acting on it — the reviewer
-  acknowledges a push within seconds and posts real findings minutes later.
-- Bump the round label BEFORE acting, and count only post-fence verdicts.
+**Reviewer-loop rules (they belong in `fix-on-review`):**
+- **Bind a verdict to the head SHA it reviewed, never to a timestamp.** A
+  review of head A can land after head B is pushed, so a timestamp fence
+  accepts it and the fix loop then edits B in response to findings about A.
+  Codex's own review body names the commit it reviewed; parse that SHA and
+  refuse to act unless it equals the PR's current head. (Same discipline as
+  the v1 merge harness, which pins to the reviewed head and refuses when it
+  moves.)
+- **Wait for an explicit completion marker, not a fixed delay.** A settle
+  window is a heuristic: a slow review wakes the fix job early, and a late
+  comment can start a duplicate pass. Poll for a completed verdict naming the
+  expected head, up to a bounded timeout, then escalate rather than guess.
+- **Bump the round label BEFORE acting**, so a crash can only overcount.
 
 - Four workflows: `spec-on-intent`, `implement-on-spec`, `review-on-pr`,
   `fix-on-review`. Every job: one agent at a time, hard time and turn limits,
@@ -77,17 +98,18 @@ them, and a reviewer should reject any that does not:**
 
 ## Order of work
 
-1. You approve this plan → I build PR A → you merge.
-2. Run the plumbing test. Record the result on #126. If the bot can't open
-   PRs, use the spec's fallback (a plain workflow step opens the PR instead).
-3. Build PR B → you merge. The lane is live.
+1. ~~PR A: the helpers, tests and probe.~~ **Done** — merged as #131.
+2. ~~Run the plumbing test.~~ **Done** — run 33088639117 passed: the agent
+   published a branch and opened PR #140 itself, and that PR triggered CI.
+   The spec's PR-creation fallback is **retired**; the lane uses the direct
+   path. Recorded on #126.
+3. **Next: build PR B** (the section above) → operator merges. The lane is
+   live at that moment.
 4. Smoke test: one tiny throwaway intent flows through the whole lane, with
-   you doing nothing but the merges. Then we delete it.
+   the operator doing nothing but the merges. Then delete it.
 
 ## Risks
 
-- **The plumbing test can fail.** That's why it runs before PR B is written —
-  the fallback is already in the spec, not improvised.
 - **PR B is live the moment it merges** — the next `work/` merge fires it for
   real. I chose not to ship it switched off: a disabled lane proves nothing,
   and the brakes (round labels, one-job-at-a-time, time limits) are already
