@@ -473,7 +473,7 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
   session re-processes its full context every turn, so inlining a bulky read (a CI log,
   a PR diff, a thread of review comments, a page of `gh` query output) into your context
   gets re-billed for the rest of the session. Delegate that class of work to a
-  **`YSTACK_HANDS_MODEL`** subagent instead — the **same resolution mechanism as the
+  **`YSTACK_HANDS_MODEL`** (either key family, same rule as the coder model) subagent instead — the **same resolution mechanism as the
   coder spawn model above** (read `config/models.conf` from this control-plane repo,
   then the target repo's committed `.ystack/models.conf (legacy .fabrica/models.conf still honored)` override if present, parsed as
   data — never shell-source the target file), passed as an explicit **`model`**
