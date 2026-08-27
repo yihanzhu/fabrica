@@ -83,9 +83,11 @@ Two goals drive the backlog:
   current upstream file, label the PR `stale` and stop — never build on a moved artifact.
 - **Stage rules (autonomous lane):** the spec stage writes only `work/<slug>/spec.md`;
   the implement stage never touches `intent.md`/`spec.md`; unattended agents never write
-  `.github/**`, `.claude/**`, or this file — such changes land as patches under `proposals/` that the
-  operator applies. Operator-driven sessions are exempt; Phase 3 hooks enforce this
-  mechanically via `YSTACK_STAGE`.
+  the **constitution paths** — `.github/**`, `.claude/**`, `AGENTS.md` (this file),
+  `CLAUDE.md`, `REVIEW.md` — such changes land as patches under `proposals/` that the
+  operator applies. That is the same list `REVIEW.md` uses; the two must always match, so
+  a change to one is a change to both. Operator-driven sessions are exempt; Phase 3 hooks
+  enforce this mechanically via `YSTACK_STAGE`.
 - Deterministic branches: `ystack/intent/<slug>`, `ystack/spec/<slug>`,
   `ystack/impl/<slug>` — re-runs update the existing PR, never open a second.
 

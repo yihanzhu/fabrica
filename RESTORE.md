@@ -59,9 +59,9 @@ human channel.
    state and open issues.
 
 yshifu **never writes code or opens PRs** and **never approves on your behalf** — it opens
-issues and orchestrates the loop. yshifu **does** merge clean, low-risk PRs (CI green +
-Codex review passed) under your standing authorization, and brings you anything needing
-human review (safety-rail changes, north-star / goal drift, high-risk back-look). The
+issues and orchestrates the loop. yshifu **never merges either**: when a PR is CI-green and
+Codex passed that head, it labels the PR `merge-ready` and hands it to you, naming the risk
+when there is one (safety-rail changes, north-star / goal drift, high-risk back-look). The
 front gate is **your approval of the drafted spec** (for a user-directed issue, your
 one-liner is the request → yshifu drafts the spec → you approve that drafted spec — drafting
 alone never earns `ready`): once you approve the spec, yshifu applies the `ready` label as the
@@ -209,9 +209,10 @@ Run **one trivial issue** through the full loop end to end, all from your yshifu
    - **CI** runs on the PR and goes green.
 5. If there's feedback, confirm **yshifu spawns a fix-mode coder** that pushes follow-up
    commits and bumps the `round-N` label, then re-runs `codex-review.sh`.
-6. Confirm the merge path: for a clean, low-risk PR (CI green + Codex passed) **yshifu
-   merges** under your standing authorization; a PR needing human review (safety-rail /
-   north-star / high-risk) is brought to **you** instead.
+6. Confirm the merge path: for a clean PR (CI green + Codex passed at that head) yshifu
+   applies **`merge-ready`** and hands it over — **you merge**. Nothing else has a merge
+   path: `main` requires a pull request and an approving review, the reviewer is
+   comments-only, and no agent has a bypass.
 
 If every step above fired, the team is back. If one stage is silent: re-check `/yshifu` is
 installed and points at this repo (step 1), the coder instruction files are present (step
@@ -229,11 +230,13 @@ These are load-bearing — per the self-modification safety section of
 
 - **Reviewer stays read-only / comments-only.** Codex never pushes, approves-to-merge, or
   merges, and is never the author.
-- **Merge stays gated, and human-review carve-outs survive.** yshifu may auto-merge a PR
-  only when it's **CI-green + Codex-clean + low-risk** (standing authorization). It must
-  **not** merge — it brings the PR to you — for safety-rail changes, ambiguous specs,
-  anything escalated (`needs-human`/round-cap), north-star milestones / goal drift, or
-  high-risk back-look (auth, migrations, shared repos). Codex never approves or merges.
+- **Merging is yours, always.** yshifu labels a reviewed-clean head `merge-ready` and hands
+  the PR over; it never merges, and the label goes void the moment new commits land. The
+  in-session auto-merge v1 allowed was retired when the branch ruleset landed. Carve-outs
+  survive as handoff duties: safety-rail changes, ambiguous specs, anything escalated
+  (`needs-human`/round-cap), north-star milestones / goal drift, and high-risk back-look
+  (auth, migrations, shared repos) are named as such when handed to you. Codex never
+  approves or merges either.
 - **Rounds cap (~3) + `needs-human` escalation stay intact.** Because each coder spawn is
   stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in agent
   memory — so the labels (step 4) are part of the safety system, not decoration.

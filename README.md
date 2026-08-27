@@ -21,7 +21,7 @@ separate human channel to the workers. Claude and Codex never talk directly;
 
 | Agent | Vendor | How it runs | Writes? |
 |-------|--------|-------------|---------|
-| **yshifu** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs (merges clean low-risk PRs) |
+| **yshifu** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs; **never merges** (labels `merge-ready`, hands the PR to you) |
 | **Coder** | Claude | A subagent yshifu spawns with the issue/PR context — two modes: build (`routines/coder.md`) then fix (`routines/coder-revision.md`) | yes (branches, PRs) |
 | **Manager-reviewer** | Codex (OpenAI) | yshifu runs `scripts/manager-review.sh` at **plan altitude, before coding** — debates a proactive issue vs. the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
 | **Code-reviewer** | Codex (OpenAI) | yshifu runs `scripts/codex-review.sh` at **code altitude, after coding** — against the PR diff | **comments only / read-only** |
@@ -53,13 +53,15 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
                           ↺  yshifu re-runs codex-review.sh
                           └── round = 3 (cap) → SCOPE DOWN + FOLLOW-UP (productive):
                                  land the converged core (one scoped-down change →
-                                 clean review → merge) + open a follow-up issue for
-                                 the contested remainder; only a genuine standoff /
-                                 safety-rail / north-star → label `needs-human` → pings YOU
+                                 clean review → `merge-ready` → YOU merge) + open a
+                                 follow-up issue for the contested remainder; only a
+                                 genuine standoff / safety-rail / north-star →
+                                 label `needs-human` → pings YOU
                                        ↓
-              CI green + Codex clean (low-risk) → yshifu runs scripts/merge-pr.sh <PR#>
-                 (in-session, back-to-back; SHA-pinned merge — status scan / brief only report)
-                 (high-risk / escalations / rail changes / north-star → YOU)
+              CI green + Codex clean at that head → yshifu labels the PR `merge-ready`
+                 and hands it to YOU → YOU merge (yshifu never merges; a status scan
+                 or brief only reports). New commits void `merge-ready` — re-review first.
+                 (high-risk / escalations / rail changes / north-star → named at handoff)
 ```
 
 ## Design decisions (the "why")
@@ -76,8 +78,9 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   [`.ystack/north-star.md`](templates/.ystack/north-star.md) (when the target *is* this
   control-plane repo, that file is the root [`NORTH_STAR.md`](NORTH_STAR.md) — ystack is its
   own target) — and yshifu pursues it
-  autonomously — you stop reviewing diffs, and for **proactive** work you stop approving each
-  issue. Two paths clear an issue to run: a **user-directed** issue where your one-liner is the
+  autonomously — you stop reading diffs line by line (you still merge every PR, but on the
+  strength of `merge-ready`), and for **proactive** work you stop approving each issue.
+  Two paths clear an issue to run: a **user-directed** issue where your one-liner is the
   *request* — yshifu drafts the spec, **you still approve that drafted spec**, and *that approval*
   is the gate yshifu records with `ready` (drafting alone does not earn `ready`; user-directed
   issues are *not* exempt from per-spec approval);
@@ -92,36 +95,36 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   drafted-spec approval.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
-- **yshifu auto-merges clean, low-risk PRs — in-session only.** Under your standing
-  authorization, yshifu **may auto-merge a PR it reviewed in-session** when it is CI-green,
-  Codex-clean, and low-risk — no per-PR confirmation — **unless it is high-risk**. yshifu does
-  this by running **`scripts/merge-pr.sh <PR#>`** from within the target repo's clone (it does
-  not hand-craft a merge command). `merge-pr.sh` owns the mechanical safety: it reads the
-  reviewed head+base SHAs from the authenticated `codex-review.sh` marker, confirms the PR's
-  current head **and** base still match those (refusing if either moved since the review),
-  gates on the base branch's **required status checks** (falling back to ≥1 real passing CI
-  check with none failing when no required checks are defined — optional checks like preview
-  deploys are informational), refuses a PR that needs an **approving review**
-  (`reviewDecision=REVIEW_REQUIRED`, since the comments-only reviewer never approves), and
-  merges with a **repo-permitted method** (squash if allowed) **pinned via
-  `--match-head-commit`** — refusing otherwise. The merge is **scoped to the target repo** (never another repo) and **bound to the
-  exact head yshifu reviewed** — if the head moved, yshifu **re-reviews rather than merges** (the
-  script itself refuses a moved head; a head Codex never reviewed is never merged). A later
-  **status/Tracking scan and the brief only surface `merge-ready` PRs (read-only)** — they never
-  auto-merge; those get merged on a fresh in-session review, or by you. High-risk PRs always
-  come to your merge gate even when CI-green + Codex-clean (auth, DB/schema migrations,
-  shared/production repos, security-sensitive or other operator-judgment changes) — yshifu does
-  **not** run `merge-pr.sh` for those. You're also brought in for `needs-human`/round-cap
-  escalations, safety-rail changes, and **north-star milestones / goal drift**. The high-risk
-  carve-out is the last word on merging — when in doubt about risk, it comes to you. The
-  **unattended status-scan / cross-repo auto-merge** (a daemon merging without a yshifu session)
-  is a **future extension of `merge-pr.sh`, deferred to [#46](../../issues/46)** — not supported
-  yet per the script's header.
+- **yshifu never merges — it labels, then hands you the PR.** Merging is the operator's,
+  always. `main`'s branch ruleset requires a pull request plus **one approving review**, the
+  Codex reviewer is **comments-only and never approves**, and **no agent has a bypass** — so
+  there is no agent merge path at all. What yshifu does instead: when a PR's **current head**
+  is CI-green **and** the reviewer passed **that same head**, yshifu applies **`merge-ready`** —
+  a label that means only *"this head passed Codex review"* — and hands the PR to you, naming
+  anything you should weigh. **You merge.** `merge-ready` is **void the moment new commits
+  land**: GitHub keeps the label across a head change, so yshifu clears it, re-runs
+  `codex-review.sh` on the new head, and re-applies it only on a fresh pass — a stale label is a
+  false green. A later **status/Tracking scan and the brief only surface `merge-ready` PRs
+  (read-only)** — they never merge either. High-risk PRs are handed over **with the risk named**
+  even when CI-green and Codex-clean (auth, DB/schema migrations, shared/production repos,
+  security-sensitive or other operator-judgment changes); `merge-ready` records a clean review,
+  it never means "merge without looking." **Gate-creating bootstrap PRs get no `merge-ready` at
+  all** — an "add PR CI" PR or a greenfield 0→1 scaffold *creates* the gate, so no real gate yet
+  exists to certify it, and the new workflow can self-report green on its own PR; you approve and
+  merge those by hand. You're also brought in for `needs-human`/round-cap escalations,
+  safety-rail changes, and **north-star milestones / goal drift**. **`scripts/merge-pr.sh` stays
+  in the repo for your own use** — it reads the reviewed head+base SHAs from the authenticated
+  `codex-review.sh` marker and refuses if either moved, gates on the base branch's **required
+  status checks** (falling back to ≥1 real passing CI check with none failing when none are
+  defined — optional checks like preview deploys are informational), refuses a PR that still
+  needs an **approving review** (`reviewDecision=REVIEW_REQUIRED`), stays **scoped to the target
+  repo**, and merges with a **repo-permitted method** (squash if allowed) **pinned via
+  `--match-head-commit`**. **yshifu never runs it, on any PR.**
 - **One rounds counter (~3), and the cap is productive.** Comments resolved or disagreement
   burned both count; a single push-back doesn't escalate. At the ~3-round cap yshifu **scopes
   down + splits** rather than dead-ending: land the part the reviewer is satisfied with (one
-  scoped-down final change → clean review → merge the core) and **open a follow-up issue** for
-  the contested remainder (logged, not lost). `needs-human` is **reserved** for when even the
+  scoped-down final change → clean review → `merge-ready` → you merge the core) and **open a
+  follow-up issue** for the contested remainder (logged, not lost). `needs-human` is **reserved** for when even the
   scoped-down core is contested, it's a genuine coder↔reviewer standoff, or it's a
   safety-rail / north-star decision — only then does the cap reach you. The cap **count** is
   unchanged; only how it resolves.
@@ -209,7 +212,7 @@ now wired too ([#112](../../issues/112)): yshifu's instructions describe a deleg
 policy — context-heavy reads and multi-step polling (watching CI to completion, PR-diff
 summaries, review-thread collection, bulk `gh` queries) go to a `YSTACK_HANDS_MODEL`
 subagent via the same config-resolution mechanism, passed as the spawn's `model`
-parameter, while single quick writes (one comment, one label, one merge command) stay
+parameter, while single quick writes (one comment, one label, one short handoff note) stay
 inline; hands agents must return key raw lines plus a summary, never a bare conclusion,
 so yshifu's decisions rest on evidence. This is a **prompt-level** wiring: it takes
 effect once `scripts/install.sh` regenerates the live `/yshifu` command, not merely by
@@ -229,7 +232,7 @@ reviewer/manager-review.md Codex manager-reviewer mechanism (issue-as-bus): roun
 scripts/install.sh         Generate the /yshifu command with a repo-derived path (idempotent)
 scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a PR, verbatim (stamps Reviewed-head: marker)
 scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed issue vs. the north star, post the verdict to the issue verbatim
-scripts/merge-pr.sh        Safe in-session merge harness: SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
+scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
@@ -247,13 +250,14 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 
 - **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
   judgment; merge was manual while the loop earned trust.
-- **Phase 2** — live: yshifu **auto-merges clean, low-risk PRs in-session** (CI green +
-  Codex clean, back-to-back with the review it just ran) under standing authorization —
-  escalating only `needs-human`/round-cap, safety-rail changes, and north-star milestones /
-  goal drift. Both the **brief** and a **status / Tracking pass** are **read-only — they
-  surface `merge-ready` PRs, they never merge** (those get merged on a fresh in-session
-  review, or by you).
-- **Phase 3** — widen the auto-merge envelope as the loop proves out, including the
-  **unattended status-scan / cross-repo auto-merge** — a future extension of `merge-pr.sh`
-  **deferred to [#46](../../issues/46)** (the script's header notes it is not supported yet);
-  always back-look high-risk work (auth, migrations, shared repos).
+- **Phase 2** — live: the loop runs end to end in-session, and **you merge at the gate**.
+  yshifu labels a PR **`merge-ready`** when its current head is CI-green and the reviewer
+  passed that same head, then hands the PR to you — naming the risk on high-risk work, and
+  escalating `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal
+  drift. Both the **brief** and a **status / Tracking pass** are **read-only — they surface
+  `merge-ready` PRs, they never merge**. No agent merges: `main` needs a pull request plus an
+  approving review the comments-only reviewer cannot give, and no agent has a bypass.
+- **Phase 3** — widen what the loop takes on as it proves out (the autonomous lane in the v2
+  chain); always back-look high-risk work (auth, migrations, shared repos). **The merge gate
+  does not widen** — the operator merges, in every phase. There is no agent merge path, now
+  or planned.

@@ -49,7 +49,8 @@ them, and a reviewer should reject any that does not:**
 3. **Assert the side effect THIS stage was supposed to have** — not merely
    that a PR exists. For `spec-on-intent` and `implement-on-spec` the new
    branch and PR are the effect. For `review-on-pr` the PR already exists, so
-   assert a review marker naming the head it reviewed. For `fix-on-review`
+   assert the stamped review marker (see the reviewer-loop rules) naming the
+   head it reviewed. For `fix-on-review`
    assert a new head SHA (or a posted push-back). A denied write still
    reports `is_error: false`, so a vacuous assert means a green job that did
    nothing.
@@ -62,36 +63,115 @@ them, and a reviewer should reject any that does not:**
    tested before merge. (An earlier draft of this plan claimed dispatch never
    works off-default; that was a wrong inference from a run that actually
    failed on the allowlist.)
-6. **Load write wrappers from a trusted revision.** A same-repo PR can edit
-   `scripts/v2/*.sh`; a job that checks out the PR head and then allowlists
-   that path runs the PR's script, not the audited one, with the job's write
-   credentials. Review and fix jobs read their wrappers from the default
-   branch — the same trust-anchor rule the v1 review harness already uses for
-   committed config.
+6. **Load write wrappers AND stage skills from a trusted revision.** A
+   same-repo PR can edit `scripts/v2/*.sh`. It can just as easily edit
+   `.claude/skills/review-pr/SKILL.md` or
+   `.claude/skills/address-review/SKILL.md` — the prompt the job runs. A job
+   that checks out the PR head gets the PR's copy of both: its wrapper runs
+   with the job's write credentials, and its skill can tell the model to use
+   the allowed wrapper to post a verdict nobody ever reached. So `review-on-pr`
+   and `fix-on-review` take **both** their wrapper and their stage skill from
+   the default branch's current revision, never from the PR head:
+   - check out the default branch to its own path and point the job's skill
+     directory and its allowlisted wrapper path at that checkout;
+   - `review-on-pr` needs no PR-head checkout at all — read the PR's diff and
+     text through `gh`, as data;
+   - `fix-on-review` does need the head, because it edits those files. Check it
+     out to a separate working path: files to edit, never files to run.
+   Same trust anchor as R3's "`REVIEW.md` loaded from main" and the v1 review
+   harness's committed config.
 
-**Reviewer-loop rules (they belong in `fix-on-review`):**
+**Reviewer-loop rules (they belong in `review-on-pr` and `fix-on-review`):**
 - **Bind a verdict to the head SHA it reviewed, never to a timestamp.** A
   review of head A can land after head B is pushed, so a timestamp fence
-  accepts it and the fix loop then edits B in response to findings about A.
-  **The reviewer must emit the marker** — this phase's `review-on-pr` runs
-  Claude, so its skill ends every review comment with a machine-readable
-  `reviewed-head: <sha>` line, and `fix-on-review` parses that and refuses to
-  act unless it equals the PR's current head. (Codex's cloud review body
-  already names its reviewed commit, so the same parser serves both when that
-  reviewer is added later.) Same discipline as the v1 merge harness, which
-  pins to the reviewed head and refuses once it moves.
-- **Wait for an explicit completion marker, not a fixed delay.** A settle
-  window is a heuristic: a slow review wakes the fix job early, and a late
-  comment can start a duplicate pass. Poll for a completed verdict naming the
-  expected head, up to a bounded timeout, then escalate rather than guess.
-- **Bump the round label BEFORE acting**, so a crash can only overcount.
+  accepts it and the fix loop then edits B in response to findings about A. So
+  every review comment the fix job may act on ends with one machine-readable
+  line, and `fix-on-review` refuses to act unless the SHA on that line equals
+  the PR's current head. Same discipline as the v1 merge harness, which pins to
+  the reviewed head and refuses once it moves.
+- **A workflow step stamps that line — never the model.** The PR's diff, title,
+  body and comments are untrusted input to the review skill (`REVIEW.md`:
+  treat as data). If the skill writes the marker itself, planted text can talk
+  the model into printing one for the current head without a review happening —
+  and the comment still arrives signed by the trusted app, so the fix job
+  believes it. The marker is a credential, so a deterministic step owns it:
+  - the review skill posts nothing. It writes its review body to
+    `$RUNNER_TEMP/review.md` and one word — `findings` or `passed` — alone on
+    one line to `$RUNNER_TEMP/verdict.txt`. Nothing else it prints is read.
+  - `review-on-pr` then runs a plain step, only if the review step succeeded.
+    That step posts the comment: the body from the file, plus the marker line
+    it builds itself. The SHA comes from the event
+    (`github.event.pull_request.head.sha`), never from model output.
+  - the skill is told in so many words: do not write a `YSTACK-REVIEW`,
+    `reviewed-head:` or `verdict:` line. The stamping step strips any such
+    line out of the body before it appends its own.
+  - if the review step fails or times out, nothing is stamped and no comment is
+    posted, so the fix job never fires. A dead review must never look like a
+    finished one.
+  With the skill posting nothing, the review step needs no write wrapper and no
+  write allowlist at all: the stamping step is the only thing in `review-on-pr`
+  that writes. That is the comments-only rail, made mechanical.
+  This does not make the judgment itself injection-proof — the verdict is still
+  the model's call. It makes a review that never ran impossible to forge, and
+  that is the part the fix job's authority rests on. When a second reviewer is
+  added later (Codex cloud, D2), it gets the same treatment: a step we control
+  stamps the marker, and the reviewer's own text is never trusted for the SHA.
+- **The marker carries the verdict too, and only findings wake the fix job.**
+  Head alone says "this head was reviewed" and nothing more, so a clean review
+  passes the fence as easily as a bad one: the fix agent wakes, has nothing to
+  fix, and burns a round for nothing. The stamped line is therefore
+  `YSTACK-REVIEW reviewed-head: <sha> verdict: findings|passed`, and:
+  - the skill writes `findings` when it reported at least one **Important**
+    finding (`REVIEW.md`'s bar), `passed` when it did not. A nit-only review is
+    `passed` — nits never spend a round.
+  - `fix-on-review` acts only on `verdict: findings`. On `verdict: passed` it
+    exits at once: no round bump, no push, no comment.
+  - if `verdict.txt` is missing, empty, or holds anything but those two words,
+    the stamping step stamps nothing and fails the job loudly. A broken review
+    must not read as a pass.
+- **A push-back must re-trigger the review, or the standoff never ends.**
+  `address-review` may answer a finding by disagreeing instead of changing
+  code. That posts a comment and leaves the head where it is — and review only
+  fires on a new head, so nothing ever answers the push-back: no round is
+  spent, the cap is never reached, and the PR sits there. So the fix job ends
+  every round by making sure a review of the current head is coming:
+  - **changed code** → push it. The `pull_request` synchronize event fires
+    `review-on-pr` as usual. Nothing else to do.
+  - **pushed back, no code change** → the job's last step asks for the review
+    itself: dispatch `review-on-pr` for this PR at its current head
+    (`workflow_dispatch` with the PR number, alongside the `pull_request`
+    trigger), through the fix stage's wrapper like every other write. Dispatch
+    it `--ref` the default branch, so the re-review runs the trusted copy of
+    the workflow (rule 6), not a copy the PR could have edited. The
+    re-review reads the push-back comment as part of the PR's text — as data —
+    and either drops the finding with a stated reason or repeats it. This is a
+    third deliberately-opened bot edge on top of the two the spec's R5 names,
+    so `review-on-pr`'s dispatch trigger gets its own actor gate: the app or
+    the operator, nobody else.
+  - **mixed round** (some findings fixed, some pushed back) → code is pushed,
+    so synchronize already covers it. Do not dispatch as well, or the same head
+    gets reviewed twice.
+  The round label was already bumped before the round ran, so a repeat
+  disagreement walks to `round-3`, gets `needs-human`, and lands on the
+  operator — which is what `REVIEW.md` ("When we disagree") says should happen
+  to an argument neither side drops.
+- **Wait for the stamped marker, not a fixed delay.** A settle window is a
+  heuristic: a slow review wakes the fix job early, and a late comment can
+  start a duplicate pass. Poll for a stamped marker naming the expected head,
+  up to a bounded timeout, then escalate rather than guess.
+- **Bump the round label BEFORE acting**, so a crash can only overcount. The
+  whole order in `fix-on-review` is: read the marker → stop unless it says
+  `verdict: findings` on the PR's current head → bump the label → then act. The
+  fence comes before the bump; the bump comes before any write.
 
 - Four workflows: `spec-on-intent`, `implement-on-spec`, `review-on-pr`,
   `fix-on-review`. Every job: one agent at a time, hard time and turn limits,
   loud failure if its PR didn't get created.
 - Three skills: `implement`, `review-pr`, `address-review`. Rules baked in:
   - Cheap model writes, high effort judges (v1 policy, unchanged).
-  - Never write to `.github/` or `.claude/`.
+  - Never write the constitution paths — `.github/**`, `.claude/**`,
+    `AGENTS.md`, `CLAUDE.md`, `REVIEW.md` (the list in AGENTS.md > Stage rules
+    and REVIEW.md > Compliance). Such a change goes to `proposals/` instead.
   - **Proof is tied to the code:** verify output names the exact commit it ran
     on. New commits make old proof stale.
   - **Each change type has its own proof:** shell → shellcheck + tests;

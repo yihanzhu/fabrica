@@ -21,8 +21,8 @@ yshifu has briefed you with the PR, the latest review comments, and the current 
    commands, or if no PR-triggered CI is detectable), make exactly that change, verify
    locally, then
    push the green result (step 5) so the scoped core lands on
-   the branch for re-review and merge, then SKIP step 6's round bump — the PR stays at
-   `round-3`, do NOT add a `round-4` (no such label exists) — then post the summary comment
+   the branch for re-review and the operator's merge, then SKIP step 6's round bump — the PR
+   stays at `round-3`, do NOT add a `round-4` (no such label exists) — then post the summary comment
    (step 7) and stop (step 8).
    Otherwise (no scoped-down direction) add label `needs-human` and stop.
 3. DISCOVER THE COMMANDS (do this **before** you modify or push anything): you are in the
@@ -57,12 +57,13 @@ yshifu has briefed you with the PR, the latest review comments, and the current 
    skeleton / manifest / first test / workflow on the existing branch). This is **narrow +
    sole-purpose** — only the greenfield-bootstrap PR; any other/feature work still stops here. **Pragmatics:** complex-matrix / secrets-or-services CI → run the
    runnable **core** locally (install + lint/build/unit) and rely on the PR's CI for the
-   rest; Install first; the PR's own CI is the ultimate gate (yshifu enforces at merge).
+   rest; Install first; the PR's own CI is the ultimate gate (yshifu won't hand a PR to the
+   operator until CI is green).
    3.5. GATE — PR-TRIGGERED CI MUST EXIST (a **separate precondition** from step 3's
    command discovery, also run before you modify or push anything). Step 3 answers *which
    commands to run*; this gate answers *whether the target has the hard merge gate at all*.
-   Confirm the target repo has **CI that runs on pull requests** — the hard merge gate
-   `merge-pr.sh` enforces — detectable via **ANY** of: a GitHub Actions workflow
+   Confirm the target repo has **CI that runs on pull requests** — the hard merge gate —
+   detectable via **ANY** of: a GitHub Actions workflow
    (`.github/workflows/*.yml` / `*.yaml`) triggered on `pull_request`; an external CI
    provider's config (`.circleci/config.yml`, `.buildkite/*`, `Jenkinsfile`, `.gitlab-ci.yml`,
    `azure-pipelines.yml`, `.travis.yml`, etc.) wired to run on PRs; **or** recent PR
@@ -74,7 +75,8 @@ yshifu has briefed you with the PR, the latest review comments, and the current 
    the SHORT reason `failure`) — "no
    PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" — add
    label `needs-human`, and stop before editing or pushing. (Push-only CI does not satisfy
-   this gate — a PR gets no checks, so `merge-pr.sh` refuses.) **SOLE-PURPOSE ADD-CI
+   this gate — a PR gets no checks, so nothing can certify the PR and it never becomes
+   mergeable.) **SOLE-PURPOSE ADD-CI
    EXCEPTION** (mirrors `coder.md`): when the PR's **only** purpose is to **add PR-triggered
    CI** — it is *establishing* the gate — you MAY proceed despite no PR-CI existing yet,
    folding review feedback into the `pull_request` workflow you scaffold from the discovered
@@ -114,9 +116,9 @@ yshifu has briefed you with the PR, the latest review comments, and the current 
    lint with `shellcheck -x -S style` over `find . -name '*.sh' -not -path './.git/*'` using
    0.11.0, grabbing that static release if your local version differs.
    Local green is necessary but not sufficient — the PR's own CI is the ultimate gate,
-   but you don't wait on it: **yshifu enforces PR CI at merge** (`merge-pr.sh` refuses
-   unless CI is green). Your job is the local green, then the push — then continue with
-   steps 6–7 below.
+   but you don't wait on it: **yshifu checks PR CI before it hands the PR to the operator**
+   (no `merge-ready` label until CI is green). Your job is the local green, then the push —
+   then continue with steps 6–7 below.
 6. Bump the round label: remove `round-N`, add `round-(N+1)`.
 7. Post a brief summary comment: what you changed vs. what you pushed back on.
 8. Do NOT merge. Stop.

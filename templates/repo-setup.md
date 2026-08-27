@@ -15,7 +15,7 @@ The loop uses these labels as its state (each coder spawn is stateless):
 - `ready` — cleared to run (your direct approval OR yshifu⇄Codex consensus toward an approved north star); yshifu's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
-- `merge-ready` — current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge
+- `merge-ready` — current head passed Codex review; the PR is now waiting on **your** merge (yshifu never merges, and the label goes void the moment new commits land)
 
 **yshifu creates/reconciles these automatically** on its first-loop-action bootstrap, so you
 normally don't touch this. If you want to bootstrap or reconcile the labels by hand
@@ -40,7 +40,9 @@ and exits non-zero if anything is missing or differs (zero if all match).
 
 ## 2. Branch protection (main)
 The supported protection shape is **required status checks** — that is the gate
-`scripts/merge-pr.sh` reads and enforces.
+`scripts/merge-pr.sh` reads and enforces when **you** run it. (No agent merges here:
+yshifu labels a reviewed-clean head `merge-ready` and hands you the PR; `merge-pr.sh` is
+yours, and yshifu never runs it.)
 - ✅ Require status checks to pass before merging (your CI) — the **hard gate**. Mark your
   CI contexts (lint/test/build) as **required**; `merge-pr.sh` discovers the required checks
   from the PR's own status-check rollup (`gh pr checks --required`, readable by anyone who can
@@ -50,14 +52,15 @@ The supported protection shape is **required status checks** — that is the gat
   optional check won't stall a mergeable PR. If you leave the base unprotected (or define no
   required checks), the script falls back to requiring ≥1 passing check with none failing/pending.
 - ✅ Require branches to be up to date before merging
-- ⛔️ **Do NOT use "Require a pull request before merging → require approving review."**
-  ystack's reviewer (`scripts/codex-review.sh`) is **comments-only and never approves**, so a
-  required approving review can never be satisfied by the loop — `merge-pr.sh` detects this
-  (`reviewDecision=REVIEW_REQUIRED`) and refuses, handing the PR to the human merge gate.
-  Gate on required **status checks**, not on a required approving review.
-- ⛔️ **Keep GitHub's native auto-merge button off** — merges run through yshifu or the
-  human (both gated on green CI), not a server-side auto-merge trigger. yshifu merging a
-  clean, low-risk PR is a deliberate `gh pr merge`, not this checkbox.
+- ⚠️ **"Require a pull request before merging → require approving review" is your call, but
+  know the trade.** ystack's reviewer (`scripts/codex-review.sh`) is **comments-only and never
+  approves**, so no agent can ever satisfy that requirement — and `merge-pr.sh` refuses such a
+  PR outright (`reviewDecision=REVIEW_REQUIRED`), so you merge those **by hand** instead of
+  with the script. Gate on required **status checks** if you want `merge-pr.sh` usable. (ystack's
+  own `main` takes the other trade: a PR plus one approving review, with no agent bypass.)
+- ⛔️ **Keep GitHub's native auto-merge button off** — merges run through **you**, gated on
+  green CI and a `merge-ready` label, not a server-side trigger that lands a PR while nobody
+  is looking.
 
 **Merged-branch cleanup.** `merge-pr.sh` does not delete the head branch. Either enable the
 repo's **"Automatically delete head branches"** setting, or run `gh pr merge … --delete-branch`
@@ -72,18 +75,17 @@ own CI agree. You do **not** need a filled-in `CLAUDE.md` for this — a target 
 "Stack & commands" is an **optional override** (see step 4) to pin or disambiguate a
 non-standard toolchain.
 
-**If this repo has no CI, you have two options** — it's the loop's hard gate, and the team
-won't merge against a missing or hollow check:
+**If this repo has no CI, you have two options** — it's the loop's hard gate, and no PR gets
+handed to you as reviewed-and-green against a missing or hollow check:
 - **Let ystack bootstrap it (you approve the initial gate).** At first contact yshifu confirms
   CI is genuinely absent (inspecting the CI/provider config, not just `doctor.sh`'s WARN — that
   warns for a repo with no PRs yet even when a workflow exists), then offers to scaffold a
   `pull_request` workflow from your auto-discovered toolchain as the **first "add PR CI"
   issue**. Because a self-authored gate can't certify itself, that PR is **operator-approved
-  and human-merged, never auto-merged** — yshifu classifies it as human-merge-only and does
-  **not** run `merge-pr.sh` on it at all (a same-repo bootstrap workflow can even self-report
-  green on its own PR, so the human — not the tooling — is the gate), so **you merge it by
-  hand**; this is the one sanctioned human-merge-without-a-pre-existing-gate case, precisely
-  because it *creates* the gate. yshifu tells you **what the bootstrapped gate
+  and merged by you** — yshifu classifies it as human-merge-only and does **not** even apply
+  `merge-ready` to it (a same-repo bootstrap workflow can self-report green on its own PR, so
+  the human — not a check — is the gate), so **you merge it by hand**; this is the one
+  sanctioned merge-without-a-pre-existing-gate case, precisely because it *creates* the gate. yshifu tells you **what the bootstrapped gate
   covers** (tests if present; otherwise lint / build only) so a weak gate isn't mistaken for a
   strong one.
 - **Or wire it yourself.** There is no blessed drop-in workflow: CI is project-specific, so you

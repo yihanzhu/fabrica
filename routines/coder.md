@@ -65,12 +65,13 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      not available locally, run the runnable **core** locally (install + lint/build/unit
      tests) and rely on the PR's CI for the rest — don't try to perfectly replicate CI,
      and don't block on un-runnable steps. Run the **Install** command first; the PR's
-     own CI remains the ultimate gate (yshifu enforces it at merge).
+     own CI remains the ultimate gate (yshifu won't hand a PR to the operator until CI is
+     green).
 4. GATE — PR-TRIGGERED CI MUST EXIST (a **separate precondition** from step 3's command
    discovery; also a pre-work gate, so a failed gate leaves no dirty clone). Step 3 answers
    *which commands to run*; this gate answers *whether the target even has the hard merge
    gate*. Confirm the target repo actually has **CI that runs on pull requests** — the hard
-   merge gate `merge-pr.sh` enforces — detectable via **ANY** of: a GitHub Actions workflow
+   merge gate — detectable via **ANY** of: a GitHub Actions workflow
    (`.github/workflows/*.yml` / `*.yaml`) triggered on `pull_request`; an external CI
    provider's config (`.circleci/config.yml`, `.buildkite/*`, `Jenkinsfile`, `.gitlab-ci.yml`,
    `azure-pipelines.yml`, `.travis.yml`, etc.) wired to run on PRs; **or** recent PR
@@ -84,7 +85,8 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      with the SHORT reason `failure`) — "no
      PR-triggered CI detected; CI is the hard merge gate, so a PR here can't be merged" —
      add label `needs-human`, and stop **before creating a branch or making any edit**.
-     (Push-only CI does not satisfy this gate — a PR gets no checks, so `merge-pr.sh` refuses.)
+     (Push-only CI does not satisfy this gate — a PR gets no checks, so nothing can certify
+     the PR and it never becomes mergeable.)
    - **SOLE-PURPOSE ADD-CI EXCEPTION.** The gate above stays for all feature work, but there
      is one exception: when the issue's **only** purpose is to **add PR-triggered CI** (it is
      *establishing* the gate that doesn't exist yet), you MAY proceed and open the PR despite
@@ -97,9 +99,10 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      builds is acceptable. This exception is **narrow**: it applies solely to an issue whose
      one concern is adding PR CI; any feature issue on a CI-less repo still escalates and stops
      per the gate above. (yshifu's CI-bootstrap offer happens at first contact *before* feature
-     issues, so once the CI PR lands the normal gate is satisfied for later work. Note this
-     "add CI" PR is operator-approved and human-merged, not auto-merged — but that is yshifu's
-     concern; your job is only to open the green PR and stop.)
+     issues, so once the CI PR lands the normal gate is satisfied for later work. Note the
+     operator approves and merges this "add CI" PR by hand, and yshifu does not label it
+     `merge-ready` at all — but that is yshifu's concern; your job is only to open the green
+     PR and stop.)
    - **GREENFIELD-BOOTSTRAP EXCEPTION.** The greenfield analogue of the add-CI exception,
      extended to a **full first scaffold**: when yshifu briefs you with a **designated
      greenfield-bootstrap issue** — the **first change on an empty target** (no source yet, no
@@ -117,7 +120,7 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      first test, and author a `pull_request`-triggered workflow that installs and runs the lint /
      build / test for that skeleton; run those same commands locally (step 9) so the workflow you
      author is green. **Also create + commit `<target>/.ystack/north-star.md` with the
-     yshifu-provided north star:** post-98a the merge / manager-debate gate reads the target's
+     yshifu-provided north star:** post-98a the manager-debate gate reads the target's
      **committed** `.ystack/north-star.md` and FAILs on missing / `ystack-shipped-default`-marker /
      no-`status: active`-entry, so the 0→1 bootstrap must leave a real committed one. **yshifu's
      brief gives you the exact north-star text + done-signal** (drafted from the operator's command
@@ -156,9 +159,9 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    (the lint / build / test commands you discovered in step 3), **locally**. Where the
    repo has a test suite, add or adjust tests to cover the change. Never open a PR
    with red CI. Local green is **necessary but not sufficient** — the PR's own CI is
-   the ultimate gate, but you don't wait on it: **yshifu enforces PR CI at merge**
-   (`merge-pr.sh` refuses unless CI is green). Your job is the local green, then
-   open the PR and stop.
+   the ultimate gate, but you don't wait on it: **yshifu checks PR CI before it hands the PR
+   to the operator** (no `merge-ready` label until CI is green). Your job is the local green,
+   then open the PR and stop.
    - **MATCH CI's PINNED TOOL VERSIONS.** When CI pins a linter/formatter/toolchain to
      a specific version, run **that exact version** locally — not whatever your local
      install happens to be. Different versions of the same tool report different findings

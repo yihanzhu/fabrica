@@ -13,7 +13,8 @@ command, point it at a target repo, and watch one loop run. For the mental model
 
 - **`gh` CLI authenticated** — `gh auth status` shows you logged in.
 - **`jq` on `PATH`** — needed by the review/debate gates to validate Codex's typed JSONL events,
-  and by `scripts/merge-pr.sh` to parse `gh`'s CI-check JSON.
+  and by `scripts/merge-pr.sh` — your own merge helper, which no agent runs — to parse `gh`'s
+  CI-check JSON.
 - **Codex (OpenAI) CLI signed in** — a ChatGPT plan that includes Codex review is enough
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
 - **Claude Code installed** — the whole team runs in-session (no API key); yshifu and the
@@ -55,7 +56,7 @@ command, point it at a target repo, and watch one loop run. For the mental model
    PR CI, **yshifu offers to bootstrap it for you** at first contact (it scaffolds a
    `pull_request` workflow from your toolchain as the first "add PR CI" issue, and **you
    approve + merge that initial gate by hand** — yshifu classifies it as human-merge-only and
-   won't run `merge-pr.sh` on it, since a self-authored gate can't certify itself). Wire it
+   won't even label it `merge-ready`, since a self-authored gate can't certify itself). Wire it
    yourself instead if you prefer. Everything else (the
    loop labels, the readiness pre-flight) **yshifu bootstraps for you on first use** — see step 7.
    A target `CLAUDE.md` is **optional**: the coder auto-discovers the install / lint / build /
@@ -93,7 +94,8 @@ command, point it at a target repo, and watch one loop run. For the mental model
    star is the root `NORTH_STAR.md` — ystack is its own target.)
 
 5. **Clone the target repo and `cd` into it.** `/yshifu` and every orchestration script
-   (`codex-review.sh`, `merge-pr.sh`, `manager-review.sh`) run from **inside the target
+   (`codex-review.sh` and `manager-review.sh`, plus `merge-pr.sh` when *you* merge with it)
+   run from **inside the target
    repo's local clone** — they read its git remote and resolve the repo via `gh` (e.g.
    `codex-review.sh` calls `gh repo view`) — so you need a working copy on disk, and `gh`
    must resolve to **the repo PRs target**.
@@ -146,11 +148,15 @@ command, point it at a target repo, and watch one loop run. For the mental model
    yshifu runs `"<ystack>/scripts/codex-review.sh" <PR#>` from inside the target repo's
    clone — by absolute path, since the harness lives only in the ystack clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
-   an ambiguous spec escalates with `needs-human`. After a clean review yshifu labels the
-   PR `merge-ready`; for a clean, low-risk PR yshifu **merges** it once CI is green, under
-   your standing authorization (acting on the passed review — not self-approval; Codex is
-   comments-only). A PR needing human review (safety-rail / north-star / high-risk) is
-   brought to **you** to merge instead.
+   an ambiguous spec escalates with `needs-human`. When CI is green and Codex passed that
+   exact head, yshifu labels the PR `merge-ready` and hands it to **you — you merge, always.**
+   yshifu never merges — merging is yours, and it is a rail, not a preference. (Protect `main`
+   with a ruleset that requires a pull request plus an approving review and the rail is enforced
+   too: the reviewer is comments-only and cannot approve, and no agent gets a bypass.) The label
+   only says "reviewed clean at this head", and it goes void the moment new commits land. A PR
+   that needs your judgment on top of the review (safety-rail / north-star / high-risk) is
+   flagged as such when it is handed over. `scripts/merge-pr.sh` stays in the repo for your own
+   use; yshifu never runs it.
 
 That's the loop. To prove a rebuilt or relocated setup end to end — or recover a lost one
 — follow the smoke test and runbook in [`RESTORE.md`](RESTORE.md).
@@ -193,12 +199,14 @@ gate yet (yshifu won't run autonomously until a real gate exists):
    this exception exists precisely to establish both). Cross-vendor Codex review still runs. This
    leaves the 0→1 target with the committed north star the shipped gate (`manager-review.sh`)
    requires.
-6. **You approve and merge the bootstrap PR by hand.** No real gate exists yet for it to
-   certify itself, so yshifu classifies it **human-merge-only** and does **not** auto-merge
-   it — you merge that initial gate yourself (same as the add-PR-CI bootstrap above).
+6. **You approve and merge the bootstrap PR by hand.** You merge every PR here, but this one
+   is extra: no real gate exists yet for it to certify itself, so yshifu classifies it
+   **human-merge-only** and does **not** apply `merge-ready` at all — you merge that initial
+   gate yourself (same as the add-PR-CI bootstrap above).
 7. **Handoff to the 1→N loop — the front gate still holds.** Once the skeleton + CI + first
    test land, a **real gate now exists** and yshifu transitions to the normal loop under the
-   standing rails (including auto-merge for clean, low-risk PRs). But the handoff does **not**
+   standing rails (review → `merge-ready` → handed to you, and you merge). But the handoff
+   does **not**
    by itself unlock open-ended proactive autonomy: you approved the **bootstrap scaffold plan
    (scoped to the 0→1 PR)**, which is **NOT** approval of the active north star for proactive
    1→N work. So after the bootstrap lands, yshifu pursues **proactive** north-star work **only
