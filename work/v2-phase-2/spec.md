@@ -26,9 +26,12 @@ operator ruled on; no rail is weakened by it.
 
 ## Requirements
 
-Each requirement is verifiable; R1–R3 are jointly proven by the phase exit test
-(one real change flows through the lane with the operator only merging). R4 is
-deferred with this phase's fix stage — see the amendment note above.
+Each requirement is verifiable; R1–R3 are jointly proven by the phase exit test:
+one real change flows through the lane, the operator merging at each gate and
+answering whatever the review finds. The run counts only if the review actually
+reported something and the operator resolved it in a session — a smoke change so
+clean that nothing was found proves the happy path, not the handoff this phase
+depends on. R4 is deferred with the fix stage — see the amendment note above.
 
 - **R1 — spec stage.** An operator merge to main that adds or changes
   `work/<slug>/intent.md` triggers a job that opens (or updates) a PR titled
@@ -49,7 +52,8 @@ deferred with this phase's fix stage — see the amendment note above.
   above). It described: review findings trigger a fix pass that bumps the `round-N`
   label before acting; at `round-3` it applies `needs-human`, posts the productive-cap
   comment, and stops. That design is superseded — the next intent starts from the
-  credential split in `plan.md`, not from this text.
+  credential split stated in the amendment note above, not from this text and not
+  from any plan written for the four-workflow shape.
 - **R5 — safety invariants (all three workflows in this phase).** One global `claude-quota`
   concurrency group serializes every agent job; explicit actor gates
   (`github.actor == operator`, or `allowed_bots: claude[bot]` only on deliberately
@@ -57,9 +61,11 @@ deferred with this phase's fix stage — see the amendment note above.
   edge R5 allowed served the deferred fix stage);
   `timeout-minutes` and `--max-turns` on every job; PR-creation steps assert the
   PR exists and fail loudly; stage write-limits stated in the stage skills
-  (mechanical enforcement arrives with Phase 3 hooks). (The "never push to an
-  approved PR" rule went with the deferred fix stage — it belongs to that intent,
-  which is the only thing that pushes to an open PR.)
+  (mechanical enforcement arrives with Phase 3 hooks). **No stage pushes to a PR
+  the operator has already approved** — R1 and R2 let a re-triggered producer
+  stage update an existing PR, so this is not only the deferred fix stage's
+  concern: an approval means the operator read that diff, and a later push would
+  silently move what they approved.
 - **R6 — plumbing proven first.** Before the three workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
@@ -119,8 +125,8 @@ first; adding Codex is additive and needs no workflow changes).
    one-concern budget. Recommendation for the plan stage: land as a stacked
    sequence under one `plan.md` — (a) helpers + tests, (b) workflows + skills +
    docs — each PR independently green.
-3. **Quota:** all four jobs share the operator's subscription window with their
-   interactive use. Serialization + preflight (R5) mitigate; the sizing question
+3. **Quota:** the three jobs share the operator's subscription window with the
+   operator's own interactive use. Serialization + preflight (R5) mitigate; the sizing question
    stays open until measured in this phase.
 4. **North-star fit:** user-directed intent (operator-approved at G1), so no
    consensus gate required. The lane serves north star B indirectly — an
