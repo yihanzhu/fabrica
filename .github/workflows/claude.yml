@@ -1,5 +1,20 @@
 name: Claude Code
 
+# Answers @claude mentions on issues and PRs.
+#
+# ACTOR GATE — this repo is public, so without it any passer-by could spend the
+# operator's subscription by writing "@claude" in a comment. Both actors are
+# checked, the same rule every job in this repo follows: on a re-run
+# github.actor stays whoever started the original run, and the person who
+# pressed re-run appears only in github.triggering_actor, so checking one alone
+# lets a collaborator re-run someone else's job.
+#
+# Bots stay refused: the action rejects bot actors unless they are listed in
+# allowed_bots, and no bot edge is opened here on purpose. A cross-vendor
+# reviewer belongs in a review workflow that fires on every PR, not in a
+# mention edge where one bot can spend the operator's quota by talking to
+# another.
+
 on:
   issue_comment:
     types: [created]
@@ -13,10 +28,14 @@ on:
 jobs:
   claude:
     if: |
+      github.actor == 'yihanzhu' &&
+      github.triggering_actor == 'yihanzhu' &&
+      (
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
