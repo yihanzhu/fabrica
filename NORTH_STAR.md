@@ -37,33 +37,43 @@ user's approval of the spec yshifu drafts from their one-liner is its own gate.)
 
 ## Current north star
 
-### B — "Pick up any project at any stage"  ·  status: **active** · <!-- ystack-shipped-default --> history: set + approved by the **operator** (2026-06-28). **Adopters:** this is ystack's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo (and remove the `ystack-shipped-default` marker on this line when you do). This history line is **not** a token that auto-approves a clone.
+### D — "Any harness, any Git forge, one governed loop" · status: **active** · <!-- ystack-shipped-default --> history: set + approved by the **operator** (2026-08-27). **Adopters:** this is ystack's goal, not yours — replace it with your own north star and explicitly approve *that* before proactive mode applies to your repo (and remove the `ystack-shipped-default` marker on this line when you do). This history line is **not** a token that auto-approves a clone.
 
-ystack can adopt a project wherever it is and drive it toward the operator's goal — whether
-that project is an empty folder or an existing codebase with history.
+ystack is a harness-neutral and forge-neutral control plane for an AI-native
+software-delivery loop. It can meet a Git project at any stage, then run the same
+versioned artifacts, risk gates, verification, review, and human authorization through
+replaceable adapters.
 
-- **Two modes:**
-  - **Empty (0→1):** the operator's first command *becomes* the first north star; ystack
-    scaffolds the skeleton + a **real PR-CI gate (the operator confirms that initial gate)**
-    + a first commit + a **committed `.ystack/north-star.md`** (yshifu drafts the exact
-    north-star text + done-signal from the operator's command as part of the approved bootstrap
-    plan; the bootstrap coder commits THAT text into the target), then runs the loop.
-  - **Existing (1→N):** ystack **understands the whole project first** (structure, stack,
-    conventions, current state), then pursues the operator's north star.
-- **Done-signal:** from BOTH starting points — (a) an empty folder/repo, and (b) an existing
-  repo with no prior ystack setup — a first `/yshifu` session drives one real change to a
-  **merged, CI-gated PR** toward the operator's stated goal, with the CI gate present
-  (**operator-approved when ystack bootstrapped it**) before any autonomous merge. On the
-  empty (0→1) path the bootstrap PR also lands a **committed `.ystack/north-star.md`** (active
-  non-placeholder entry, no `ystack-shipped-default` marker) so the 0→1 target ends with the
-  committed north star the shipped gate (`manager-review.sh`) requires — a `doctor.sh`
-  north-star WARN *before* that bootstrap PR lands is advisory in greenfield (like missing
-  PR CI), not a blocker.
-- **Why it's the north star:** the team is only *"pick up my work"* useful if it meets a
-  project where it is, instead of requiring a pre-wired repo.
-- **Safety note:** ystack's autonomy rests on CI + cross-vendor review; on an empty project
-  neither exists yet, so the gate is bootstrapped **early and operator-approved**, and the
-  human stays in the loop until a real gate exists.
+- **Portable core:** intent, spec, accepted plan, evidence, review, incident records,
+  state, policies, evals, and gates do not require Claude, Codex, GitHub, or another
+  named vendor. Git is the first canonical artifact protocol; GitHub, GitLab, and
+  Bitbucket are forge adapters.
+- **Preference profiles:** the first profile may prefer Claude Code as producer, Codex
+  as reviewer, and GitHub Actions as CI. A profile selects these implementations; it
+  cannot weaken separation of duties, deterministic proof, human merge, or production
+  gates.
+- **Any-stage adoption remains required:** greenfield bootstrap establishes a real,
+  operator-approved CI/merge gate before autonomous 1→N work. An existing project is
+  understood before change. Both paths commit the target's own approved north star.
+  ystack is its own first dogfood target, but an unrelated external target is required
+  to prove the core did not special-case itself.
+- **Complete loop:** work moves through
+  `intent → spec → accepted plan → build → verify → independent review → human merge →
+  deploy/rollback → production feedback/new intent`. Events only wake the loop; durable
+  reconciliation reads canonical state and repairs missed work.
+- **Done-signal:** the same canonical contracts and gates complete a real target change
+  under the default profile, while at least one alternative harness and one alternative
+  forge pass the adapter contract and smoke path. No core rule or artifact requires a
+  Claude, Codex, or GitHub-specific command, event, secret, model, or file layout. A real
+  target then completes the full loop through a rehearsed rollback or production signal
+  that creates a new intent and permanent eval.
+- **Why it's the north star:** faster code generation is useful only when the whole system
+  stays portable, recoverable, measurable, and governed. The durable product is the
+  control plane and its contracts, not one vendor harness.
+- **Safety note:** the operator remains the merge and production authority. High-risk work
+  receives plan approval before code. Model-controlled commands and candidate code cannot
+  read model, forge, or deployment credentials; inference and external writes cross a
+  brokered boundary. No adapter may downgrade the core gates.
 
 ---
 
@@ -72,11 +82,16 @@ that project is an empty folder or an existing codebase with history.
 A short history of north stars and consensus-filtered proposals, so the human can see the
 trajectory and override anything consensus dropped.
 
-- **B — "Pick up any project at any stage"** — *active; set + approved by the operator
-  (2026-06-28) (history, not an inheritable token).* Done-signal: from both an empty
-  folder/repo and an existing un-set-up repo, a first manager session reaches a merged,
-  CI-gated PR toward the operator's goal — gate present + operator-approved-if-bootstrapped
-  before any autonomous merge.
+- **D — "Any harness, any Git forge, one governed loop"** — *active; set + approved by
+  the operator (2026-08-27) (history, not an inheritable token).* Done-signal: a portable
+  core runs the governed artifact-to-production-feedback loop under the default profile,
+  with alternative harness and forge adapters proving the same contracts and gates.
+- **B — "Pick up any project at any stage"** — *superseded — folded into D.* Any-stage
+  greenfield and existing-project adoption remains a requirement of the portable loop.
+  B was substantially built but not independently proven on a real fresh clone, so it is
+  folded forward rather than marked achieved. Original done-signal: from both starting
+  points, a first manager session reaches a merged, CI-gated PR toward the operator's
+  goal, with an operator-approved gate established before autonomous work.
 - **A — "Frictionless first-run"** — *superseded — folded into B.* Frictionless adoption of
   an existing repo is a subset of any-stage adoption. Substantially built out via #54–#82,
   but **not** independently proven on a real fresh clone, so folded into B rather than marked
@@ -84,7 +99,7 @@ trajectory and override anything consensus dropped.
   `QUICKSTART.md` walkthrough.
 - **C — "Numbers I can trust" (MapleFolio)** — *the team's **first real external run**; set +
   approved by the operator (2026-07-01, in an in-session manager chat); **achieved 2026-07-02**. Logged
-  here as a completed external run — this repo's own active star stays B.* Goal: MapleFolio's
+  here as a completed external run — this repo's own active star stays D.* Goal: MapleFolio's
   Canadian room/cash/FX calculation engine verified by an automated test suite run as the hard
   CI gate, so real-money contribution decisions rest on correct math. This run motivated the
   **per-target north-star architecture** (#97 resolver, #98/98a atomic flip, 98b adoption) — a

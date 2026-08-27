@@ -7,14 +7,16 @@ target repo: agents here are improving the team itself.
 whatever vendor — Codex and most tools look for `AGENTS.md`, Claude Code
 reads `CLAUDE.md`, which imports this file. One file, no drift.
 
-Companions: **`REVIEW.md`** is how work is reviewed here (passes, Important
-vs nit, how disagreements end). **`work/<slug>/`** holds the artifact chain —
+Companions: **`ROADMAP.md`** records the portable architecture and rollout order.
+**`REVIEW.md`** is how work is reviewed here (passes, Important vs nit, how
+disagreements end). **`work/<slug>/`** holds the artifact chain —
 `intent.md` → `spec.md` → `plan.md`. If you are implementing, your brief is
 that slug's plan; it is written so someone who never saw the conversation can
 build from it.
 
 Two goals drive the backlog:
-1. **Reusable by anyone** — a clean, parameterized, well-documented product others can adopt.
+1. **Reusable anywhere** — a clean, parameterized, well-documented product whose
+   core is not tied to an agent harness, model vendor, Git forge, or CI provider.
 2. **Full backup** — everything needed to reconstruct the team if the live setup is lost.
 
 ## What lives here
@@ -49,6 +51,11 @@ Two goals drive the backlog:
 ## PR rules (enforced by coder + reviewer)
 - **One concern per PR.** Soft size budget ~300–400 net lines; split if bigger.
 - Every PR links its issue (`Closes #<n>`) and keeps README/docs in sync with any change.
+- **Risk sets the plan gate.** High-risk work — constitution paths, workflows,
+  identity/auth, security controls, migrations, deployment/production infrastructure,
+  or broad architecture — requires the operator to accept `plan.md` before code.
+  Routine work may keep plan + code in one PR only after an independent plan check
+  records acceptance before the write phase. The author cannot accept its own plan.
 - **Plain language, always** (operator rule, 2026-08-26): every artifact
   (intent/spec/plan), PR title/description, and review comment is written for a
   tired human. Short sentences. Everyday words. No jargon where a plain word
@@ -70,13 +77,16 @@ Two goals drive the backlog:
   user-directed issue is gated by the user's approval of the drafted spec (the one-liner is the
   request, not the go), a proactive issue by the passed yshifu⇄Codex manager-debate consensus
   (for *proactive* work the user's gate is at the north-star altitude; user-directed issues
-  still need the user's spec approval).
+  still need the user's spec approval). This intake rule does not waive the later high-risk
+  plan gate: proactive and user-directed high-risk work both return to the operator before code.
 
 ## v2 artifact chain (work/)
 - One initiative = one dir: `work/<slug>/` holding `intent.md` → `spec.md` → `plan.md`.
   Each artifact lands via its own PR and the operator's merge IS the gate: G1 accepts
-  the intent, G2 approves the spec, G3 approves the implementation PR (which carries
-  `plan.md` + code + tests). Details: `work/README.md`; review policy: `REVIEW.md`.
+  the intent, G2 approves the spec, and G3 approves the implementation. High-risk work
+  records a separate operator acceptance of `plan.md` before code; routine work may carry
+  an independently accepted plan with code + tests in the implementation PR. Details:
+  `work/README.md`; review policy: `REVIEW.md`.
 - Skills: `/intent-draft`, `/spec-draft`, `/plan-draft` hold the templates and stage rules.
 - **Hash discipline:** `spec.md` frontmatter records `intent-blob` (`git hash-object` of
   the intent it was drafted from); `plan.md` records `spec-blob`. On mismatch with main's
@@ -84,7 +94,7 @@ Two goals drive the backlog:
 - **Stage rules (autonomous lane):** the spec stage writes only `work/<slug>/spec.md`;
   the implement stage never touches `intent.md`/`spec.md`; unattended agents never write
   the **constitution paths** — `.github/**`, `.claude/**`, `AGENTS.md` (this file),
-  `CLAUDE.md`, `REVIEW.md` — such changes land as patches under `proposals/` that the
+  `CLAUDE.md`, `REVIEW.md`, `ROADMAP.md` — such changes land as patches under `proposals/` that the
   operator applies. That is the same list `REVIEW.md` uses; the two must always match, so
   a change to one is a change to both. Operator-driven sessions are exempt; Phase 3 hooks
   enforce this mechanically via `YSTACK_STAGE`.
@@ -94,6 +104,11 @@ Two goals drive the backlog:
 ## Reusability goal
 - No hardcoded personal values (usernames, repo names) in shipped templates — keep the
   reusable path parameterized. Personal config stays out of it.
+- Core artifacts, policies, gates, state, and evals are harness-, model-, forge-, and
+  CI-neutral. Claude, Codex, GitHub, and other products belong in adapters or selected
+  profiles, never in core requirements.
+- Safety is expressed as capabilities and separation of duties: author, verifier,
+  reviewer, and publisher boundaries must survive an adapter change.
 
 ## The rules that bite
 
