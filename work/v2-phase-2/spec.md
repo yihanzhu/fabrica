@@ -65,7 +65,12 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   the operator has already approved** — R1 and R2 let a re-triggered producer
   stage update an existing PR, so this is not only the deferred fix stage's
   concern: an approval means the operator read that diff, and a later push would
-  silently move what they approved.
+  silently move what they approved. When a producer stage would have to update an
+  already-approved PR — the upstream artifact moved while the PR sat approved and
+  unmerged — it does not push. It labels the PR `stale`, says so in one comment,
+  and stops. The operator then merges it, dismisses the approval, or closes it;
+  the stage runs again once the PR is theirs to rebuild. An approved PR belongs to
+  the operator, so the lane never edits one behind them.
 - **R6 — plumbing proven first.** Before the three workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
