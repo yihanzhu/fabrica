@@ -136,8 +136,8 @@ That checklist covers:
   `scripts/setup-target-repo.sh --check <owner>/<repo>` — which reports per label
   `matches` / `differs` / `missing` and exits non-zero if anything is missing or differs.
 - **Branch protection on `main`** — require CI status checks to pass; keep GitHub's
-  **native auto-merge button off** (merges go through yshifu or the human, both gated on
-  green CI — not a server-side trigger). Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
+  **native auto-merge button off** (merging is the operator's, gated on green CI and a
+  `merge-ready` label — never a server-side trigger, and never an agent). Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
   command** (unlike the labels loop), and **branch protection isn't available on free
   private repos** — it needs a paid plan or a public repo. If you can't enable it, **CI is
   still the hard gate** (see Safety rails); you just lose the server-side enforcement.

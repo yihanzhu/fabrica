@@ -415,11 +415,14 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
        human-judgment-only and the operator approves + merges by hand.
      - **`merge-ready` is void the moment new commits land.** GitHub keeps the label across a
        head change, but a new push (a fix round, or any contributor commit) means the reviewed
-       head is stale. Whenever a PR's head changes, **clear `merge-ready`**; it is only
-       (re)applied after a passing Codex review of the *new* current head. Never leave the
-       label standing when its review predates the current head — the operator merges on the
-       strength of that label, so a stale one is a false green. Re-run `codex-review.sh` on
-       the new head first.
+       head is stale. Whenever a PR's head **or its base** changes, **clear `merge-ready`**;
+       it is only (re)applied after a passing Codex review of the *new* head against the
+       *current* base. The base matters as much as the head: when `main` moves the head SHA
+       stays the same, but the diff the reviewer read no longer exists — the retired merge
+       harness compared both `Reviewed-head` and `Reviewed-base` for exactly this reason.
+       Never leave the label standing when its review predates either — the operator merges
+       on the strength of that label, so a stale one is a false green. Re-run
+       `codex-review.sh` first.
      - **Not-pass is a "bounce" — diagnose before you respawn; this replaces any notion of
        model escalation.** A bounced round is never "try again with a bigger model" —
        diagnose which exit applies and take exactly one:
