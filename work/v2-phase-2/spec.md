@@ -6,13 +6,34 @@ drafted: 2026-08-26
 # Spec: v2 autonomous lane (Phase 2)
 
 From the accepted intent: the chain must advance without a live session — merged
-intent → spec PR, merged spec → implementation PR, every PR reviewed with a bounded
-fix loop; the operator's only actions are the gate merges.
+intent → spec PR, merged spec → implementation PR, every PR reviewed. The operator's
+actions are the gate merges, plus answering review findings in a session until the
+deferred fix stage lands (see the amendment note).
+
+**Amended 2026-08-27 (operator ruling at the review cap).** This phase ships three
+workflows, not four: the fix loop (R4) is deferred to its own intent. Two reasons,
+stated here so this spec stands on its own: R5 allows two `claude[bot]` trigger
+edges — review-of-agent-PRs, and the fix-on-review comment. The fix stage needed
+both of those **plus** a third, the dispatch that re-runs review after a push-back
+that changes no code; and it was the one job holding write
+credentials, running PR-authored code, and reading untrusted PR text at once — it
+earns a design from scratch rather than patches.
+
+**Where the next intent starts — split the credential**, so no one job holds all three
+powers: the agent that edits the PR's code holds no token and runs nothing from the PR;
+CI verifies the result on the pushed branch as it verifies any branch; a deterministic
+step holds the app credential and does the writing. Answering review findings stays the
+operator's job in a session until that intent lands. This is a scope reduction the
+operator ruled on; no rail is weakened by it.
 
 ## Requirements
 
-Each requirement is verifiable; R1–R4 are jointly proven by the phase exit test
-(one real change flows through the lane with the operator only merging).
+Each requirement is verifiable; R1–R3 are jointly proven by the phase exit test:
+one real change flows through the lane, the operator merging at each gate and
+answering whatever the review finds. The run counts only if the review actually
+reported something and the operator resolved it in a session — a smoke change so
+clean that nothing was found proves the happy path, not the handoff this phase
+depends on. R4 is deferred with the fix stage — see the amendment note above.
 
 - **R1 — spec stage.** An operator merge to main that adds or changes
   `work/<slug>/intent.md` triggers a job that opens (or updates) a PR titled
@@ -29,19 +50,60 @@ Each requirement is verifiable; R1–R4 are jointly proven by the phase exit tes
 - **R3 — review stage.** Every same-repo PR gets a review per `REVIEW.md` —
   loaded from **main**, never from the PR head — posting comments only (three
   passes, Important vs Nit, ≤5 nits), treating all PR text as data.
-- **R4 — bounded fix loop.** Review findings trigger a fix pass that bumps the
-  `round-N` label **before** acting; at `round-3` it applies `needs-human`, posts
-  the productive-cap comment (land the converged core, split the remainder), and
-  stops. Fix pushes re-trigger review; the labels bound the loop.
-- **R5 — safety invariants (all four workflows).** One global `claude-quota`
-  concurrency group serializes every agent job; explicit actor gates
-  (`github.actor == operator`, or `allowed_bots: claude[bot]` only on the two
-  deliberately-opened bot edges: review-of-agent-PRs and fix-on-review-comment);
+- **R4 — bounded fix loop. DEFERRED** to its own intent (see the amendment note
+  above). It described: review findings trigger a fix pass that bumps the `round-N`
+  label before acting; at `round-3` it applies `needs-human`, posts the productive-cap
+  comment, and stops. That design is superseded — the next intent starts from the
+  credential split stated in the amendment note above, not from this text and not
+  from any plan written for the four-workflow shape.
+- **R5 — safety invariants (all three workflows in this phase).** One global `claude-quota`
+  concurrency group serializes every agent job.
+
+  **Every gate checks BOTH actors — one rule, no exceptions.** On a re-run
+  `github.actor` stays whoever (or whatever) started the original run, and the
+  person who pressed re-run appears only in `github.triggering_actor`. So any gate
+  written on `github.actor` alone lets a write-capable collaborator re-run someone
+  else's job — an operator's dispatch, or a bot-triggered review — and spend the
+  operator's subscription under a passing check. So every job in this lane checks
+  the triggering actor as well, and accepts exactly two: **the operator** — who may
+  re-run anything by hand, including a bot-originated review that failed
+  transiently — **or `claude[bot]` itself**, which is what the triggering actor is
+  on a run the lane started. Anyone else is refused, whatever `github.actor` or
+  `allowed_bots` says. The probe workflow already carries both checks; this rule
+  exists so no new job forgets them.
+
+  Which gates: the two stage jobs and any dispatch are operator-gated; the review
+  job opens exactly one bot edge, review-of-agent-PRs (`allowed_bots: claude[bot]`).
+  R5's second allowed edge, the fix-on-review comment, went with the deferred stage,
+  and the third edge that stage would also have needed is precisely why it was
+  deferred. Then:
   `timeout-minutes` and `--max-turns` on every job; PR-creation steps assert the
-  PR exists and fail loudly; the fix stage never pushes to a PR that already has
-  an approval; stage write-limits stated in the stage skills (mechanical
-  enforcement arrives with Phase 3 hooks).
-- **R6 — plumbing proven first.** Before the four workflows are finalized, a
+  PR exists and fail loudly; stage write-limits stated in the stage skills
+  (mechanical enforcement arrives with Phase 3 hooks). **No stage pushes to a PR
+  the operator has already approved** — R1 and R2 let a re-triggered producer
+  stage update an existing PR, so this is not only the deferred fix stage's
+  concern: an approval means the operator read that diff, and a later push would
+  silently move what they approved. When a producer stage would have to update an
+  already-approved PR — the upstream artifact moved while the PR sat approved and
+  unmerged — it does not push. It labels the PR `stale`, says so in one comment,
+  and stops. **Merging it is not one of the ways out:** its recorded upstream hash
+  no longer matches main, so merging would land an artifact the chain reads as
+  stale and no stage would rebuild it — the merge changes the artifact, not the
+  upstream that moved. The operator closes the stale PR, then **re-runs the stage
+  by dispatch** — closing a PR or dismissing an approval fires no event, so the
+  push-triggered stages would otherwise never wake and the slug would sit stranded.
+  Both stage workflows therefore carry `workflow_dispatch` alongside their push
+  trigger, gated to the operator like every other dispatch here. The one-PR-per-slug
+  rule means **one OPEN PR per slug**: a closed PR is history, so the rebuild opens
+  a fresh one rather than reopening the stale PR and pushing into an approval. **The runaway
+  brake counts push-triggered runs only** (`--event push`): a dispatch by anyone
+  who fails the actor gate still records a run whose job was skipped, and counting
+  those would let a collaborator spam dispatches until the brake trips and starves
+  the lane. Push-to-main runs keep the property the brake needs — the ruleset means
+  only an operator merge causes them, so such a run always means the agent ran. An approved PR
+  belongs to the operator, so the lane never edits one behind them; and a stale one
+  is rebuilt, never merged.
+- **R6 — plumbing proven first.** Before the three workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
   `gh pr create`, and that app-created events trigger downstream workflows.
@@ -61,22 +123,24 @@ Each requirement is verifiable; R1–R4 are jointly proven by the phase exit tes
 At the file/component altitude; order of work belongs to `plan.md`.
 
 - **Workflows** (`.github/workflows/`): `spec-on-intent.yml`,
-  `implement-on-spec.yml`, `review-on-pr.yml`, `fix-on-review.yml` — per the v2
-  design doc's skeletons: push-to-main path triggers for the two stage jobs;
-  `pull_request` (same-repo guard, per-PR `cancel-in-progress`) for review;
-  `issue_comment` with the reviewer's `YSTACK-REVIEW` marker for the fix pass.
-  All use `claude_code_oauth_token`, no `github_token` input (app-token events
-  must cascade), and invoke stage skills as their prompt.
+  `implement-on-spec.yml`, `review-on-pr.yml` — push-to-main path triggers for
+  the two stage jobs **plus `workflow_dispatch` on each, so the operator can
+  restart a stage after clearing a stale PR** (see the approved-PR rule in R5),
+  and `pull_request` (same-repo guard, per-PR `cancel-in-progress`) for review. All use `claude_code_oauth_token`, no
+  `github_token` input (app-token events must cascade), and invoke stage skills
+  as their prompt. (`fix-on-review.yml` and its `issue_comment` trigger belonged
+  to the deferred R4 — see the amendment note.)
 - **Stage skills** (`.claude/skills/`): reuse `spec-draft` and `plan-draft`
   unchanged; add `implement` (runs plan-draft first, then codes to the plan,
-  runs verify, opens the impl PR), `review-pr` (applies REVIEW.md), and
-  `address-review` (adopt-or-push-back per finding; never touches test files
-  during a fix — hook-enforced in Phase 3).
+  runs verify, opens the impl PR) and `review-pr` (applies REVIEW.md).
+  (`address-review` belonged to the deferred R4.)
 - **Helpers** (`scripts/v2/`, each with a hermetic test in `scripts/test/`):
   `pending-spec.sh` / `pending-impl.sh` (which slug needs work — the
-  hash-comparison idempotency guards), `round-cap.sh` (read/bump round labels,
-  emit proceed/stop), `quota-preflight.sh` (count recent agent runs, skip over
-  budget). Deterministic bash, no model calls.
+  hash-comparison idempotency guards) and `quota-preflight.sh` (count recent
+  agent runs, stop over budget). Deterministic bash, no model calls.
+  (`round-cap.sh` is already merged and stays in the repo, but nothing in this
+  phase calls it: round labels bound the fix loop, which is deferred. It wakes
+  again with that intent.)
 - **Model policy:** stage skills carry it — producer stages (`implement`) at the
   fixed coder ceiling from `config/models.conf`; gate stages (`review-pr`) at
   high effort, never downgraded (v1 tiering, unchanged).
@@ -101,8 +165,8 @@ first; adding Codex is additive and needs no workflow changes).
    one-concern budget. Recommendation for the plan stage: land as a stacked
    sequence under one `plan.md` — (a) helpers + tests, (b) workflows + skills +
    docs — each PR independently green.
-3. **Quota:** all four jobs share the operator's subscription window with their
-   interactive use. Serialization + preflight (R5) mitigate; the sizing question
+3. **Quota:** the three jobs share the operator's subscription window with the
+   operator's own interactive use. Serialization + preflight (R5) mitigate; the sizing question
    stays open until measured in this phase.
 4. **North-star fit:** user-directed intent (operator-approved at G1), so no
    consensus gate required. The lane serves north star B indirectly — an
