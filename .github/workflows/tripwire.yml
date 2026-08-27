@@ -1,7 +1,7 @@
 name: tripwire
 
 # Fails loudly when any actor other than the operator lands commits on main.
-# Under the fabrica-main-gate ruleset this should never fire — it is the
+# Under the ystack-main-gate ruleset this should never fire — it is the
 # canary for a misconfigured ruleset, a compromised app token, or an agent
 # that found a path around the guards. A red run here means: stop and audit.
 

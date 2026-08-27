@@ -1,6 +1,6 @@
 # Required-files manifest — the source of truth for CI's structure check.
 #
-# Every restore-critical file in the Fabrica backup is listed here, one
+# Every restore-critical file in the ystack backup is listed here, one
 # repo-relative path per line. CI (.github/workflows/ci.yml) fails if any
 # listed path is missing, and fails if a listed scripts/*.sh is not +x.
 #

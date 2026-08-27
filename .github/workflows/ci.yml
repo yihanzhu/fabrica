@@ -116,7 +116,7 @@ jobs:
       - name: models.conf parser tests
         run: |
           # Hermetic bash asserts for scripts/lib/models-conf.sh (mc_parse_target_override) — the
-          # P1 fix from the adversarial review of PR #115: a target-committed .fabrica/models.conf
+          # P1 fix from the adversarial review of PR #115: a target-committed legacy .fabrica/models.conf
           # is parsed as DATA, never source'd/eval'd, and can never set the gate-effort keys. Plus
           # static (grep-based) assertions that codex-review.sh/manager-review.sh actually wire in
           # the trust-anchor + parse-not-source fix. No git/gh/codex harness needed.
@@ -154,3 +154,9 @@ jobs:
           # PATH, no network. Covers the fail-open hazards the Stack A review
           # found: silent zero-counts and gh outages.
           bash scripts/test/v2-quota-preflight.test.sh
+
+      - name: Rename gate
+        run: |
+          # Patrols tracked files for old names left over from the rename.
+          # Lines labeled legacy and scripts/test/ fixtures are exempt.
+          bash scripts/check-rename.sh

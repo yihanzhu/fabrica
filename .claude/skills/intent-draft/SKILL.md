@@ -1,6 +1,6 @@
 ---
 name: intent-draft
-description: Draft a fabrica intent — work/<slug>/intent.md — from the operator's
+description: Draft a ystack intent — work/<slug>/intent.md — from the operator's
   one-liner or brainstorm. Use whenever the operator describes a problem, idea, or
   initiative that should enter the v2 chain.
 argument-hint: [slug-or-one-liner]
@@ -18,7 +18,7 @@ not a solution commitment. Merging its PR is gate **G1** — acceptance into des
    implementation detail beyond real constraints.
 4. Show the operator the draft and apply their corrections — the final text must
    read as THEIR words.
-5. On branch `fabrica/intent/<slug>` (never main), commit and open a PR titled
+5. On branch `ystack/intent/<slug>` (never main), commit and open a PR titled
    `intent: <slug>`. The operator merging that PR is the acceptance gate.
 
 Template — keep all six sections and headings exact:

@@ -1,7 +1,7 @@
-# Fabrica — landing page
+# ystack — landing page
 
-A static, self-contained "coming soon" landing page for Fabrica, served at
-**fabrica.yihanzhu.com**.
+A static, self-contained "coming soon" landing page for ystack, served at
+**ystack.yihanzhu.com**.
 
 ## Files
 
@@ -26,7 +26,7 @@ This folder is the publish root.
 - **Build output directory:** `website`
 - **Framework preset:** None / Static HTML
 
-Point the custom domain `fabrica.yihanzhu.com` at the Pages project. That's it — the
+Point the custom domain `ystack.yihanzhu.com` at the Pages project. That's it — the
 files are served as-is.
 
 To preview locally:

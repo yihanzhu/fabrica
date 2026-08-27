@@ -1,22 +1,22 @@
 # Manager-reviewer — Codex (OpenAI), via `scripts/manager-review.sh`
 
-Fabrica has a cross-vendor **code** reviewer ([`codex-review.sh`](../scripts/codex-review.sh) —
+ystack has a cross-vendor **code** reviewer ([`codex-review.sh`](../scripts/codex-review.sh) —
 Codex reviews a PR, with the **PR as the message bus**). The **manager-reviewer** is the
-same idea one layer up: a cross-vendor reviewer that debates with Faber whether a
+same idea one layer up: a cross-vendor reviewer that debates with yshifu whether a
 *proposed issue* is worth raising toward the team's north star — **with the ISSUE as the
 message bus** (the mirror of PR-as-bus). It runs on **Codex**, not as a Claude routine, so
 the judgment on "should we even build this?" comes from a *different* model than the Claude
 manager that drafted it — the same cross-vendor split that decorrelates blind spots
 (coder = Claude, reviewer = Codex; manager = Claude, manager-reviewer = Codex).
 
-This gate is for Faber's **proactive** (self-generated) proposals toward the north star.
+This gate is for yshifu's **proactive** (self-generated) proposals toward the north star.
 **User-directed issues skip it** — when the human asks for something directly, that *is*
-the judgment; the manager-debate is for the issues Faber raises on its own.
+the judgment; the manager-debate is for the issues yshifu raises on its own.
 
 ## north star
 
 The north star is **per target**: the debate is judged against the **target repo's own
-committed `.fabrica/north-star.md`** — set, committed, and operator-approved in that repo.
+committed `.ystack/north-star.md`** — set, committed, and operator-approved in that repo.
 `manager-review.sh` resolves it via the shared resolver (`scripts/lib/north-star.sh`) from
 the cwd's checkout and reads the **committed** copy pinned to the **gh-bound remote's
 default-branch commit, fetched fresh** (#102) — not raw local HEAD. The default branch is
@@ -30,8 +30,9 @@ stale local `refs/remotes/<remote>/HEAD`), and pins **both** the north-star read
 Codex review worktree to that fetched commit. The north star is an autonomy-authorization
 artifact, so an uncommitted working-tree edit (or a feature-branch-only edit) must **not**
 silently redirect the gate. A target with **no committed** north star on that default branch
-(or one still carrying the shipped Fabrica default marker) does **not** authorize proactive
-work: the gate FAILs before invoking Codex, with a pointer back here.
+does **not** authorize proactive work — nor does one still carrying the shipped default marker
+(`ystack-shipped-default`; the legacy `fabrica-shipped-default` marker is treated the same way):
+the gate FAILs before invoking Codex, with a pointer back here.
 
 The anchor is **gh-authoritative and fail-closed** (an adversarial sweep, #102 round-2): every
 input that decides *what* the gate reads is proven against the **same `gh` binding the verdict
@@ -45,7 +46,7 @@ fetching, the gate asserts the selected remote's **effective** fetch URL (after 
 the verdict to — a cross-repo `url.<other>.insteadOf` (read repo A / post to repo B) FAILs, and
 so does a rewrite to a **local path / `file://` / `ext::`** or any transport the gate cannot
 *prove* is gh's repo (round-2 closed the earlier "empty ⇒ trusted" hole; a deliberate local
-mirror is an explicit `FABRICA_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). Remote
+mirror is an explicit `YSTACK_ALLOW_LOCAL_MIRROR=1` opt-in, never the default). Remote
 *selection* stays available (it matches the configured URL first, then falls back to the
 effective URL, so an SSH-alias/shorthand remote still selects — safety is still enforced by the
 effective-identity assert before any fetch). (3) The anchor fetch uses `--refmap=` so it writes
@@ -60,17 +61,17 @@ wrong-source risk). The **visible local-default/HEAD fallback** (logged, never s
 there is no issue to post to anyway. `doctor.sh` (a diagnostic that may run local-only) keeps a
 visible local fallback for the no-repo / no-matching-remote case, and logs it.
 
-Fabrica-self is its **own** target. When the gate runs against this control-plane repo it
-reads its own root [`NORTH_STAR.md`](../NORTH_STAR.md) (Fabrica's real approved goal) — that
-root file is now **only** Fabrica-self's target file, not the source for adopters. Adopters set
-their direction in their target's `.fabrica/north-star.md`, not in the control-plane root.
+ystack-self is its **own** target. When the gate runs against this control-plane repo it
+reads its own root [`NORTH_STAR.md`](../NORTH_STAR.md) (ystack's real approved goal) — that
+root file is now **only** ystack-self's target file, not the source for adopters. Adopters set
+their direction in their target's `.ystack/north-star.md`, not in the control-plane root.
 
 ## Why issue-as-bus (and not a one-shot print)
 
 Code review happens **on the PR**, over rounds; manager-review happens **on the issue**,
-over rounds. Faber and Codex never talk directly — the **issue is the message bus**, just
+over rounds. yshifu and Codex never talk directly — the **issue is the message bus**, just
 as the PR is for code review. `manager-review.sh` posts Codex's verdict as an **issue
-comment** (verbatim); Faber reads it and either advances, refines (another round), or
+comment** (verbatim); yshifu reads it and either advances, refines (another round), or
 drops — and every step is recorded on the issue thread, so the debate is auditable and
 state never lives in an agent's memory.
 
@@ -78,9 +79,9 @@ state never lives in an agent's memory.
 
 ```
 Step 0 — gate check: has the operator explicitly approved the ACTIVE north star?
-   (the target's committed .fabrica/north-star.md — Fabrica-self uses its root
-    NORTH_STAR.md. Faber knows the approval from the operator, NOT from a line in
-    the file — a fresh adopter clone showing the shipped Fabrica default, or any
+   (the target's committed .ystack/north-star.md — ystack-self uses its root
+    NORTH_STAR.md. yshifu knows the approval from the operator, NOT from a line in
+    the file — a fresh adopter clone showing the shipped ystack default, or any
     `approved-by-user`-style text, is the prior owner's history, NOT this operator's go.)
         ├── unset / not committed / not yet operator-approved / still the shipped default
         │      → do NOT draft, do NOT run the debate, do NOT apply `ready`;
@@ -88,17 +89,17 @@ Step 0 — gate check: has the operator explicitly approved the ACTIVE north sta
         │        (that approval is the root authorization for ALL proactive work)
         └── operator has explicitly approved the active north star → proceed:
         ↓
-Faber drafts a proactive issue (created, NOT `ready`, labeled `debating`)
+yshifu drafts a proactive issue (created, NOT `ready`, labeled `debating`)
         ↓
-Faber runs manager-review.sh <issue#>   (by absolute path, from the target repo's clone)
+yshifu runs manager-review.sh <issue#>   (by absolute path, from the target repo's clone)
    (script posts Codex's PROCEED / REFINE / DROP verdict to the issue, verbatim)
         ↓
-Faber reads the Codex comment and forms its own view
-        ├── CONSENSUS to proceed (Faber agrees AND Codex says PROCEED)
+yshifu reads the Codex comment and forms its own view
+        ├── CONSENSUS to proceed (yshifu agrees AND Codex says PROCEED)
         │      → remove `debating`, apply `ready`, and run the loop — NO per-issue
         │        user approval (the consensus IS the gate for proactive north-star
         │        work; the user gates the direction, not each issue)
-        ├── REFINE → Faber edits the issue + posts a reply comment (issue-as-bus)
+        ├── REFINE → yshifu edits the issue + posts a reply comment (issue-as-bus)
         │      + re-runs manager-review.sh   ← this is a ROUND; cap ~2 rounds
         │      ↺ repeat
         └── DROP / no consensus by the cap → close the issue with a rationale comment
@@ -110,31 +111,31 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 
 ## Consensus / veto-only (the rule)
 
-- **Step 0 — the operator must have explicitly approved the active north star.** Before Faber
-  drafts a proactive issue, runs this manager-debate, or applies `ready` on consensus, Faber must
+- **Step 0 — the operator must have explicitly approved the active north star.** Before yshifu
+  drafts a proactive issue, runs this manager-debate, or applies `ready` on consensus, yshifu must
   confirm *from the operator* that they have explicitly approved the target's active north star —
-  the target repo's committed **`.fabrica/north-star.md`** (Fabrica-self uses its root
-  [`NORTH_STAR.md`](../NORTH_STAR.md); see [north star](#north-star) above). Faber knows this
+  the target repo's committed **`.ystack/north-star.md`** (ystack-self uses its root
+  [`NORTH_STAR.md`](../NORTH_STAR.md); see [north star](#north-star) above). yshifu knows this
   **from the operator, not from a line in the file** — a fresh adopter clone showing the shipped
-  Fabrica default (or any `approved-by-user`-style text) is the prior owner's history, **not** this
+  ystack default (or any `approved-by-user`-style text) is the prior owner's history, **not** this
   operator's go. If the north star is **unset, not committed, not yet approved by this operator, or
-  still the shipped Fabrica default**, Faber does **not** start this gate or self-apply `ready` — it
+  still the shipped ystack default**, yshifu does **not** start this gate or self-apply `ready` — it
   asks the operator to set, commit, and approve their own north star first (that approval is the
   root authorization that unlocks all proactive work). This is the same step-0 guard the manager
-  prompt (`manager/CLAUDE.md`) and the generated `/faber` command (`templates/faber-command.md`)
+  prompt (`manager/CLAUDE.md`) and the generated `/yshifu` command (`templates/yshifu-command.md`)
   carry — the consensus gate below is legitimate *only* under an operator-approved north star.
 - **Consensus IS the gate (proactive issues).** For a proactive issue *under an operator-approved
   north star* (see step 0 above), the manager-debate
-  is not just a recommendation — it is the **front gate**. On consensus (both Faber and Codex
-  agree the issue is worth building) Faber removes `debating`, **applies `ready` itself, and
-  runs the loop — with no per-issue user approval.** This does **not** make Faber a
-  self-approver: **Faber acting alone still never applies `ready`** — it takes the *passed*
-  cross-vendor debate (Faber's agreement **and** Codex PROCEED). The user's gate moved up an
+  is not just a recommendation — it is the **front gate**. On consensus (both yshifu and Codex
+  agree the issue is worth building) yshifu removes `debating`, **applies `ready` itself, and
+  runs the loop — with no per-issue user approval.** This does **not** make yshifu a
+  self-approver: **yshifu acting alone still never applies `ready`** — it takes the *passed*
+  cross-vendor debate (yshifu's agreement **and** Codex PROCEED). The user's gate moved up an
   altitude — the user approves the **north star** and is involved at **north-star achieved**,
   **goal drift / transition**, and `needs-human`; *within* an approved north star, the
   cross-vendor consensus gates proactive work. (**User-directed issues keep the direct gate** —
-  the user's approval of the spec Faber drafts from their one-liner is the judgment (the
-  one-liner is the request, not the go); this consensus gate is only for the issues Faber
+  the user's approval of the spec yshifu drafts from their one-liner is the judgment (the
+  one-liner is the request, not the go); this consensus gate is only for the issues yshifu
   raises on its own.)
 - **The manager-reviewer is VETO-ONLY.** It never merges, approves, labels `ready`, or
   edits the issue — its *only* effect is the verdict comment. It cannot advance an issue;
@@ -143,22 +144,22 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
   closed — the bar for spending the team's effort is consensus, not a single voice.
 - **Never rubber-stamp, never invent busywork.** Codex is told to default to DROP on
   genuine doubt; a proposal that doesn't clearly serve the north star is dropped.
-- **But LOG the override-worthy drops.** When Faber believed a *vetoed* item was genuinely
-  north-star-relevant, Faber records it in the target's north-star log (the
-  "vetoed-but-Faber-thought-relevant" section of that target's `.fabrica/north-star.md`;
-  Fabrica-self logs to its root [`NORTH_STAR.md`](../NORTH_STAR.md)), so the human can see
+- **But LOG the override-worthy drops.** When yshifu believed a *vetoed* item was genuinely
+  north-star-relevant, yshifu records it in the target's north-star log (the
+  "vetoed-but-yshifu-thought-relevant" section of that target's `.ystack/north-star.md`;
+  ystack-self logs to its root [`NORTH_STAR.md`](../NORTH_STAR.md)), so the human can see
   what consensus filtered out and override it if they want. Default-drop is the floor, not
   a silent shredder.
 
 > **Front gate at the north-star altitude (#49).** Per the user-authorized front-gate
 > change in **#49**, the manager-debate consensus **is** the gate for proactive issues: on
-> consensus Faber removes `debating`, applies `ready`, and runs the loop — **no per-issue
+> consensus yshifu removes `debating`, applies `ready`, and runs the loop — **no per-issue
 > user approval.** The user's gate moved up an altitude: the user approves the **north star /
 > direction** and is involved at **north-star achieved**, **goal drift / transition**, and
-> `needs-human` escalations; *proactive* work inside an approved north star is Faber's to drive on consensus (user-directed issues still need the user's approval of the drafted spec).
-> This is not self-approval — **Faber acting alone still never applies `ready`**; it takes the
-> passed cross-vendor debate (Faber's agreement **and** Codex PROCEED). **User-directed issues
-> keep the direct gate** (the user's approval of the spec Faber drafts from their one-liner —
+> `needs-human` escalations; *proactive* work inside an approved north star is yshifu's to drive on consensus (user-directed issues still need the user's approval of the drafted spec).
+> This is not self-approval — **yshifu acting alone still never applies `ready`**; it takes the
+> passed cross-vendor debate (yshifu's agreement **and** Codex PROCEED). **User-directed issues
+> keep the direct gate** (the user's approval of the spec yshifu drafts from their one-liner —
 > the one-liner is the request, not the go).
 
 ## How the manager-reviewer actually runs
@@ -167,7 +168,7 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
 the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote, and the
 verdict comment is posted to that repo's issue — so **invoke it from within the target
 repo's clone**. The script lives only in *this* control-plane repo, so call it by its
-**absolute path** (or put `<fabrica>/scripts` on your `PATH`); don't copy it into each
+**absolute path** (or put `<ystack>/scripts` on your `PATH`); don't copy it into each
 target repo. It `unset`s `GH_REPO` then derives the repo from the cwd and passes an
 explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't redirect the
 comment to a *different* repo's issue. Then:
@@ -179,7 +180,7 @@ comment to a *different* repo's issue. Then:
    remote matching the repo `gh` resolves (shared `scripts/lib/gh-remote.sh` — the same gh-bound
    remote-identity pattern `codex-review.sh` uses), **fetches that remote's default branch into a
    private per-run ref**, and pins the read to that fetched commit: for a normal target,
-   `git show <default-branch-commit>:.fabrica/north-star.md`; on a Fabrica-self run, the
+   `git show <default-branch-commit>:.ystack/north-star.md`; on a ystack-self run, the
    control-plane root `NORTH_STAR.md` at the same commit. The per-run ref is cleaned up on exit.
    It reads the **committed** copy at the **default-branch** commit — not the working tree, and
    not raw local HEAD — because the north star is an autonomy-authorization artifact: an
@@ -188,7 +189,7 @@ comment to a *different* repo's issue. Then:
    configured remote matches, the gate **FAILs** (it will not anchor to local HEAD while
    commenting on the gh-bound issue); a genuinely local/greenfield target with no remote uses a
    **visible** local-HEAD fallback (logged). If there is no committed north star on that
-   default-branch commit (or it still carries the shipped Fabrica default marker), the gate
+   default-branch commit (or it still carries the shipped ystack default marker), the gate
    **FAILs before invoking Codex** with an actionable pointer — the debate needs an integrated,
    committed goal to judge against. It also reads the issue's title + body (`gh issue view
    <issue#> --json title,body`).
@@ -213,7 +214,7 @@ comment to a *different* repo's issue. Then:
    never untracked/ignored/uncommitted files (`.env`, secrets, local WIP) or a feature-branch
    variant. The read-only sandbox blocks writes but not reads, so the worktree — not the sandbox —
    is what keeps the operator's dirty/local state out of the review, mirroring `codex-review.sh`'s
-   isolation. This same worktree is also where a target's optional per-target `.fabrica/models.conf`
+   isolation. This same worktree is also where a target's optional per-target `.ystack/models.conf`
    override (see **model policy** below) is read from, so the config always matches the exact
    commit Codex is grounding its judgment in. The worktree, the `<tmpfile>` below, and the private
    per-run anchor ref are removed via a `trap ... EXIT` on every exit. There is no PR head to
@@ -230,13 +231,13 @@ comment to a *different* repo's issue. Then:
 
 ```
 # run from within the TARGET repo's clone; invoke the script by ABSOLUTE PATH
-# (it lives only in the fabrica control-plane repo — do NOT copy it per repo).
-# Substitute your fabrica clone for "$HOME/git/fabrica".
-"$HOME/git/fabrica/scripts/manager-review.sh" <issue#>             # e.g. ... 44
-"$HOME/git/fabrica/scripts/manager-review.sh" -m <model> <issue#>  # optional model override
+# (it lives only in the ystack control-plane repo — do NOT copy it per repo).
+# Substitute your ystack clone for "$HOME/git/ystack".
+"$HOME/git/ystack/scripts/manager-review.sh" <issue#>             # e.g. ... 44
+"$HOME/git/ystack/scripts/manager-review.sh" -m <model> <issue#>  # optional model override
 
-# Optional: add fabrica/scripts to PATH once, then call it by name from any target repo:
-#   export PATH="$HOME/git/fabrica/scripts:$PATH"   # (add to your shell rc)
+# Optional: add ystack/scripts to PATH once, then call it by name from any target repo:
+#   export PATH="$HOME/git/ystack/scripts:$PATH"   # (add to your shell rc)
 #   manager-review.sh <issue#>
 ```
 
@@ -248,13 +249,15 @@ does not simply inherit the operator's personal Codex defaults. Before doing any
 (alongside sourcing `scripts/lib/north-star.sh` / `scripts/lib/gh-remote.sh`), the script
 sources `config/models.conf` **resolved relative to its own location** (this clone's
 control-plane root, following symlinks — never a hardcoded personal path), which sets
-`FABRICA_CODEX_MODEL` (empty by default) and `FABRICA_DEBATE_EFFORT` (`high` by default). A
+`YSTACK_CODEX_MODEL` (empty by default) and `YSTACK_DEBATE_EFFORT` (`high` by default). A
 missing or unsourceable `config/models.conf` **fails loudly**, pointing at `scripts/doctor.sh`
 check (k), rather than silently debating at an unknown effort.
 
-If the **target repo** has committed its own [`.fabrica/models.conf`](../templates/.fabrica/models.conf)
+If the **target repo** has committed its own [`.ystack/models.conf`](../templates/.ystack/models.conf)
 (same format/keys, an opt-in per-target override), it may override the **producer/model keys
-only**, applied on top of the shipped defaults. This script's trust anchor was already correct —
+only**, applied on top of the shipped defaults. A target that has not renamed yet may still
+keep the override at the legacy `.fabrica/models.conf` path — the harness still reads it there.
+This script's trust anchor was already correct —
 the override is read from the **same anchored worktree the debate runs against** (the detached
 worktree checked out at the fetched default-branch commit, step 2 above), never the operator's
 possibly-stale or dirty cwd checkout, so the override always reflects the SAME integrated commit
@@ -263,12 +266,12 @@ of PR #115 found a P1: the override used to be **`source`d directly into this no
 harness shell**, so a target-committed file could run as arbitrary shell with the operator's own
 `gh`/`codex` credentials. It is now read as **data**, via a strict line-by-line parser
 (`mc_parse_target_override` in [`scripts/lib/models-conf.sh`](../scripts/lib/models-conf.sh)) —
-never `source`/`.`/`eval`. Only a line matching exactly `FABRICA_<allowedkey>=<value>` is
+never `source`/`.`/`eval`. Only a line matching exactly `YSTACK_<allowedkey>=<value>` is
 recognized (value charset-restricted, optionally quoted); every other line — comments, blank
 lines, shell metacharacters, command substitutions — is silently ignored, never executed.
 Absence of the file is normal (most targets have no override) and is not an error.
 
-**Gate keys are not target-overridable.** The parser recognizes `FABRICA_DEBATE_EFFORT` in a
+**Gate keys are not target-overridable.** The parser recognizes `YSTACK_DEBATE_EFFORT` in a
 target's override, but **never applies it** — a target can never lower or otherwise change its
 own manager-debate gate. Instead it prints a warning and folds a visible **`warning: target
 override attempted to set gate effort — ignored`** line into the posted issue comment, so an
@@ -276,12 +279,12 @@ attempted downgrade is never silent.
 
 Applying the resolved config:
 
-- **`-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"` is ALWAYS passed** — the gate is never
+- **`-c model_reasoning_effort="$YSTACK_DEBATE_EFFORT"` is ALWAYS passed** — the gate is never
   class-routed down, so this explicitly raises it to the resolved value (`high` by default)
   instead of silently inheriting whatever the operator's `~/.codex/config.toml` happens to
   default to (often `low`), and a target override can never change this value.
 - **`-m <model>` is passed only when a model is actually resolved.** The script's own `-m` CLI
-  flag keeps precedence over `FABRICA_CODEX_MODEL`; if neither is set, no `-m` is passed at all
+  flag keeps precedence over `YSTACK_CODEX_MODEL`; if neither is set, no `-m` is passed at all
   (Codex uses its own default model).
 - The **resolved** model + effort are echoed into the posted issue comment's header —
   `reviewer: <model> @ <effort>` (e.g. `reviewer: operator-default @ high` when no model was
@@ -313,7 +316,7 @@ posts normally. An
 
 On detection: the script exits non-zero and posts `VERDICT: DEGRADED` (never
 `PROCEED`/`REFINE`/`DROP`) under a **different** header line than the real `## Codex
-manager-reviewer (cross-vendor, read-only)` one, so Faber's "proceed only on consensus" rule can
+manager-reviewer (cross-vendor, read-only)` one, so yshifu's "proceed only on consensus" rule can
 never read this as a `PROCEED`.
 
 **The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix, same
@@ -329,15 +332,15 @@ influenced by the issue/repo content it read.
 ## The manager-reviewer prompt
 
 The script builds this prompt from the role + the target's current committed north star
-(the target's `.fabrica/north-star.md`, or Fabrica-self's root `NORTH_STAR.md`) + the issue
+(the target's `.ystack/north-star.md`, or ystack-self's root `NORTH_STAR.md`) + the issue
 title/body + a "read the repo to ground your judgment" instruction, and asks for a structured
 **PROCEED / REFINE / DROP** verdict:
 
-> You are the cross-vendor MANAGER reviewer for an autonomous coding team. Faber (a Claude
+> You are the cross-vendor MANAGER reviewer for an autonomous coding team. yshifu (a Claude
 > manager) has DRAFTED the GitHub issue below as a *proactive* proposal toward the team's
 > current north star. Your job is to debate whether this issue is worth raising NOW — not
 > to review code, and not to rubber-stamp it. You are VETO-ONLY: you never approve, label,
-> edit the issue, or merge anything; you only give a verdict that Faber weighs. The team
+> edit the issue, or merge anything; you only give a verdict that yshifu weighs. The team
 > proceeds ONLY on consensus, and DEFAULT-DROPS on no consensus, so do not invent busywork.
 >
 > — the **current north star** (the target's committed north star) —
@@ -349,7 +352,7 @@ title/body + a "read the repo to ground your judgment" instruction, and asks for
 >   REFINE = north-star-relevant but needs changes first — say what; DROP = doesn't clearly
 >   serve the north star / duplicates work / premature — default here on genuine doubt).
 > - **REASONING:** why, grounded in the north star and the repo as it stands.
-> - **GAP FABER MISSED:** a risk, dependency, simpler path, conflict, or "already covered";
+> - **GAP YSHIFU MISSED:** a risk, dependency, simpler path, conflict, or "already covered";
 >   or "none".
 
 The exact wording lives in [`scripts/manager-review.sh`](../scripts/manager-review.sh) —
@@ -357,7 +360,7 @@ treat the script as the source of truth.
 
 ## Invariants (non-negotiable)
 
-- **Cross-vendor.** Manager = Claude (Faber), manager-reviewer = Codex. The reviewer's
+- **Cross-vendor.** Manager = Claude (yshifu), manager-reviewer = Codex. The reviewer's
   value is being a *different* model judging the proposal, not a second copy of the author.
 - **Read-only.** The script **forces** the read-only sandbox with
   `-c sandbox_mode="read-only"` (so it can't inherit a writable config default) and never
@@ -368,8 +371,8 @@ treat the script as the source of truth.
   pushes, or merges. It cannot advance an issue — only object.
 - **Verbatim.** Codex's verdict is posted unedited — no Claude session rewrites, blends, or
   summarizes it. That preserves the independence of the second opinion.
-- **Consensus-only + default-drop.** Proceed only when Faber and Codex agree; drop on no
-  consensus by the round cap; log the drops Faber thought were north-star-relevant.
+- **Consensus-only + default-drop.** Proceed only when yshifu and Codex agree; drop on no
+  consensus by the round cap; log the drops yshifu thought were north-star-relevant.
 
 ## Bootstrap caveat
 
@@ -380,7 +383,7 @@ proactive issue.
 ## Future / alternatives (not wired)
 
 As with the code reviewer, an **autonomous** Codex GitHub integration (Codex posting the
-manager-review on issue events itself, with no Faber session) is a possible later upgrade —
+manager-review on issue events itself, with no yshifu session) is a possible later upgrade —
 same invariants (cross-vendor, read-only, comments-only, veto-only). Not built; wiring it
 is out of scope here.
 

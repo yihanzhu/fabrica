@@ -6,7 +6,7 @@ Author: Yihan (operator). Status: draft.
 
 The chain only advances while I'm sitting in a live session driving it. When I'm
 away, merged intents just sit there — nothing drafts the spec, nothing implements
-an approved spec, nothing reviews a PR. Fabrica v1 deferred this as "future, not
+an approved spec, nothing reviews a PR. The v1 loop deferred this as "future, not
 wired"; the artifact spine from Phase 1 now exists, but every stage is hand-cranked.
 
 ## Proposed outcome
@@ -18,7 +18,7 @@ loop. My only actions are the three gate merges — the loop runs while I sleep.
 
 ## Affected users and systems
 
-Me (as gate-keeper); the fabrica repo's GitHub Actions workflows; the Phase 1 stage
+Me (as gate-keeper); the ystack repo's GitHub Actions workflows; the Phase 1 stage
 skills (spec-draft, plan-draft, plus new implement/review/fix prompts); new
 `scripts/v2/` helpers (idempotency, round-cap, quota preflight).
 

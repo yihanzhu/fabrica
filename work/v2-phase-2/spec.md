@@ -1,5 +1,5 @@
 ---
-intent-blob: 4ce22a9d96b5acaad542519fc85113b844c81a0e
+intent-blob: ca6d0bb64d0e7b71cc031057f782c20c72be020e
 drafted: 2026-08-26
 ---
 
@@ -16,13 +16,13 @@ Each requirement is verifiable; R1–R4 are jointly proven by the phase exit tes
 
 - **R1 — spec stage.** An operator merge to main that adds or changes
   `work/<slug>/intent.md` triggers a job that opens (or updates) a PR titled
-  `spec: <slug>` on branch `fabrica/spec/<slug>` containing exactly one file:
+  `spec: <slug>` on branch `ystack/spec/<slug>` containing exactly one file:
   `work/<slug>/spec.md`, with `intent-blob` frontmatter matching main's intent.
   Idempotent: re-triggering when a fresh spec already exists produces no new PR
   and no Claude invocation.
 - **R2 — implement stage.** An operator merge that adds or changes
   `work/<slug>/spec.md` triggers a job producing a PR `impl: <slug>` on branch
-  `fabrica/impl/<slug>` whose **first commit is `work/<slug>/plan.md`**
+  `ystack/impl/<slug>` whose **first commit is `work/<slug>/plan.md`**
   (`spec-blob` recorded), followed by implementation and tests, with the verify
   output pasted in the PR body. Same idempotency and staleness rules (frontmatter
   hash mismatch ⇒ label `stale`, stop).
@@ -52,7 +52,7 @@ Each requirement is verifiable; R1–R4 are jointly proven by the phase exit tes
 - **R7 — docs in sync.** README's "Future, not wired" paragraph and the
   one-path-today claims are replaced by the two-lane reality (in-session +
   autonomous, same artifacts, same gates); QUICKSTART gains the lane setup
-  (secret, labels, ruleset pointer). The stale v1 claim that Faber auto-merges
+  (secret, labels, ruleset pointer). The stale v1 claim that the manager auto-merges
   low-risk PRs (retired by the Phase 0 ruleset — see #122) is corrected in the
   same pass.
 
@@ -64,7 +64,7 @@ At the file/component altitude; order of work belongs to `plan.md`.
   `implement-on-spec.yml`, `review-on-pr.yml`, `fix-on-review.yml` — per the v2
   design doc's skeletons: push-to-main path triggers for the two stage jobs;
   `pull_request` (same-repo guard, per-PR `cancel-in-progress`) for review;
-  `issue_comment` with the reviewer's `FABRICA-REVIEW` marker for the fix pass.
+  `issue_comment` with the reviewer's `YSTACK-REVIEW` marker for the fix pass.
   All use `claude_code_oauth_token`, no `github_token` input (app-token events
   must cascade), and invoke stage skills as their prompt.
 - **Stage skills** (`.claude/skills/`): reuse `spec-draft` and `plan-draft`
@@ -85,7 +85,7 @@ At the file/component altitude; order of work belongs to `plan.md`.
 
 ## Out of scope (later phases, per the design doc)
 
-Evals and `FABRICA_STAGE` enforcement hooks (Phase 3); daily-brief chain auditor,
+Evals and `YSTACK_STAGE` enforcement hooks (Phase 3); daily-brief chain auditor,
 Telegram delivery, and `bands.yaml` (Phase 4); target-repo templating of the lane
 (Phase 5); Codex cloud review installation (D2 — the lane ships Claude-review
 first; adding Codex is additive and needs no workflow changes).
