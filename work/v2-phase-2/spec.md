@@ -93,7 +93,9 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   by dispatch** — closing a PR or dismissing an approval fires no event, so the
   push-triggered stages would otherwise never wake and the slug would sit stranded.
   Both stage workflows therefore carry `workflow_dispatch` alongside their push
-  trigger, gated to the operator like every other dispatch here. **The runaway
+  trigger, gated to the operator like every other dispatch here. The one-PR-per-slug
+  rule means **one OPEN PR per slug**: a closed PR is history, so the rebuild opens
+  a fresh one rather than reopening the stale PR and pushing into an approval. **The runaway
   brake counts push-triggered runs only** (`--event push`): a dispatch by anyone
   who fails the actor gate still records a run whose job was skipped, and counting
   those would let a collaborator spam dispatches until the brake trips and starves
