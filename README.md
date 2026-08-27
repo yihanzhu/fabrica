@@ -96,8 +96,10 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   [`reviewer/manager-review.md`](reviewer/manager-review.md)). For *proactive* work you are
   pulled back in only at the north-star altitude: **north-star achieved**, **goal drift /
   transition**, and `needs-human` escalations — user-directed issues still come to you for the
-  drafted-spec approval. This intake autonomy does not waive the risk-tiered plan gate:
-  high-risk proactive or user-directed work returns to you for plan approval before code.
+  drafted-spec approval. The accepted roadmap adds a risk-tiered plan gate after intake:
+  high-risk proactive or user-directed work will return to you for plan approval before
+  code. That gate is not wired into the current manager yet; `ready` must not be described
+  as plan approval.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
 - **yshifu never merges — it labels, then hands you the PR.** Merging is the operator's,

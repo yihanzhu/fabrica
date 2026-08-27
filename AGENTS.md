@@ -51,11 +51,14 @@ Two goals drive the backlog:
 ## PR rules (enforced by coder + reviewer)
 - **One concern per PR.** Soft size budget ~300–400 net lines; split if bigger.
 - Every PR links its issue (`Closes #<n>`) and keeps README/docs in sync with any change.
-- **Risk sets the plan gate.** High-risk work — constitution paths, workflows,
-  identity/auth, security controls, migrations, deployment/production infrastructure,
-  or broad architecture — requires the operator to accept `plan.md` before code.
-  Routine work may keep plan + code in one PR only after an independent plan check
-  records acceptance before the write phase. The author cannot accept its own plan.
+- **Accepted roadmap policy — not yet a live gate:** risk will set the plan gate.
+  High-risk work — constitution paths, workflows, identity/auth, security controls,
+  migrations, deployment/production infrastructure, or broad architecture — will require
+  the operator to accept `plan.md` before code. Routine work may keep plan + code in one
+  PR only after an independent plan check records acceptance before the write phase. The
+  author cannot accept its own plan. The current manager does not enforce this yet; until
+  the portable control foundation wires and evaluates it, the existing gate rules for
+  each lane remain authoritative and nobody may claim a pre-code plan gate passed.
 - **Plain language, always** (operator rule, 2026-08-26): every artifact
   (intent/spec/plan), PR title/description, and review comment is written for a
   tired human. Short sentences. Everyday words. No jargon where a plain word
@@ -77,16 +80,15 @@ Two goals drive the backlog:
   user-directed issue is gated by the user's approval of the drafted spec (the one-liner is the
   request, not the go), a proactive issue by the passed yshifu⇄Codex manager-debate consensus
   (for *proactive* work the user's gate is at the north-star altitude; user-directed issues
-  still need the user's spec approval). This intake rule does not waive the later high-risk
-  plan gate: proactive and user-directed high-risk work both return to the operator before code.
+  still need the user's spec approval). The accepted roadmap adds a later high-risk plan
+  gate for both paths. It is planned policy, not a gate the current manager enforces.
 
 ## v2 artifact chain (work/)
 - One initiative = one dir: `work/<slug>/` holding `intent.md` → `spec.md` → `plan.md`.
   Each artifact lands via its own PR and the operator's merge IS the gate: G1 accepts
-  the intent, G2 approves the spec, and G3 approves the implementation. High-risk work
-  records a separate operator acceptance of `plan.md` before code; routine work may carry
-  an independently accepted plan with code + tests in the implementation PR. Details:
-  `work/README.md`; review policy: `REVIEW.md`.
+  the intent, G2 approves the spec, and G3 approves the implementation. The accepted
+  roadmap adds a separate pre-code plan gate based on risk; it does not become live until
+  both lanes enforce it. Details: `work/README.md`; review policy: `REVIEW.md`.
 - Skills: `/intent-draft`, `/spec-draft`, `/plan-draft` hold the templates and stage rules.
 - **Hash discipline:** `spec.md` frontmatter records `intent-blob` (`git hash-object` of
   the intent it was drafted from); `plan.md` records `spec-blob`. On mismatch with main's

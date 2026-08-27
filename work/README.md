@@ -1,17 +1,20 @@
 # work/ — the v2 artifact chain
 
 One initiative per directory: `work/<slug>/`. Every stage commits an artifact the
-next stage reads. G1/G2/G3 are operator merge gates. High-risk work adds a
-pre-code plan gate: the operator's decision is recorded against the exact
-`plan.md` blob before implementation. Until the portable stage record exists,
-use a separately merged plan PR. Any plan change invalidates that acceptance and
-must return to the plan gate.
+next stage reads. Within this artifact chain, G1/G2/G3 are the live operator merge
+gates. The in-session manager still uses its existing intake, CI, review, and human
+merge gates. The accepted roadmap adds a risk-based pre-code plan gate, but neither
+lane enforces it yet. Once both lanes wire that gate, the operator's decision must be
+recorded against the exact `plan.md` blob before high-risk implementation. Until the
+portable stage record exists, that means a separately merged plan PR. Any plan change
+invalidates that acceptance and must return to the plan gate. Do not claim this planned
+gate passed before the enforcement change lands.
 
 | Artifact | Written by | Gate that accepts it |
 |---|---|---|
 | `intent.md` | operator + `/intent-draft` | **G1** — operator merges the `intent: <slug>` PR |
 | `spec.md` | `/spec-draft` (spec stage) | **G2** — operator merges the `spec: <slug>` PR |
-| `plan.md` | `/plan-draft`, before implementation | **Plan gate** — operator accepts the exact blob before high-risk code; routine work records an independent plan check before code, then the operator accepts plan + code + tests at G3 |
+| `plan.md` | `/plan-draft` | **G3 today; target plan gate after enforcement lands** — operator accepts the exact blob before high-risk code; routine work records an independent plan check before code, then the operator accepts plan + code + tests at G3 |
 
 **Chain state is the artifacts themselves, hash-linked.** `spec.md` frontmatter
 records `intent-blob` — the `git hash-object` of the intent it was drafted from;

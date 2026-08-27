@@ -178,7 +178,7 @@ delivery safe; the system does not pretend webhook delivery is exactly once.
 
 ## Risk-tiered gates
 
-The initial policy is:
+The target policy is:
 
 - **High risk** — constitution paths, workflows, identity/auth, security
   controls, database/schema migrations, deployment, production infrastructure,
