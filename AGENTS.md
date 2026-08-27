@@ -13,9 +13,7 @@ vs nit, how disagreements end). **`work/<slug>/`** holds the artifact chain —
 that slug's plan; it is written so someone who never saw the conversation can
 build from it.
 
-This is the **control-plane repo for an autonomous coding team, and it is its own
-target repo** — agents working here are improving the team itself. Two goals drive
-the backlog:
+Two goals drive the backlog:
 1. **Reusable by anyone** — a clean, parameterized, well-documented product others can adopt.
 2. **Full backup** — everything needed to reconstruct the team if the live setup is lost.
 
