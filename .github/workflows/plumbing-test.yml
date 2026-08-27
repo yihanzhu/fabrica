@@ -2,8 +2,16 @@ name: Plumbing test
 
 # Manual probe (v2 plan, step 2): can the Claude app push a branch and open a
 # PR on its own — and do its events trigger other workflows (does CI run on
-# the probe PR)? Run it from the Actions tab. Close the probe PR without
-# merging and delete its branch afterward. Kept as a permanent diagnostic.
+# the probe PR)? Run it from the Actions tab on the DEFAULT branch (a
+# workflow_dispatch from another ref does not execute the action). Close the
+# probe PR without merging and delete its branch afterward. Kept as a
+# permanent diagnostic.
+#
+# Allowlist rule learned the hard way (probe attempts 3-5): a `:*` pattern
+# matches only after the COMMAND prefix — `Bash(git push:*)` works,
+# `Bash(git push -u origin some-branch:*)` never matches and the call is
+# denied. Scope by command, not by argument text. Pushing to main stays
+# impossible regardless: the branch ruleset refuses it server-side.
 
 on:
   workflow_dispatch: {}
@@ -47,7 +55,7 @@ jobs:
             and stop.
           claude_args: >-
             --max-turns 15
-            --allowedTools "Write,Bash(git checkout -b plumbing-probe-:*),Bash(git add probe.txt),Bash(git commit -m:*),Bash(git push -u origin plumbing-probe-:*),Bash(gh pr create --title:*),Bash(git status:*),Bash(git branch:*)"
+            --allowedTools "Write,Bash(git checkout:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*),Bash(git status:*),Bash(git branch:*)"
 
       - name: Assert the probe PR exists (loud failure, never silent)
         env:
