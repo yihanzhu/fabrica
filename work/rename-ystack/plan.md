@@ -40,7 +40,15 @@ secret, Claude app, Codex review, and Cloudflare Pages still respond.
   into ci.yml only in PR b.
 - All touched tests + new fallback tests (resolver, models.conf, alias).
 
-**PR b — words (branch fabrica/impl/rename-ystack-b, after PR a merges)**
+**COLLAPSED (operator ruling at the cap, 2026-08-26):** the split proved
+structurally leaky — every bridge patch exposed the next half-renamed
+contradiction (11 findings across 4 rounds all of one class). The words
+half below lands in THIS PR; the rename merges atomically. The size rule
+bends once, deliberately, for an inherently atomic change. Installed-state
+bridges (dual command name, doctor's legacy-command pass) stay — they
+protect live machines, not the repo.
+
+**Words half (now in this PR)**
 - README (identity line replaces the trio — operator approves wording),
   QUICKSTART, RESTORE, NORTH_STAR, CLAUDE.md, manager/CLAUDE.md (prose —
   its functional lines [paths, keys, marker] moved to PR a because the
