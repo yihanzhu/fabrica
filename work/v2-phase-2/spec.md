@@ -57,15 +57,23 @@ depends on. R4 is deferred with the fix stage — see the amendment note above.
   credential split stated in the amendment note above, not from this text and not
   from any plan written for the four-workflow shape.
 - **R5 — safety invariants (all three workflows in this phase).** One global `claude-quota`
-  concurrency group serializes every agent job; explicit actor gates
-  (`github.actor == operator` **and `github.triggering_actor == operator`** — on a
-  re-run `github.actor` stays whoever dispatched originally, so the first check
-  alone lets any write-capable collaborator re-run an operator's dispatch and spend
-  their subscription; the probe workflow already carries both checks for exactly
-  this reason — or `allowed_bots: claude[bot]` only on deliberately
-  opened bot edges — this phase opens exactly one, review-of-agent-PRs. R5's second
-  allowed edge, the fix-on-review comment, went with the deferred stage, and the
-  third edge that stage would also have needed is precisely why it was deferred);
+  concurrency group serializes every agent job.
+
+  **Every gate checks BOTH actors — one rule, no exceptions.** On a re-run
+  `github.actor` stays whoever (or whatever) started the original run, and the
+  person who pressed re-run appears only in `github.triggering_actor`. So any gate
+  written on `github.actor` alone lets a write-capable collaborator re-run someone
+  else's job — an operator's dispatch, or a bot-triggered review — and spend the
+  operator's subscription under a passing check. Every job in this lane therefore
+  requires the triggering actor to be the operator (or, on the bot edge, the bot
+  itself), alongside whatever `github.actor` or `allowed_bots` allows. The probe
+  workflow already carries both checks; this rule exists so no new job forgets it.
+
+  Which gates: the two stage jobs and any dispatch are operator-gated; the review
+  job opens exactly one bot edge, review-of-agent-PRs (`allowed_bots: claude[bot]`).
+  R5's second allowed edge, the fix-on-review comment, went with the deferred stage,
+  and the third edge that stage would also have needed is precisely why it was
+  deferred. Then:
   `timeout-minutes` and `--max-turns` on every job; PR-creation steps assert the
   PR exists and fail loudly; stage write-limits stated in the stage skills
   (mechanical enforcement arrives with Phase 3 hooks). **No stage pushes to a PR
