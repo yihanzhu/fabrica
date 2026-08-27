@@ -216,7 +216,7 @@ ghr_select_remote() {
 # ghr_url_is_local <url> — return 0 iff <url> is a genuinely LOCAL git source: a `file://` URL or a
 # local filesystem path (absolute or relative). Return non-zero for a remote/exotic transport — any
 # `<helper>::…` form (`ext::`, `fd::`, `transport::…`) or any `<scheme>://` that is NOT `file://`
-# (https/ssh/git/… and any unknown scheme). This is what constrains the FABRICA_ALLOW_LOCAL_MIRROR
+# (https/ssh/git/… and any unknown scheme). This is what constrains the YSTACK_ALLOW_LOCAL_MIRROR
 # opt-in (#102 round-5 [P2]) to the case it exists for: an empty normalized identity is ambiguous
 # between a local mirror (safe to opt into) and an arbitrary remote-helper transport (never), so the
 # opt-in bypass is gated on THIS check. scp-style `host:owner/repo` is a REMOTE ssh form (not local),
@@ -267,8 +267,9 @@ ghr_url_is_local() {
 # EXPLICIT LOCAL-MIRROR OPT-IN: a genuine local mirror (a `file://` / on-disk clone the operator
 # deliberately fetches from) is unprovable against gh's GitHub identity, so it is refused BY DEFAULT.
 # An operator who really wants it must opt in EXPLICITLY by exporting
-# FABRICA_ALLOW_LOCAL_MIRROR=1 — never the silent default. This flag is what the hermetic test
-# harness (which rewrites the https identity to a local `file://` bare for offline transport) sets.
+# YSTACK_ALLOW_LOCAL_MIRROR=1 — never the silent default (the legacy FABRICA_ name still works as an
+# alias while targets migrate). This flag is what the hermetic test harness (which rewrites the
+# https identity to a local `file://` bare for offline transport) sets.
 #
 # The opt-in relaxes ONLY the genuinely-LOCAL case (#102 round-5 [P2]). An empty effective id covers
 # TWO very different things: a local mirror (`file://` URL / on-disk path) — the intended case — AND
@@ -311,8 +312,9 @@ ghr_assert_effective_identity() {
   # never bless an `ext::`/`fd::`/`<helper>::…` remote-helper or a non-local remote scheme: those run
   # an arbitrary transport against an arbitrary source while the verdict still binds to gh's repo
   # (#102 round-5 [P2]). So the opt-in relaxes ONLY the local case; a non-local empty-id transport
-  # FAILs closed even with FABRICA_ALLOW_LOCAL_MIRROR=1.
-  if [ "${FABRICA_ALLOW_LOCAL_MIRROR:-0}" = "1" ] && ghr_url_is_local "$effective_url"; then
+  # FAILs closed even with the opt-in set.
+  # Either name enables the opt-in; YSTACK_ is canonical. # legacy fallback: FABRICA_ alias
+  if { [ "${YSTACK_ALLOW_LOCAL_MIRROR:-0}" = "1" ] || [ "${FABRICA_ALLOW_LOCAL_MIRROR:-0}" = "1" ]; } && ghr_url_is_local "$effective_url"; then # legacy fallback: FABRICA_ alias
     return 0
   fi
   echo "error: remote '${remote}' resolves (via git remote get-url, applying any insteadOf) to a fetch" >&2
@@ -322,7 +324,7 @@ ghr_assert_effective_identity() {
   echo "       cannot prove is that repo (an 'url.<local>.insteadOf' could silently redirect the fetch)." >&2
   echo "       Point the remote at the real GitHub transport, or — for a deliberate LOCAL mirror (a" >&2
   echo "       file:// URL or a local filesystem path only, never an ext::/fd::/remote-helper" >&2
-  echo "       transport) — export FABRICA_ALLOW_LOCAL_MIRROR=1 to opt in explicitly, then re-run." >&2
+  echo "       transport) — export YSTACK_ALLOW_LOCAL_MIRROR=1 to opt in explicitly, then re-run." >&2
   return 1
 }
 

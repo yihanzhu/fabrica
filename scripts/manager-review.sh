@@ -5,26 +5,29 @@ set -euo pipefail
 #
 # The mirror of codex-review.sh, one layer up: where codex-review.sh debates a *diff*
 # with the PR as the message bus, this debates a *proposed issue* with the ISSUE as the
-# message bus. It asks Codex whether a Faber-drafted issue is worth raising toward the
+# message bus. It asks Codex whether a yshifu-drafted issue is worth raising toward the
 # current north star, and posts Codex's verdict to the issue verbatim, so a Claude
 # session never edits or blends the manager-review (that is what keeps the cross-vendor
-# split honest). Run by Faber in-session on a *proactive* (Faber-generated) issue before
+# split honest). Run by yshifu in-session on a *proactive* (yshifu-generated) issue before
 # it gets the `ready` label (see reviewer/manager-review.md).
 #
 # NORTH-STAR SOURCE (#98a) — the debate is against the TARGET's own north star, resolved via
 # scripts/lib/north-star.sh from the cwd's checkout: the target's committed
-# `.fabrica/north-star.md`, or (on a Fabrica-self run) the control-plane root NORTH_STAR.md.
+# `.ystack/north-star.md` (with the legacy `.fabrica/north-star.md` still honored as a
+# fallback, so targets that have not renamed yet keep working), or (on a ystack-self run)
+# the control-plane root NORTH_STAR.md.
 # The content is read COMMITTED at the SAME commit the review worktree is pinned to (never a
 # free-floating later HEAD): the north star is an autonomy-authorization artifact, so an
 # uncommitted local edit must not silently redirect the gate. A target with no committed star
-# (UNSET), or a LOCAL star still carrying the shipped-default placeholder marker, FAILs before
-# any Codex verdict. This gate source is IDENTICAL to Faber's approval source (persona +
-# /faber) — they flip together so the gate never reads a source the operator did not approve.
+# (UNSET), or a LOCAL star still carrying the shipped-default placeholder marker (either the
+# current or the legacy marker string), FAILs before any Codex verdict. This gate source is
+# IDENTICAL to yshifu's approval source (persona + /yshifu) — they flip together so the gate
+# never reads a source the operator did not approve.
 #
 # The debate is over ROUNDS, on the issue: this script posts ONE Codex verdict comment;
-# Faber reads it and either advances (consensus to proceed), refines (edit the issue +
+# yshifu reads it and either advances (consensus to proceed), refines (edit the issue +
 # reply + re-run — another round), or drops (close with rationale). Consensus-only: the
-# coder loop starts only when BOTH Faber and Codex agree. The reviewer is VETO-ONLY — it
+# coder loop starts only when BOTH yshifu and Codex agree. The reviewer is VETO-ONLY — it
 # never labels `ready`, edits the issue, or merges; its only effect is the verdict comment.
 #
 # This script ONLY writes a single ISSUE comment. It never edits the issue, applies or
@@ -38,39 +41,40 @@ set -euo pipefail
 # (spend-by-leverage, see config/models.conf), so it does not simply "keep the operator's
 # model/effort defaults": it sources this clone's shipped config/models.conf (resolved from
 # THIS script's own location, alongside the ns_lib/ghr_lib sourcing below) and ALWAYS passes
-# `-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"`, explicitly raising the gate to that
+# `-c model_reasoning_effort="$YSTACK_DEBATE_EFFORT"`, explicitly raising the gate to that
 # effort (default `high`) instead of silently inheriting whatever the operator's personal
 # `~/.codex/config.toml` happens to default to (often `low`). A `-m <model>` is passed only
-# when one is actually resolved (the CLI `-m` flag keeps precedence; else FABRICA_CODEX_MODEL,
+# when one is actually resolved (the CLI `-m` flag keeps precedence; else YSTACK_CODEX_MODEL,
 # empty by default = inherit Codex's own default model) — never downgraded by task class. The
 # resolved model + effort are echoed into the posted issue comment's header (`reviewer: <model>
 # @ <effort>`) so every debate documents what gated it. A missing/unsourceable shipped config
 # FAILs loudly (pointing at scripts/doctor.sh) rather than silently debating at an unknown effort.
 #
 # PER-TARGET OVERRIDE — PARSE-NOT-SOURCE (P1 fix, adversarial review of PR #115). If the TARGET
-# repo has committed its own `.fabrica/models.conf` (see templates/.fabrica/models.conf), it may
-# override the PRODUCER/MODEL keys only. This script's trust anchor was already correct (the
-# override is read from the SAME pinned worktree/commit, $head_commit, the debate runs against —
-# the gh-bound default branch, fetched fresh, never the operator's possibly-stale cwd checkout),
-# but the override used to be `source`d directly into this non-sandboxed harness shell — a
-# target-committed file must never run as shell here. It is now read as DATA via
-# mc_parse_target_override (scripts/lib/models-conf.sh) — never `source`/`.`/`eval`. The parser
-# also refuses to let a target set FABRICA_DEBATE_EFFORT at all (recognized, but ignored with a
-# visible warning folded into the posted issue comment) — a target can never lower or otherwise
-# change its own manager-debate gate.
+# repo has committed its own `.ystack/models.conf` (see templates/.ystack/models.conf; the older
+# legacy `.fabrica/models.conf` still works as a fallback), it may override the PRODUCER/MODEL keys
+# only. This script's trust anchor was already correct (the override is read from the SAME
+# pinned worktree/commit, $head_commit, the debate runs against — the gh-bound default branch,
+# fetched fresh, never the operator's possibly-stale cwd checkout), but the override used to be
+# `source`d directly into this non-sandboxed harness shell — a target-committed file must never
+# run as shell here. It is now read as DATA via mc_parse_target_override
+# (scripts/lib/models-conf.sh) — never `source`/`.`/`eval`. The parser also refuses to let a
+# target set YSTACK_DEBATE_EFFORT at all (recognized, but ignored with a visible warning folded
+# into the posted issue comment) — a target can never lower or otherwise change its own
+# manager-debate gate.
 #
 # PER-TARGET OVERRIDE — SYMLINK-SAFE READ (P2 fix, adversarial review of PR #115). The parse-not-
-# source fix above still read the override via `mc_parse_target_override < "$worktree/.fabrica/
-# models.conf"` — a `<`-redirect from the checked-out worktree path, which FOLLOWS SYMLINKS. A
-# target that commits `.fabrica/models.conf` as a symlink to an arbitrary operator-local regular
-# file would pass the `[ -f ]` check and have the parser read the POINTED-TO file's content; a
-# charset-valid `FABRICA_CODEX_MODEL=<value>` line there then leaked into the PUBLIC issue comment
-# header — a narrow info-leak of an arbitrary local file (the device/FIFO DoS variant was already
-# blocked by `[ -f ]`). The override is now read via `git show "${head_commit}:.fabrica/
-# models.conf"` instead — the SAME anchor commit, but as a git blob, never a filesystem path — so
-# a symlink entry yields only its link-target-path STRING (which fails the parser's charset check
-# and is ignored), exactly mirroring codex-review.sh's identical `git show`-based read and its
-# existing symlink guards on the committed north star above (SYMLINK guard, round-2 FIX 4).
+# source fix above still read the override with a `<`-redirect from the checked-out worktree
+# path, which FOLLOWS SYMLINKS. A target that commits its models.conf override as a symlink to
+# an arbitrary operator-local regular file would pass the `[ -f ]` check and have the parser
+# read the POINTED-TO file's content; a charset-valid `YSTACK_CODEX_MODEL=<value>` line there
+# then leaked into the PUBLIC issue comment header — a narrow info-leak of an arbitrary local
+# file (the device/FIFO DoS variant was already blocked by `[ -f ]`). The override is now read
+# via `git show "${head_commit}:<path>"` instead — the SAME anchor commit, but as a git blob,
+# never a filesystem path — so a symlink entry yields only its link-target-path STRING (which
+# fails the parser's charset check and is ignored), exactly mirroring codex-review.sh's
+# identical `git show`-based read and its existing symlink guards on the committed north star
+# above (SYMLINK guard, round-2 FIX 4).
 #
 # It operates on the CURRENT repo: gh infers <owner>/<repo> from the cwd's git remote, and
 # the comment is posted to that repo's issue. Run it from within the target repo's clone —
@@ -115,7 +119,7 @@ set -euo pipefail
 # explicit DEGRADED marker issue comment (never the untrustworthy `-o` answer body verbatim — see
 # the INTEGRITY note below) — `VERDICT: DEGRADED`, never PROCEED/REFINE/DROP, with a DIFFERENT
 # header line than the real `## Codex manager-reviewer (cross-vendor, read-only)` one — so
-# Faber's "proceed only on consensus" rule can never read this as a PROCEED. A genuine verdict
+# yshifu's "proceed only on consensus" rule can never read this as a PROCEED. A genuine verdict
 # (codex ran, read the repo, formed a real PROCEED/REFINE/DROP judgment) carries neither signal
 # and still posts normally. A genuine exit-0 run with an EMPTY/whitespace-only `-o` capture (no
 # actual verdict text) is ALSO refused — mirroring codex-review.sh's non-empty guard — rather
@@ -133,16 +137,17 @@ set -euo pipefail
 # agent/command/repository payloads that a line prefix would not make private.
 #
 # Usage: scripts/manager-review.sh [-m <model>] <issue#>
-#   (or, with fabrica/scripts on PATH: manager-review.sh [-m <model>] <issue#>)
+#   (or, with ystack/scripts on PATH: manager-review.sh [-m <model>] <issue#>)
 
 usage() {
   echo "usage: $0 [-m <model>] <issue#>" >&2
   echo "  run from within the target repo's clone; debates the ISSUE on the CURRENT repo" >&2
   echo "  runs 'codex exec' read-only with the manager-reviewer prompt + north star + the" >&2
   echo "  issue, and posts Codex's PROCEED/REFINE/DROP verdict as an issue comment, verbatim" >&2
-  echo "  always runs at config/models.conf's FABRICA_DEBATE_EFFORT (a target's committed" >&2
-  echo "  .fabrica/models.conf may override FABRICA_CODEX_MODEL only — it can never lower/change" >&2
-  echo "  the gate's effort); -m here keeps precedence over FABRICA_CODEX_MODEL" >&2
+  echo "  always runs at config/models.conf's YSTACK_DEBATE_EFFORT (a target's committed" >&2
+  echo "  .ystack/models.conf — or the legacy .fabrica/models.conf — may override" >&2
+  echo "  YSTACK_CODEX_MODEL only; it can never lower/change the gate's effort); -m here" >&2
+  echo "  keeps precedence over YSTACK_CODEX_MODEL" >&2
   echo "  -m <model>  optional Codex model override (defaults to the resolved config, else Codex's own default)" >&2
 }
 
@@ -192,7 +197,7 @@ fi
 # The north star is resolved FOR THE TARGET this run operates on, via the shared resolver
 # (scripts/lib/north-star.sh). Historically this script read the control-plane NORTH_STAR.md
 # directly; #98a flips it to the per-target star so the consensus gate debates against the
-# TARGET's own approved goal (and, for a Fabrica-self run, still against Fabrica's own root
+# TARGET's own approved goal (and, for a ystack-self run, still against ystack's own root
 # NORTH_STAR.md). Locate the resolver from the SCRIPT'S OWN location — follow symlinks, then
 # dirname/.. — so it is found regardless of which target repo's cwd this is invoked from; the
 # actual content read is deferred until after HEAD is pinned (below), because the gate MUST
@@ -209,7 +214,7 @@ control_plane_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 ns_lib="${control_plane_root}/scripts/lib/north-star.sh"
 if [ ! -f "$ns_lib" ]; then
   echo "error: north-star resolver not found (${ns_lib})" >&2
-  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       it ships in the ystack control-plane repo alongside this script;" >&2
   echo "       restore scripts/lib/north-star.sh, then re-run" >&2
   exit 1
 fi
@@ -223,20 +228,20 @@ fi
 ghr_lib="${control_plane_root}/scripts/lib/gh-remote.sh"
 if [ ! -f "$ghr_lib" ]; then
   echo "error: gh-remote helper not found (${ghr_lib})" >&2
-  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       it ships in the ystack control-plane repo alongside this script;" >&2
   echo "       restore scripts/lib/gh-remote.sh, then re-run" >&2
   exit 1
 fi
 # shellcheck source=scripts/lib/gh-remote.sh
 . "$ghr_lib"
 
-# Source the shared PARSER for a target-committed .fabrica/models.conf override (P1 fix, #115) —
+# Source the shared PARSER for a target-committed models.conf override (P1 fix, #115) —
 # mc_parse_target_override reads that file as DATA, never as shell (see scripts/lib/models-conf.sh
 # for the full rationale). Located under the same control-plane root.
 mc_lib="${control_plane_root}/scripts/lib/models-conf.sh"
 if [ ! -f "$mc_lib" ]; then
   echo "error: models-conf helper not found (${mc_lib})" >&2
-  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       it ships in the ystack control-plane repo alongside this script;" >&2
   echo "       restore scripts/lib/models-conf.sh, then re-run" >&2
   exit 1
 fi
@@ -251,7 +256,7 @@ fi
 cd_lib="${control_plane_root}/scripts/lib/codex-degraded.sh"
 if [ ! -f "$cd_lib" ]; then
   echo "error: codex-degraded helper not found (${cd_lib})" >&2
-  echo "       it ships in the fabrica control-plane repo alongside this script;" >&2
+  echo "       it ships in the ystack control-plane repo alongside this script;" >&2
   echo "       restore scripts/lib/codex-degraded.sh, then re-run" >&2
   exit 1
 fi
@@ -267,7 +272,7 @@ fi
 models_conf="${control_plane_root}/config/models.conf"
 if [ ! -f "$models_conf" ]; then
   echo "error: config/models.conf not found (${models_conf})" >&2
-  echo "       it ships in the fabrica control-plane repo; restore it (see RESTORE.md), then" >&2
+  echo "       it ships in the ystack control-plane repo; restore it (see RESTORE.md), then" >&2
   echo "       re-run. scripts/doctor.sh check (k) diagnoses this file — run it for details" >&2
   exit 1
 fi
@@ -288,8 +293,8 @@ if [ "$models_conf_rc" -ne 0 ]; then
   echo "       this file — run it for details" >&2
   exit 1
 fi
-if [ -z "${FABRICA_DEBATE_EFFORT:-}" ]; then
-  echo "error: FABRICA_DEBATE_EFFORT is unset/empty after sourcing ${models_conf}" >&2
+if [ -z "${YSTACK_DEBATE_EFFORT:-}" ]; then
+  echo "error: YSTACK_DEBATE_EFFORT is unset/empty after sourcing ${models_conf}" >&2
   echo "       the manager-debate gate refuses to run at an unknown reasoning effort; fix the" >&2
   echo "       shipped config (scripts/doctor.sh check (k) diagnoses it), then re-run" >&2
   exit 1
@@ -324,7 +329,7 @@ fi
 
 # NESTED/EMBEDDED-REPO guard (#98a, confused-deputy) — refuse to authorize off a north star that
 # lives in a SEPARATE git repo NESTED inside ANOTHER git work tree. Running the gate from inside
-# an untracked/embedded git repo (with its own committed .fabrica/north-star.md) makes `git
+# an untracked/embedded git repo (with its own committed north star) makes `git
 # rev-parse HEAD` / ns_resolve resolve to the NESTED repo, so the gate would authorize against a
 # star that was never committed to the REAL (outer) target — a confused deputy. The operator must
 # run from the target's OWN top-level clone.
@@ -354,7 +359,7 @@ if [ -n "$gate_toplevel" ]; then
       outer_toplevel="$(git -C "$gate_parent" rev-parse --show-toplevel 2>/dev/null || true)"
       echo "error: this checkout ($gate_toplevel) is a SEPARATE git repo NESTED inside another" >&2
       echo "       git work tree${outer_toplevel:+ ($outer_toplevel)} — the manager-debate gate refuses to authorize off a" >&2
-      echo "       north star in a nested/embedded checkout (its HEAD/.fabrica/north-star.md is not" >&2
+      echo "       north star in a nested/embedded checkout (its HEAD/.ystack/north-star.md is not" >&2
       echo "       the real target's). Run this from the target's OWN top-level clone, not a" >&2
       echo "       nested/embedded checkout." >&2
       exit 1
@@ -418,7 +423,7 @@ if [ -n "$repo" ]; then
   # contacts can be a DIFFERENT repo. Before fetching (and anchoring the gate off it), assert the
   # EFFECTIVE fetch URL is a NON-EMPTY GitHub id EQUAL to gh's: a cross-repo GitHub substitution, a
   # local-path/file://-substitution, or any transport we can't PROVE is gh's repo all FAIL closed
-  # (round-2 — empty is no longer trusted; a deliberate local mirror needs FABRICA_ALLOW_LOCAL_MIRROR=1).
+  # (round-2 — empty is no longer trusted; a deliberate local mirror needs YSTACK_ALLOW_LOCAL_MIRROR=1).
   # So the gate never reads a source it can't prove is the repo the verdict posts to.
   if ! ghr_assert_effective_identity "$selected_remote" "$gh_repo_id"; then
     exit 1
@@ -474,42 +479,45 @@ fi
 # Resolve the north star FOR THE TARGET, then read its COMMITTED content pinned to the SAME
 # commit ($head_commit) the review operates on — NEVER a free-floating later HEAD re-lookup
 # (debate GAP, #98a). The north star is an autonomy-authorization artifact: an unreviewed
-# LOCAL worktree edit to .fabrica/north-star.md must NOT silently redirect the proactive gate,
-# so a star that exists ONLY as an uncommitted working-tree edit does NOT authorize — while a
-# star COMMITTED at $head_commit STILL authorizes even if the working-tree copy is later
+# LOCAL worktree edit to the target's north-star file must NOT silently redirect the proactive
+# gate, so a star that exists ONLY as an uncommitted working-tree edit does NOT authorize —
+# while a star COMMITTED at $head_commit STILL authorizes even if the working-tree copy is later
 # deleted or modified. We read `git show "$head_commit:<path>"`, which resolves <path> relative
 # to the repo ROOT regardless of the cwd (subdir vs. root) and reads only committed content, so
 # the gate's goal matches the clean detached worktree Codex reviews at the same commit and is
 # immune to the dirty working tree.
 #
-# ns_resolve tells us WHICH source applies via its IDENTITY logic — is this a Fabrica-self run
-# (root NORTH_STAR.md) or a normal target (.fabrica/north-star.md)? We do NOT use its
-# LOCAL-vs-UNSET result to gate authorization, because ns_resolve stats the WORKING-TREE file,
-# so a committed-but-worktree-deleted star would read UNSET there. Instead, for a normal target
-# the authoritative authorize test is whether .fabrica/north-star.md exists AT $head_commit.
+# ns_resolve tells us WHICH source applies via its IDENTITY logic — is this a ystack-self run
+# (root NORTH_STAR.md) or a normal target (.ystack/north-star.md, or the older
+# .fabrica/north-star.md as a legacy fallback)? We do NOT use its LOCAL-vs-UNSET result to gate
+# authorization, because ns_resolve stats the WORKING-TREE file, so a
+# committed-but-worktree-deleted star would read UNSET there. Instead, for a normal target the
+# authoritative authorize test is whether a north-star file exists AT $head_commit — the new
+# .ystack/ path is tried first, and the legacy .fabrica/ path only when the new one is absent,
+# so targets that have not renamed yet keep working.
 ns_result="$(ns_resolve "$PWD" || true)"
 ns_kind="${ns_result%% *}"
 north_star=""
-if [ "$ns_kind" = "FABRICA_SELF" ]; then
-  # Fabrica-self run: the control-plane root NORTH_STAR.md is Fabrica's own real approved goal
+if [ "$ns_kind" = "YSTACK_SELF" ]; then
+  # ystack-self run: the control-plane root NORTH_STAR.md is ystack's own real approved goal
   # (it legitimately carries the shipped-default marker — this branch is EXEMPT from the
   # placeholder-FAIL). cwd IS the control-plane checkout, so read the root star COMMITTED at the
   # same $head_commit for the same committed-state guarantee.
   #
-  # AUTHORIZATION lives HERE (round-3 [P2]): ns_resolve classifies FABRICA_SELF by git-structural
+  # AUTHORIZATION lives HERE (round-3 [P2]): ns_resolve classifies YSTACK_SELF by git-structural
   # identity (shared git common-dir, so a linked worktree of the control plane counts too; a
   # top-level path match is also accepted) UNCONDITIONALLY — it does NOT check whether NORTH_STAR.md
   # is committed — so this branch is the
   # authorization gate. It must require a COMMITTED root star and FAIL cleanly if there is none: a
-  # missing committed root FAILs, it does NOT fall back to `.fabrica/north-star.md` (that fallback
-  # would let a stray committed `.fabrica` star mis-steer Fabrica-self). Do the committed read
-  # FIRST so an ABSENT root gives the accurate "not committed at HEAD" message — not the symlink
-  # message. `if ! …="$(git show …)"` (a condition context) never trips `set -e`: an absent path
-  # makes `git show` exit non-zero → the FAIL branch runs cleanly.
+  # missing committed root FAILs, it does NOT fall back to a per-target star file (that fallback
+  # would let a stray committed `.ystack`/legacy-`.fabrica` star mis-steer ystack-self). Do the committed
+  # read FIRST so an ABSENT root gives the accurate "not committed at HEAD" message — not the
+  # symlink message. `if ! …="$(git show …)"` (a condition context) never trips `set -e`: an
+  # absent path makes `git show` exit non-zero → the FAIL branch runs cleanly.
   if ! north_star="$(git show "${head_commit}:NORTH_STAR.md" 2>/dev/null)" || [ -z "$north_star" ]; then
     echo "error: NORTH_STAR.md is not committed at HEAD (${head_commit}) in the control plane" >&2
-    echo "       ns_resolve classified this run as Fabrica-self by git-structural identity; the manager-debate" >&2
-    echo "       gate reads COMMITTED state and does NOT fall back to .fabrica/north-star.md. Commit" >&2
+    echo "       ns_resolve classified this run as ystack-self by git-structural identity; the manager-debate" >&2
+    echo "       gate reads COMMITTED state and does NOT fall back to .ystack/north-star.md. Commit" >&2
     echo "       the root north star (or restore it), then re-run" >&2
     exit 1
   fi
@@ -526,67 +534,86 @@ if [ "$ns_kind" = "FABRICA_SELF" ]; then
     echo "       regular file, commit it, and re-run" >&2
     exit 1
   fi
-elif north_star="$(git show "${head_commit}:.fabrica/north-star.md" 2>/dev/null)" && [ -n "$north_star" ]; then
-  # A normal target with .fabrica/north-star.md COMMITTED at $head_commit → LOCAL. This is the
-  # authorize test (committed existence), independent of the working tree: a committed star
-  # authorizes even if the worktree copy was deleted/modified, and a worktree-only edit that is
-  # NOT committed here falls through to the UNSET FAIL below (it does not reach this branch).
-  #
-  # SYMLINK guard (round-2 FIX 4) — BEFORE the marker check: reject a committed .fabrica/north-star.md
-  # stored as a SYMLINK. `git show <commit>:.fabrica/north-star.md` on a symlink returns the link
-  # TARGET-PATH string (which `[ -n ]` above accepts), so without this guard the gate would run the
-  # marker check against a path string and could AUTHORIZE off it, diverging from the real file Codex
-  # reviews. Assert the committed entry is a regular blob (100644/100755) first.
-  if ! ns_committed_is_regular_file "$PWD" "$head_commit" ".fabrica/north-star.md"; then
-    echo "error: ${repo}'s committed .fabrica/north-star.md at HEAD (${head_commit}) is a SYMLINK —" >&2
-    echo "       the committed north star must be a regular file, not a symlink (a symlink makes the" >&2
-    echo "       gate read the link's target-path string, not the star's content). Replace it with a" >&2
-    echo "       regular file, commit it, and re-run" >&2
-    exit 1
-  fi
-  #
-  # A LOCAL committed star still carrying the shipped-default placeholder marker is an
-  # un-replaced template — NOT a real approved goal — so FAIL before any verdict. (FABRICA_SELF
-  # above is exempt; the marker-FAIL is keyed to LOCAL only.)
-  #
-  # The check goes through ns_has_shipped_default_marker (shared with doctor.sh (h)), which
-  # SCOPES the match to the ACTIVE-entry region and matches the marker WHITESPACE/CASE-
-  # INSENSITIVELY. Scoping stops the marker's mentions in the template PROSE from wrongly FAILing
-  # a correctly-replaced star (marker cleared from the active heading, still named in prose);
-  # the insensitive match stops an un-replaced placeholder whose marker is spaced/cased/split
-  # differently (`<!--fabrica-shipped-default-->`, UPPERCASE, tab, reflow-split) from wrongly
-  # AUTHORIZING. Feed the committed content over stdin (`-`) so we never touch a working-tree file.
-  if printf '%s' "$north_star" | ns_has_shipped_default_marker -; then
-    echo "error: ${repo}'s .fabrica/north-star.md is still the shipped placeholder (carries the" >&2
-    echo "       '<!-- fabrica-shipped-default -->' marker) — the manager-debate gate will not" >&2
-    echo "       debate against an un-replaced template. Replace it with your own north star," >&2
-    echo "       remove the marker from the active heading line, commit it, and approve it," >&2
-    echo "       then re-run. See reviewer/manager-review.md > north star" >&2
-    exit 1
-  fi
 else
-  # No committed north star for this target: either UNSET/EMPTY/NOREPO from the resolver, or a
-  # .fabrica/north-star.md that exists ONLY as an uncommitted working-tree edit (not at
-  # $head_commit). None authorizes proactive work — FAIL with an actionable pointer BEFORE
-  # invoking Codex, so the operator sets and COMMITS a north star rather than debating an empty
-  # (or uncommitted, unreviewed) goal.
-  echo "error: no committed north star resolved for ${repo} (resolver: ${ns_kind}) — .fabrica/north-star.md is" >&2
-  echo "       not committed at HEAD (${head_commit}). The manager-debate gate reads COMMITTED" >&2
-  echo "       target state — an uncommitted local edit does not authorize proactive work. Set one up:" >&2
-  echo "         copy '${control_plane_root}/templates/.fabrica/north-star.md' into the target" >&2
-  echo "         as .fabrica/north-star.md, replace the placeholder with your own direction," >&2
-  echo "         remove the '<!-- fabrica-shipped-default -->' marker from the active heading," >&2
-  echo "         then commit and approve it — see reviewer/manager-review.md > north star." >&2
-  echo "       (setup-target-repo.sh only creates the loop labels; it does NOT seed the star.)" >&2
-  exit 1
+  # A normal target: the authorize test is committed existence, independent of the working
+  # tree — a committed star authorizes even if the worktree copy was deleted/modified, and a
+  # worktree-only edit that is NOT committed falls through to the UNSET FAIL below.
+  #
+  # PATH FALLBACK (the ystack rename): try the new `.ystack/north-star.md` first; only when
+  # that path is ABSENT at $head_commit, fall back to the legacy `.fabrica/north-star.md`, so
+  # targets that have not renamed yet keep working. A present-but-broken new-path entry (an
+  # empty file, or a symlink) FAILs loudly below — it never silently falls back.
+  star_relpath=".ystack/north-star.md"
+  if ! north_star="$(git show "${head_commit}:.ystack/north-star.md" 2>/dev/null)"; then
+    if north_star="$(git show "${head_commit}:.fabrica/north-star.md" 2>/dev/null)"; then # legacy fallback
+      star_relpath=".fabrica/north-star.md" # legacy fallback
+    else
+      north_star=""
+    fi
+  fi
+  if [ -n "$north_star" ]; then
+    # A committed star at $head_commit → LOCAL.
+    #
+    # SYMLINK guard (round-2 FIX 4) — BEFORE the marker check: reject a committed north star
+    # stored as a SYMLINK. `git show <commit>:<path>` on a symlink returns the link TARGET-PATH
+    # string (which the non-empty check above accepts), so without this guard the gate would run
+    # the marker check against a path string and could AUTHORIZE off it, diverging from the real
+    # file Codex reviews. Assert the committed entry is a regular blob (100644/100755) first.
+    if ! ns_committed_is_regular_file "$PWD" "$head_commit" "$star_relpath"; then
+      echo "error: ${repo}'s committed ${star_relpath} at HEAD (${head_commit}) is a SYMLINK —" >&2
+      echo "       the committed north star must be a regular file, not a symlink (a symlink makes the" >&2
+      echo "       gate read the link's target-path string, not the star's content). Replace it with a" >&2
+      echo "       regular file, commit it, and re-run" >&2
+      exit 1
+    fi
+    #
+    # A LOCAL committed star still carrying the shipped-default placeholder marker is an
+    # un-replaced template — NOT a real approved goal — so FAIL before any verdict. (YSTACK_SELF
+    # above is exempt; the marker-FAIL is keyed to LOCAL only.)
+    #
+    # The check goes through ns_has_shipped_default_marker (shared with doctor.sh (h)), which
+    # SCOPES the match to the ACTIVE-entry region, matches the marker WHITESPACE/CASE-
+    # INSENSITIVELY, and accepts BOTH marker strings — the current `ystack-shipped-default` and
+    # the legacy `fabrica-shipped-default` — so an un-replaced template FAILs no matter which
+    # marker it shipped with. Scoping stops the marker's mentions in the template PROSE from
+    # wrongly FAILing a correctly-replaced star (marker cleared from the active heading, still
+    # named in prose); the insensitive match stops a placeholder whose marker is spaced/cased/
+    # split differently from wrongly AUTHORIZING. Feed the committed content over stdin (`-`)
+    # so we never touch a working-tree file.
+    if printf '%s' "$north_star" | ns_has_shipped_default_marker -; then
+      echo "error: ${repo}'s ${star_relpath} is still the shipped placeholder (carries the" >&2
+      echo "       '<!-- ystack-shipped-default -->' marker — the legacy" >&2
+      echo "       legacy '<!-- fabrica-shipped-default -->' marker counts too) — the manager-debate gate" >&2
+      echo "       will not debate against an un-replaced template. Replace it with your own north" >&2
+      echo "       star, remove the marker from the active heading line, commit it, and approve it," >&2
+      echo "       then re-run. See reviewer/manager-review.md > north star" >&2
+      exit 1
+    fi
+  else
+    # No committed north star for this target: either UNSET/EMPTY/NOREPO from the resolver, or a
+    # north-star file that exists ONLY as an uncommitted working-tree edit (not at
+    # $head_commit). None authorizes proactive work — FAIL with an actionable pointer BEFORE
+    # invoking Codex, so the operator sets and COMMITS a north star rather than debating an empty
+    # (or uncommitted, unreviewed) goal.
+    echo "error: no committed north star resolved for ${repo} (resolver: ${ns_kind}) — .ystack/north-star.md is" >&2
+    echo "       not committed at HEAD (${head_commit}), and neither is the legacy .fabrica/north-star.md." >&2
+    echo "       The manager-debate gate reads COMMITTED target state — an uncommitted local edit" >&2
+    echo "       does not authorize proactive work. Set one up:" >&2
+    echo "         copy '${control_plane_root}/templates/.ystack/north-star.md' into the target" >&2
+    echo "         as .ystack/north-star.md, replace the placeholder with your own direction," >&2
+    echo "         remove the '<!-- ystack-shipped-default -->' marker from the active heading," >&2
+    echo "         then commit and approve it — see reviewer/manager-review.md > north star." >&2
+    echo "       (setup-target-repo.sh only creates the loop labels; it does NOT seed the star.)" >&2
+    exit 1
+  fi
 fi
 
 # NO-ACTIVE-ENTRY FAIL (round-3 [P2]) — a committed north star with NO valid `status: active`
 # heading does NOT authorize proactive work. We reach here only on an AUTHORIZED source (the
-# FABRICA_SELF or LOCAL committed branch above populated $north_star; UNSET/placeholder/symlink
+# YSTACK_SELF or LOCAL committed branch above populated $north_star; UNSET/placeholder/symlink
 # already exited). But "the file exists and is not the shipped placeholder" is NOT enough:
 # proactive work is authorized ONLY by an approved ACTIVE north star, and a target that committed
-# `.fabrica/north-star.md` (or the control plane its NORTH_STAR.md) with the `status: active`
+# its north-star file (or the control plane its NORTH_STAR.md) with the `status: active`
 # heading mistyped/removed has NO active goal — debating Codex against that goalless file would
 # authorize work the operator never steered. So require a NON-EMPTY active region from the SAME
 # committed content already read ($north_star), via the shared ns_active_region helper (identical
@@ -605,8 +632,8 @@ if [ -z "$(printf '%s' "$north_star" | ns_active_region - | head -n1 || true)" ]
 fi
 
 # Pull the issue title + body + the comment thread — the proposal Codex debates, PLUS the
-# prior debate. On a REFINE rerun, Faber edits the issue and replies in an issue comment
-# (issue-as-bus), so the comment thread carries the prior Codex verdicts and Faber's
+# prior debate. On a REFINE rerun, yshifu edits the issue and replies in an issue comment
+# (issue-as-bus), so the comment thread carries the prior Codex verdicts and yshifu's
 # refinement rationale; feeding it in means the next Codex run sees the prior debate and
 # does not just repeat the same objection or miss why the issue was refined. Fail early if
 # the issue can't be read (wrong number, no access) before invoking codex. gh's `-q` runs
@@ -653,48 +680,51 @@ trap cleanup EXIT
 # uncommitted state, and never mutates the operator's branch / index / working tree.
 git worktree add --detach "$worktree" "$head_commit"
 
-# Per-target override: if the TARGET repo has committed a .fabrica/models.conf (same
-# format/keys as config/models.conf — see templates/.fabrica/models.conf), PARSE it (never
-# source/eval it — see scripts/lib/models-conf.sh for the full P1 rationale) AFTER the shipped
-# defaults, so it can override the PRODUCER/MODEL keys for this target only. Read it via `git
-# show "${head_commit}:.fabrica/models.conf"` — the SAME EXACT anchored commit ($head_commit)
-# already resolved above for the committed north-star reads and the worktree checkout — never a
-# `<`-redirect from the checked-out worktree path (P2 fix, adversarial review of PR #115): a
-# target could commit `.fabrica/models.conf` AS A SYMLINK to an arbitrary operator-local file, and
-# an `[ -f ]` check on that checked-out path follows the symlink, so a redirect from it would read
-# and parse the POINTED-TO file's content — a charset-valid `FABRICA_CODEX_MODEL=<value>` line in that
-# file would then leak into the PUBLIC issue comment header (`reviewer: <model> @ <effort>`
+# Per-target override: if the TARGET repo has committed a .ystack/models.conf (same
+# format/keys as config/models.conf — see templates/.ystack/models.conf; the older
+# legacy .fabrica/models.conf is still honored as a fallback when the new path is absent, so targets
+# that have not renamed yet keep working), PARSE it (never source/eval it — see
+# scripts/lib/models-conf.sh for the full P1 rationale) AFTER the shipped defaults, so it can
+# override the PRODUCER/MODEL keys for this target only. Read it via `git show
+# "${head_commit}:<path>"` — the SAME EXACT anchored commit ($head_commit) already resolved
+# above for the committed north-star reads and the worktree checkout — never a `<`-redirect
+# from the checked-out worktree path (P2 fix, adversarial review of PR #115): a target could
+# commit its override AS A SYMLINK to an arbitrary operator-local file, and an `[ -f ]` check
+# on that checked-out path follows the symlink, so a redirect from it would read and parse the
+# POINTED-TO file's content — a charset-valid `YSTACK_CODEX_MODEL=<value>` line in that file
+# would then leak into the PUBLIC issue comment header (`reviewer: <model> @ <effort>`
 # below) — a narrow info-leak of an arbitrary local file (the device/FIFO DoS variant was already
 # blocked by `[ -f ]`). `git show <commit>:path` never dereferences a symlink: for a symlinked
 # path it returns the link TARGET-PATH string itself (as blob content), which fails the parser's
 # charset check below and is silently ignored — mirroring codex-review.sh's identical
 # `git show`-based read of this same file. Absence is normal (most targets have no override;
-# `git show` exits non-zero and we skip). GATE keys (FABRICA_DEBATE_EFFORT) are recognized by the
+# `git show` exits non-zero and we skip). GATE keys (YSTACK_DEBATE_EFFORT) are recognized by the
 # parser but never applied from a target override — a target can never lower/change its own
 # manager-debate gate — mc_parse_target_override instead warns (stderr) and sets
 # MC_TARGET_OVERRIDE_GATE_WARNING, folded into the posted issue comment below.
 MC_TARGET_OVERRIDE_GATE_WARNING=0
-if target_models_conf_content="$(git show "${head_commit}:.fabrica/models.conf" 2>/dev/null)"; then
+if target_models_conf_content="$(git show "${head_commit}:.ystack/models.conf" 2>/dev/null)" \
+   || target_models_conf_content="$(git show "${head_commit}:.fabrica/models.conf" 2>/dev/null)"; then # legacy fallback
   # Here-string, NOT a pipe: the rightmost command of a pipe runs in a SUBSHELL under bash 3.2 (no
-  # `lastpipe`), which would silently discard the FABRICA_* assignments the parser makes here.
+  # `lastpipe`), which would silently discard the YSTACK_* assignments the parser makes here.
   mc_parse_target_override <<<"$target_models_conf_content"
 fi
 
 # Resolve the effective Codex model: the existing -m CLI flag keeps precedence over config (per
 # #110) — it is only missing when the operator omitted -m, in which case we fall back to
-# FABRICA_CODEX_MODEL (empty by default, meaning "inherit the operator's own Codex CLI/config
-# default"; a target's .fabrica/models.conf override, parsed just above, may have changed it).
+# YSTACK_CODEX_MODEL (empty by default, meaning "inherit the operator's own Codex CLI/config
+# default"; a target's committed models.conf override, parsed just above, may have changed it).
 # model_display feeds the resolved-config echo below so every debate documents what gated it,
 # even when nothing was explicitly pinned (shown as "operator-default").
 effective_model="$model"
 if [ -z "$effective_model" ]; then
-  effective_model="${FABRICA_CODEX_MODEL:-}"
+  effective_model="${YSTACK_CODEX_MODEL:-}"
 fi
 model_display="${effective_model:-operator-default}"
 
 # Build the manager-reviewer prompt: the role + the current north star + the issue under
 # debate + an instruction to read the repo to ground the judgment, asking for a structured
-# PROCEED / REFINE / DROP verdict with reasoning and any gap Faber missed. This is a
+# PROCEED / REFINE / DROP verdict with reasoning and any gap yshifu missed. This is a
 # hand-written prompt (unlike codex-review.sh, which uses Codex's built-in review): there is
 # no built-in "should this issue exist?" review, and the whole point is Codex's own
 # independent judgment on the proposal vs. the north star — see reviewer/manager-review.md.
@@ -710,12 +740,12 @@ model_display="${effective_model:-operator-default}"
 # `read` returns non-zero at EOF (the heredoc has no trailing NUL), so guard with `|| true`.
 prompt_tmpl=""
 IFS= read -r -d '' prompt_tmpl <<'PROMPT_TMPL' || true
-You are the cross-vendor MANAGER reviewer for an autonomous coding team. Faber (a Claude
+You are the cross-vendor MANAGER reviewer for an autonomous coding team. yshifu (a Claude
 manager) has DRAFTED the GitHub issue below as a *proactive* proposal toward the team's
 current north star. Your job is to debate whether this issue is worth raising NOW — not to
 review code, and not to rubber-stamp it. You are VETO-ONLY: you never approve, label, edit
-the issue, or merge anything; you only give a verdict that Faber weighs. The team proceeds
-ONLY on consensus (you and Faber both agree), and DEFAULT-DROPS on no consensus, so do not
+the issue, or merge anything; you only give a verdict that yshifu weighs. The team proceeds
+ONLY on consensus (you and yshifu both agree), and DEFAULT-DROPS on no consensus, so do not
 invent busywork: if the issue does not clearly serve the north star, say so.
 
 == CURRENT NORTH STAR (the target's committed north star) ==
@@ -727,8 +757,8 @@ Title: %s
 %s
 
 == ISSUE COMMENT THREAD (the debate so far, oldest first) ==
-On a rerun this carries any prior verdicts of yours and Faber's refinement replies (the
-issue is the message bus). Read it: do not just repeat a prior objection if Faber already
+On a rerun this carries any prior verdicts of yours and yshifu's refinement replies (the
+issue is the message bus). Read it: do not just repeat a prior objection if yshifu already
 addressed it, and weigh the refinement rationale. On a first round it may be empty.
 
 %s
@@ -746,7 +776,7 @@ VERDICT: one of PROCEED / REFINE / DROP
 
 REASONING: why, grounded in the north star and the repo as it stands.
 
-GAP FABER MISSED: anything Faber overlooked — a risk, a dependency, a simpler path, a
+GAP YSHIFU MISSED: anything yshifu overlooked — a risk, a dependency, a simpler path, a
 conflict with existing files, or a reason this is already covered. If none, say "none".
 PROMPT_TMPL
 
@@ -770,13 +800,13 @@ prompt="$(printf "$prompt_tmpl" "$north_star" "$issue" "$issue_title" "$issue_bo
 # on a shared machine it would also expose the issue/north-star text in `ps`/process listings
 # while Codex runs. stdin avoids both. All flags stay BEFORE the `-` (flags then positional).
 #
-# `-c model_reasoning_effort="$FABRICA_DEBATE_EFFORT"` is ALWAYS passed (#110) — the
+# `-c model_reasoning_effort="$YSTACK_DEBATE_EFFORT"` is ALWAYS passed (#110) — the
 # manager-debate gate is a max-capability decision point (spend-by-leverage), never
 # class-routed down, so this raises it from whatever effort the operator's Codex config
 # happened to default to (often `low`) to the resolved config's explicit value. `-m` is passed
-# only when a model was actually resolved (CLI flag or FABRICA_CODEX_MODEL); empty means
+# only when a model was actually resolved (CLI flag or YSTACK_CODEX_MODEL); empty means
 # "inherit Codex's own default model".
-review_cmd=(codex exec -C "$worktree" --json -c sandbox_mode="read-only" -c model_reasoning_effort="$FABRICA_DEBATE_EFFORT" -o "$tmp")
+review_cmd=(codex exec -C "$worktree" --json -c sandbox_mode="read-only" -c model_reasoning_effort="$YSTACK_DEBATE_EFFORT" -o "$tmp")
 if [ -n "$effective_model" ]; then
   review_cmd+=(-m "$effective_model")
 fi
@@ -803,10 +833,10 @@ if degraded_reason="$(cd_degraded_reason "$codex_rc" "$stdout_tmp" "$stderr_tmp"
     echo "## Codex manager-reviewer — DEGRADED, REVIEW DID NOT RUN (cross-vendor, read-only)"
     echo
     echo "VERDICT: DEGRADED (never PROCEED / REFINE / DROP — this run did not genuinely debate the issue)"
-    echo "reviewer: ${model_display} @ ${FABRICA_DEBATE_EFFORT}"
+    echo "reviewer: ${model_display} @ ${YSTACK_DEBATE_EFFORT}"
     echo
     echo "**This Codex run FAILED TO RUN a genuine debate on issue #${issue}. Treat this as NO"
-    echo "consensus — never as PROCEED. Faber must not advance on the strength of this comment.**"
+    echo "consensus — never as PROCEED. yshifu must not advance on the strength of this comment.**"
     echo
     echo "Reason: ${degraded_reason}."
     echo
@@ -846,15 +876,15 @@ if ! grep -q '[^[:space:]]' "$tmp"; then
 fi
 
 # Compose the issue comment: a short header marking it the cross-vendor manager-reviewer,
-# then Codex's verdict VERBATIM. The header is Faber's prefix — clearly separate from
+# then Codex's verdict VERBATIM. The header is yshifu's prefix — clearly separate from
 # Codex's verbatim body — so this stays read-only / comments-only / verbatim (no Claude
 # rewriting). Build it into a second temp file so we can both echo it to stdout (the
 # operator sees the verdict in-session) and post it as the issue comment. A
 # `reviewer: <model> @ <effort>` line records the RESOLVED config (#110) — model and reasoning
-# effort actually applied, after CLI/-m > FABRICA_CODEX_MODEL and any per-target
-# .fabrica/models.conf override — so every debate documents what gated it on the record, and
+# effort actually applied, after CLI/-m > YSTACK_CODEX_MODEL and any per-target
+# models.conf override — so every debate documents what gated it on the record, and
 # personal-config drift (e.g. a stray operator default) is visible in the issue history. If the
-# target's override tried to set FABRICA_DEBATE_EFFORT (rejected by mc_parse_target_override,
+# target's override tried to set YSTACK_DEBATE_EFFORT (rejected by mc_parse_target_override,
 # #115 P1 fix), a visible warning line is folded in here too — never a silent ignore.
 comment="$(mktemp)"
 # Re-arm the trap to also remove this second temp file. We re-`git worktree remove` the
@@ -866,7 +896,7 @@ trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree";
 {
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
   echo
-  echo "reviewer: ${model_display} @ ${FABRICA_DEBATE_EFFORT}"
+  echo "reviewer: ${model_display} @ ${YSTACK_DEBATE_EFFORT}"
   if [ "$MC_TARGET_OVERRIDE_GATE_WARNING" = "1" ]; then
     echo "warning: target override attempted to set gate effort — ignored"
   fi

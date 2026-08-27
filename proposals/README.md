@@ -10,4 +10,4 @@ rationale in its PR body. The operator reviews the patch and applies it by hand
 
 The agent improves the product; only the operator amends the constitution.
 Operator-driven interactive sessions are exempt — this boundary exists for
-unattended runs (enforced mechanically via `FABRICA_STAGE` hooks from Phase 3).
+unattended runs (enforced mechanically via `YSTACK_STAGE` hooks from Phase 3).

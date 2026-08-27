@@ -15,8 +15,8 @@ records `intent-blob` — the `git hash-object` of the intent it was drafted fro
 hash against main's current upstream file: on mismatch, label the PR `stale` and
 stop — never build on a moved artifact.
 
-**Deterministic branches:** `fabrica/intent/<slug>`, `fabrica/spec/<slug>`,
-`fabrica/impl/<slug>`. A re-run updates the existing branch/PR; it never opens a
+**Deterministic branches:** `ystack/intent/<slug>`, `ystack/spec/<slug>`,
+`ystack/impl/<slug>`. A re-run updates the existing branch/PR; it never opens a
 second PR for the same slug.
 
 Today the stages run by hand (`/intent-draft`, `/spec-draft`, `/plan-draft` in a

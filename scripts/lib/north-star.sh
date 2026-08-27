@@ -3,48 +3,52 @@
 #
 # Both scripts/manager-review.sh and scripts/doctor.sh need to answer the same question:
 # "what is the active north star for the repo this run operates on?" Historically each
-# hardcoded the control-plane root NORTH_STAR.md — which mis-reads Fabrica-self's star when
-# a run targets an EXTERNAL repo, or forces a target's star into Fabrica's own source (the
-# MapleFolio collision, 2026-07-01). This helper resolves the star FOR THE TARGET, so each
-# target owns its own steering. It is `source`d by the callers (no shebang execution) — the
-# `#!/usr/bin/env bash` line is only so shellcheck picks the right dialect.
+# hardcoded the control-plane root NORTH_STAR.md — which mis-reads the control plane's own star
+# when a run targets an EXTERNAL repo, or forces a target's star into the control plane's own
+# source (the MapleFolio collision, 2026-07-01). This helper resolves the star FOR THE TARGET,
+# so each target owns its own steering. It is `source`d by the callers (no shebang execution) —
+# the `#!/usr/bin/env bash` line is only so shellcheck picks the right dialect.
 #
 # Resolution order (see issue #97, hardened in #98a):
-#   1. Fabrica-self:   the control-plane root NORTH_STAR.md — CLASSIFIED (as the SOURCE) whenever
-#      the resolved repo IS the Fabrica control-plane repo itself (its main checkout OR any linked
+#   1. ystack-self:    the control-plane root NORTH_STAR.md — CLASSIFIED (as the SOURCE) whenever
+#      the resolved repo IS the ystack control-plane repo itself (its main checkout OR any linked
 #      worktree of it), decided by a SHARED-GIT-COMMON-DIR identity check (the target's git
 #      common-dir equals THIS lib's own control-plane common-dir; the top-level PATH equality is
 #      kept as one accepted case), never a slug. This classification is IDENTITY-ONLY (git-structural,
 #      not slug) and UNCONDITIONAL — it does NOT depend on whether NORTH_STAR.md
 #      exists (round-3 [P2]): CLASSIFICATION (which source applies) is the resolver's job; whether
 #      that source carries a real committed star (AUTHORIZATION) is the gate's job. Checked FIRST,
-#      and returned unconditionally on a path match, so a stray/committed `.fabrica/north-star.md`
-#      accidentally sitting in the control-plane checkout can NEVER shadow Fabrica-self (the gate
-#      then FAILs cleanly if the root star is not committed — it does NOT fall back to `.fabrica`).
-#   2. Target-local:   <target-toplevel>/.fabrica/north-star.md, where target-toplevel is the
-#      target repo's GIT TOP-LEVEL (`git -C <dir> rev-parse --show-toplevel`), NOT literal
-#      $PWD — so a run from ANY subdirectory of the target clone resolves the top-level file.
+#      and returned unconditionally on a path match, so a stray per-target star file
+#      accidentally sitting in the control-plane checkout can NEVER shadow ystack-self (the gate
+#      then FAILs cleanly if the root star is not committed — it does NOT fall back to the
+#      per-target file).
+#   2. Target-local:   <target-toplevel>/.ystack/north-star.md, falling back to the LEGACY
+#      <target-toplevel>/.fabrica/north-star.md for legacy targets that have not renamed yet (the new
+#      path wins when both exist). target-toplevel is the target repo's GIT TOP-LEVEL
+#      (`git -C <dir> rev-parse --show-toplevel`), NOT literal $PWD — so a run from ANY
+#      subdirectory of the target clone resolves the top-level file.
 #   3. Unset:          neither resolves and the target is NON-EMPTY -> UNSET; the caller
 #      decides how to react (manager-review FAILs; doctor WARNs). Never silently read another
 #      repo's star.
 #
-# SECURITY (#98a): the Fabrica-self identity is GIT-STRUCTURAL (shared common-dir / top-level path),
-# never a slug. An earlier slug-based fallback (target slug == Fabrica's slug -> FABRICA_SELF) rested
-# on the git REMOTE URL, which any clone owner can set — so a hostile target pointing origin at
-# Fabrica's slug would be authorized against Fabrica's root star, bypassing its own star AND the
-# placeholder-FAIL. The remote URL is attacker-settable and thus NOT a trustworthy identity signal;
-# only git-structural identity (the target shares the very repository that ships this lib — its main
-# checkout or a linked worktree of it) is trustworthy. The slug fallback is removed.
+# SECURITY (#98a): the ystack-self identity is GIT-STRUCTURAL (shared common-dir / top-level path),
+# never a slug. An earlier slug-based fallback (target slug == the control plane's slug ->
+# YSTACK_SELF) rested on the git REMOTE URL, which any clone owner can set — so a hostile target
+# pointing origin at the control plane's slug would be authorized against its root star, bypassing
+# its own star AND the placeholder-FAIL. The remote URL is attacker-settable and thus NOT a
+# trustworthy identity signal; only git-structural identity (the target shares the very repository
+# that ships this lib — its main checkout or a linked worktree of it) is trustworthy. The slug
+# fallback is removed.
 #
 # The functions here are pure resolution/derivation — they print a result and never post
 # comments, edit files, or mutate any checkout. Callers own the side effects.
 
 # __ns_self — this file's OWN path, absolutized ONCE at source time. `${BASH_SOURCE[0]}` reflects
 # HOW the caller sourced us: a relative `. scripts/lib/north-star.sh` leaves it relative, so a lazy
-# `dirname`-based root derivation inside ns_fabrica_root would later resolve against the CALLER's
+# `dirname`-based root derivation inside ns_ystack_root would later resolve against the CALLER's
 # cwd (which may have cd'd into a target repo) — mis-locating the control plane. Capturing and
 # absolutizing here, at source time (cwd is still the caller's source-time cwd, which is where the
-# relative path is valid), pins the self-path regardless of any later cd. ns_fabrica_root then uses
+# relative path is valid), pins the self-path regardless of any later cd. ns_ystack_root then uses
 # this instead of re-reading BASH_SOURCE, and its symlink loop's relative-target branch resolves
 # against the symlink's real dir rather than $PWD.
 __ns_self="${BASH_SOURCE[0]}"
@@ -66,16 +70,16 @@ ns_git_toplevel() {
 }
 
 # ns_repo_slug <dir> — print the <owner>/<repo> (gh nameWithOwner) for the repo containing
-# <dir>, or nothing. This is the IDENTITY used for the Fabrica-self check and doctor's
-# cwd/slug match — a slug, not a path, so two different clones of the same repo compare equal
-# and a clone whose path is a prefix of another's cannot false-match. Returns non-zero (and
-# prints nothing) when <dir> is not a gh-recognized repo.
+# <dir>, or nothing. This is the IDENTITY used for doctor's cwd/slug match — a slug, not a
+# path, so two different clones of the same repo compare equal and a clone whose path is a
+# prefix of another's cannot false-match. Returns non-zero (and prints nothing) when <dir> is
+# not a gh-recognized repo.
 #
 # `env -u GH_REPO`: `gh repo view` honors an exported GH_REPO OVER the repo at the cwd, so a
 # set GH_REPO would make this print the ENV repo's slug instead of the repo at <dir> — which
 # would let doctor.sh's cwd/slug match falsely pass (spoofing an external checkout into looking
-# like the target and reading the wrong local .fabrica/north-star.md). Clearing GH_REPO for
-# this one invocation forces the slug to reflect the actual repo at <dir>, always.
+# like the target and reading the wrong local per-target star). Clearing GH_REPO for this one
+# invocation forces the slug to reflect the actual repo at <dir>, always.
 ns_repo_slug() {
   local dir="$1"
   # Reject an empty/missing arg: `cd ""` is a silent no-op that leaves the subshell in the
@@ -105,41 +109,42 @@ ns_slug_eq() {
   [ "$a" = "$b" ]
 }
 
-# ns_fabrica_slug — print Fabrica's OWN control-plane repo slug (the repo that ships THIS
+# ns_ystack_slug — print the ystack control plane's OWN repo slug (the repo that ships THIS
 # resolver), or nothing. Derived from the resolver file's own location (this sourced file
 # lives at <control-plane>/scripts/lib/north-star.sh), following symlinks, so it identifies
-# Fabrica regardless of which target's cwd the caller runs from.
+# the control plane regardless of which target's cwd the caller runs from.
 #
-# NOTE (#98a): this is NO LONGER used for the Fabrica-self IDENTITY decision in ns_resolve —
+# NOTE (#98a): this is NO LONGER used for the ystack-self IDENTITY decision in ns_resolve —
 # that is now PATH-only, because a slug (from the git remote URL) is attacker-settable and thus
 # untrustworthy for authorization. Retained as a general-purpose derivation helper for callers
-# that legitimately need Fabrica's own slug for a NON-authorization comparison (e.g. diagnostics).
-ns_fabrica_slug() {
-  # `|| true` on the inner substitution: ns_fabrica_root ends in `( cd … && pwd -P )`, which
+# that legitimately need the control plane's own slug for a NON-authorization comparison
+# (e.g. diagnostics).
+ns_ystack_slug() {
+  # `|| true` on the inner substitution: ns_ystack_root ends in `( cd … && pwd -P )`, which
   # exits non-zero if the derived root is unreachable — under `set -e` that would abort the
   # caller before ns_repo_slug (itself guarded) can degrade to empty. Guarding here keeps the
   # whole helper degrade-to-empty.
   local root
-  root="$(ns_fabrica_root || true)"
+  root="$(ns_ystack_root || true)"
   ns_repo_slug "$root"
 }
 
-# ns_fabrica_root — print the Fabrica control-plane repo root, derived from THIS file's own
+# ns_ystack_root — print the ystack control-plane repo root, derived from THIS file's own
 # location (following symlinks: <root>/scripts/lib/north-star.sh -> dirname x3). BASH_SOURCE[0]
 # is the path of the sourced file (not $0, which is the CALLER's path) — that is what lets a
 # sourced helper locate the control plane independent of the caller's cwd or invocation.
 #
-# GIT-CANONICAL casing (#98a round-2 regression fix): the Fabrica-self IDENTITY compare in
-# ns_resolve (and the same guard in setup-target-repo.sh) tests `toplevel == fabrica_root`, where
+# GIT-CANONICAL casing (#98a round-2 regression fix): the ystack-self IDENTITY compare in
+# ns_resolve (and the same guard in setup-target-repo.sh) tests `toplevel == ystack_root`, where
 # `toplevel` comes from `git rev-parse --show-toplevel` (git-canonical casing) while this root is
 # a filesystem `pwd -P` (case-PRESERVING). On a case-insensitive filesystem a case-variant path
-# (`/Users/x/Fabrica` vs git's stored `/Users/x/fabrica`) makes the two operands differ ONLY in
-# case, so the identity compare falsely FAILs → Fabrica-self's own debate FAILs and setup would
-# pollute the control plane. So, once we have the physical root, canonicalize it THROUGH GIT too
-# (`git -C <root> rev-parse --show-toplevel`) so both sides of the compare are produced the same
-# way; fall back to the physical `pwd -P` value when the root is not a git work tree (e.g. a
-# tarball restore before `git init`), where a bare-path compare is the best we can do.
-ns_fabrica_root() {
+# (`/Users/x/YStack` vs git's stored `/Users/x/ystack`) makes the two operands differ ONLY in
+# case, so the identity compare falsely FAILs → the control plane's own debate FAILs and setup
+# would pollute the control plane. So, once we have the physical root, canonicalize it THROUGH
+# GIT too (`git -C <root> rev-parse --show-toplevel`) so both sides of the compare are produced
+# the same way; fall back to the physical `pwd -P` value when the root is not a git work tree
+# (e.g. a tarball restore before `git init`), where a bare-path compare is the best we can do.
+ns_ystack_root() {
   # `$__ns_self` (absolutized once at source time), NOT a fresh `${BASH_SOURCE[0]}`: a lazily
   # re-read BASH_SOURCE could still be the relative path the caller sourced us with, which would
   # resolve against the caller's (possibly cd'd) cwd. The pinned absolute self keeps root
@@ -227,17 +232,19 @@ ns_dir_is_empty_repo() {
 # `<mode> <type> <oid>\t<path>`; we read the first field. `2>/dev/null` + explicit rc keep it
 # degrade-to-non-zero under a `set -e` caller (an absent path prints nothing → non-zero).
 #
-# TOP-LEVEL pathspec resolution (round-3 FIX 1): <relpath> is ROOT-relative (`.fabrica/north-star.md`
-# / `NORTH_STAR.md`), but `git -C "$dir" ls-tree "$commit" -- "$relpath"` interprets the pathspec
-# relative to `-C "$dir"`. When a caller passes `$PWD` and the gate is invoked from a SUBDIRECTORY of
-# the target (documented as supported — the companion `git show <commit>:<relpath>` reads root
-# relative regardless of cwd), the ls-tree pathspec then points at `<subdir>/<relpath>` → the mode
-# lookup returns EMPTY for a valid regular committed file → this helper falsely reports "not a regular
-# file" and the round-2 symlink guard wrongly REJECTS the run. So resolve <dir> to its git TOP-LEVEL
-# first and run ls-tree there, making the root-relative pathspec correct from ANY subdirectory. `||
-# true` on the rev-parse keeps this degrade-to-non-zero under a `set -e` caller when <dir> is not a
-# work tree; an empty top (not a work tree) short-circuits to rc 1 (we must NOT `git -C "" ls-tree`,
-# which git treats as a no-op that stays in the CURRENT dir — possibly a DIFFERENT repo).
+# TOP-LEVEL pathspec resolution (round-3 FIX 1): <relpath> is ROOT-relative
+# (`.ystack/north-star.md`, the legacy `.fabrica/north-star.md`, or `NORTH_STAR.md`), but
+# `git -C "$dir" ls-tree "$commit" -- "$relpath"` interprets the pathspec relative to `-C "$dir"`.
+# When a caller passes `$PWD` and the gate is invoked from a SUBDIRECTORY of the target
+# (documented as supported — the companion `git show <commit>:<relpath>` reads root relative
+# regardless of cwd), the ls-tree pathspec then points at `<subdir>/<relpath>` → the mode lookup
+# returns EMPTY for a valid regular committed file → this helper falsely reports "not a regular
+# file" and the round-2 symlink guard wrongly REJECTS the run. So resolve <dir> to its git
+# TOP-LEVEL first and run ls-tree there, making the root-relative pathspec correct from ANY
+# subdirectory. `|| true` on the rev-parse keeps this degrade-to-non-zero under a `set -e` caller
+# when <dir> is not a work tree; an empty top (not a work tree) short-circuits to rc 1 (we must
+# NOT `git -C "" ls-tree`, which git treats as a no-op that stays in the CURRENT dir — possibly a
+# DIFFERENT repo).
 ns_committed_is_regular_file() {
   local dir="$1" commit="$2" relpath="$3"
   local top
@@ -255,7 +262,11 @@ ns_committed_is_regular_file() {
 # still-unreplaced shipped template. Both the gate (manager-review.sh) and doctor.sh (h) key
 # their placeholder detection off THIS token, via ns_has_shipped_default_marker below, so the
 # two never disagree on what counts as an un-replaced placeholder.
-NS_SHIPPED_DEFAULT_TOKEN='fabrica-shipped-default'
+NS_SHIPPED_DEFAULT_TOKEN='ystack-shipped-default'
+# The LEGACY marker, from before the product rename. Targets that adopted the old template
+# still carry it, so the marker check accepts BOTH tokens — an old un-replaced placeholder must
+# keep FAILing the gate, never slip through because the token name changed.
+NS_SHIPPED_DEFAULT_TOKEN_LEGACY='fabrica-shipped-default'
 
 # ns_active_region <file-or-"-"> — print the ACTIVE-entry region of a north-star document read
 # from a file path (or, with `-`, from stdin): the first HEADING line carrying `status: active`
@@ -277,7 +288,7 @@ NS_SHIPPED_DEFAULT_TOKEN='fabrica-shipped-default'
 # active heading would fall OUTSIDE the scanned region and never be seen → the gate would proceed
 # against an unreplaced template (placeholder bypass). Anchoring the start to a heading line makes
 # the region begin on the real active-entry heading. The shipped `NORTH_STAR.md` /
-# `.fabrica/north-star.md` active entries ARE headings (e.g. `### B — "…" · status: **active** · …`),
+# `.ystack/north-star.md` active entries ARE headings (e.g. `### B — "…" · status: **active** · …`),
 # so this matches the real format.
 ns_active_region() {
   local src="$1"
@@ -338,20 +349,21 @@ ns_active_region() {
 # ns_has_shipped_default_marker <file-or-"-"> — return 0 (true) when the north-star document's
 # ACTIVE-entry region still carries the shipped-default marker AS AN HTML COMMENT, matched
 # WHITESPACE- and CASE-INSENSITIVELY. Return non-zero otherwise (including when there is no active
-# heading).
+# heading). BOTH the canonical token (ystack-shipped-default) and the legacy one
+# (the legacy fabrica-shipped-default) count as the marker — see the token definitions above.
 #
 # Robust match — three bugs the adversarial sweeps found, fixed together:
 #   - SCOPED to the active region (ns_active_region) → the marker's prose/doc mentions elsewhere in
 #     the file do NOT false-trip a correctly-replaced star.
 #   - WHITESPACE/CASE-insensitive → an un-replaced placeholder whose marker is written as
-#     `<!--fabrica-shipped-default-->`, padded, UPPERCASE, tab-separated, or reflow-split across the
+#     `<!--ystack-shipped-default-->`, padded, UPPERCASE, tab-separated, or reflow-split across the
 #     heading + next line still MATCHES (a byte-exact `grep -F` on `<!-- … -->` would let all those
 #     variants slip through and wrongly AUTHORIZE).
-#   - COMMENT-FORM, not a bare token (round-2 FIX 2): match the `<!-- … fabrica-shipped-default … -->`
+#   - COMMENT-FORM, not a bare token (round-2 FIX 2): match the `<!-- … <token> … -->`
 #     HTML-COMMENT delimiters, NOT a bare token ANYWHERE in the active region. The round-1 bare-token
 #     match FALSE-FAILed a valid star when the operator removed the real `<!-- … -->` comment but the
-#     active region still mentioned `fabrica-shipped-default` in PROSE (e.g. "remove the
-#     fabrica-shipped-default marker") — a delimiter-free prose mention must NOT count as the marker.
+#     active region still mentioned the token in PROSE (e.g. "remove the
+#     ystack-shipped-default marker") — a delimiter-free prose mention must NOT count as the marker.
 #
 # Implementation: strip ALL whitespace (spaces/tabs, and — the region being one blob — newlines) and
 # lowercase, so every spacing/line-split/casing variant of the comment collapses to a matchable run
@@ -359,7 +371,9 @@ ns_active_region() {
 # before the token and `[^<]*` after it are boundary guards: `[^>]*` cannot cross a preceding `-->`
 # (it contains `>`) and `[^<]*` cannot cross into a following `<!--` (it contains `<`), so the token
 # must sit INSIDE one `<!-- … -->` comment — a prose token between/outside comments never matches,
-# while a comment carrying extra interior text (e.g. `<!-- fabrica-shipped-default: keep -->`) still does.
+# while a comment carrying extra interior text (e.g. `<!-- ystack-shipped-default: keep -->`) still
+# does. The alternation accepts either token (canonical or legacy); both are fixed literals whose
+# only non-alphanumeric character is `-`, which is ERE-safe here.
 ns_has_shipped_default_marker() {
   local src="$1"
   local region
@@ -367,15 +381,15 @@ ns_has_shipped_default_marker() {
   # `set -e` caller never aborts here — the grep result below is what decides.
   region="$(ns_active_region "$src" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]' || true)"
   # Match the collapsed COMMENT form: <!-- (up to, no `>`) TOKEN (up to, no `<`) -->. `grep -Eq`
-  # returns non-zero on no-match; `-F`-unsafe chars (`<`, `-`, `>`) are ERE-safe here (none are ERE
-  # metacharacters except none that change meaning in this pattern). The token is a fixed literal.
-  printf '%s' "$region" | grep -Eq "<!--[^>]*${NS_SHIPPED_DEFAULT_TOKEN}[^<]*-->"
+  # returns non-zero on no-match.
+  printf '%s' "$region" | grep -Eq "<!--[^>]*(${NS_SHIPPED_DEFAULT_TOKEN}|${NS_SHIPPED_DEFAULT_TOKEN_LEGACY})[^<]*-->"
 }
 
 # ns_resolve <target_dir> — resolve the active north star for the repo containing <target_dir>.
 # Prints ONE result line to stdout; the caller reads the first token:
-#   FABRICA_SELF <path>   the control-plane root NORTH_STAR.md, target IS Fabrica (order 1)
-#   LOCAL <path>          the target's own <toplevel>/.fabrica/north-star.md (order 2)
+#   YSTACK_SELF <path>    the control-plane root NORTH_STAR.md, target IS the control plane (order 1)
+#   LOCAL <path>          the target's own <toplevel>/.ystack/north-star.md, or the legacy
+#                         <toplevel>/.fabrica/north-star.md when only that legacy file exists (order 2)
 #   UNSET                 non-empty target, no star resolved (order 3) — caller decides
 #   EMPTY                 target repo has no commits yet (benign; no star expected)
 #   NOREPO                <target_dir> is not inside a git work tree (caller-specific handling)
@@ -393,48 +407,49 @@ ns_resolve() {
     return 0
   fi
 
-  # Order 1 — Fabrica-self: root NORTH_STAR.md, ONLY on a trustworthy identity match (the target IS
-  # the Fabrica control-plane repo — i.e. the clone that ships THIS very lib, OR one of its linked
-  # worktrees). Checked BEFORE the target-local file so a stray/committed `.fabrica/north-star.md`
-  # accidentally sitting in the control-plane checkout can NOT shadow Fabrica's own root star (that
-  # file would otherwise win the LOCAL branch and mis-steer Fabrica-self).
+  # Order 1 — ystack-self: root NORTH_STAR.md, ONLY on a trustworthy identity match (the target IS
+  # the ystack control-plane repo — i.e. the clone that ships THIS very lib, OR one of its linked
+  # worktrees). Checked BEFORE the target-local file so a stray per-target star file
+  # accidentally sitting in the control-plane checkout can NOT shadow the control plane's own
+  # root star (that file would otherwise win the LOCAL branch and mis-steer ystack-self).
   #
-  # SHARED-GIT-COMMON-DIR identity (NO slug): the target is Fabrica-self iff its git COMMON-DIR
-  # equals Fabrica's own git common-dir. This is the SAME signal round-1's nested-repo guard (FIX F)
-  # uses, and it is what a bare top-level PATH compare could not do: Faber operates from a LINKED
-  # WORKTREE (`.claude/worktrees/*`) whose `git rev-parse --show-toplevel` is the WORKTREE path, not
-  # the main checkout, so `toplevel == fabrica_root` FALSELY FAILed and the Fabrica worktree was
-  # misclassified as an external target (skipping the root NORTH_STAR.md and instead resolving off a
-  # `.fabrica/north-star.md` in the worktree, mis-steering Fabrica-self). A linked worktree SHARES its parent repo's common-dir, so the
-  # common-dir compare makes the main checkout AND all its linked worktrees resolve as Fabrica-self,
+  # SHARED-GIT-COMMON-DIR identity (NO slug): the target is ystack-self iff its git COMMON-DIR
+  # equals the control plane's own git common-dir. This is the SAME signal round-1's nested-repo
+  # guard (FIX F) uses, and it is what a bare top-level PATH compare could not do: yshifu operates
+  # from a LINKED WORKTREE (`.claude/worktrees/*`) whose `git rev-parse --show-toplevel` is the
+  # WORKTREE path, not the main checkout, so `toplevel == ystack_root` FALSELY FAILed and the
+  # control plane's own worktree was misclassified as an external target (skipping the root
+  # NORTH_STAR.md and instead resolving off a per-target star file in the worktree, mis-steering
+  # ystack-self). A linked worktree SHARES its parent repo's common-dir, so the
+  # common-dir compare makes the main checkout AND all its linked worktrees resolve as ystack-self,
   # while a genuinely SEPARATE repo (different common-dir) does not. The existing top-level PATH
-  # equality is KEPT as one accepted case (belt-and-suspenders: a match either way is self) — but the
-  # common-dir compare is the primary signal.
+  # equality is KEPT as one accepted case (belt-and-suspenders: a match either way is self) — but
+  # the common-dir compare is the primary signal.
   #
   # BOTH operands are canonicalized to absolute physical paths (ns_git_common_dir `cd`s in and
   # `pwd -P`s), immune to a relative `--git-common-dir` and to `/var`→`/private/var` symlink skew.
-  # This is gh-free, so Fabrica-self still resolves OFFLINE / when gh is unavailable. The old slug
-  # fallback (target slug == Fabrica slug) is REMOVED: the slug derives from the git REMOTE URL,
-  # which any clone owner can set, so it let a hostile target pointing origin at Fabrica's slug
-  # authorize against Fabrica's root star and bypass the placeholder-FAIL. Only git-structural
-  # identity (the target shares this shipped copy's repository) is trustworthy.
-  local fabrica_root
-  # `|| true`: ns_fabrica_root degrades to empty (rc may be non-zero); guard so this `set -e` call
+  # This is gh-free, so ystack-self still resolves OFFLINE / when gh is unavailable. The old slug
+  # fallback (target slug == the control plane's slug) is REMOVED: the slug derives from the git
+  # REMOTE URL, which any clone owner can set, so it let a hostile target pointing origin at the
+  # control plane's slug authorize against its root star and bypass the placeholder-FAIL. Only
+  # git-structural identity (the target shares this shipped copy's repository) is trustworthy.
+  local ystack_root
+  # `|| true`: ns_ystack_root degrades to empty (rc may be non-zero); guard so this `set -e` call
   # site can never abort before the `-n` emptiness check decides.
-  fabrica_root="$(ns_fabrica_root || true)"
-  # Common-dir identity: does the target share the SAME repository as the Fabrica control plane?
+  ystack_root="$(ns_ystack_root || true)"
+  # Common-dir identity: does the target share the SAME repository as the ystack control plane?
   # Both canonicalized to absolute physical paths so a linked worktree resolves equal to its main
   # checkout. `|| true` keeps each derivation from aborting this `set -e` call site; the emptiness
   # guards below ensure an unresolved common-dir never false-matches.
-  local tgt_common fab_common is_self=0
+  local tgt_common cp_common is_self=0
   tgt_common="$(ns_git_common_dir "$toplevel" || true)"
-  if [ -n "$fabrica_root" ]; then
-    fab_common="$(ns_git_common_dir "$fabrica_root" || true)"
-    if [ -n "$tgt_common" ] && [ -n "$fab_common" ] && [ "$tgt_common" = "$fab_common" ]; then
+  if [ -n "$ystack_root" ]; then
+    cp_common="$(ns_git_common_dir "$ystack_root" || true)"
+    if [ -n "$tgt_common" ] && [ -n "$cp_common" ] && [ "$tgt_common" = "$cp_common" ]; then
       is_self=1
     fi
     # Keep the existing top-level PATH equality as one accepted case (a match either way is self).
-    if [ "$toplevel" = "$fabrica_root" ]; then
+    if [ "$toplevel" = "$ystack_root" ]; then
       is_self=1
     fi
   fi
@@ -442,29 +457,37 @@ ns_resolve() {
     # CLASSIFICATION is IDENTITY-ONLY, UNCONDITIONAL (round-3, [P2]). Classification (which SOURCE
     # applies) and AUTHORIZATION (whether that source has a real committed star) are SEPARATE
     # concerns: classification belongs to the resolver, authorization belongs to the gate. Once the
-    # identity matches (this checkout — or a linked worktree of it — IS the Fabrica control plane),
-    # the resolved SOURCE is the root NORTH_STAR.md — FULL STOP. We do NOT gate this on whether NORTH_STAR.md exists (committed
-    # OR working-tree): round-2 keyed the branch on `git cat-file -e HEAD:NORTH_STAR.md`, so a
-    # control-plane cwd whose root star was NOT committed would FALL THROUGH to the LOCAL branch and
-    # a stray committed `.fabrica/north-star.md` there would be authorized as if it were Fabrica's
-    # star — contradicting the precedence rule (path identity → FABRICA_SELF; `.fabrica` must never
-    # shadow Fabrica-self). Returning FABRICA_SELF unconditionally here makes `.fabrica/north-star.md`
-    # incapable of ever shadowing Fabrica-self. The AUTHORIZATION that a real committed root star
-    # exists is the gate's job: manager-review.sh's FABRICA_SELF branch reads `git show
-    # HEAD:NORTH_STAR.md` and FAILs cleanly ("NORTH_STAR.md is not committed at HEAD") if the root is
-    # not committed — a missing committed root FAILs, it does NOT fall back to `.fabrica`. doctor.sh
-    # likewise diagnoses the uncommitted-root FABRICA_SELF case as a WARN (it never gated the kind on
-    # committed existence). So a worktree-deleted-but-committed root still authorizes (path→FABRICA_SELF
-    # here, `git show HEAD:` succeeds at the gate).
-    echo "FABRICA_SELF $fabrica_root/NORTH_STAR.md"
+    # identity matches (this checkout — or a linked worktree of it — IS the ystack control plane),
+    # the resolved SOURCE is the root NORTH_STAR.md — FULL STOP. We do NOT gate this on whether
+    # NORTH_STAR.md exists (committed OR working-tree): round-2 keyed the branch on
+    # `git cat-file -e HEAD:NORTH_STAR.md`, so a control-plane cwd whose root star was NOT
+    # committed would FALL THROUGH to the LOCAL branch and a stray committed per-target star there
+    # would be authorized as if it were the control plane's star — contradicting the precedence
+    # rule (path identity → YSTACK_SELF; the per-target star must never shadow ystack-self).
+    # Returning YSTACK_SELF unconditionally here makes the per-target star file incapable of ever
+    # shadowing ystack-self. The AUTHORIZATION that a real committed root star exists is the
+    # gate's job: manager-review.sh's YSTACK_SELF branch reads `git show HEAD:NORTH_STAR.md` and
+    # FAILs cleanly ("NORTH_STAR.md is not committed at HEAD") if the root is not committed — a
+    # missing committed root FAILs, it does NOT fall back to the per-target star. doctor.sh
+    # likewise diagnoses the uncommitted-root YSTACK_SELF case as a WARN (it never gated the kind
+    # on committed existence). So a worktree-deleted-but-committed root still authorizes
+    # (path→YSTACK_SELF here, `git show HEAD:` succeeds at the gate).
+    echo "YSTACK_SELF $ystack_root/NORTH_STAR.md"
     return 0
   fi
 
-  # Order 2 — target-local .fabrica/north-star.md at the git top-level (reached only when the
-  # target is NOT Fabrica-self, so a real external target's own star is what wins here).
-  local local_star="$toplevel/.fabrica/north-star.md"
+  # Order 2 — target-local star at the git top-level (reached only when the target is NOT
+  # ystack-self, so a real external target's own star is what wins here). The canonical
+  # `.ystack/north-star.md` is tried first; a target still on the legacy layout keeps working via
+  # the legacy `.fabrica/north-star.md` fallback. When BOTH exist, the canonical path wins.
+  local local_star="$toplevel/.ystack/north-star.md"
   if [ -f "$local_star" ]; then
     echo "LOCAL $local_star"
+    return 0
+  fi
+  local legacy_star="$toplevel/.fabrica/north-star.md"
+  if [ -f "$legacy_star" ]; then
+    echo "LOCAL $legacy_star"
     return 0
   fi
 

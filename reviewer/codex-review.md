@@ -12,7 +12,7 @@ independent judgment, not Claude's rubric echoed back.
 the **current repo** — `gh` infers `<owner>/<repo>` from the cwd's git remote, and the
 review runs against that repo's PR — so **invoke it from within the target repo's clone**.
 The script lives only in *this* control-plane repo, so call it by its **absolute path**
-(or put `<fabrica>/scripts` on your `PATH`); don't copy it into each target repo. It first
+(or put `<ystack>/scripts` on your `PATH`); don't copy it into each target repo. It first
 guards that the cwd is a git repo with a gh-recognized remote (else it errors out) — and it
 `unset`s `GH_REPO` then derives the repo from the cwd and passes an explicit `--repo` to
 every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to a
@@ -85,7 +85,7 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    this review covered (and refuse if the head has since moved), plus a
    **`reviewer: <model> @ <effort>`** line recording the RESOLVED config that gated this review
    (see **model policy** below). The marker and reviewer lines are part of
-   Faber's header prefix, clearly separate from Codex's verbatim body, so the review stays
+   yshifu's header prefix, clearly separate from Codex's verbatim body, so the review stays
    read-only / comments-only / verbatim. [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) is
    the first consumer: it reads the `Reviewed-head`/`Reviewed-base` markers, confirms the PR's
    current head still equals it and that CI is green, then squash-merges pinned to that SHA
@@ -93,13 +93,13 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 
 ```
 # run from within the TARGET repo's clone; invoke the script by ABSOLUTE PATH
-# (it lives only in the fabrica control-plane repo — do NOT copy it per repo).
-# Substitute your fabrica clone for "$HOME/git/fabrica".
-"$HOME/git/fabrica/scripts/codex-review.sh" <PR#>             # e.g. ... 7
-"$HOME/git/fabrica/scripts/codex-review.sh" -m <model> <PR#>  # optional model override
+# (it lives only in the ystack control-plane repo — do NOT copy it per repo).
+# Substitute your ystack clone for "$HOME/git/ystack".
+"$HOME/git/ystack/scripts/codex-review.sh" <PR#>             # e.g. ... 7
+"$HOME/git/ystack/scripts/codex-review.sh" -m <model> <PR#>  # optional model override
 
-# Optional: add fabrica/scripts to PATH once, then call it by name from any target repo:
-#   export PATH="$HOME/git/fabrica/scripts:$PATH"   # (add to your shell rc)
+# Optional: add ystack/scripts to PATH once, then call it by name from any target repo:
+#   export PATH="$HOME/git/ystack/scripts:$PATH"   # (add to your shell rc)
 #   codex-review.sh <PR#>
 ```
 
@@ -115,14 +115,15 @@ The review gate is a **max-capability decision point** (spend-by-leverage — se
 does not simply inherit the operator's personal Codex defaults. Before doing anything else,
 the script sources `config/models.conf` **resolved relative to its own location** (this clone's
 control-plane root, following symlinks — never a hardcoded personal path), which sets
-`FABRICA_CODEX_MODEL` (empty by default) and `FABRICA_REVIEW_EFFORT` (`high` by default). A
+`YSTACK_CODEX_MODEL` (empty by default) and `YSTACK_REVIEW_EFFORT` (`high` by default). A
 missing or unsourceable `config/models.conf` **fails loudly**, pointing at `scripts/doctor.sh`
 check (k), rather than silently reviewing at an unknown effort. This is the **control plane's
 own** config — operator-owned and doctor-validated — so sourcing it directly is fine.
 
-If the **reviewed repo** has committed its own [`.fabrica/models.conf`](../templates/.fabrica/models.conf)
+If the **reviewed repo** has committed its own [`.ystack/models.conf`](../templates/.ystack/models.conf)
 (same format/keys, an opt-in per-target override), it may override the **producer/model keys
-only**. Two properties are security-critical here (a P1 finding from an adversarial review of
+only**. A target that has not renamed yet may still keep it at the legacy `.fabrica/models.conf` path — the harness still reads it there.
+Two properties are security-critical here (a P1 finding from an adversarial review of
 PR #115 — the original design got both wrong):
 
 - **Trust anchor: the gh-bound DEFAULT branch, fetched fresh — never the PR head.** The PR head
@@ -134,13 +135,13 @@ PR #115 — the original design got both wrong):
   way the manager-debate gate's anchor is.
 - **Parse, don't source.** The override is read as **data**, via a strict line-by-line parser
   (`mc_parse_target_override` in [`scripts/lib/models-conf.sh`](../scripts/lib/models-conf.sh))
-  — never `source`/`.`/`eval`. Only a line matching exactly `FABRICA_<allowedkey>=<value>` is
+  — never `source`/`.`/`eval`. Only a line matching exactly `YSTACK_<allowedkey>=<value>` is
   recognized (value charset-restricted, optionally quoted); every other line — comments, blank
   lines, shell metacharacters, command substitutions — is silently ignored, never executed. A
   target-committed file must never run as shell in this non-sandboxed harness. Absence of the
   file is normal (most targets have no override) and is not an error.
 
-**Gate keys are not target-overridable.** The parser recognizes `FABRICA_REVIEW_EFFORT` in a
+**Gate keys are not target-overridable.** The parser recognizes `YSTACK_REVIEW_EFFORT` in a
 target's override, but **never applies it** — a target can never lower or otherwise change its
 own review gate. Instead it prints a warning and folds a visible **`warning: target override
 attempted to set gate effort — ignored`** line into the posted PR comment, so an attempted
@@ -148,12 +149,12 @@ downgrade is never silent.
 
 Applying the resolved config:
 
-- **`-c model_reasoning_effort="$FABRICA_REVIEW_EFFORT"` is ALWAYS passed** — the gate is never
+- **`-c model_reasoning_effort="$YSTACK_REVIEW_EFFORT"` is ALWAYS passed** — the gate is never
   class-routed down, so this explicitly raises it to the resolved value (`high` by default)
   instead of silently inheriting whatever the operator's `~/.codex/config.toml` happens to
   default to (often `low`), and a target override can never change this value.
 - **`-m <model>` is passed only when a model is actually resolved.** The script's own `-m` CLI
-  flag keeps precedence over `FABRICA_CODEX_MODEL`; if neither is set, no `-m` is passed at all
+  flag keeps precedence over `YSTACK_CODEX_MODEL`; if neither is set, no `-m` is passed at all
   (Codex uses its own default model).
 - The **resolved** model + effort are echoed into the posted PR comment's header —
   `reviewer: <model> @ <effort>` (e.g. `reviewer: operator-default @ high` when no model was
@@ -200,7 +201,7 @@ On detection: the script exits non-zero and posts an explicit DEGRADED marker co
 **different** header line than the real `## Codex reviewer (cross-vendor, read-only)` one, with
 NO `Reviewed-head`/`Reviewed-base` markers. That means `scripts/merge-pr.sh`'s marker parser
 (which matches that exact header line plus those exact marker keys) can never mistake a
-degraded run for a completed review — belt-and-suspenders on top of Faber reading the comment
+degraded run for a completed review — belt-and-suspenders on top of yshifu reading the comment
 text.
 
 **The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix).** The
@@ -236,28 +237,28 @@ degraded run — codex may not have inspected the diff at all. So a DEGRADED com
 
 ## The in-session review loop
 
-Today the loop is **synchronous** — it runs while a Faber session is driving it:
+Today the loop is **synchronous** — it runs while a yshifu session is driving it:
 
 ```
-Faber spawns coder subagent  →  coder opens PR (label round-0)
+yshifu spawns coder subagent  →  coder opens PR (label round-0)
         ↓
-Faber runs codex-review.sh <PR#>  (by absolute path, from the target repo's clone)
+yshifu runs codex-review.sh <PR#>  (by absolute path, from the target repo's clone)
    (script posts Codex's verdict to the PR, verbatim)
         ↓
-Faber reads the Codex comment
-        ├── pass      →  Faber merges if low-risk (CI green); else hands to the human
-        └── not pass  →  Faber spawns coder (fix mode) to address comments
+yshifu reads the Codex comment
+        ├── pass      →  yshifu merges if low-risk (CI green); else hands to the human
+        └── not pass  →  yshifu spawns coder (fix mode) to address comments
                               ↓
-                         Faber re-runs codex-review.sh   (bump round-N)
+                         yshifu re-runs codex-review.sh   (bump round-N)
                               ↺  repeat
                               └── ~3-round cap → SCOPE DOWN + FOLLOW-UP (productive):
                                     land the converged core (one scoped-down change →
                                     clean review → merge) + open a follow-up issue for the
-                                    contested remainder; reserve needs-human → Faber pings you
+                                    contested remainder; reserve needs-human → yshifu pings you
                                     for a genuine standoff / safety-rail / north-star
 ```
 
-Faber, not the reviewer, drives each step; Claude and Codex never talk directly — the
+yshifu, not the reviewer, drives each step; Claude and Codex never talk directly — the
 **PR is the message bus**. Rounds + escalation live in the **labels**
 (`round-0..3`, `needs-human`), not in any agent's memory.
 
@@ -267,7 +268,7 @@ These are possible later changes — **none is set up today.** The in-session ha
 is the only review path that exists.
 
 - **Codex GitHub integration** — a possible **autonomous** upgrade: Codex would post its
-  review on PR events itself (PR opened/updated), so the loop would no longer need a Faber
+  review on PR events itself (PR opened/updated), so the loop would no longer need a yshifu
   session to invoke the script. Same invariants (cross-vendor, read-only, comments-only).
   Not built; wiring it is out of scope here.
 - **codex-plugin-cc** — an **interactive** alternative: drive Codex review from inside a

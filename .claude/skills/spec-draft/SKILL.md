@@ -15,7 +15,7 @@ Slug: `$0`
 
 1. Read `work/$0/intent.md` **from main** — never from a branch. Record its blob
    hash: `git hash-object work/$0/intent.md`.
-2. Read the north star (`NORTH_STAR.md` here; a target's `.fabrica/north-star.md`
+2. Read the north star (`NORTH_STAR.md` here; a target's `.ystack/north-star.md`
    elsewhere), `CLAUDE.md`, and `REVIEW.md` — the spec must conform to all three.
 3. Write `work/$0/spec.md`:
    - YAML frontmatter first:
@@ -33,7 +33,7 @@ Slug: `$0`
    may vanish.
 5. **Stage rule:** this pass writes ONLY `work/$0/spec.md` — never the intent,
    other files, or any config.
-6. On branch `fabrica/spec/$0` (reuse if it exists — update, never duplicate),
+6. On branch `ystack/spec/$0` (reuse if it exists — update, never duplicate),
    commit and open/update a PR titled `spec: $0`. The operator merging it is
    **G2**: approval to build.
 

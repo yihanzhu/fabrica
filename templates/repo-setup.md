@@ -1,23 +1,23 @@
 # Target repo setup checklist
 
 The **one real precondition** is CI that runs on PRs (§3) — that's the hard merge gate.
-**Everything else Faber bootstraps for you on first use:** the first time you run `/faber`
-in a target repo this session, Faber derives the repo, creates/reconciles the loop labels,
+**Everything else yshifu bootstraps for you on first use:** the first time you run `/yshifu`
+in a target repo this session, yshifu derives the repo, creates/reconciles the loop labels,
 and runs the readiness self-check — before its first loop action. So adoption collapses to
-`cd repo → /faber → go`. And if the repo has **no PR CI yet, Faber can bootstrap that gate
+`cd repo → /yshifu → go`. And if the repo has **no PR CI yet, yshifu can bootstrap that gate
 too** (§3) — you approve and merge the initial gate by hand — so you don't have to wire it
 yourself first. The steps below document what that bootstrap does (and how to run it by hand
 as an optional pre-flight); you don't have to run them yourself.
 
-## 1. Labels (Faber creates these on first use)
+## 1. Labels (yshifu creates these on first use)
 The loop uses these labels as its state (each coder spawn is stateless):
-- `debating` — issue under manager-debate (Faber + Codex); not yet approved
-- `ready` — cleared to run (your direct approval OR Faber⇄Codex consensus toward an approved north star); Faber's cue to spawn the coder
+- `debating` — issue under manager-debate (yshifu + Codex); not yet approved
+- `ready` — cleared to run (your direct approval OR yshifu⇄Codex consensus toward an approved north star); yshifu's cue to spawn the coder
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
 - `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
 - `merge-ready` — current head passed Codex review; auto-merged in-session if low-risk, else awaiting your merge
 
-**Faber creates/reconciles these automatically** on its first-loop-action bootstrap, so you
+**yshifu creates/reconciles these automatically** on its first-loop-action bootstrap, so you
 normally don't touch this. If you want to bootstrap or reconcile the labels by hand
 (optional/advanced), run the setup script — it's idempotent, safe to re-run:
 
@@ -27,8 +27,8 @@ scripts/setup-target-repo.sh <owner>/<repo>
 
 The script is the **canonical source of truth** for these labels: a normal run
 force-edits each existing label to the script's definitions, so re-running (whether by you
-or by Faber's bootstrap) reconciles any drift live labels have picked up. To check for drift
-**without** mutating anything, run the read-only dry mode (this is what Faber runs first to
+or by yshifu's bootstrap) reconciles any drift live labels have picked up. To check for drift
+**without** mutating anything, run the read-only dry mode (this is what yshifu runs first to
 decide whether a reconcile is needed):
 
 ```bash
@@ -51,12 +51,12 @@ The supported protection shape is **required status checks** — that is the gat
   required checks), the script falls back to requiring ≥1 passing check with none failing/pending.
 - ✅ Require branches to be up to date before merging
 - ⛔️ **Do NOT use "Require a pull request before merging → require approving review."**
-  Fabrica's reviewer (`scripts/codex-review.sh`) is **comments-only and never approves**, so a
+  ystack's reviewer (`scripts/codex-review.sh`) is **comments-only and never approves**, so a
   required approving review can never be satisfied by the loop — `merge-pr.sh` detects this
   (`reviewDecision=REVIEW_REQUIRED`) and refuses, handing the PR to the human merge gate.
   Gate on required **status checks**, not on a required approving review.
-- ⛔️ **Keep GitHub's native auto-merge button off** — merges run through Faber or the
-  human (both gated on green CI), not a server-side auto-merge trigger. Faber merging a
+- ⛔️ **Keep GitHub's native auto-merge button off** — merges run through yshifu or the
+  human (both gated on green CI), not a server-side auto-merge trigger. yshifu merging a
   clean, low-risk PR is a deliberate `gh pr merge`, not this checkbox.
 
 **Merged-branch cleanup.** `merge-pr.sh` does not delete the head branch. Either enable the
@@ -74,16 +74,16 @@ non-standard toolchain.
 
 **If this repo has no CI, you have two options** — it's the loop's hard gate, and the team
 won't merge against a missing or hollow check:
-- **Let Fabrica bootstrap it (you approve the initial gate).** At first contact Faber confirms
+- **Let ystack bootstrap it (you approve the initial gate).** At first contact yshifu confirms
   CI is genuinely absent (inspecting the CI/provider config, not just `doctor.sh`'s WARN — that
   warns for a repo with no PRs yet even when a workflow exists), then offers to scaffold a
   `pull_request` workflow from your auto-discovered toolchain as the **first "add PR CI"
   issue**. Because a self-authored gate can't certify itself, that PR is **operator-approved
-  and human-merged, never auto-merged** — Faber classifies it as human-merge-only and does
+  and human-merged, never auto-merged** — yshifu classifies it as human-merge-only and does
   **not** run `merge-pr.sh` on it at all (a same-repo bootstrap workflow can even self-report
   green on its own PR, so the human — not the tooling — is the gate), so **you merge it by
   hand**; this is the one sanctioned human-merge-without-a-pre-existing-gate case, precisely
-  because it *creates* the gate. Faber tells you **what the bootstrapped gate
+  because it *creates* the gate. yshifu tells you **what the bootstrapped gate
   covers** (tests if present; otherwise lint / build only) so a weak gate isn't mistaken for a
   strong one.
 - **Or wire it yourself.** There is no blessed drop-in workflow: CI is project-specific, so you
@@ -108,41 +108,41 @@ Illustrative only (not a drop-in — swap in your repo's real commands and runti
 
 ## 5. Connect the in-session team
 The team runs from a Claude Code session — there are no per-repo routine triggers to wire.
-- Install the **`/faber`** command: run `scripts/install.sh` (no args) from your fabrica
-  clone. Faber then orchestrates the loop here, spawning Claude coder subagents.
-- Connect the **Codex CLI** (installed + signed in) so Faber can run
+- Install the **`/yshifu`** command: run `scripts/install.sh` (no args) from your ystack
+  clone. yshifu then orchestrates the loop here, spawning Claude coder subagents.
+- Connect the **Codex CLI** (installed + signed in) so yshifu can run
   `scripts/codex-review.sh <PR#>` against this repo's PRs — the cross-vendor, comments-only
   reviewer.
 
 ## 6. Set + approve your own north star (unlocks proactive autonomous mode)
-Your north star lives in **this target repo**, at `.fabrica/north-star.md` (committed, owned by
-your repo — not the fabrica control-plane clone). Setup does **not** auto-seed it; you create it:
-copy `templates/.fabrica/north-star.md` from your fabrica clone into this repo as
-`.fabrica/north-star.md`, replace the placeholder with *your* direction, remove the
-`<!-- fabrica-shipped-default -->` marker, then **commit** it. `scripts/setup-target-repo.sh`
+Your north star lives in **this target repo**, at `.ystack/north-star.md` (committed, owned by
+your repo — not the ystack control-plane clone). Setup does **not** auto-seed it; you create it:
+copy `templates/.ystack/north-star.md` from your ystack clone into this repo as
+`.ystack/north-star.md`, replace the placeholder with *your* direction, remove the
+`<!-- ystack-shipped-default -->` marker, then **commit** it. `scripts/setup-target-repo.sh`
 only creates the loop labels — it does not create this file. Then explicitly approve the active
-north star to Faber. **Your explicit approval of the active north star is the root authorization
-for all proactive work** — and Faber gates on that approval, not on any line written in the file.
+north star to yshifu. **Your explicit approval of the active north star is the root authorization
+for all proactive work** — and yshifu gates on that approval, not on any line written in the file.
 The shipped approval note is the prior owner's history, **not** a token that approves the goal for
 you: a fresh copy inheriting it is not auto-approved. Until you set + commit + approve your own,
-Faber acts only on issues you ask for directly and will ask you to set + approve the north star
+yshifu acts only on issues you ask for directly and will ask you to set + approve the north star
 before pursuing anything proactively. The proactive manager-debate (`scripts/manager-review.sh`)
-reads the **committed** `.fabrica/north-star.md`; a missing, still-placeholder, or no-active-entry
+reads the **committed** `.ystack/north-star.md`; a missing, still-placeholder, or no-active-entry
 star FAILs the gate — so commit your north star after you write it. (When the target is the
-Fabrica control-plane repo itself, its north star is the root `NORTH_STAR.md` — Fabrica is its
+ystack control-plane repo itself, its north star is the root `NORTH_STAR.md` — ystack is its
 own target.)
 
 ## 7. Model tiering override (optional)
-Fabrica ships model-tiering defaults at `config/models.conf` in the fabrica clone (see
+ystack ships model-tiering defaults at `config/models.conf` in the ystack clone (see
 README.md's "Model policy" section). If this target repo wants different values (e.g. a
-different coder ceiling), copy `templates/.fabrica/models.conf` from your fabrica clone into
-this repo as `.fabrica/models.conf` — same format/keys as the shipped defaults, applied
+different coder ceiling), copy `templates/.ystack/models.conf` from your ystack clone into
+this repo as `.ystack/models.conf` — same format/keys as the shipped defaults, applied
 **after** them — set only the keys you want to change, and commit it. This is optional: skip
 it entirely to inherit the shipped defaults. `scripts/doctor.sh` validates the shipped
 defaults (checks (k) and (l)). The review/manager-debate gates (`scripts/codex-review.sh` /
 `scripts/manager-review.sh`) already read this per-target override — but **only the
-producer/model keys** (`FABRICA_CODER_MODEL`, `FABRICA_HANDS_MODEL`, `FABRICA_CODEX_MODEL`):
-`FABRICA_REVIEW_EFFORT` / `FABRICA_DEBATE_EFFORT` can never be set this way (a target can
+producer/model keys** (`YSTACK_CODER_MODEL`, `YSTACK_HANDS_MODEL`, `YSTACK_CODEX_MODEL`):
+`YSTACK_REVIEW_EFFORT` / `YSTACK_DEBATE_EFFORT` can never be set this way (a target can
 never lower or change its own gate — an attempt is ignored with a visible warning in the
 posted PR/issue comment). Wiring the coder-spawn / hands-policy keys into the producers
 themselves is still follow-up work.

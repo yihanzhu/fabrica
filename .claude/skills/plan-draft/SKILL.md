@@ -8,7 +8,7 @@ argument-hint: [slug]
 # Draft a plan
 
 Nothing is implemented without an accepted plan. The plan is committed before code,
-on the same branch as the implementation (`fabrica/impl/<slug>`), so review can
+on the same branch as the implementation (`ystack/impl/<slug>`), so review can
 check the eventual diff against it.
 
 Slug: `$0`
@@ -37,7 +37,7 @@ Slug: `$0`
    is riskiest, what alternative did you reject and why — the answers belong under
    Risks.
 5. The bar: someone who never saw this conversation could implement from the plan
-   alone. Commit it as the **first commit** on `fabrica/impl/$0`. If implementation
+   alone. Commit it as the **first commit** on `ystack/impl/$0`. If implementation
    later departs from the plan, update `plan.md` in the same commit that departs.
 
 **Write in plain language.** Short sentences, everyday words — the reader is a

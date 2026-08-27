@@ -4,7 +4,9 @@ set -euo pipefail
 # round-cap.sh — the review-loop brake.
 #
 # The fix loop is bounded by round-N labels on the PR (v1's counter, reused).
-# No round label counts as round 0. The cap is 3 (FABRICA_ROUND_CAP overrides).
+# No round label counts as round 0. The cap is 3. YSTACK_ROUND_CAP overrides
+# it; the legacy FABRICA_ROUND_CAP still works, and YSTACK_ROUND_CAP wins when
+# both are set.
 #
 #   round-cap.sh check <pr>   print "round=<n>" and "proceed=true|false"
 #   round-cap.sh bump  <pr>   move the label up one round BEFORE the fix acts;
@@ -21,7 +23,7 @@ if [ "$#" -ne 2 ]; then
 fi
 mode="$1"
 pr="$2"
-cap="${FABRICA_ROUND_CAP:-3}"
+cap="${YSTACK_ROUND_CAP:-${FABRICA_ROUND_CAP:-3}}" # legacy fallback
 
 labels="$(gh pr view "$pr" --json labels --jq '.labels[].name')"
 

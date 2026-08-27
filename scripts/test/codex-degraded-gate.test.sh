@@ -29,7 +29,7 @@ set -euo pipefail
 # scripts/merge-pr.sh's marker parser (which matches the EXACT line
 # `^## Codex reviewer (cross-vendor, read-only)$` plus `Reviewed-head:`/`Reviewed-base:`) can never
 # mistake a degraded run for a completed review, even mechanically (independent of whether a human
-# or Faber reads the comment text carefully).
+# or yshifu reads the comment text carefully).
 #
 # OFFLINE and hermetic. Run: scripts/test/codex-degraded-gate.test.sh
 
@@ -425,14 +425,14 @@ case "$mode" in
     json_completed
     exit 0 ;;
   clean-verdict)
-    [ -n "$out" ] && printf 'VERDICT: PROCEED\nREASONING: stub genuine debate.\nGAP FABER MISSED: none.\n' >"$out"
+    [ -n "$out" ] && printf 'VERDICT: PROCEED\nREASONING: stub genuine debate.\nGAP YSHIFU MISSED: none.\n' >"$out"
     json_repo_probe
-    json_agent $'VERDICT: PROCEED\nREASONING: stub genuine debate.\nGAP FABER MISSED: none.'
+    json_agent $'VERDICT: PROCEED\nREASONING: stub genuine debate.\nGAP YSHIFU MISSED: none.'
     json_completed
     exit 0 ;;
   signal)
     if [ "$last" = "-" ]; then
-      signal_answer=$'VERDICT: PROCEED\nREASONING: This genuine verdict quotes "Failed to spawn code-mode host" as fixture prose.\nGAP FABER MISSED: none.'
+      signal_answer=$'VERDICT: PROCEED\nREASONING: This genuine verdict quotes "Failed to spawn code-mode host" as fixture prose.\nGAP YSHIFU MISSED: none.'
     else
       signal_answer='Failed to spawn code-mode host: quoted fixture prose, not a diagnostic.'
     fi
@@ -539,7 +539,7 @@ run_codex_review() {
   : >"$posted_file"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 FAKE_REPO_NAME="$(basename "$repo_dir")" \
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR=1 FAKE_REPO_NAME="$(basename "$repo_dir")" \
       FAKE_CODEX_MODE="$mode" FAKE_GH_POSTED="$posted_file" \
       bash "$codex_review" "$pr" 2>&1
   )" && rc=0 || rc=$?
@@ -552,7 +552,7 @@ run_manager_review() {
   : >"$posted_file"
   out="$(
     cd "$repo_dir"
-    PATH="$fakebin:$PATH" FABRICA_ALLOW_LOCAL_MIRROR=1 FAKE_REPO_NAME="$(basename "$repo_dir")" \
+    PATH="$fakebin:$PATH" YSTACK_ALLOW_LOCAL_MIRROR=1 FAKE_REPO_NAME="$(basename "$repo_dir")" \
       FAKE_CODEX_MODE="$mode" FAKE_GH_POSTED="$posted_file" \
       bash "$manager_review" "$issue" 2>&1
   )" && rc=0 || rc=$?
@@ -697,9 +697,9 @@ assert_not_contains "(2h) command output was NOT published" "PRIVATE_COMMAND_OUT
 # the same minimal valid star shape that suite uses: a single heading with `status: active`.
 # -------------------------------------------------------------------------------------
 mr_target="$(make_target "mr-target")"
-mkdir -p "$mr_target/.fabrica"
-printf '### our test north star · status: **active**\n' >"$mr_target/.fabrica/north-star.md"
-git -C "$mr_target" add .fabrica/north-star.md
+mkdir -p "$mr_target/.ystack"
+printf '### our test north star · status: **active**\n' >"$mr_target/.ystack/north-star.md"
+git -C "$mr_target" add .ystack/north-star.md
 git -C "$mr_target" commit -q -m "set north star"
 push_default "$mr_target"
 

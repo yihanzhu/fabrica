@@ -77,3 +77,18 @@ printf '%s\n' "$out" | grep -qx "round=8" || fail "round-08 reads as 8 (got: $ou
 printf '%s\n' "$out" | grep -qx "proceed=false" || fail "round 8 is past the cap"
 
 echo "ok: zero-padded label behaves"
+
+# The canonical cap override.
+out="$(GH_STUB_LABELS="round-3" YSTACK_ROUND_CAP=5 "$rc" check 1)"
+printf '%s\n' "$out" | grep -qx "proceed=true" || fail "YSTACK_ROUND_CAP override must apply (got: $out)"
+
+# The legacy FABRICA_ROUND_CAP still works: a target that has not renamed yet
+# must keep its cap.
+out="$(GH_STUB_LABELS="round-1" FABRICA_ROUND_CAP=1 "$rc" check 1)"
+printf '%s\n' "$out" | grep -qx "proceed=false" || fail "FABRICA_ROUND_CAP alias must apply (got: $out)"
+
+# When both names are set, YSTACK_ROUND_CAP wins.
+out="$(GH_STUB_LABELS="round-3" YSTACK_ROUND_CAP=5 FABRICA_ROUND_CAP=1 "$rc" check 1)"
+printf '%s\n' "$out" | grep -qx "proceed=true" || fail "YSTACK_ROUND_CAP must win over the alias (got: $out)"
+
+echo "ok: cap override and legacy alias behave"

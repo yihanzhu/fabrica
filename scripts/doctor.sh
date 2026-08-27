@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# doctor.sh — read-only restore self-check for Fabrica.
+# doctor.sh — read-only restore self-check for ystack.
 #
 # RESTORE.md only proves a rebuild by running a full live loop; this answers the
 # faster question "is the team reconstructable from HERE?" — a restorer can have
 # every file back yet still be blocked on a missing credential, an uninstalled
-# /faber command, or absent loop labels. doctor surfaces those gaps in seconds.
+# /yshifu command, or absent loop labels. doctor surfaces those gaps in seconds.
 #
 # Beyond presence/PATH it also probes whether the setup actually WORKS for a real
 # run, so a green doctor can't overstate readiness: it verifies Codex is signed in
 # (not merely on PATH), warns when the TARGET's north star (resolved via the shared
-# resolver — the target's .fabrica/north-star.md, or the control-plane NORTH_STAR.md
-# on a Fabrica-self run) is unset or still the shipped Fabrica-self default, and — in
+# resolver — the target's .ystack/north-star.md, with the legacy .fabrica/north-star.md
+# honored as a fallback, or the control-plane NORTH_STAR.md
+# on a ystack-self run) is unset or still the shipped default, and — in
 # the target-repo path — checks the target has PR-triggered CI (the hard merge gate)
 # and reports (advisory only) whether a CLAUDE.md "Stack & commands" override is
 # present (commands are auto-discovered, so it is optional). It also statically
@@ -29,8 +30,8 @@ set -euo pipefail
 # the exit code. doctor exits non-zero ONLY when at least one check failed.
 #
 # Checks:
-#   (a) ~/.claude/commands/faber.md exists AND contains THIS clone's resolved
-#       control-plane path — i.e. /faber points at this clone (same path
+#   (a) ~/.claude/commands/yshifu.md exists AND contains THIS clone's resolved
+#       control-plane path — i.e. /yshifu points at this clone (same path
 #       derivation install.sh uses).
 #   (b) gh is present and authenticated.
 #   (c) claude (Claude Code CLI) is on PATH — the team runs in a Claude Code session.
@@ -41,8 +42,9 @@ set -euo pipefail
 #       read live — the list is never duplicated here).
 #   (h) the TARGET's north star (resolved via scripts/lib/north-star.sh from the cwd —
 #       consistent with the manager-review.sh gate) is set and its ACTIVE entry is not
-#       still the shipped Fabrica-self default (WARN). Detected by a stable MARKER
-#       (`<!-- fabrica-shipped-default -->`) on the active-entry heading line, NOT a
+#       still the shipped default (WARN). Detected by a stable MARKER
+#       (`<!-- ystack-shipped-default -->`; the legacy `<!-- fabrica-shipped-default -->`
+#       counts too) on the active-entry heading line, NOT a
 #       north-star phrase — so no transition needs a doctor edit (the marker rides to the
 #       new default; adopters remove it when they set their own star) and the whole-file doc
 #       mentions of the token never false-warn. UNSET (non-empty target, no committed star),
@@ -74,10 +76,10 @@ set -euo pipefail
 #       (pin/disambiguate a non-standard toolchain), NOT a prerequisite. WARN flags its
 #       absence/placeholders as a heads-up, never as a blocker.
 #   (k) config/models.conf (#109's shipped model-tiering defaults) is present and
-#       SOURCEABLE, and — once sourced — FABRICA_CODER_MODEL / FABRICA_HANDS_MODEL are
+#       SOURCEABLE, and — once sourced — YSTACK_CODER_MODEL / YSTACK_HANDS_MODEL are
 #       non-empty. STATIC only: this is doctor's own diagnostic sourcing (isolated to a
 #       subshell), never a live model/API call, and it does NOT read a target's optional
-#       per-target `.fabrica/models.conf` override (that convention is documented, not
+#       per-target `.ystack/models.conf` override (that convention is documented, not
 #       enforced by any code yet — see README.md's "Model policy" section).
 #   (l) WARN if `CLAUDE_CODE_SUBAGENT_MODEL` is set in doctor's own environment — that
 #       env var would silently override any per-spawn model argument once coder spawning
@@ -90,7 +92,7 @@ set -euo pipefail
 
 usage() {
   echo "usage: $0 [<owner>/<repo>]" >&2
-  echo "  read-only restore self-check: /faber install, gh auth, claude/codex (auth)/jq on" >&2
+  echo "  read-only restore self-check: /yshifu install, gh auth, claude/codex (auth)/jq on" >&2
   echo "  PATH, restore-critical files, and NORTH_STAR not still the shipped default. Prints" >&2
   echo "  a pass/warn/fail line per check; exits non-zero only on a fail (warnings never do)." >&2
   echo "  Pass <owner>/<repo> to also verify that repo's loop labels and PR-triggered CI," >&2
@@ -116,7 +118,7 @@ fi
 # Resolve THIS clone's repo root from the script's own location, following symlinks
 # so the derived path is the real clone directory even if doctor.sh is symlinked.
 # This MUST match install.sh's derivation so check (a)'s expected path is exactly the
-# one install.sh would have written into faber.md.
+# one install.sh would have written into yshifu.md.
 script_path="$0"
 while [ -L "$script_path" ]; do
   link_target="$(readlink "$script_path")"
@@ -129,9 +131,10 @@ repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 
 # Source the shared north-star resolver (scripts/lib/north-star.sh) so check (h) resolves the
 # TARGET's north star the SAME way manager-review.sh's gate does (#98a) — the target's
-# `.fabrica/north-star.md`, or the control-plane root NORTH_STAR.md on a Fabrica-self run —
-# rather than always reading the control plane's own NORTH_STAR.md. It lives at the fixed,
-# install-location-independent path under this clone.
+# `.ystack/north-star.md` (or the legacy `.fabrica/north-star.md` as a fallback), or the
+# control-plane root NORTH_STAR.md on a ystack-self run — rather than always reading the
+# control plane's own NORTH_STAR.md. It lives at the fixed, install-location-independent path
+# under this clone.
 #
 # GUARD the source (#98a robustness): doctor is a restore self-check, so the lib may be exactly
 # what's MISSING on a partial restore. An unconditional `. "$ns_lib"` would abort doctor under
@@ -186,18 +189,31 @@ report_warn() {
   echo "warn: $*"
 }
 
-# (a) /faber points at this clone -------------------------------------------------
-faber_cmd="$HOME/.claude/commands/faber.md"
+# (a) /yshifu points at this clone -------------------------------------------------
+yshifu_cmd="$HOME/.claude/commands/yshifu.md"
+faber_cmd="$HOME/.claude/commands/faber.md" # legacy fallback: installed before the rename
 # Match a path BOUNDARY ("$repo_root/"), not a bare prefix: the generated command
 # embeds paths like "<root>/manager/CLAUDE.md", so the trailing slash anchors the
 # match to a path component and stops a clone whose path is a prefix of another's
-# (e.g. /work/fabrica vs an installed /work/fabrica-old) from false-passing.
-if [ ! -f "$faber_cmd" ]; then
-  report 1 "(a) /faber command installed at $faber_cmd (missing — run scripts/install.sh)"
-elif grep -qF -- "$repo_root/" "$faber_cmd"; then
-  report 0 "(a) /faber command points at this clone ($repo_root)"
+# (e.g. /work/ystack vs an installed /work/ystack-old) from false-passing.
+if [ ! -f "$yshifu_cmd" ] && [ -f "$faber_cmd" ]; then # legacy fallback
+  # A pre-rename install may sit here during the bridge — but only a FRESH
+  # bridge copy counts. A stale pre-rename render still declares the old
+  # persona and old paths, contradicting the renamed manager/CLAUDE.md it
+  # loads, so it fails with the one-command fix. # legacy fallback
+  if grep -qE 'FABRICA_|\.fabrica/' "$faber_cmd"; then # legacy fallback
+    report 1 "(a) stale legacy /faber command found (pre-rename render) — re-run scripts/install.sh (it writes fresh copies under both names)"
+  else
+    yshifu_cmd="$faber_cmd" # legacy fallback
+    report 0 "(a) legacy-named /faber bridge copy found (fresh content) — valid until it is retired"
+  fi
+fi
+if [ ! -f "$yshifu_cmd" ]; then
+  report 1 "(a) /yshifu command installed at $yshifu_cmd (missing — run scripts/install.sh)"
+elif grep -qF -- "$repo_root/" "$yshifu_cmd"; then
+  report 0 "(a) /yshifu command points at this clone ($repo_root)"
 else
-  report 1 "(a) /faber command does not reference this clone ($repo_root) — run scripts/install.sh from here"
+  report 1 "(a) /yshifu command does not reference this clone ($repo_root) — run scripts/install.sh from here"
 fi
 
 # (b) gh present and authenticated ------------------------------------------------
@@ -220,7 +236,7 @@ else
 fi
 
 # (c) claude (Claude Code CLI) on PATH --------------------------------------------
-# The whole team runs inside a Claude Code session (QUICKSTART step 7 = run /faber),
+# The whole team runs inside a Claude Code session (QUICKSTART step 7 = run /yshifu),
 # so a green doctor must not imply readiness when claude is unavailable. `command -v
 # claude` is the probe; a hard fail keeps this consistent with the gh/codex checks.
 if command -v claude >/dev/null 2>&1; then
@@ -285,8 +301,9 @@ fi
 # (h) the TARGET's north star is set and not still the shipped default -------------
 # Consistent with the manager-review.sh gate (#98a), doctor resolves the north star FOR THE
 # TARGET via the shared resolver (scripts/lib/north-star.sh) from the cwd's checkout: the
-# target's own `.fabrica/north-star.md` (LOCAL), or the control-plane root NORTH_STAR.md on a
-# Fabrica-self run (FABRICA_SELF). If it aims at the shipped Fabrica-self default (never
+# target's own `.ystack/north-star.md` (LOCAL; the legacy `.fabrica/north-star.md` still counts
+# as a fallback), or the control-plane root NORTH_STAR.md on a
+# ystack-self run (YSTACK_SELF). If it aims at the shipped default (never
 # replaced), the gate would debate proposals against the wrong goal. WARN (not FAIL): a stale
 # or unset north star doesn't block restore, but it must be set + replaced before proactive
 # mode is meaningful for the adopter's repo. UNSET (a non-empty target with no committed star)
@@ -302,7 +319,8 @@ fi
 # Detection is MARKER-BASED, not phrase-based, and SCOPED to the ACTIVE ENTRY, via the SHARED
 # helper ns_has_shipped_default_marker (so doctor and the gate never disagree on what counts as
 # an un-replaced placeholder). The shipped-default entry carries a stable marker —
-# `fabrica-shipped-default` (as an HTML comment) — on the active-entry heading, so a north-star
+# `ystack-shipped-default` (as an HTML comment; the legacy `fabrica-shipped-default` marker is
+# matched too) — on the active-entry heading, so a north-star
 # transition never needs a matching edit here (the transition carries the marker onto the new
 # active/shipped-default entry), and an adopter who sets their own star REMOVES the marker and the
 # warning clears. Scoping to the active-entry region keeps the mechanism clearable: NORTH_STAR.md /
@@ -312,8 +330,9 @@ fi
 # file) — an independent readiness gap.
 #
 # (#98a) doctor (h) now diagnoses the SAME COMMITTED source the gate authorizes on — for a LOCAL
-# target, `HEAD:.fabrica/north-star.md`; for a Fabrica-self run, `HEAD:NORTH_STAR.md` — read via
-# `git show`. Previously it read the WORKING-TREE copy, so it could disagree with the gate on a
+# target, `HEAD:.ystack/north-star.md` (falling back to the legacy `HEAD:.fabrica/north-star.md`
+# when the new path is absent, matching the gate); for a ystack-self run, `HEAD:NORTH_STAR.md` —
+# read via `git show`. Previously it read the WORKING-TREE copy, so it could disagree with the gate on a
 # committed-but-worktree-modified/deleted star. The working-tree copy is now only a SUPPLEMENTARY
 # note (does it differ from / is it committed at HEAD?). UNSET/EMPTY/NOREPO still WARN.
 
@@ -333,7 +352,7 @@ ns_h_result="$(ns_resolve "$PWD" || true)"
 ns_h_kind="${ns_h_result%% *}"
 ns_h_path="${ns_h_result#"$ns_h_kind"}"; ns_h_path="${ns_h_path# }"
 
-# When a target <owner>/<repo> was given, the LOCAL/FABRICA_SELF read only describes the target
+# When a target <owner>/<repo> was given, the LOCAL/YSTACK_SELF read only describes the target
 # if the cwd IS the target's checkout. Compare SLUGS (case-insensitive via ns_slug_eq, GH_REPO
 # cleared inside ns_repo_slug) — a cwd that resolves to a different repo must NOT have its local
 # star attributed to the target. `|| true` keeps the slug derivation from aborting under `set -e`.
@@ -350,15 +369,20 @@ fi
 # FIX E — drive (h)'s verdict off the COMMITTED star (the same source the gate authorizes on),
 # NOT the resolver's working-tree LOCAL/UNSET result. ns_resolve stats the WORKING-TREE file, so a
 # committed-but-worktree-deleted star reads UNSET there while the gate still authorizes off HEAD —
-# doctor must not disagree. So we check COMMITTED existence directly (git cat-file -e HEAD:<relpath>)
-# and diagnose the committed content when present; the resolver's kind only tells us WHICH source
-# applies (Fabrica-self root NORTH_STAR.md vs. a normal target's .fabrica/north-star.md) and gives
+# doctor must not disagree. So we check COMMITTED existence directly (git cat-file -e at the
+# anchored commit) and diagnose the committed content when present; the resolver's kind only tells
+# us WHICH source applies (ystack-self root NORTH_STAR.md vs. a normal target's
+# .ystack/north-star.md, or its legacy .fabrica/north-star.md) and gives
 # us the EMPTY/NOREPO cases. The working-tree copy is a SUPPLEMENTARY head-vs-worktree note only.
+# For a normal target the new .ystack/ path is tried first; the legacy .fabrica/ path is used
+# only when the new one is absent at the anchor — the same order the gate uses — so targets
+# that have not renamed yet keep working. The path pick happens below, after the anchor commit
+# is resolved.
 toplevel="$(ns_git_toplevel "$PWD" || true)"
-if [ "$ns_h_kind" = "FABRICA_SELF" ]; then
+if [ "$ns_h_kind" = "YSTACK_SELF" ]; then
   committed_relpath="NORTH_STAR.md"
 else
-  committed_relpath=".fabrica/north-star.md"
+  committed_relpath=".ystack/north-star.md"
 fi
 
 # ANCHOR RESOLUTION (#102; READ-ONLY in doctor, round-5 [P2]) — doctor is STRICTLY read-only, so
@@ -404,7 +428,7 @@ if [ -n "$toplevel" ] && [ "$ghr_lib_ok" -eq 1 ] && [ "$ns_h_cwd_is_target" -eq 
     # doctor never fetches at all). Suppress the helper's own stderr; emit a WARN.
     if [ -n "$ns_h_remote" ] \
        && ! ( cd "$toplevel" && ghr_assert_effective_identity "$ns_h_remote" "$ns_h_gh_id" ) 2>/dev/null; then
-      report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT or unprovable repo identity than gh's (${ns_h_gh_id}) — the gate FAILs closed on this; diagnosing against LOCAL committed state instead. Point the remote at gh's real transport (or, for a deliberate local mirror, export FABRICA_ALLOW_LOCAL_MIRROR=1) before enabling proactive mode"
+      report_warn "(h) remote '${ns_h_remote}' has an insteadOf rewrite redirecting its fetch to a DIFFERENT or unprovable repo identity than gh's (${ns_h_gh_id}) — the gate FAILs closed on this; diagnosing against LOCAL committed state instead. Point the remote at gh's real transport (or, for a deliberate local mirror, export YSTACK_ALLOW_LOCAL_MIRROR=1) before enabling proactive mode"
       ns_h_remote=""
       ns_h_identity_warned=1
     fi
@@ -462,15 +486,26 @@ echo "info: (h) north-star anchor: ${anchor_source}"
 
 # Committed existence + content at the ANCHOR commit (the gate's authoritative source). `|| true`
 # so a not-committed path (git exits non-zero) flows through rather than aborting under `set -e`.
+# PATH FALLBACK (the ystack rename): for a normal target, when the new .ystack/north-star.md is
+# absent at the anchor, fall back to the legacy .fabrica/north-star.md — the same order the
+# gate reads them — so a target still on the old dir name is diagnosed, not reported as unset.
 committed_present=0
 committed_star=""
-if [ -n "$toplevel" ] && git -C "$toplevel" cat-file -e "${anchor_commit}:$committed_relpath" 2>/dev/null; then
-  committed_present=1
-  committed_star="$(git -C "$toplevel" show "${anchor_commit}:$committed_relpath" 2>/dev/null || true)"
+if [ -n "$toplevel" ]; then
+  if git -C "$toplevel" cat-file -e "${anchor_commit}:$committed_relpath" 2>/dev/null; then
+    committed_present=1
+  elif [ "$ns_h_kind" != "YSTACK_SELF" ] \
+     && git -C "$toplevel" cat-file -e "${anchor_commit}:.fabrica/north-star.md" 2>/dev/null; then # legacy fallback
+    committed_relpath=".fabrica/north-star.md" # legacy fallback
+    committed_present=1
+  fi
+  if [ "$committed_present" -eq 1 ]; then
+    committed_star="$(git -C "$toplevel" show "${anchor_commit}:$committed_relpath" 2>/dev/null || true)"
+  fi
 fi
 
 if [ -n "$target_repo" ] && [ "$ns_h_cwd_is_target" -ne 1 ]; then
-  report_warn "(h) north star not checked for $target_repo — the cwd (${ns_h_cwd_slug:-<no repo>}) is not $target_repo's checkout; run doctor from the target's clone to check its .fabrica/north-star.md"
+  report_warn "(h) north star not checked for $target_repo — the cwd (${ns_h_cwd_slug:-<no repo>}) is not $target_repo's checkout; run doctor from the target's clone to check its .ystack/north-star.md"
 elif [ -n "$toplevel" ] && ! ns_committed_is_regular_file "$toplevel" "$anchor_commit" "$committed_relpath" && [ "$committed_present" -eq 1 ]; then
   # SYMLINK guard (round-2 FIX 4), symmetric with the gate: a committed north star stored as a
   # SYMLINK makes `git show HEAD:<path>` return the link's target-path string, not content — the
@@ -484,7 +519,7 @@ elif [ "$committed_present" -eq 1 ]; then
   # version (an uncommitted edit the gate would ignore) — advisory only.
   head_note=""
   # Drive this off $committed_relpath (the exact path the gate reads) — NOT a hardcoded
-  # .fabrica-relative path — so a Fabrica-self checkout (committed_relpath = NORTH_STAR.md)
+  # per-target path — so a ystack-self checkout (committed_relpath = NORTH_STAR.md)
   # gets the same "gate reads the committed version" note on an uncommitted ROOT edit. The
   # gate reads the ANCHOR commit's $committed_relpath and ignores the working tree, so a
   # dirty/divergent working-tree copy must not read as a silent clean pass here. We diff the
@@ -501,7 +536,7 @@ elif [ "$committed_present" -eq 1 ]; then
   if [ -z "$active_entry_line" ]; then
     report_warn "(h) the target's committed north star ($committed_relpath) has no 'status: active' entry — set an active north star before enabling proactive mode$head_note"
   elif printf '%s' "$committed_star" | ns_has_shipped_default_marker -; then
-    report_warn "(h) the target's committed north star ($committed_relpath) still carries the shipped Fabrica-self default (marker '$NS_SHIPPED_DEFAULT_TOKEN' on the active entry) — replace it with your own direction (and remove the marker) before enabling proactive mode$head_note"
+    report_warn "(h) the target's committed north star ($committed_relpath) still carries the shipped default (marker '$NS_SHIPPED_DEFAULT_TOKEN' — or the legacy 'fabrica-shipped-default' — on the active entry) — replace it with your own direction (and remove the marker) before enabling proactive mode$head_note"
   else
     report 0 "(h) the target's committed north star ($committed_relpath) is set and not the shipped default$head_note"
   fi
@@ -510,15 +545,15 @@ elif [ "$ns_h_kind" = "LOCAL" ]; then
   # source: the gate reads the anchored committed state and would treat it as UNSET. WARN (doctor
   # only diagnoses). This also fires when the star is committed on a NON-default branch but not on
   # the anchored (gh-bound default) branch — the gate would not authorize off it either.
-  report_warn "(h) the target's north star (.fabrica/north-star.md) is not committed at the anchored source (${anchor_source}) — the gate reads that committed state and would treat it as UNSET; commit your north star to the default branch before enabling proactive mode"
+  report_warn "(h) the target's north star (.ystack/north-star.md — or the legacy .fabrica/north-star.md) is not committed at the anchored source (${anchor_source}) — the gate reads that committed state and would treat it as UNSET; commit your north star to the default branch before enabling proactive mode"
 else
   # No committed star and no working-tree star. UNSET (non-empty target), EMPTY (commit-less), or
   # NOREPO (cwd not a git work tree) — WARN (not FAIL): the gate FAILs, doctor only flags the gap.
   case "$ns_h_kind" in
-    UNSET) report_warn "(h) no north star set for the target — .fabrica/north-star.md is absent; set + commit one before enabling proactive mode (manager-review.sh's gate FAILs without it)" ;;
-    EMPTY) report_warn "(h) target repo has no commits yet — no north star expected; set + commit .fabrica/north-star.md before enabling proactive mode" ;;
-    FABRICA_SELF) report_warn "(h) the Fabrica control-plane root NORTH_STAR.md is not committed at the anchored source (${anchor_source}) — commit it before enabling proactive mode" ;;
-    *)     report_warn "(h) could not resolve a north star from the cwd (resolver: ${ns_h_kind:-none}) — run doctor from the target repo's checkout to check its .fabrica/north-star.md" ;;
+    UNSET) report_warn "(h) no north star set for the target — .ystack/north-star.md is absent (and so is the legacy .fabrica/north-star.md); set + commit one before enabling proactive mode (manager-review.sh's gate FAILs without it)" ;;
+    EMPTY) report_warn "(h) target repo has no commits yet — no north star expected; set + commit .ystack/north-star.md before enabling proactive mode" ;;
+    YSTACK_SELF) report_warn "(h) the ystack control-plane root NORTH_STAR.md is not committed at the anchored source (${anchor_source}) — commit it before enabling proactive mode" ;;
+    *)     report_warn "(h) could not resolve a north star from the cwd (resolver: ${ns_h_kind:-none}) — run doctor from the target repo's checkout to check its .ystack/north-star.md" ;;
   esac
 fi
 
@@ -655,7 +690,7 @@ fi
 # this is the shipped-defaults file, not a per-target one, so it is the same
 # regardless of any <owner>/<repo> target arg.
 #
-# We deliberately do NOT read a target's optional per-target `.fabrica/models.conf`
+# We deliberately do NOT read a target's optional per-target `.ystack/models.conf`
 # override here: that convention (same format/keys, sourced after these defaults) is
 # documented in README.md's "Model policy" section but not enforced by any code in
 # this PR, doctor included.
@@ -664,16 +699,16 @@ if [ ! -f "$models_conf" ]; then
   report 1 "(k) config/models.conf present and sourceable ($models_conf missing)"
 elif ! models_out="$(
   # shellcheck source=config/models.conf
-  . "$models_conf" && printf '%s\n%s\n' "${FABRICA_CODER_MODEL:-}" "${FABRICA_HANDS_MODEL:-}"
+  . "$models_conf" && printf '%s\n%s\n' "${YSTACK_CODER_MODEL:-}" "${YSTACK_HANDS_MODEL:-}"
 )" 2>&1; then
   report 1 "(k) config/models.conf present but failed to source — check for a shell syntax error (bash -n $models_conf)"
 else
   models_coder="$(printf '%s\n' "$models_out" | sed -n '1p')"
   models_hands="$(printf '%s\n' "$models_out" | sed -n '2p')"
   if [ -z "$models_coder" ] || [ -z "$models_hands" ]; then
-    report 1 "(k) config/models.conf sourceable but has empty required value(s) — FABRICA_CODER_MODEL='$models_coder' FABRICA_HANDS_MODEL='$models_hands' must both be non-empty"
+    report 1 "(k) config/models.conf sourceable but has empty required value(s) — YSTACK_CODER_MODEL='$models_coder' YSTACK_HANDS_MODEL='$models_hands' must both be non-empty"
   else
-    report 0 "(k) config/models.conf present, sourceable, FABRICA_CODER_MODEL=$models_coder FABRICA_HANDS_MODEL=$models_hands"
+    report 0 "(k) config/models.conf present, sourceable, YSTACK_CODER_MODEL=$models_coder YSTACK_HANDS_MODEL=$models_hands"
   fi
 fi
 
