@@ -60,7 +60,7 @@ deferred with this phase's fix stage — see the amendment note above.
   (mechanical enforcement arrives with Phase 3 hooks). (The "never push to an
   approved PR" rule went with the deferred fix stage — it belongs to that intent,
   which is the only thing that pushes to an open PR.)
-- **R6 — plumbing proven first.** Before the four workflows are finalized, a
+- **R6 — plumbing proven first.** Before the three workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
   `gh pr create`, and that app-created events trigger downstream workflows.
