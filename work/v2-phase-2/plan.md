@@ -73,10 +73,13 @@ them, and a reviewer should reject any that does not:**
 - **Bind a verdict to the head SHA it reviewed, never to a timestamp.** A
   review of head A can land after head B is pushed, so a timestamp fence
   accepts it and the fix loop then edits B in response to findings about A.
-  Codex's own review body names the commit it reviewed; parse that SHA and
-  refuse to act unless it equals the PR's current head. (Same discipline as
-  the v1 merge harness, which pins to the reviewed head and refuses when it
-  moves.)
+  **The reviewer must emit the marker** — this phase's `review-on-pr` runs
+  Claude, so its skill ends every review comment with a machine-readable
+  `reviewed-head: <sha>` line, and `fix-on-review` parses that and refuses to
+  act unless it equals the PR's current head. (Codex's cloud review body
+  already names its reviewed commit, so the same parser serves both when that
+  reviewer is added later.) Same discipline as the v1 merge harness, which
+  pins to the reviewed head and refuses once it moves.
 - **Wait for an explicit completion marker, not a fixed delay.** A settle
   window is a heuristic: a slow review wakes the fix job early, and a late
   comment can start a duplicate pass. Poll for a completed verdict naming the
@@ -128,6 +131,11 @@ them, and a reviewer should reject any that does not:**
 - PR A: the two new test scripts pass in CI; verify output pasted in the PR,
   named to the commit it ran on.
 - Plumbing: the test run's PR link + whether it triggered CI, recorded on #126.
-- PR B: the lane reviews its own PR (the review workflow fires on it); you
-  check the workflows against the spec's safety list (R5).
+- PR B: **the lane cannot review its own PR** — a `pull_request` workflow only
+  fires when its file is already on the default branch, so `review-on-pr`
+  does not exist for the PR that introduces it. Prove it with the harness that
+  exists today: the Codex cloud review on the PR, plus the operator's read of
+  the workflows against the spec's safety list (R5). The lane's first real
+  review is the PR after this one — and the smoke test below is what proves
+  it fires at all.
 - Phase exit: the smoke intent goes through end to end, you only merge.

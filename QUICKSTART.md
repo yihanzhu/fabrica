@@ -2,7 +2,7 @@
 
 The friendly golden path for a **new adopter**: clone this repo, install the `/yshifu`
 command, point it at a target repo, and watch one loop run. For the mental model read
-[`README.md`](README.md); for the conventions and safety rails read [`CLAUDE.md`](CLAUDE.md).
+[`README.md`](README.md); for the conventions and safety rails read [`AGENTS.md`](AGENTS.md).
 
 > This is the happy path only. The scripts are the source of truth for the exact
 > commands — when in doubt, run them and read their output. For depth, edge cases, and

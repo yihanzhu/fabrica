@@ -63,9 +63,9 @@ Two goals drive the backlog:
   Merging a prompt change does NOT change live behavior until synced — call this out in the
   PR description when a prompt changes.
 - **Never weaken the safety rails without explicit human sign-off:** reviewer stays
-  read-only / comments-only; merge stays gated (yshifu may merge only CI-green + Codex-clean
-  + low-risk PRs under standing authorization, and must bring safety-rail / north-star /
-  ambiguous / high-risk PRs to the human); the rounds cap and `needs-human` escalation stay
+  read-only / comments-only; **merging is the operator's, always** — the in-session
+  auto-merge v1 allowed was retired when the branch ruleset landed, and no agent has a
+  merge path any more; the rounds cap and `needs-human` escalation stay
   intact. yshifu never writes code/opens PRs and **never self-approves acting alone** — a
   user-directed issue is gated by the user's approval of the drafted spec (the one-liner is the
   request, not the go), a proactive issue by the passed yshifu⇄Codex manager-debate consensus
@@ -83,7 +83,7 @@ Two goals drive the backlog:
   current upstream file, label the PR `stale` and stop — never build on a moved artifact.
 - **Stage rules (autonomous lane):** the spec stage writes only `work/<slug>/spec.md`;
   the implement stage never touches `intent.md`/`spec.md`; unattended agents never write
-  `.github/**` or `.claude/**` — such changes land as patches under `proposals/` that the
+  `.github/**`, `.claude/**`, or this file — such changes land as patches under `proposals/` that the
   operator applies. Operator-driven sessions are exempt; Phase 3 hooks enforce this
   mechanically via `YSTACK_STAGE`.
 - Deterministic branches: `ystack/intent/<slug>`, `ystack/spec/<slug>`,

@@ -11,7 +11,7 @@ it as written.
 
 > **Parameterize, don't hardcode.** Wherever you see `<owner>/<repo>` (or
 > `<owner>`), substitute your own target repo(s). Per the reusability rule in
-> [`CLAUDE.md`](CLAUDE.md), keep personal usernames and repo names out of the shipped
+> [`AGENTS.md`](AGENTS.md), keep personal usernames and repo names out of the shipped
 > files — supply them here at restore time, not in the templates.
 
 ---
@@ -35,7 +35,7 @@ Accounts and access you need before starting:
     (ystack is its own target repo; add others as you adopt the team elsewhere.)
 
 Read [`README.md`](README.md) once for the mental model (the team, the loop, the
-design "why") and [`CLAUDE.md`](CLAUDE.md) for the conventions and safety rails before
+design "why") and [`AGENTS.md`](AGENTS.md) for the conventions and safety rails before
 you rebuild.
 
 ---
@@ -225,7 +225,7 @@ installed and points at this repo (step 1), the coder instruction files are pres
 ## 6. Safety rails that must survive any rebuild
 
 These are load-bearing — per the self-modification safety section of
-[`CLAUDE.md`](CLAUDE.md), never weaken them without explicit human sign-off:
+[`AGENTS.md`](AGENTS.md), never weaken them without explicit human sign-off:
 
 - **Reviewer stays read-only / comments-only.** Codex never pushes, approves-to-merge, or
   merges, and is never the author.
