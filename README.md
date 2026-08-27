@@ -1,12 +1,12 @@
 # ystack
 
-A small autonomous coding team. **yshifu** (the manager) runs the shop in a Claude Code
-session: you approve specs, and yshifu spawns a Claude coder subagent to build and runs a
-Codex reviewer to review.
+A small autonomous coding team with two lanes. **yshifu** (the manager) runs the
+in-session lane. GitHub Actions advances the committed v2 artifact chain when you
+are away. You approve the gates and merge every PR in both lanes.
 
-This repo is the **control plane** — it defines *how the team works*. It is **not**
-where the team writes code. The team works in separate **target repos**; this repo
-holds the prompts, roles, and templates you edit to set up and evolve the team.
+This repo is the **control plane** — it defines *how the team works*. Product work
+lives in separate **target repos**. ystack can also treat this control plane as a
+target and advance its own `work/` chain when the team itself needs to change.
 
 **ystack** — Yihan's stack for the AI-native SDLC: an autonomous coding team, gated by human judgment.
 
@@ -14,21 +14,21 @@ holds the prompts, roles, and templates you edit to set up and evolve the team.
 
 ## The team
 
-You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
-within that session — spawning the coder and running the reviewer — so there is no
-separate human channel to the workers. Claude and Codex never talk directly;
+In the in-session lane, you talk **only** to yshifu. It spawns the coder and runs
+the reviewer, so there is no separate human channel to the workers. The
+autonomous lane reads and writes the same committed artifacts. In both lanes,
 **the PR is the message bus.**
 
 | Agent | Vendor | How it runs | Writes? |
 |-------|--------|-------------|---------|
 | **yshifu** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs; **never merges** (labels `merge-ready`, hands the PR to you) |
-| **Coder** | Claude | A subagent yshifu spawns with the issue/PR context — two modes: build (`routines/coder.md`) then fix (`routines/coder-revision.md`) | yes (branches, PRs) |
+| **Coder** | Claude | Subagent in-session; `implement-on-spec.yml` in the autonomous lane | yes (branches, PRs) |
 | **Manager-reviewer** | Codex (OpenAI) | yshifu runs `scripts/manager-review.sh` at **plan altitude, before coding** — debates a proactive issue vs. the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
-| **Code-reviewer** | Codex (OpenAI) | yshifu runs `scripts/codex-review.sh` at **code altitude, after coding** — against the PR diff | **comments only / read-only** |
+| **Code-reviewer** | Codex in-session; Claude autonomously | `scripts/codex-review.sh` in-session; `review-on-pr.yml` autonomously | **comments only / read-only** |
 
-## The loop
+## In-session lane
 
-The loop is **in-session**: yshifu drives every step from one Claude Code chat. There is
+In this lane, yshifu drives every step from one Claude Code chat. There is
 exactly one coder launch per cleared issue, one review path, and one revision path.
 
 ```
@@ -69,9 +69,10 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
 - **4 roles, fixed** (2 vendors). Manager = the PM (no separate PM). Add an agent only for a
   distinct *job + trigger + tool surface* — not per discipline (no FE/BE split;
   specialize via each target repo's `CLAUDE.md`).
-- **Cross-vendor by design.** Claude codes, Codex reviews — different training/
-  architecture = decorrelated blind spots. A reviewer's value is being *different*,
-  not a second copy.
+- **Cross-vendor in-session.** Claude codes and Codex reviews in the in-session
+  lane, which gives the gate a different set of blind spots. The first autonomous
+  reviewer runs through Claude Code Actions. Codex cloud review remains an
+  additive later gate.
 - **Reviewer is read-only, comments only, never the author.** Non-negotiable.
 - **Judgment lives at the direction (front gate at the north-star altitude), not the diff.**
   You approve the **north star** — each target repo's own committed
@@ -131,14 +132,22 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
 - **State lives in labels, not memory.** Each coder is a fresh subagent with no memory of
   the last round, so rounds + escalation live in **labels** (`round-0..3`, `needs-human`)
   that yshifu reads and bumps each round.
-- **Runs on the plan** in an ordinary Claude Code session (Claude coder subagents) plus
-  Codex's built-in review via `scripts/codex-review.sh` — compliant ordinary use, metered.
-  Prototype on personal repos; apply terms diligence before any work/shared repo.
+- **Runs on the plan.** The in-session lane uses an ordinary Claude Code session
+  plus Codex review through `scripts/codex-review.sh`. The autonomous lane uses
+  OAuth-backed GitHub Actions. Prototype on personal repos; apply terms diligence
+  before any work or shared repo.
 
-> **Autonomous lane: being built.** The autonomous lane is being built through the v2
-> chain — committed intent → spec → plan artifacts, each gated by the operator's merge.
-> Stack A (the artifact chain) is merged; the GitHub Actions workflows land next. Until
-> they do, the in-session loop above is the one path that runs.
+## Autonomous lane
+
+The autonomous lane watches the same hash-linked `work/<slug>/` chain. When the
+operator merges an `intent.md`, `spec-on-intent.yml` opens or updates
+`spec: <slug>`. When the operator merges its `spec.md`,
+`implement-on-spec.yml` opens or updates `impl: <slug>`. `review-on-pr.yml`
+gives every same-repo PR a comments-only review.
+
+Both lanes use the same artifacts and the same gates: the operator merges every
+PR. The fix stage is deferred, so autonomous review findings wait for the
+operator to handle in a session.
 
 ## Model policy
 
@@ -148,12 +157,13 @@ everything the same model either overspends on volume or underspends on judgment
 ystack instead routes by the *leverage* of the decision, not by how much text it
 produces:
 
-- **Gates decide → always max.** The code-review gate (`scripts/codex-review.sh`)
-  and the manager-debate gate (`scripts/manager-review.sh`) run at maximum
+- **Gates decide → always max.** The code-review gates
+  (`scripts/codex-review.sh` and `/review-pr`) and the manager-debate gate
+  (`scripts/manager-review.sh`) run at maximum
   reasoning effort, always — there is no per-task/class routing that would lower
   them. A bad gate call (approving a broken PR, debating a proposal against the
   wrong bar) is expensive to unwind later, so gates never get a cheaper tier.
-- **Producers type → fixed ceilings.** The coder subagent and "hands" work
+- **Producers type → fixed ceilings.** The coder subagent, `/implement`, and "hands" work
   (mechanical, low-judgment steps) run at a fixed model ceiling, set once and never
   escalated at runtime — not even when a task looks hard. A task that seems to need
   a bigger model is a signal to **decompose the task or fix the spec upstream**,
@@ -250,14 +260,15 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 
 - **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
   judgment; merge was manual while the loop earned trust.
-- **Phase 2** — live: the loop runs end to end in-session, and **you merge at the gate**.
+- **Phase 2** — live: the loop runs in-session and through the autonomous v2 lane,
+  and **you merge at every gate**.
   yshifu labels a PR **`merge-ready`** when its current head is CI-green and the reviewer
   passed that same head, then hands the PR to you — naming the risk on high-risk work, and
   escalating `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal
   drift. Both the **brief** and a **status / Tracking pass** are **read-only — they surface
   `merge-ready` PRs, they never merge**. No agent merges: `main` needs a pull request plus an
   approving review the comments-only reviewer cannot give, and no agent has a bypass.
-- **Phase 3** — widen what the loop takes on as it proves out (the autonomous lane in the v2
-  chain); always back-look high-risk work (auth, migrations, shared repos). **The merge gate
-  does not widen** — the operator merges, in every phase. There is no agent merge path, now
-  or planned.
+- **Phase 3** — add evals and mechanical `YSTACK_STAGE` write-limit hooks;
+  always back-look high-risk work (auth, migrations, shared repos). **The merge
+  gate does not widen** — the operator merges in every phase. There is no agent
+  merge path, now or planned.

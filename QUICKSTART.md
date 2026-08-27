@@ -17,8 +17,8 @@ command, point it at a target repo, and watch one loop run. For the mental model
   CI-check JSON.
 - **Codex (OpenAI) CLI signed in** — a ChatGPT plan that includes Codex review is enough
   for personal repos; the CLI must be installed and signed in. This is the cross-vendor reviewer.
-- **Claude Code installed** — the whole team runs in-session (no API key); yshifu and the
-  coder it spawns are an ordinary Claude Code chat.
+- **Claude Code installed** — needed for the in-session lane. The autonomous
+  lane uses the protected Claude Code OAuth environment secret described below.
 - **A target repo with CI that runs on PRs** — CI is the **hard merge gate**, so it must run
   the repo's real tests / lint / build on pull requests; otherwise the gate is hollow. **If
   your repo has no CI, ystack can bootstrap PR CI for you** — yshifu offers to scaffold a
@@ -29,6 +29,38 @@ command, point it at a target repo, and watch one loop run. For the mental model
   gate; only *who sets it up* is up to you. A target `CLAUDE.md` is **not** required — the
   coder auto-discovers the install / lint / build / test commands from the repo's CI workflows
   and standard manifests. The team works in *target* repos, not in this control-plane repo.
+
+## Enable the autonomous lane in this repo
+
+The steps below still prove the in-session loop in a target repo. To also let
+this ystack control-plane repo advance its own `work/` chain:
+
+1. Install the official [Claude GitHub App](https://github.com/apps/claude) on
+   `<owner>/<ystack-repo>`. It supplies the short-lived GitHub write token; the
+   OAuth secret below is inference-only. Claude Code's `/install-github-app`
+   command can guide an administrator through this step.
+2. Create a GitHub Actions environment named `ystack-lane`, restrict its
+   deployment branches to `main`, and add `CLAUDE_CODE_OAUTH_TOKEN` there as an
+   environment secret. Generate its value with `claude setup-token`. Do not keep
+   a repository-level secret with that name: an off-main workflow must never be
+   able to read it.
+3. Add an Actions repository variable named `YSTACK_OPERATOR` whose value is
+   the GitHub login of the one operator allowed to start or re-run lane jobs.
+4. Run `scripts/setup-target-repo.sh <owner>/<ystack-repo>` so `stale` and the
+   other canonical labels exist.
+5. Protect `main` with the ruleset in `templates/repo-setup.md`: require a pull
+   request and an approving review, give no agent a bypass, and keep native
+   auto-merge off. Restrict updates to `ystack/spec/*` and `ystack/impl/*` to
+   that operator and the Claude App.
+6. Add Actions workflow-execution protection rules that permit
+   `YSTACK_OPERATOR`, plus `claude[bot]` only for the PR-review event. If your
+   GitHub plan cannot express both the actor and event limits, do not enable
+   this lane in a repo with any other write collaborator. The in-file checks
+   are defense in depth, not the outer trust boundary.
+
+After the three lane workflows are on `main`, merged intents and specs advance
+automatically. The operator still merges every gate. Packaging this lane into
+arbitrary target repos is Phase 5.
 
 ## Steps
 
