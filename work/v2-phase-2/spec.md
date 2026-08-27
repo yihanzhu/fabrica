@@ -6,15 +6,21 @@ drafted: 2026-08-26
 # Spec: v2 autonomous lane (Phase 2)
 
 From the accepted intent: the chain must advance without a live session — merged
-intent → spec PR, merged spec → implementation PR, every PR reviewed; the operator's
-only actions are the gate merges.
+intent → spec PR, merged spec → implementation PR, every PR reviewed. The operator's
+actions are the gate merges, plus answering review findings in a session until the
+deferred fix stage lands (see the amendment note).
 
 **Amended 2026-08-27 (operator ruling at the review cap).** This phase ships three
 workflows, not four: the fix loop (R4) is deferred to its own intent. Two reasons,
-recorded in `plan.md` under "Deferred: fix-on-review": the fix stage needed a third
+stated here so this spec stands on its own: the fix stage needed a third
 `claude[bot]` trigger edge where R5 allows two, and it was the one job holding write
 credentials, running PR-authored code, and reading untrusted PR text at once — it
-earns a design from scratch rather than patches. Answering review findings stays the
+earns a design from scratch rather than patches.
+
+**Where the next intent starts — split the credential**, so no one job holds all three
+powers: the agent that edits the PR's code holds no token and runs nothing from the PR;
+CI verifies the result on the pushed branch as it verifies any branch; a deterministic
+step holds the app credential and does the writing. Answering review findings stays the
 operator's job in a session until that intent lands. This is a scope reduction the
 operator ruled on; no rail is weakened by it.
 
@@ -50,9 +56,10 @@ deferred with this phase's fix stage — see the amendment note above.
   opened bot edges — this phase opens exactly one, review-of-agent-PRs; the second
   edge R5 allowed served the deferred fix stage);
   `timeout-minutes` and `--max-turns` on every job; PR-creation steps assert the
-  PR exists and fail loudly; the fix stage never pushes to a PR that already has
-  an approval; stage write-limits stated in the stage skills (mechanical
-  enforcement arrives with Phase 3 hooks).
+  PR exists and fail loudly; stage write-limits stated in the stage skills
+  (mechanical enforcement arrives with Phase 3 hooks). (The "never push to an
+  approved PR" rule went with the deferred fix stage — it belongs to that intent,
+  which is the only thing that pushes to an open PR.)
 - **R6 — plumbing proven first.** Before the four workflows are finalized, a
   disposable `workflow_dispatch` test proves: the action (app token, no
   `github_token` input) can push a branch and create a PR via allowlisted
