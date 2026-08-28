@@ -26,10 +26,12 @@ manager is responsible for, what authority it never has, which accepted artifact
 and gate results it consumes, which stage or operator-decision request it may
 produce, and how it reports status and handoff reasons.
 
-The neutral role uses only capabilities granted by the selected profile. It does
-not name Claude, Codex, GitHub, local scripts, labels, model IDs, command files, or
-one orchestration runtime. It references accepted policy and contract identities
-instead of copying their rules into another prompt.
+The neutral role uses only capabilities granted by accepted policy and permission
+records. A selected profile may request capabilities and adapter bindings; it
+cannot grant authority. The role does not name Claude, Codex, GitHub, local scripts,
+labels, model IDs, command files, or one orchestration runtime. It references
+accepted policy and contract identities instead of copying their rules into
+another prompt.
 
 The current `manager/CLAUDE.md` remains the live default during migration and later
 becomes a thin Claude Code wrapper. GitHub projections and Codex debate/review live
@@ -74,9 +76,11 @@ shadow qualification, telemetry, rollback, and later target packaging.
 - Retry, reconciliation, missed/repeated events, backpressure, cancellation,
   durable resume, and kill-switch state belong in the durable orchestrator, not a
   manager prompt or chat memory.
-- The selected profile owns the display name and adapter bindings. Target or
-  candidate content, ambient environment, and unaccepted prompt text cannot choose
-  the manager identity, capabilities, permissions, gates, or trust anchors.
+- The selected profile carries the requested display name, capabilities, and
+  adapter bindings. Trusted resolution plus accepted policy and permission records
+  decide what takes effect; a profile never grants authority. Target or candidate
+  content, ambient environment, and unaccepted prompt text cannot choose the
+  manager identity, capabilities, permissions, gates, or trust anchors.
 - Current behavior remains live and unchanged while the neutral contract is
   designed. No merge of an artifact silently updates the installed `/yshifu`
   command, pasted Claude project persona, or already-open sessions.
