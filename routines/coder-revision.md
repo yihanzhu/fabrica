@@ -108,9 +108,17 @@ yshifu has briefed you with the PR, the latest review comments, and the current 
    - **EXCEPTIONAL IMPLEMENTATION RULE.** Review feedback is not approval to add a
      workaround. Prefer the root-cause fix. If a proposed fix would introduce an
      exception that was not already named in an accepted issue, spec, plan, or
-     operator decision record, push back on that comment, add `needs-human` with
-     the SHORT reason
-     `ambiguous-spec`, and stop so the decision returns to the artifact gate.
+     operator decision record, do not make or push exception code. Push back on
+     that comment and post a bounded handoff containing exact repo, branch, full
+     local HEAD, PR number plus its current open state and remote head OID, old base
+     OID, current round, and `worktree: clean|dirty`—never raw paths, filenames,
+     status output, or patch content. Add `needs-human` with the SHORT reason
+     `ambiguous-spec` and stop. A clean tuple may resume this PR after any accepted
+     ruling—approve, reject, or rescope—when yshifu re-verifies repo/branch/local
+     HEAD/PR open+head/round. A moved base becomes new context and invalidates old
+     review evidence. A dirty tuple stays human-blocked until explicit operator
+     disposition produces a new clean tuple. Any unexpected attempt-identity move
+     stops without switch, reset, clean, push, or a new round-0 PR.
    - For an accepted exception, preserve one named private boundary, its regression
      test, durable decision link, and its temporary removal condition or permanent
      external invariant plus re-evaluation trigger. Never expose it as a reusable

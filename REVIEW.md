@@ -41,6 +41,19 @@ artifact gate when the exception was not accepted before implementation. An
 exception can never waive CI, independent review, authorization boundaries,
 constitution rules, or human merge.
 
+When a new exception is sent back to the artifact gate, require a resumable,
+sanitized handoff: exact repo, branch, full local HEAD, PR number-or-absent, PR
+open/head OID and round when it exists, old base OID as external context, and
+`worktree: clean|dirty`. Raw paths and patch content stay out of public comments.
+A pre-PR pause clears `ready`. Only a clean attempt can auto-resume; a dirty one
+waits for explicit operator disposition and a new clean tuple, with no agent
+reset/clean. After any accepted decision—approve, reject, or rescope—the loop
+re-verifies preserved attempt identity and resumes that same branch or PR in the
+correct coder mode. A base move updates external context and invalidates prior
+review evidence rather than blocking resume. Any unexpected local HEAD or PR
+identity/state move stops without switch, reset, clean, or duplicate work.
+Abandonment must be explicit and disposition preserved work on the record.
+
 The regression test must run in CI. When the protected invariant can be expressed
 reliably as a lint, type, or deterministic check, require that check in CI too.
 

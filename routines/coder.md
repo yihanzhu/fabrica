@@ -144,9 +144,20 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      branch exists you branch off it (step 5) and open the PR normally. This bootstrap PR is
      **operator-approved and human-merged** (no gate exists yet for it to certify itself) — but
      that is yshifu's concern; your job is only to open the green PR and stop.
-5. Create your branch off an up-to-date base: `git fetch origin`, then create
-   `issue-<number>-<slug>` off the **up-to-date default branch** (e.g. `origin/main`)
-   — never a stale local base.
+5. USE THE AUTHORIZED BRANCH.
+   - **IMPLEMENTATION-RESUME ONLY:** if yshifu's brief says the operator resolved a
+     prior implementation-time exception decision—approve, reject, or rescope—and
+     supplies its recorded handoff tuple, resume that same branch instead of
+     creating a new one. It must name exact repo, branch, full local HEAD, PR
+     `absent`, old and current base OIDs, and `worktree: clean`. Re-query PR
+     association and match the preserved repo/branch/HEAD plus a currently clean
+     worktree. A base move is context, not an attempt-identity mismatch. On any
+     unexpected local HEAD/PR move or dirty state, stop with `needs-human` /
+     `failure`; never switch, reset, clean, discard work, or create a duplicate
+     branch.
+   - **Otherwise**, create your branch off an up-to-date base: `git fetch origin`,
+     then create `issue-<number>-<slug>` off the **up-to-date default branch**
+     (e.g. `origin/main`) — never a stale local base.
 6. Implement ONLY what the issue asks — one concern.
    - **EXCEPTIONAL IMPLEMENTATION RULE.** Prefer the root-cause fix. Do not hide a
      symptom or bypass the target's normal architecture just to finish the issue.
@@ -155,8 +166,15 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
      spec, plan, or operator decision record, and only when the normal fix is
      unsafe, unavailable, or outside that accepted scope. A link or PR discussion
      is provenance, not approval. If implementation reveals an unapproved
-     exception, do not add it: comment with the SHORT reason `ambiguous-spec`, add
-     `needs-human`, and stop so it can return to the artifact gate.
+     exception, do not add or commit exception code. Leave the current issue branch
+     and worktree in place. Post a bounded handoff containing exact repo, branch,
+     full local HEAD, PR `absent`, old base OID, and `worktree: clean|dirty`—never
+     raw paths, filenames, status output, or patch content. Add
+     `needs-human`, remove `ready`, verify `ready` is absent, and comment with the
+     SHORT reason `ambiguous-spec`; then stop. A clean tuple may later resume this
+     branch after an accepted ruling. A dirty tuple remains human-blocked until the
+     operator explicitly dispositions the preserved work and records a new clean
+     tuple; no agent resets or cleans it.
    - Put an approved exception behind one clearly named function, module, or
      adapter boundary. Add a regression test that runs in CI. Link the durable
      issue/spec/plan/decision explaining the constraint and tradeoff. State an

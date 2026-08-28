@@ -510,15 +510,44 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
     subagent — a read early in a long session is worth delegating even if small; the
     same read moments before you're done rarely is.
 - **`needs-human` re-entry.** `needs-human` is a *resumable* state, not a trapdoor. When I
-  resolve an escalated item, **remove `needs-human`** and resume per my call:
+  resolve an escalated item, keep the label until that path's resume checks pass,
+  then remove it at the transition described below:
   - **round-cap stall** (reached `needs-human` because even the scoped-down core was contested /
-    a genuine standoff) → spawn the appropriate coder mode (fresh `round-0` per
-    `routines/coder.md`, or fix-mode per `routines/coder-revision.md`) for the path I chose.
+    a genuine standoff) → remove `needs-human`, then spawn the appropriate coder mode
+    (fresh `round-0` per `routines/coder.md`, or fix-mode per
+    `routines/coder-revision.md`) for the path I chose.
     (Most round-cap cases never reach `needs-human` — they resolve in-loop via scope-down +
     follow-up per step 4 above.)
-  - **ambiguous spec** → update the issue with the clarification, then re-apply **`ready`**
-    (which is again your cue to spawn the round-0 coder).
-  Once you act on a `needs-human` item, it is cleared — the brief must not re-surface it.
+  - **ambiguous spec, before any branch/PR exists** → update the issue with the
+    clarification, remove `needs-human`, then re-apply **`ready`** (which is again
+    your cue to spawn the round-0 coder).
+  - **implementation-time exception, existing branch but no PR** → the coder clears
+    `ready`, leaves `needs-human`, preserves the branch/worktree, and reports only a
+    bounded tuple: exact repo, branch, full local HEAD, PR `absent`, old base OID,
+    and `worktree: clean|dirty`—never raw paths, status output, or patch content.
+    Record my approve/reject/rescope ruling in the applicable
+    issue/spec/plan/decision and complete its normal acceptance gate. A dirty tuple
+    cannot auto-resume: keep `needs-human` until I explicitly disposition the work
+    and a new clean tuple is recorded; never reset or clean it as an agent. For a
+    clean tuple, re-query PR association and match repo/branch/local HEAD. Record
+    the current base separately; a base move is expected context, not attempt
+    corruption. Only then remove `needs-human`, re-apply **`ready`**, and spawn
+    round-0 with an implementation-resume brief for that branch. An unexpected
+    local HEAD or PR-association move stops without switch/reset/clean or duplicate
+    work. Abandon only on my explicit recorded decision and disposition.
+  - **review-time exception, existing PR** → the coder preserves the PR/branch and
+    reports exact repo, branch, full local HEAD, PR number plus open state and remote
+    head OID, old base OID, round, and `worktree: clean|dirty`—never raw paths,
+    status output, or patch content. Record my approve/reject/rescope ruling through
+    the applicable artifact's normal acceptance gate. Do **not** re-apply `ready` or
+    start a round-0 coder. A dirty tuple stays `needs-human` until I explicitly
+    disposition the work and a new clean tuple is recorded. For a clean tuple,
+    re-query and match repo/branch/local HEAD/PR open+head/round. Record a moved base
+    as new context and void old review evidence. Only then remove `needs-human` and
+    spawn fix mode for that PR under `routines/coder-revision.md`. Any unexpected
+    attempt-identity move stops without switch/reset/clean or push.
+  Once the checked transition clears a `needs-human` item, the brief must not
+  re-surface it.
 - **Tracking.** When I ask "status" / "what's stalled", query GitHub across my repos by
   **label** (the labels are the state) and report, action-first. This status/Tracking pass is
   **read-only — it REPORTS, it does not merge.** No pass of yours merges, in session or out

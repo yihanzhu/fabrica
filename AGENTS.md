@@ -87,6 +87,18 @@ Two goals drive the backlog:
   plan, or operator decision record. A link, code comment, or PR discussion is
   provenance, not approval. An implementation-time discovery returns to that
   artifact gate before exception code is added.
+- That return must stay resumable. Record a bounded handoff with exact repo,
+  branch, full local HEAD, PR number-or-absent, PR open/head OID and round when it
+  exists, the old base OID as external context, and `worktree: clean|dirty`. Never
+  publish raw paths or patch content. A pre-PR pause clears `ready` so
+  `needs-human` is the only active state. Only a clean attempt can auto-resume. A
+  dirty attempt waits for an explicit operator disposition and a newly recorded
+  clean tuple; no agent resets or cleans it. After any accepted decision—approve,
+  reject, or rescope—re-verify the preserved attempt and resume that same branch
+  or PR. A moved base is recorded as new external context and invalidates prior
+  review evidence; it is not branch corruption. Any unexpected local HEAD or PR
+  identity/state move stops without switch, reset, clean, or duplicate work.
+  Abandonment requires an explicit operator decision and recorded disposition.
 - An exception never waives CI, independent review, authorization boundaries,
   constitution rules, or human merge.
 - Mechanically reliable checks belong in the target's CI. Every exception's
