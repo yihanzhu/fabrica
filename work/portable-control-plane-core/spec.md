@@ -28,8 +28,8 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   lowercase ASCII letters, digits, dots, colons, underscores, or hyphens. Extension keys match
   `^([a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9])(\.([a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9]))+/[a-z0-9][a-z0-9._-]{0,127}$`
   (`com.example/trace` passes; `trace`, `Com.example/x`, and `com..x/y` fail); values
-  are objects. Unknown extensions are preserved but inert. Changed meaning, a new
-  required field, or a changed core enum requires a new major version.
+  are objects. Unknown extensions are preserved but inert. Changed meaning, any new
+  core field (required or optional), or a changed core enum requires a new major.
 - **R4 — exact references.** A `document_ref` names a canonical document by kind,
   ID, and SHA-256 of its complete canonical bytes. An `artifact_ref` is a tagged
   union: `git_object` names repository, full commit, normalized repo-relative path,
@@ -53,14 +53,16 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
 - **R6 — total status/outcome matrix.** A `stage_result` binds request/profile,
   attempt, reporter, status/outcome/reason, expected/observed identities, outputs,
   diagnostics, evidence, and times. `executed=true` requires exact performer/used
-  capability; false forbids both. Design defines every combination and timestamp
-  order. No machine outcome represents human approval or merge.
+  capability; false forbids performer, used capability, execution metadata, nested
+  evidence, and subject/auxiliary outputs. Design defines every combination and
+  timestamp order. No machine outcome represents human approval or merge.
 - **R6a — actual execution metadata.** `executed=false` forbids metadata; true
   requires a closed `model|deterministic` tagged union. Model requires actual
   provider/model/effort and prompt/skill refs; deterministic forbids model fields.
   Snapshot, trace, token usage, and currency/cost microunits each use
   `recorded|computed|unavailable|not-applicable`; unavailable requires reason, and
-  null or invented zero is invalid. These are run facts, not profile requests.
+  null or invented zero is invalid. Both variants record the sorted unique actual
+  tool refs used (empty only when no tool ran). These are run facts, not requests.
 - **R7 — evidence covers the request.** Evidence binds request/attempt/finish,
   target/source/base/output/release, profile/qualification/environment/performer,
   package/config/instructions, and proof `content_ref`. Kinds are
@@ -106,8 +108,9 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   data cannot override selection, grant, gate, or activation.
 - **R12 — relational validation.** Shape validation alone is insufficient.
   Commands validate: one document; profile/manifests into a resolved profile; a
-  request + resolved profile + result; and a complete contract-test result with
-  its raw fixtures. Cross-document checks cover exact refs, capability subsets,
+  request + resolved profile + result against explicit repository-ID/path mappings;
+  and a complete contract-test result against an external inventory-acceptance ref
+  and raw fixtures. Cross-document checks cover exact refs, capability subsets,
   role bindings, evidence coverage, status/outcome rules, risk/gate immutability,
   and request/result identity.
 - **R13 — honest fake swap proof.** Four distinct Git package trees represent
@@ -119,11 +122,15 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   `parse|shape|resolve|run|matrix`, observed status/error/assertions, and canonical
   refs only when produced. Independent `adapter_contract_test_inventory` fixes suite
   ID and each case's ID, phase, fixture digest, verdict/error, group, and assertions.
-  Observations match one-for-one; missing results, changed expectations, dropped or
-  tautological assertions, vacuous pass, and fabricated canonical results fail.
+  A separately supplied `inventory_acceptance_ref` scope-ref binds its exact document
+  digest; the result carries that same ref. Observations match one-for-one; replaced
+  inventories, missing results, changed expectations, dropped/tautological assertions,
+  vacuous pass, and fabricated canonical results fail. V1 carries but does not
+  authenticate the external acceptance ref.
 - **R15 — adversarial cases.** Tests cover malformed and noncanonical JSON;
-  limits/version/kind/fields; unsafe objects/paths; bad refs/status/evidence; replay;
-  capability, permission, role, model-invoke, metadata, branch, merge/approval/bypass,
+  limits/version/kind/new fields; missing/wrong repo mappings and unsafe objects;
+  replaced inventory/acceptance, unexecuted evidence, bad refs/status/replay;
+  capability, permission, role, model/tool metadata, branch, merge/approval/bypass;
   profile injection, package relabeling/replacement objects, and reversed times;
   risk/gate mutation; pass-looking prose; and degraded/empty output. Positive cases
   prove same implementation with separate boundaries.
@@ -156,35 +163,24 @@ payload bytes. Timestamps are UTC RFC 3339 strings. Every JSON integer is in
 | `profile` | profile ID/version, skill refs, at most one binding for each role with exact adapter/package/config refs, instance/principal/boundary/authority refs, requested capabilities/permissions; no self source ref; every requested role exists |
 | `resolved_profile` | resolver-derived exact profile commit/path/blob, selection ref, manifest/package/config provenance, resolved bindings and validated subsets; no authorization claim |
 | `adapter_contract_test_inventory` | suite ID and non-empty unique cases fixing ID, phase, fixture ref/digest, expected verdict/error, equivalence group, and required assertion IDs |
-| `adapter_contract_test_result` | exact inventory ref, ordered times, overall status, observed cases/errors/assertions and conditional refs; no expected fields |
+| `adapter_contract_test_result` | exact inventory and external acceptance refs, ordered times, overall status, observed cases/errors/assertions and conditional refs; no expected fields |
 
 - `document_ref`: `kind`, `id`, `sha256` of canonical bytes.
-- `git_object_ref`: repository ID, full commit, path, `object_type: blob|tree`,
-  object algorithm `git-sha1|git-sha256`, and full object ID.
-- `content_ref`: media type, locator ID matching the core ID grammar, and SHA-256.
-  The core records but never dereferences the locator ID.
+- `git_object_ref`: repository ID, full commit/path, blob|tree type, Git hash algorithm, and full object ID.
+- `content_ref`: media type, safe locator ID, and SHA-256; core never dereferences it.
 - `fixture_ref`: normalized fixture-root-relative path, media type, and SHA-256.
-  Validation resolves each real, non-symlink path component beneath the canonical
-  root and refuses any escape.
-- nested `evidence_record`: evidence ID; proof kind
-  `deterministic|behavioral|architecture|independent-review`; verdict
-  `passed|failed|inconclusive`; exact request/document digest, attempt ID,
-  finish-condition SHA-256, target/source/base/output/release fields required by
-  the outcome, profile/qualification/environment/performer/package/config and
-  instruction refs; and `proof_ref: content_ref`. The enclosing `stage_result`
-  document digest covers the whole nested record. It is not a seventh top-level
-  document.
-- `scope_ref`: artifact/document ref plus SHA-256 scope digest; used separately for
-  selection, qualification, grant, policy, and gate decisions.
-- `actor_ref`: provider-scoped stable principal, adapter implementation and instance,
-  execution boundary, and optional authority ref. It contains no credential value.
+  Validation resolves real non-symlink components beneath canonical root.
+- nested `evidence_record`: ID; closed kind/verdict; request/attempt/finish and
+  target/source/base/output/release bindings; profile/qualification/environment/
+  performer/package/config/instruction refs; and proof `content_ref`. The enclosing
+  stage-result digest covers it; it is not a top-level document.
+- `scope_ref`: artifact/document ref plus scope SHA-256 for selection, qualification, grant, policy, or gate.
+- `actor_ref`: provider principal, adapter implementation/instance, boundary, and optional authority; no secret.
 - `environment_ref`: stable ID plus SHA-256 fingerprint.
-- nested `execution_metadata`: tagged `model|deterministic`. Model requires actual
-  provider/model/effort and prompt/skill refs; deterministic forbids them. Snapshot,
-  trace, token input/cache/output, and ISO-4217 cost microunits each carry
-  `recorded|computed|unavailable|not-applicable` plus value or required reason.
-- `skill_package_ref`: name, canonical `.ystack/skills/<name>` path, format ID, and
-  exact Git tree ref. V1 does not inspect `SKILL.md` contents.
+- `tool_ref`: stable tool ID/version, exact implementation/package ref, and config digest.
+- nested `execution_metadata`: model|deterministic tag; actual model/effort/prompt/
+  skill fields when model; availability-tagged snapshot/trace/usage/cost; sorted tool refs.
+- `skill_package_ref`: name, `.ystack/skills/<name>` path, format ID, and exact tree; no content parsing.
 
 ### Total status and outcome rules
 
@@ -266,7 +262,8 @@ operation.capability ∈ binding.requested_capabilities
 operation.permissions = effective_permissions(operation.capability, binding)
 if result.executed: result.used_capability = operation.capability
 if result.executed: result.execution_metadata.kind = binding.execution_kind
-if not result.executed: performer, used_capability, and execution_metadata are absent
+if not result.executed: performer, used_capability, execution_metadata, evidence,
+  subject_outputs, and auxiliary_outputs are absent
 ```
 
 For executed work, outcome/evidence must match the table and evidence performer,
@@ -304,8 +301,8 @@ remain separate.
 ```text
 validate <file>
 resolve <repo> <commit> <selection-ref-file> <profile-path> <manifest-path>...
-validate-run <request-file> <resolved-profile-file> <result-file>
-validate-suite <suite-result-file> <case-inventory-file> <fixture-root>
+validate-run <request-file> <resolved-profile-file> <result-file> --repo <id>=<path>...
+validate-suite <suite-result-file> <inventory-file> <acceptance-ref-file> <fixture-root>
 ```
 
 `validate` enforces canonical bytes, limits, shape, and local invariants. One shared
@@ -313,10 +310,12 @@ wrapper sets `GIT_NO_REPLACE_OBJECTS=1` for every resolver/driver/test Git call.
 `resolve` uses exact Git objects and rejects symlinks, missing/wrong objects, config outside
 the selected commit, unsafe paths, mismatched adapter versions/packages, subset
 violations, and separation conflicts. It records the caller-supplied selection ref
-but does not call it trusted or active. `validate-run` performs request/profile/result
-and evidence-coverage checks. `validate-suite` verifies fixture digests, conditional
-refs, non-vacuous status, and one-for-one equality with the independently supplied
-typed inventory. Each inventory entry fixes case ID, phase, fixture ref, expected verdict
+but does not call it trusted or active. `validate-run` requires exactly one physical
+Git repo for every referenced repository ID (no extra/duplicate mapping) and verifies
+commit, path, mode, object ID, symlink state, request/profile/result relations, and
+evidence coverage. `validate-suite` verifies the external acceptance ref matches the
+independently supplied typed inventory digest, then checks fixture digests, conditional
+refs, non-vacuous status, and one-for-one observations. Each inventory entry fixes case ID, phase, fixture ref, expected verdict
 and error, group, and required assertion IDs; the result supplies observations only.
 Fixture paths use the Git-path grammar. The command canonicalizes the root, rejects
 symlinks at every component, and refuses any
