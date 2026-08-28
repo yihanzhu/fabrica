@@ -62,22 +62,25 @@ authority, or changes the live ystack profile.
 - **R8 — total result rules.** A stage result binds one exact request and one
   attempt. It records the controller, terminal status, whether the operation ran,
   the outcome when allowed, reason and diagnostics, expected/observed identities,
-  outputs, evidence, actual performer and capability when executed, actual
-  execution facts, and ordered times. Every status/outcome combination is defined
+  outputs, evidence, actual performer, binding, environment, and capability when
+  executed, actual execution facts, and ordered times. Every status/outcome combination is defined
   in Design; all others fail. `completed` means the operation finished, not that it
   passed.
 - **R9 — actual execution facts stay separate from requested config.** An executed
-  result records its actual adapter/package/config, environment, tools, and either
+  result records its observed adapter/package/config, environment, tools, and either
   deterministic or model execution metadata. Every possibly hidden actual model
   fact—provider, model, snapshot, effort, prompt, skills, tools, trace, usage, and
   cost—uses the same typed availability union. Missing facts are `unavailable` with
-  a reason, never guessed or copied from the profile. An unexecuted result
+  a reason, never guessed or copied from the profile. Failed, cancelled, or
+  completed-inconclusive execution preserves any observed performer, binding, or
+  environment mismatch instead of rewriting it to the request. An unexecuted result
   cannot carry a performer, used capability, execution metadata, evidence, or a
   successful output.
 - **R10 — evidence is exact and non-transferable.** Each evidence record carries the
   complete `stage_request` document ref, attempt ID/number, finish condition, every
   enclosing output ref, resolved profile, qualification scope when present,
-  environment, performer, actual binding/package/config, verification instructions,
+  observed environment, performer, actual binding/package/config, exact mismatch
+  set, verification instructions,
   proof bytes, kind, and verdict. A completed result covers exactly the evidence
   kinds requested before execution. Evidence from another request body, attempt,
   output, profile, environment, or instruction version cannot be replayed as current
@@ -282,6 +285,12 @@ those bytes.
   package_ref:git_object_ref,config_ref?:git_object_ref,execution_kind:"model"|
   "deterministic",adapter_instance_id:ID,principal_id:ID,
   execution_boundary_id:ID,authority_ref?:scope_ref(authority)}`.
+- `execution_mismatch` is exactly
+  `{field:"performer",expected:actor_ref,observed:actor_ref}`,
+  `{field:"binding",expected:actual_binding,observed:actual_binding}`, or
+  `{field:"environment",expected:environment_ref,observed:environment_ref}`.
+  Expected is derived from the request/resolved binding, observed equals the result,
+  and the two canonical values differ.
 - `usage_value` is `{input_tokens:Int,output_tokens:Int,cache_read_tokens:Int,
   cache_write_tokens:Int}`. `cost_value` is `{currency_id:ID,microunits:Int}`.
 - `execution_metadata` is exactly `{kind:"model"|"deterministic",
@@ -299,6 +308,7 @@ those bytes.
   resolved_profile_ref:document_ref(resolved_profile),
   qualification_ref?:scope_ref(qualification),environment_ref:environment_ref,
   performer:actor_ref,actual_binding:actual_binding,
+  execution_mismatches:set<execution_mismatch>(field,0..3),
   verification_instruction_ref:scope_ref(verification-instructions),
   outputs:set<output_record>(output_id,0..256),delta_ref?:content_ref,
   kind:EvidenceKind,
@@ -373,6 +383,8 @@ do not repeat it.
   outputs:set<output_record>(output_id,0..256),delta_ref?:content_ref,
   diagnostics:set<content_ref>(content_id,0..256),performer?:actor_ref,
   used_capability?:CapabilityID,actual_binding?:actual_binding,
+  actual_environment_ref?:environment_ref,
+  execution_mismatches?:set<execution_mismatch>(field,0..3),
   execution_metadata?:execution_metadata,
   evidence:set<evidence_record>(evidence_id,0..256),started_at?:Time,
   finished_at?:Time,recorded_at:Time}`. Presence follows the total status table.
@@ -413,8 +425,9 @@ An advisory is data for a later gate. It is never approval or a gate decision.
 | `cancelled` | true | only an inconclusive outcome; reason and attempt evidence required; no successful subject output or delta |
 
 Outcome is present exactly when `executed=true`. Performer, used capability,
-actual binding, execution metadata, start time, and finish time are also present
-exactly when executed. Reason is required for every non-completed status and every
+actual binding, actual environment, execution-mismatch set, execution metadata,
+start time, and finish time are also present exactly when executed. Reason is
+required for every non-completed status and every
 inconclusive outcome; it is forbidden for a completed non-inconclusive outcome.
 `stale_comparisons` is present exactly for `stale`; every expected value is derived
 from its request selector, every observed value is type-compatible, and every pair
@@ -451,20 +464,37 @@ subset of the request's required kinds, every verdict is `failed` or
 `inconclusive`, at least one is non-passing, and its output set is empty. It records only the interrupted attempt and cannot satisfy a
 later completed result. An unexecuted result has an empty evidence set.
 
+An exact performer mismatch on a reviewer request has one narrow incident rule. If
+the observed performer is not a reviewer, the failed, cancelled, or
+completed-inconclusive attempt may still carry the requested `independent-review`
+kind with only `failed|inconclusive` verdicts and the observed performer. This
+records that independent review did not occur; it is never passing review evidence,
+cannot satisfy a completed non-inconclusive result, and cannot be reused to satisfy
+a later attempt.
+
 `validate-stage-run` recomputes the complete request document ref and requires it
 to equal the result and every nested evidence `request_ref`. Evidence attempt values
 equal the enclosing result. Finish condition, profile, qualification presence,
-environment, verification instructions, performer, actual binding, every output
-record, and delta presence/value also equal the request/result/binding values exactly. Every evidence
-record on a completed result covers the complete output set. Prior-stage evidence
+verification instructions, every output record, and delta presence/value equal the
+request/result values exactly. Every evidence record on a completed result covers
+the complete output set. Prior-stage evidence
 appears only in `request.prior_evidence_refs`; its body is never copied into the new
 result.
 
-For an executed result, `performer` matches the selected resolved binding's role,
-implementation, instance, principal, and boundary. `actual_binding` matches that
-binding's manifest/package/config and execution kind. Execution metadata kind
-matches it too. All nested evidence repeats those exact performer, binding, and
-environment values. These are equality checks over claims, not identity proof.
+For every executed result, the validator derives the expected performer and
+`actual_binding` projection from the selected resolved binding, and takes the
+expected environment from the request. A completed non-inconclusive result requires
+all three observed values to equal those expectations and has an empty mismatch
+set. An executed `failed` or `cancelled` result, or a completed-inconclusive result,
+may differ. Its mismatch set contains exactly one record for each differing field,
+no equal or missing field, with expected derived from the request/binding and
+observed equal to the result's actual value. The set may be empty when failure or
+inconclusive outcome has another cause.
+
+Execution metadata kind always matches the observed actual binding. Every nested
+evidence record repeats the result's observed performer, actual binding, actual
+environment, and complete mismatch set. The request ref in that evidence preserves
+the expected values. These are equality checks over claims, not identity proof.
 
 Every possibly hidden model fact uses `availability<T>` as defined above. A profile
 model request is desired configuration only and cannot fill an actual result field.
@@ -549,8 +579,9 @@ Only producer and reviewer bindings may use `execution_kind: model`. Their effec
 permission set adds exactly `core.perm.model.invoke.v1`; every other role is
 deterministic. Request evidence kinds are a subset of the capability's closed
 allowed set and include every required kind. Only either review capability may
-produce `independent-review` evidence. For every supplied profile set and stage run,
-validation enforces:
+produce passing `independent-review` evidence. An observed non-reviewer may carry
+that kind only under the exact performer-mismatch incident rule above. For every
+supplied profile set and stage run, validation enforces:
 
 ```text
 supplied manifest document refs equal the profile binding manifest-ref set
@@ -579,11 +610,14 @@ operation permissions equal that capability's effective permissions
 result request/resolved-profile refs equal the supplied request/profile documents
 executed result used capability equals the request capability
 executed result outcome family equals the request capability registry family
-executed result metadata kind equals the resolved binding execution kind
-recorded/computed actual tools are a subset of resolved binding requested tools
-executed result performer and actual binding equal the resolved binding
-performer implementation ID/version and authority presence/value equal that binding
-all evidence performer/binding/environment values equal the result and request
+expected performer/binding/environment derive from resolved binding and request
+completed non-inconclusive actual values equal expected and mismatch set is empty
+failed/cancelled/completed-inconclusive mismatch set exactly covers actual differences
+executed result metadata kind equals observed actual-binding execution kind
+completed non-inconclusive actual tools are a subset of resolved-binding
+  requested tools
+all evidence performer/binding/environment/mismatch values equal observed result facts
+non-reviewer R-kind evidence is non-passing and requires the exact incident performer mismatch
 ```
 
 The core validates only the shape of a publisher proposal and these document
@@ -674,15 +708,19 @@ hashes, modes, source provenance, or floating refs; capability wildcards, role
 mismatch, extra/missing arguments, command/argv/env/URL/network/secret/entrypoint
 fields, permission drift, and model-role drift; shared protected-role bindings;
 request/profile/result mismatch, including a changed request body with the same ID;
-wrong performer/package/config/environment or independent-review evidence from a
-non-reviewer; altered risk/selection/qualification/grant/gate refs; unexecuted
+an actual performer/binding/environment mismatch on a completed non-inconclusive
+result; missing, extra, equal, or incorrectly derived mismatch records; evidence
+that does not bind observed actual facts; passed independent-review evidence from a
+non-reviewer, or non-reviewer R-kind evidence without the exact incident mismatch;
+altered risk/selection/qualification/grant/gate refs; unexecuted
 evidence or output; invalid status/outcome/evidence/time rules; replayed proof;
 missing resolved bindings, wrong outcome family, free/unbound stale selectors,
 mixed evidence precedence errors, and unoffered execution tools;
 content-backed or wrong-repository execution snapshots;
 unnamed or moved change-request base refs and tool configs without immutable refs;
 duplicate source objects with conflicting provenance and a 129-tool binding;
-changed delta with replayed evidence, performer authority/version drift, missing
+changed delta with replayed evidence, unrecorded performer authority/version drift,
+missing
 or wrong-purpose publisher-policy refs; invalid execution availability shapes,
 source-claim refs, and model/deterministic combinations;
 the absent generic label capability; empty or replaced inventories;
@@ -692,7 +730,10 @@ omit required structured fields. Core tests do not judge whether a well-shaped
 actual-fact or extension claim is truthful.
 
 Positive cases cover all seven kinds and all thirteen capabilities, including one
-adapter implementation used through separate protected bindings. Core tests use
+adapter implementation used through separate protected bindings, plus executed
+failed, cancelled, and completed-inconclusive results that preserve each allowed
+actual mismatch, including a reviewer performer-mismatch incident with non-passing
+R-kind evidence. Core tests use
 neutral logical IDs and do not special-case ystack. The unrelated Git target,
 physical object attacks, fake processes, 2×2 substitution, timeouts, cleanup, and
 external-target smoke belong to the two sibling initiatives.
@@ -755,33 +796,37 @@ publisher/control-foundation tests, not observable core-validator cases.
 2. **Pure validation has a hard honesty boundary.** A Git/content/actor/evidence ref
    remains a claim. Downstream work must not advertise core exit 0 as proof of
    existence, identity, authorization, or execution.
-3. **Closed arguments are a G2 blocker.** If implementation needs an argument not
+3. **Observed mismatch is incident data, not authority.** A valid failed or
+   inconclusive result may preserve the wrong actual actor/binding/environment. That
+   never authorizes it; control-foundation and orchestration work must stop the
+   workflow and route the incident to the correct recovery gate.
+4. **Closed arguments are a G2 blocker.** If implementation needs an argument not
    listed here, it returns to the artifact gate. It cannot add an opaque object,
    command field, or namespaced execution escape.
-4. **The runner cannot certify itself.** Inventory/result linkage prevents dropped
+5. **The runner cannot certify itself.** Inventory/result linkage prevents dropped
    expectations but not fabricated observations. The sibling must independently run
    and revalidate every case before a stage result can carry evidence.
-5. **Declarative separation is not isolation.** Distinct IDs and refs do not create
+6. **Declarative separation is not isolation.** Distinct IDs and refs do not create
    separate credentials, sandboxes, or processes. Control-foundation work must prove
    those runtime boundaries.
-6. **Publisher records are proposals only.** Comment, status, branch, and
+7. **Publisher records are proposals only.** Comment, status, branch, and
    change-request shapes carry no permission to write and cannot project themselves
    into gate authority.
-7. **Implementation size may still expose excess scope.** The old 800-line exception
+8. **Implementation size may still expose excess scope.** The old 800-line exception
    is gone. If the plan cannot stay within the normal review budget using one schema
    and table-driven tests, reduce v1 or split again rather than weakening checks.
-8. **CI is a constitution path.** The implementation plan must identify an
+9. **CI is a constitution path.** The implementation plan must identify an
    operator-driven edit or a `proposals/` handoff. G2 merge alone authorizes neither.
-9. **No exceptional implementation is accepted here.** If jq limits, duplicate-key
+10. **No exceptional implementation is accepted here.** If jq limits, duplicate-key
    handling, or portability require an architectural exception, return to the
    accepted-artifact gate before code and satisfy the exceptional implementation
    rule. Do not hide it in a parser workaround.
-10. **The north-star marker is intentional.** The ystack-self entry keeps its
+11. **The north-star marker is intentional.** The ystack-self entry keeps its
     shipped-default marker and operator-history note for adopters. This user-directed
     G2 adds no new proactive authorization and does not approve a live profile change.
-11. **This is high-risk architecture.** G2 accepts design only. A later plan must be
+12. **This is high-risk architecture.** G2 accepts design only. A later plan must be
     reviewed under the repo's then-live risk gate; nobody may claim a pre-code plan
     gate passed merely because this spec merged.
-12. **Nothing activates on merge.** Contract/source changes do not regenerate
+13. **Nothing activates on merge.** Contract/source changes do not regenerate
     `/yshifu`, replace the manager persona, change adapters, or update an open
     session. The operator remains the only merge authority.
