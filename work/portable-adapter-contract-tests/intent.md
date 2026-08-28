@@ -28,15 +28,17 @@ A 2×2 matrix swaps producer/harness A and B while holding forge A or B fixed, t
 swaps forge A and B while holding the harness fixed. The matrix proves that the
 portable artifact, risk, gate, outcome, evidence, and audit projection stays the
 same while adapter and profile provenance changes honestly. It proves contract
-substitution only, not real-vendor safety or portability.
+substitution only, not real-vendor safety or portability. Its accepted inventory
+includes at least one target fixture unrelated to ystack.
 
 ## Affected users and systems
 
-The operator; future adapter authors; target fixtures; accepted case inventories;
-the portable-core validator; the deterministic profile resolver; fake producer and
-forge packages; temporary Git repositories; contract-test result artifacts; CI;
-and later real-adapter qualification and regression suites that reuse the accepted
-schemas, comparison projection, regression cases, and observation semantics.
+The operator; future adapter authors; ystack and unrelated-target fixtures;
+accepted case inventories; the portable-core validator; the deterministic profile
+resolver; fake producer and forge packages; temporary Git repositories;
+contract-test result artifacts; CI; and later real-adapter qualification and
+regression suites that reuse the accepted schemas, comparison projection,
+regression cases, and observation semantics.
 
 ## Constraints
 
@@ -67,12 +69,19 @@ schemas, comparison projection, regression cases, and observation semantics.
   partial, timed-out, degraded, mismatched, or self-relabelled output fails closed.
 - All Git reads disable replacement objects and use explicit one-to-one repository
   mappings. Fixture paths stay beneath a canonical non-symlink root.
+- The accepted inventory and matrix include at least one committed target fixture
+  unrelated to ystack. Contracts, assertions, and equivalence rules cannot
+  special-case ystack, its repository layout, or its names.
 - Test results cannot grant authority, qualification, approval, merge, publish, or
   branch-write capability. No real adapter or live profile runs.
 - Real-adapter execution cannot reuse this fake-only launcher. It requires a
   separately accepted, sandboxed, credential-controlled launcher and qualification
   chain; only the accepted schemas, projection, cases, and observation semantics
   may carry forward.
+- Passing this fake matrix is not portability proof. Before the parent roadmap item
+  can close, a later accepted real-adapter qualification must run an external-target
+  smoke outside ystack. This child records that unmet exit condition but neither
+  runs the smoke nor defines its launcher.
 - Keep the fixtures self-contained, the run reconstructable, and the implementation
   small enough for one reviewable PR. CI changes follow the operator/`proposals/`
   constitution boundary.
@@ -88,7 +97,8 @@ schemas, comparison projection, regression cases, and observation semantics.
   independently revalidated?
 - Which fields form the vendor-neutral comparison projection, which provenance
   fields must differ, and how are false equivalence or dropped cases rejected?
-- What fixture packages, positive/negative cases, timeouts, cleanup checks, and
-  stable errors are required for the two-stage 2×2 matrix?
+- Which ystack and unrelated-target fixture packages, positive/negative cases,
+  timeouts, cleanup checks, and stable errors are required for the two-stage 2×2
+  matrix?
 - What exact evidence is enough for this fake matrix to qualify the contract runner
   itself without claiming that any real adapter or external target is qualified?
