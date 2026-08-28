@@ -1,8 +1,9 @@
-# <Target repo> — conventions for the coding agents
+# <Target repo> — conventions for Claude-based coding agents
 
-Drop this file in the root of each target repo. Both the coder and the reviewer
-read it, so it's how you specialize the *one* coder per repo (instead of having
-separate FE/BE agents).
+Drop this file in the root of each target repo. The Claude coder reads it to learn
+the target's commands and conventions. Do not assume an independent reviewer reads
+`CLAUDE.md`; deliver the same accepted review floor through that reviewer's target
+instruction mechanism. This template does not claim to provide that delivery.
 
 > Fill in the skeleton below with your repo's real values. A complete worked
 > example follows at the bottom — read it for the level of concreteness expected,
@@ -31,6 +32,41 @@ rules it never saw.*
 - Every PR links its issue (`Closes #<n>`) and adds/updates tests where the repo
   has them; CI must stay green.
 - Conventional commit messages: `<convention, e.g. feat:/fix:/chore:>`
+
+## Exceptional implementations and comments
+*Why this matters: a narrow workaround can be necessary, but an unexplained or
+copied workaround quietly becomes architecture.*
+
+- This section governs exceptional implementation code, not separately accepted
+  CI or project-bootstrap process gates. Prefer the root-cause fix. Use an
+  exceptional implementation only for an external constraint, safety concern,
+  migration boundary, or accepted scope decision when the normal fix is unsafe,
+  unavailable, or outside scope. Every
+  exception must be named before implementation in an accepted issue, spec, plan,
+  or operator decision record. A link, code comment, or PR discussion records
+  provenance; it is not approval. A newly discovered exception returns to that
+  gate before code is added.
+- Keep each exception behind one named private function, module, or adapter. Add a
+  regression test that runs in CI and link the durable issue, spec, plan, or
+  decision explaining the tradeoff. When the protected invariant can be expressed
+  reliably as lint, type, or another deterministic check, run that check in CI.
+- Temporary exceptions name an objective removal condition. Permanent exceptions
+  name the external invariant and the change that requires re-evaluation.
+- Do not expose the exceptional pattern as a reusable API or copy it elsewhere.
+  When the same need repeats, make it a normal architecture path, lint/type rule,
+  test helper, or tracked redesign.
+- An exception never waives CI, independent review, authorization boundaries,
+  target safety rules, or human merge.
+- Comments explain only a non-obvious reason, invariant, external contract, or tool
+  directive. Do not add code restatements, AI-generated essays, commented-out code,
+  copied PR discussion, or `TODO`/`FIXME` without a durable tracking reference.
+  Keep required license, tooling, security/concurrency, compatibility/protocol,
+  public API, and short exception-boundary comments.
+- This baseline is not a blanket no-comments rule. A stricter target policy,
+  including zero optional comments, may be recorded here: `<optional stricter
+  rule>`. It cannot weaken the exception floor. Required notices, directives,
+  documentation, invariants, and provenance remain in source or accepted
+  sidecar/metadata.
 
 ## Conventions
 *Why this matters: this is what keeps the coder's output looking like the rest of
@@ -87,6 +123,8 @@ codebase and gives the reviewer concrete grounds to request changes.*
     queries in route files.
   - Use the shared `AppError` type for expected failures; let the error middleware
     format the response.
+  - Follow the exceptional-implementation rule above: isolate any accepted
+    compatibility boundary, test it, and link its durable decision.
 - Anti-patterns to avoid:
   - No raw SQL strings — go through Prisma so migrations stay the source of truth.
   - No `any`; if a type is hard, add a narrow interface rather than escaping the
