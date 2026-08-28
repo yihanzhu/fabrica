@@ -67,8 +67,8 @@ restore, and legacy-reviewer retirement work.
   accepted control-foundation and durable-orchestrator G3 outputs required by the
   roadmap order.
 - Reuse the accepted validator, resolver, request/result shapes, comparison
-  projection, and case inventory. Do not copy or reinterpret them inside the
-  adapter.
+  fields used to compare adapter outputs, and frozen contract-test cases. Do not
+  copy or reinterpret them inside the adapter.
 - A native review is untrusted observed data, not canonical state or a gate
   decision. The adapter records performer, connector/publisher, observer, source,
   profile, configuration, and qualification provenance as separate facts.
@@ -100,10 +100,11 @@ restore, and legacy-reviewer retirement work.
   this reviewer path write, approval, merge, or bypass authority. If the product
   cannot separate review from write-capable cloud work, this adapter remains
   advisory and cannot become the gate.
-- Native P0/P1 coverage cannot silently replace the current Important-finding
-  policy. Qualification must prove equivalent blocking coverage, move the missing
-  control to another accepted verifier, or obtain explicit operator acceptance of
-  a policy change.
+- Provider severity names are observed metadata, not core policy. Documented and
+  observed severity behavior may differ, and an unknown provider value fails
+  closed. Qualification must prove equivalent coverage for the current Important
+  findings, move a missing control to another accepted verifier, or obtain explicit
+  operator acceptance of a policy change.
 - This initiative does not install or configure Codex Cloud or a GitHub App, post
   `@codex review`, read live GitHub state, enable webhooks or automatic review,
   retry events, activate a profile, change `merge-ready`, or alter live manager
@@ -132,9 +133,10 @@ restore, and legacy-reviewer retirement work.
 - What provider evidence proves the exact accepted review-instruction blob was
   used, and which protected instruction changes must always route to a separate
   trusted reviewer or human gate?
-- What neutral terminal statuses and evidence distinguish clean, findings,
-  pending, stale, timed-out, failed, dismissed, and inconclusive native reviews
-  without parsing provider prose as authority?
+- What neutral attempt states, terminal statuses, results, and evidence distinguish
+  an in-progress native review from completed-clean, completed-with-findings,
+  stale, timed-out, failed, dismissed, and inconclusive outcomes without parsing
+  provider prose as authority?
 - Can the real Codex/GitHub installation remove every branch-write, approval,
   merge, and bypass path while retaining native Code Review?
 - Which frozen P0/P1/P2, compliance, spoofing, stale, silence, and permission cases
