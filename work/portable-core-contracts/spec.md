@@ -196,9 +196,9 @@ Capabilities are exactly `core.harness.produce.v1`, `core.verify.run.v1`, and
 
 `model_request` is `{provider_id:ID,model_id:ID,effort_id:ID}`. Producer/reviewer may
 be model-backed. Every model binding requires model request and prompt; every
-deterministic binding forbids both. Verifier and all dormant roles are deterministic.
-Producer, verifier, reviewer, and publisher bindings occur exactly once. Other roles
-are optional and unique by role.
+deterministic binding forbids both and requires an empty `skill_refs` set. Verifier
+and all dormant roles are deterministic. Producer, verifier, reviewer, and publisher
+bindings occur exactly once. Other roles are optional and unique by role.
 
 Producer requests only the producer capability; verifier only verifier; reviewer
 only reviewer. Dormant roles request zero capabilities/permissions and cannot be
@@ -233,12 +233,26 @@ grant, qualification, gate, trust, or activation field.
 Profile/manifest sources use `canonical-json` and their value digests equal the
 full canonical document bytes, including the final line feed, in their refs. Each
 resolved `binding` equals its profile binding, and its manifest ref selects exactly
-one supplied manifest. Package/config/prompt/skill/tool source
-objects and presence equal their corresponding binding or tool refs; skill/tool
-source sets are one-to-one with those refs. A resolved implementation ID/version
-equals its manifest document ID/adapter version. Across the resolved profile, one
-exact source object has only one format/digest claim; a set cannot contain the same
-`git-key` twice.
+one supplied manifest. For each profile binding `b`, let `m` be that manifest and
+`rb` the one resolved binding with the same binding ID. Validation enforces:
+
+```text
+rb.binding == b
+b.package_ref == m.body.package_ref
+rb.package_source.source == b.package_ref
+b.requested_tools is a subset of m.body.offered_tools by full tool_ref equality
+IDs(rb.tool_sources) == IDs(b.requested_tools)
+each resolved tool package/config source and presence equals its requested tool
+b.config_ref present => m.body.config_contract_ref present
+rb.config_source presence/source == b.config_ref presence/object
+```
+
+Prompt and skill source presence/object sets likewise equal their binding refs, so a
+deterministic binding has no resolved skill sources. A resolved implementation
+ID/version equals its manifest document ID/adapter version. Across the resolved
+profile, one exact source object has only one format/digest claim; a set cannot
+contain the same `git-key` twice. Missing/extra tools, a matching tool ID with any
+different version/package/config, or config without a manifest contract fails.
 
 `validate-profile-set` recomputes supplied document refs and enforces exact manifest
 set, binding-ID set, role/execution offer, package/config/tool relations, capability
@@ -359,12 +373,12 @@ resolved profile. The binding is non-dormant, owns the capability, and requests 
 exact effective permissions; this is compatibility, not activation or grant.
 Every Git ref in target revision, base, source, inputs, or reviewer change uses
 `target_repository_id`; resolved-profile sources are not target inputs. Verifier
-candidate ID selects exactly one input whose value is a Git tree. Reviewer change
-head equals the present target revision and change base equals request base. An
-absent target revision is allowed only for bootstrap producer work. Required
-evidence kinds equal the capability rule: producer and reviewer use their one named
-kind; verifier includes deterministic and may also request behavioral and
-architecture.
+candidate ID selects exactly one Git-tree input, and that tree's full revision equals
+the present target revision. Reviewer change head equals the present target revision
+and change base equals request base. An absent target revision is allowed only for
+bootstrap producer work. Required evidence kinds equal the capability rule: producer
+and reviewer use their one named kind; verifier includes deterministic and may also
+request behavioral and architecture.
 
 ### Stage result and evidence
 
@@ -521,11 +535,13 @@ starts stderr with `E_USAGE`, `E_RUNTIME`, `E_PARSE`, `E_CANONICAL`, `E_LIMIT`,
 Tests build one valid five-document bundle and run at least 60 table-driven
 mutations covering canonical roots/limits, exact shapes/enums, root-tree and unsafe
 paths, canonical-JSON tree rejection, manifest/profile/source relations, the three
-capabilities and five permission bounds, instruction purpose/subject/input closure,
-dormant/protected roles, request/result/status/time/output and patch-media rules,
-actual-fact incidents, model/tool availability, evidence replay/passing-role rules,
-source/base and other stale selectors, generic escapes, and all three commands. They
-do not read Git, launch a process, or use a network.
+capabilities and five permission bounds, full package/tool/config equality,
+instruction purpose/subject/input closure, dormant/protected roles, empty
+deterministic skills, verifier target-revision equality,
+request/result/status/time/output and patch-media rules, actual-fact incidents,
+model/tool availability, evidence replay/passing-role rules, source/base and other
+stale selectors, generic escapes, and all three commands. They do not read Git,
+launch a process, or use a network.
 
 Implementation budget:
 
