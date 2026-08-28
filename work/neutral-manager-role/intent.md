@@ -69,8 +69,11 @@ shadow qualification, telemetry, rollback, and later target packaging.
   handoff. A user one-liner is still a request, not approval. Proactive work still
   requires the accepted north-star and manager-debate gates until a later accepted
   policy changes them.
-- Claude subagent spawning, context handling, and command discovery belong in a
-  Claude wrapper. GitHub issues, PRs, comments, labels, and `gh` belong in forge or
+- Claude manager-session context handling and command discovery belong in a Claude
+  wrapper. Coder dispatch does not. The manager produces a typed stage request;
+  the durable orchestrator dispatches it through the producer adapter chosen by
+  trusted profile resolution and records the actual actor, capability, and executor
+  evidence. GitHub issues, PRs, comments, labels, and `gh` belong in forge or
   selected-profile adapters. Codex commands and model settings belong in reviewer,
   debate, or model adapters.
 - Retry, reconciliation, missed/repeated events, backpressure, cancellation,
@@ -99,8 +102,8 @@ shadow qualification, telemetry, rollback, and later target packaging.
 - After that qualification gate, live cutover also requires exact prompt, profile,
   and configuration backups; operator approval; a newly generated command;
   replacement of the live project persona; a new session; self-host and unrelated-
-  target smoke; permission checks; and a tested rollback to the prior prompt and
-  profile.
+  target smoke; permission checks; and a tested rollback to the prior prompt,
+  profile, and configuration.
 - General installation, upgrades, and conflict handling remain in the target-
   packaging roadmap item. This initiative cannot implement them early.
 - Keep each artifact and implementation PR to one concern and the normal size
