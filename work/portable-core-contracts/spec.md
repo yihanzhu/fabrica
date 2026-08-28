@@ -72,15 +72,16 @@ authority, or changes the live ystack profile.
   fact—provider, model, snapshot, effort, prompt, skills, tools, trace, usage, and
   cost—uses the same typed availability union. Missing facts are `unavailable` with
   a reason, never guessed or copied from the profile. Failed, cancelled, or
-  completed-inconclusive execution preserves any observed performer, binding, or
-  environment mismatch instead of rewriting it to the request. An unexecuted result
+  completed-inconclusive execution preserves any observed performer, binding,
+  environment, or capability mismatch instead of rewriting it to the request. An
+  unexecuted result
   cannot carry a performer, used capability, execution metadata, evidence, or a
   successful output.
 - **R10 — evidence is exact and non-transferable.** Each evidence record carries the
   complete `stage_request` document ref, attempt ID/number, finish condition, every
   enclosing output ref, resolved profile, qualification scope when present,
-  observed environment, performer, actual binding/package/config, exact mismatch
-  set, verification instructions,
+  observed environment, performer, actual binding/package/config, used capability,
+  exact mismatch set, verification instructions,
   proof bytes, kind, and verdict. A completed result covers exactly the evidence
   kinds requested before execution. Evidence from another request body, attempt,
   output, profile, environment, or instruction version cannot be replayed as current
@@ -188,7 +189,8 @@ lowercase media type matching
 lowercase hex characters for SHA-1 or 64 for SHA-256. `RepoPath` follows the lexical
 rules below. `TopicRef` is `refs/heads/` plus slash-separated 1–64 character
 segments made from lowercase letters, digits, `.`, `_`, or `-`; no segment is `.`,
-`..`, ends in `.` or `.lock`, or contains `..`. `IdempotencyKey` is an `ID`.
+`..`, begins or ends with `.`, ends with `.lock`, or contains `..`.
+`IdempotencyKey` is an `ID`.
 `ExtensionPrefix` is the reverse-domain portion of the extension-key grammar.
 `canonical-sha256` as a set key means SHA-256 of the nested value's canonical JSON;
 `source-canonical-sha256` means SHA-256 of only a `source_value_ref.source` object;
@@ -288,7 +290,8 @@ those bytes.
 - `execution_mismatch` is exactly
   `{field:"performer",expected:actor_ref,observed:actor_ref}`,
   `{field:"binding",expected:actual_binding,observed:actual_binding}`, or
-  `{field:"environment",expected:environment_ref,observed:environment_ref}`.
+  `{field:"environment",expected:environment_ref,observed:environment_ref}`, or
+  `{field:"capability",expected:CapabilityID,observed:CapabilityID}`.
   Expected is derived from the request/resolved binding, observed equals the result,
   and the two canonical values differ.
 - `usage_value` is `{input_tokens:Int,output_tokens:Int,cache_read_tokens:Int,
@@ -307,8 +310,8 @@ those bytes.
   finish_condition_ref:scope_ref(finish-condition),
   resolved_profile_ref:document_ref(resolved_profile),
   qualification_ref?:scope_ref(qualification),environment_ref:environment_ref,
-  performer:actor_ref,actual_binding:actual_binding,
-  execution_mismatches:set<execution_mismatch>(field,0..3),
+  performer:actor_ref,actual_binding:actual_binding,used_capability:CapabilityID,
+  execution_mismatches:set<execution_mismatch>(field,0..4),
   verification_instruction_ref:scope_ref(verification-instructions),
   outputs:set<output_record>(output_id,0..256),delta_ref?:content_ref,
   kind:EvidenceKind,
@@ -384,7 +387,7 @@ do not repeat it.
   diagnostics:set<content_ref>(content_id,0..256),performer?:actor_ref,
   used_capability?:CapabilityID,actual_binding?:actual_binding,
   actual_environment_ref?:environment_ref,
-  execution_mismatches?:set<execution_mismatch>(field,0..3),
+  execution_mismatches?:set<execution_mismatch>(field,0..4),
   execution_metadata?:execution_metadata,
   evidence:set<evidence_record>(evidence_id,0..256),started_at?:Time,
   finished_at?:Time,recorded_at:Time}`. Presence follows the total status table.
@@ -483,9 +486,9 @@ result.
 
 For every executed result, the validator derives the expected performer and
 `actual_binding` projection from the selected resolved binding, and takes the
-expected environment from the request. A completed non-inconclusive result requires
-all three observed values to equal those expectations and has an empty mismatch
-set. An executed `failed` or `cancelled` result, or a completed-inconclusive result,
+expected environment and capability from the request. A completed
+non-inconclusive result requires all four observed values to equal those expectations
+and has an empty mismatch set. An executed `failed` or `cancelled` result, or a completed-inconclusive result,
 may differ. Its mismatch set contains exactly one record for each differing field,
 no equal or missing field, with expected derived from the request/binding and
 observed equal to the result's actual value. The set may be empty when failure or
@@ -493,7 +496,8 @@ inconclusive outcome has another cause.
 
 Execution metadata kind always matches the observed actual binding. Every nested
 evidence record repeats the result's observed performer, actual binding, actual
-environment, and complete mismatch set. The request ref in that evidence preserves
+environment, used capability, and complete mismatch set. The request ref in that
+evidence preserves
 the expected values. These are equality checks over claims, not identity proof.
 
 Every possibly hidden model fact uses `availability<T>` as defined above. A profile
@@ -608,15 +612,15 @@ operation capability belongs to its resolved binding
 execution-provision argument tools are a subset of resolved binding requested tools
 operation permissions equal that capability's effective permissions
 result request/resolved-profile refs equal the supplied request/profile documents
-executed result used capability equals the request capability
 executed result outcome family equals the request capability registry family
-expected performer/binding/environment derive from resolved binding and request
+executed result used capability records the observed actual capability
+expected performer/binding/environment/capability derive from binding and request
 completed non-inconclusive actual values equal expected and mismatch set is empty
 failed/cancelled/completed-inconclusive mismatch set exactly covers actual differences
 executed result metadata kind equals observed actual-binding execution kind
 completed non-inconclusive actual tools are a subset of resolved-binding
   requested tools
-all evidence performer/binding/environment/mismatch values equal observed result facts
+all evidence performer/binding/environment/capability/mismatch values equal observed result facts
 non-reviewer R-kind evidence is non-passing and requires the exact incident performer mismatch
 ```
 
@@ -708,7 +712,7 @@ hashes, modes, source provenance, or floating refs; capability wildcards, role
 mismatch, extra/missing arguments, command/argv/env/URL/network/secret/entrypoint
 fields, permission drift, and model-role drift; shared protected-role bindings;
 request/profile/result mismatch, including a changed request body with the same ID;
-an actual performer/binding/environment mismatch on a completed non-inconclusive
+an actual performer/binding/environment/capability mismatch on a completed non-inconclusive
 result; missing, extra, equal, or incorrectly derived mismatch records; evidence
 that does not bind observed actual facts; passed independent-review evidence from a
 non-reviewer, or non-reviewer R-kind evidence without the exact incident mismatch;
@@ -718,6 +722,7 @@ missing resolved bindings, wrong outcome family, free/unbound stale selectors,
 mixed evidence precedence errors, and unoffered execution tools;
 content-backed or wrong-repository execution snapshots;
 unnamed or moved change-request base refs and tool configs without immutable refs;
+topic-ref components beginning with `.`;
 duplicate source objects with conflicting provenance and a 129-tool binding;
 changed delta with replayed evidence, unrecorded performer authority/version drift,
 missing
@@ -732,7 +737,8 @@ actual-fact or extension claim is truthful.
 Positive cases cover all seven kinds and all thirteen capabilities, including one
 adapter implementation used through separate protected bindings, plus executed
 failed, cancelled, and completed-inconclusive results that preserve each allowed
-actual mismatch, including a reviewer performer-mismatch incident with non-passing
+actual performer/binding/environment/capability mismatch, including a reviewer
+performer-mismatch incident with non-passing
 R-kind evidence. Core tests use
 neutral logical IDs and do not special-case ystack. The unrelated Git target,
 physical object attacks, fake processes, 2×2 substitution, timeouts, cleanup, and
@@ -797,7 +803,8 @@ publisher/control-foundation tests, not observable core-validator cases.
    remains a claim. Downstream work must not advertise core exit 0 as proof of
    existence, identity, authorization, or execution.
 3. **Observed mismatch is incident data, not authority.** A valid failed or
-   inconclusive result may preserve the wrong actual actor/binding/environment. That
+   inconclusive result may preserve the wrong actual actor/binding/environment or
+   capability. That
    never authorizes it; control-foundation and orchestration work must stop the
    workflow and route the incident to the correct recovery gate.
 4. **Closed arguments are a G2 blocker.** If implementation needs an argument not
