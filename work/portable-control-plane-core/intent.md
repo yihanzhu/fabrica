@@ -15,20 +15,22 @@ not a particular pair of vendors.
 
 ## Proposed outcome
 
-ystack has a small, vendor-neutral core that defines artifacts, stage results,
-risk gates, evidence, and adapter capabilities. A selected profile supplies the
-producer, verifier, reviewer, forge, CI, execution, identity, and publisher
-adapters used by a stage. An adapter is a small bridge between the core and an
-external tool. The core's extension rules let later orchestration, deployment,
-and incident capabilities join without changing existing artifact or audit
-meaning; this initiative does not design those later contracts.
+ystack has a small, vendor-neutral core that defines artifact and stage-result
+contracts, risk metadata, evidence references, and adapter capabilities. A
+selected profile supplies the producer, verifier, reviewer, forge, CI, execution,
+identity, and publisher adapters used by a stage. An adapter is a small bridge
+between the core and an external tool. The core's extension rules let later
+control, orchestration, deployment, and incident capabilities join without
+changing existing artifact or audit meaning; this initiative does not design or
+enforce those later controls.
 
 The current GitHub + GitHub Actions + Claude Code + Codex combination remains a
 working default while this core is introduced. Contract tests can swap fake
 harness adapters while holding the forge fixed, then swap fake forge adapters
-while holding the harness fixed. Each combination preserves the same canonical
-artifacts, gates, and audit meaning. Validation fails when an adapter lacks a
-required safety capability.
+while holding the harness fixed. Each combination preserves the same artifact,
+policy, and audit contract. Contract validation rejects malformed or incompatible
+declarations. Later initiatives decide, prove, and enforce the capabilities a
+risk tier requires.
 
 ## Affected users and systems
 
@@ -67,11 +69,12 @@ later initiatives extract its real adapters.
   `intent → spec → accepted plan → build → verify → independent review → human
   merge → deploy/rollback → production feedback/new intent` loop, without
   implementing the later stages now?
-- Which capability is required at each risk tier, and how does an adapter declare
-  that it cannot safely support one?
+- What risk metadata and capability declarations must the core carry so later
+  policies can decide whether an adapter may support a risk tier?
 - Should canonical skills live under `.ystack/skills/`, an open Agent Skills
   layout, or another neutral package with generated harness bridges?
-- What compatibility period should the existing Claude/Codex scripts and config
-  keys receive?
-- What compatibility evidence must a later real harness or forge adapter provide
-  before it can join a supported profile?
+- What compatibility seams must the contracts expose so later adapter extraction
+  can preserve current behavior without putting vendor names in the core?
+- What fields must an evidence reference and fake-adapter contract-test result
+  carry so later eval initiatives can set real-adapter qualification rules without
+  changing audit meaning?
