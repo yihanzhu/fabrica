@@ -58,8 +58,9 @@ restore, and legacy-reviewer retirement work.
 ## Constraints
 
 - This is the Codex/GitHub default reviewer adapter, not core policy. Core records,
-  gates, and consumers cannot name Codex, GitHub, bot logins, comment text, or a
-  provider-specific severity.
+  gates, and consumers cannot require or branch on Codex, GitHub, bot logins, raw
+  comment text, or a provider-specific severity. Neutral provenance fields may
+  preserve those observed values as opaque adapter data for audit.
 - `portable-core-contracts`, `portable-profile-resolution`, and
   `portable-adapter-contract-tests` are declared dependencies, not yet accepted.
   G1 may proceed now. This G2 waits for and pins all three accepted G2
@@ -92,10 +93,13 @@ restore, and legacy-reviewer retirement work.
 - Record only provider metadata the platform exposes. Hidden model, effort, tool,
   cost, environment, or execution facts are `unavailable` with a reason, never
   guessed or copied from local defaults.
-- Reviewer authority remains exact-change read-only. It cannot edit, approve,
-  publish, merge, label, bypass rules, or impersonate the human. `@codex fix`,
-  Security Review, general `@codex` tasks, branch writes, and automatic review are
-  outside this adapter.
+- The reviewer performer remains exact-change read-only. It cannot edit, approve,
+  publish, merge, label, bypass rules, or impersonate the human. A distinct native
+  connector/publisher may perform only the accepted fixed action that publishes
+  that review result. Qualification must prove this separation and that the
+  performer cannot select a different write. If the boundary is hidden or wider,
+  the adapter remains advisory. `@codex fix`, Security Review, general `@codex`
+  tasks, branch writes, and automatic review are outside this adapter.
 - A later qualification must prove the installed native integration cannot give
   this reviewer path write, approval, merge, or bypass authority. If the product
   cannot separate review from write-capable cloud work, this adapter remains
