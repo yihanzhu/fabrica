@@ -24,9 +24,7 @@ repo_root="$(cd "$(dirname "$script_path")/.." && pwd -P)"
 template="$repo_root/templates/yshifu-command.md"
 commands_dir="$HOME/.claude/commands"
 target="$commands_dir/yshifu.md"
-# Bridge: the docs still say the legacy /faber until the docs PR lands, so install BOTH
-# names with identical content. Ops 4 deletes the legacy copy. # legacy fallback
-legacy_target="$commands_dir/faber.md" # legacy fallback
+legacy_faber_target="$commands_dir/faber.md" # legacy retired command; never mutate here
 
 if [ ! -f "$template" ]; then
   echo "error: template not found: $template" >&2
@@ -59,13 +57,13 @@ else
   action="created"
 fi
 
-# Bridge copy under the legacy name, so the documented /faber keeps working
-# until the docs PR and Ops 4. Same content, same backup rule. # legacy fallback
-if [ -f "$legacy_target" ] && [ "$rendered" != "$(cat "$legacy_target")" ]; then
-  cp "$legacy_target" "$legacy_target.bak" # legacy fallback
+# Retirement is deliberately non-destructive. Warn about the exact old entrypoint,
+# including a dangling symlink, but never read, back up, overwrite, or delete it.
+if [ -e "$legacy_faber_target" ] || [ -L "$legacy_faber_target" ]; then # legacy residual
+  echo "WARNING: retired legacy /faber command remains at $legacy_faber_target" >&2
+  echo "         /yshifu was updated; inspect and move the retired file explicitly" >&2
+  echo "         using RESTORE.md's rollback-safe cleanup. This installer leaves it untouched." >&2
 fi
-printf '%s\n' "$rendered" >"$legacy_target" # legacy fallback
-echo "Bridge copy (legacy /faber, removed at Ops 4): $legacy_target"
 
 cat <<EOF
 

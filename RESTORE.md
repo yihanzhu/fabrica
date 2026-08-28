@@ -53,7 +53,61 @@ human channel.
    `~/.claude/commands/yshifu.md` from [`templates/yshifu-command.md`](templates/yshifu-command.md),
    substituting this clone's own path for the placeholder — so the command never hardcodes
    a repo location. Idempotent: re-running is safe, and an existing differing `yshifu.md` is
-   backed up to `yshifu.md.bak` before overwriting. It also writes a bridge copy under the legacy `/faber` name (same content, same backup rule) until that bridge is retired.
+   backed up to `yshifu.md.bak` before overwriting. A retired legacy command file is not
+   recreated or deleted by the installer. If legacy `~/.claude/commands/faber.md` remains,
+   the installer warns and leaves it byte-for-byte untouched. Retire it in this order before
+   running doctor/full smoke:
+   1. Verify the new command exists and names this clone:
+      `test -f ~/.claude/commands/yshifu.md && grep -qF "$(pwd -P)/" ~/.claude/commands/yshifu.md`.
+   2. Inspect whether the legacy file is the generated bridge or contains custom work. Never
+      discard custom content.
+   3. Move it outside the active command-discovery tree into a unique timestamped
+      directory; never overwrite the installer's fixed `.bak` or an earlier retirement:
+
+      ```sh
+      set -eu
+      legacy_cmd="$HOME/.claude/commands/faber.md" # legacy operator cleanup
+      if [ ! -e "$legacy_cmd" ] && [ ! -L "$legacy_cmd" ]; then
+        echo "retired command is already absent: $legacy_cmd" >&2
+        exit 1
+      fi
+      claude_root="$(cd "$HOME/.claude" && pwd -P)"
+      retired_root="$HOME/.claude/retired-commands"
+      if [ -L "$retired_root" ] || { [ -e "$retired_root" ] && [ ! -d "$retired_root" ]; }; then
+        echo "refusing unsafe retired-command root: $retired_root" >&2
+        exit 1
+      fi
+      if [ ! -e "$retired_root" ]; then
+        mkdir -m 700 "$retired_root"
+      fi
+      if [ ! -O "$retired_root" ] || [ -n "$(find "$retired_root" -prune \( -perm -020 -o -perm -002 \) -print -quit)" ]; then
+        echo "retired-command root must be owned by this user and not group/other writable" >&2
+        exit 1
+      fi
+      retired_real="$(cd "$retired_root" && pwd -P)"
+      case "$retired_real" in
+        "$claude_root"/*) ;;
+        *) echo "retired-command root escaped $claude_root" >&2; exit 1 ;;
+      esac
+      stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+      retired_dir="$(mktemp -d "$retired_real/legacy-faber-$stamp.XXXXXX")" # legacy backup
+      retired="$retired_dir/command.md"
+      if [ -e "$retired" ] || [ -L "$retired" ]; then
+        echo "refusing to overwrite retirement destination: $retired" >&2
+        exit 1
+      fi
+      if ! mv "$legacy_cmd" "$retired"; then
+        echo "failed to move retired command; original path was not intentionally removed" >&2
+        exit 1
+      fi
+      printf 'retired=%s\n' "$retired"
+      ```
+   4. Run `scripts/doctor.sh`, restart Claude Code, and run the full `/yshifu` smoke below.
+   5. Roll back only if the command path is still absent:
+      Set `retired` to the exact path printed above, then run
+      `legacy_cmd="$HOME/.claude/commands/faber.md"; test ! -e "$legacy_cmd" && test ! -L "$legacy_cmd" && mv "$retired" "$legacy_cmd"`.
+      If either path conflicts, stop and inspect it; never overwrite. The move preserves the
+      original bytes and mode. # legacy rollback
    Do **not** recreate this command by hand.
 4. Give that session GitHub access (`gh` CLI or the GitHub connector) so yshifu can read
    state and open issues.
