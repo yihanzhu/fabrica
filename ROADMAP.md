@@ -75,12 +75,24 @@ Every implementation must preserve these rules regardless of adapter:
    credential worth stealing.
 7. Events are wake-up signals. A durable reconciler reads canonical state and
    repairs missed, repeated, canceled, or partially completed runs.
-8. Autonomy is earned in stages: manual → shadow/read-only → bounded write →
-   risk-tiered automation. Every stage has a kill switch.
+8. Autonomy is earned for a recorded workflow scope, not granted to an agent in
+   general. The record identifies the target and the target versions or conditions
+   it covers; workflow, task class, and risk tier; resolved profile; harness and
+   adapter identities and config; capabilities and permissions; model, tool, prompt,
+   skill, and verification-instruction versions; and execution environment.
+   Policy names which changes invalidate that qualification and which gate they
+   return to. Each execution environment qualifies separately.
+   Progress remains manual → shadow/read-only → bounded write → risk-tiered
+   automation, and every stage has a kill switch.
 9. Configuration changes are tested like code. Prompts, skills, hooks, models,
    adapters, and permissions run against versioned evals.
 10. The loop is measured by user value, quality, flow, recovery, and human
     attention — never by code volume or token use alone.
+11. Every stage attempt ends with an explicit status such as `completed`,
+    `skipped`, `stale`, `blocked`, or `failed`. An attempt that executes work also
+    returns an evidence-backed result such as `changed`, `no-change`, or
+    `inconclusive`. A useful run does not have to change code. Silence or a
+    confident claim without evidence never counts as a pass.
 
 ## Stable interfaces
 
@@ -116,6 +128,17 @@ The core should use capabilities rather than vendor commands.
 - publish machine-verifiable evidence;
 - retain check state and artifacts;
 - enforce environment-specific gates.
+
+### Verification
+
+- name the finish condition and required proof kind before a stage starts;
+- keep deterministic/static, behavioral/runtime, architecture/boundary, and
+  independent-review evidence distinct;
+- bind proof to the target, source, release, and output identities when they
+  apply, plus the execution environment, verifier, and versioned verification
+  instructions;
+- return an explicit result, including `inconclusive` when required proof cannot
+  run, without forcing every useful outcome to produce a patch or PR.
 
 ### Execution
 
@@ -164,17 +187,25 @@ label must not erase the underlying state.
 
 Each stage record must make these facts recoverable:
 
-- initiative and stage;
+- initiative, stage, workflow, task class, terminal status, and result when work
+  executed;
 - input and output commit identities;
 - risk tier and required gate;
 - harness and adapter identity/config, plus model, effort, prompt/skill version,
   and cost when they apply;
-- run, retry, skip, stale, and failure reason;
-- proof identity and check result;
+- reference to the qualification record;
+- attempt, retry, and failure or recovery reason;
+- proof identity, proof kind, execution environment, versioned verification
+  instructions, and check result;
 - human decision and timestamp.
 
 Delivery is **at least once**. Idempotency and reconciliation make repeated
 delivery safe; the system does not pretend webhook delivery is exactly once.
+
+Qualification is authority attached to that exact recorded workflow scope. It is
+not reputation attached to an agent, model, or profile. Nothing outside the scope
+inherits authority by inference. A policy-controlled change returns the affected
+scope to its named shadow or eval gate before authority resumes.
 
 ## Risk-tiered gates
 
@@ -251,8 +282,10 @@ The operating dashboard should pair flow and quality:
 The roadmap is intentionally ordered by dependency, not by playbook stage name.
 Each numbered item becomes its own intent/spec/plan chain and small PRs.
 
-1. **Portable control-plane core** — canonical contracts, capability manifests,
-   profile resolution, fake adapters, and adapter contract tests.
+1. **Portable control-plane core** — canonical contracts, typed stage results,
+   evidence and references to qualification records, capability manifests, profile
+   resolution, fake adapters, and adapter contract tests. It carries references;
+   later initiatives decide and enforce qualification policy.
 2. **Control foundation** — brain/verifier/publisher separation, sandbox and
    credential policy, risk gates, kill switch, and immutable evidence.
 3. **Durable orchestrator** — canonical state scanner, at-least-once retry,
@@ -264,11 +297,13 @@ Each numbered item becomes its own intent/spec/plan chain and small PRs.
 6. **Alternative adapters** — prove at least one alternative harness and one
    alternative forge against the same contract and safety evals. GitLab is the
    recommended first alternative forge.
-7. **Shadow vertical slice** — run the artifact lane read-only/manual on real
-   self-host and external-target changes, including adversarial and recovery
-   smoke tests.
-8. **Bounded autonomous writes** — enable one low-risk stage at a time in an
-   independent PR after shadow evidence passes.
+7. **Shadow vertical slice** — prove one narrow read-only workflow locally, then
+   prove it separately in every other execution environment where it will run.
+   Incident reproduction is the preferred first case when practical because
+   `no-change` and `inconclusive` are useful outcomes. Run on real self-host and
+   external-target changes, including adversarial and recovery smoke tests.
+8. **Bounded autonomous writes** — enable one low-risk qualified workflow scope at
+   a time in an independent PR after that scope's own shadow evidence passes.
 9. **Safe review-fix loop** — add autonomous fixes only after the credential and
    reconciliation boundaries are proven.
 10. **Target packaging** — install profiles and adapters into a fresh target
@@ -293,6 +328,7 @@ Each numbered item becomes its own intent/spec/plan chain and small PRs.
 
 - implementing every harness or forge;
 - opening autonomous write access;
+- treating an agent, model, or profile as globally trusted;
 - deployment or production monitoring;
 - replacing Git as the first artifact store;
 - preserving Claude, Codex, or GitHub as mandatory dependencies.
