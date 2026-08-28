@@ -188,6 +188,7 @@ segments made from lowercase letters, digits, `.`, `_`, or `-`; no segment is `.
 `..`, ends in `.` or `.lock`, or contains `..`. `IdempotencyKey` is an `ID`.
 `ExtensionPrefix` is the reverse-domain portion of the extension-key grammar.
 `canonical-sha256` as a set key means SHA-256 of the nested value's canonical JSON;
+`source-canonical-sha256` means SHA-256 of only a `source_value_ref.source` object;
 `value` means the primitive string itself.
 `ErrorCode` matches `^E_[A-Z][A-Z0-9_]{0,62}$`; it is not a lowercase core `ID`.
 
@@ -241,7 +242,7 @@ those bytes.
   authority_ref?:scope_ref(authority),package_ref:git_object_ref,
   config_ref?:git_object_ref,prompt_ref?:git_object_ref,
   skill_refs:set<git_object_ref>(canonical-sha256,0..256),
-  requested_tool_refs:set<tool_ref>(tool_id,0..256),model_request?:model_request,
+  requested_tool_refs:set<tool_ref>(tool_id,0..128),model_request?:model_request,
   requested_capabilities:set<CapabilityID>(value,1..256),
   requested_permissions:set<PermissionID>(value,1..256)}`. `model_request` and
   `prompt_ref` are required exactly when `execution_kind=model`. Tool refs inside a
@@ -251,9 +252,12 @@ those bytes.
   adapter_implementation:{id:ID,version:Version},
   manifest_source:source_value_ref,package_source:source_value_ref,
   config_source?:source_value_ref,prompt_source?:source_value_ref,
-  skill_sources:set<source_value_ref>(canonical-sha256,0..256),
-  tool_sources:set<source_value_ref>(canonical-sha256,0..256)}`. Optional/source set
+  skill_sources:set<source_value_ref>(source-canonical-sha256,0..256),
+  tool_sources:set<source_value_ref>(source-canonical-sha256,0..256)}`. Optional/source set
   presence and source object refs exactly match the binding refs they claim to resolve.
+  A source object appears at most once in each source set. If the same source object
+  appears in another resolved field, its value format and digest are identical.
+  At most 128 requested tools need at most 256 distinct package/config sources.
 - `named_input` is `{input_id:ID,value:input_value_ref}`.
 - `risk_claim` is `{tier:{namespace:"core",name:"routine"|"high"|"bootstrap"}
   |{namespace:ExtensionPrefix,name:ID},reason_ids:set<ID>(value,1..256),
@@ -284,7 +288,7 @@ those bytes.
   provider:availability<ID>,model:availability<ID>,snapshot:availability<ID>,
   effort:availability<ID>,prompt:availability<artifact_ref>,
   skills:availability<set<artifact_ref>(canonical-sha256,0..256)>,
-  tools:availability<set<tool_ref>(tool_id,0..256)>,trace:availability<content_ref>,
+  tools:availability<set<tool_ref>(tool_id,0..128)>,trace:availability<content_ref>,
   usage:availability<usage_value>,cost:availability<cost_value>}`. Deterministic
   execution requires provider/model/snapshot/effort/prompt/skills to be
   `not-applicable`; model execution requires each of those fields to be recorded,
@@ -336,7 +340,7 @@ do not repeat it.
   offered_execution_kinds:set<"model"|"deterministic">(value,1..2),
   offered_capabilities:set<CapabilityID>(value,1..256),
   offered_permissions:set<PermissionID>(value,1..256),
-  offered_tool_refs:set<tool_ref>(tool_id,0..256),
+  offered_tool_refs:set<tool_ref>(tool_id,0..128),
   config_contract_ref?:scope_ref(config-contract)}`.
 - `profile.body` is `{profile_version:Version,
   bindings:set<profile_binding>(binding_id,1..8)}` with at most one binding per
@@ -485,7 +489,7 @@ credential reads.
 | reviewer / `core.review.advise.v1` | `{change_ref:change_ref,review_policy_ref:scope_ref(review-policy)}` | `core.perm.target.read.v1`, `core.perm.evidence.write.v1` | advisory / `{R}`; R |
 | forge / `core.forge.observe.v1` | `{observation_kind:ForgeObservation,subject:ForgeSubject}` | `core.perm.forge.read.v1` | check / `{D}`; D |
 | ci / `core.ci.observe.v1` | `{repository_id:ID,commit_ref:git_revision_ref,check_set_ref:scope_ref(check-set),required_only:true}` | `core.perm.ci.read.v1` | check / `{D}`; D |
-| execution / `core.execution.provision.v1` | `{environment_spec_ref:scope_ref(environment-policy),input_snapshot_ref:git_object_ref,network_mode:"deny",tool_refs:set<tool_ref>(tool_id,0..256)}` | `core.perm.execution.provision.v1` | check / `{D}`; D |
+| execution / `core.execution.provision.v1` | `{environment_spec_ref:scope_ref(environment-policy),input_snapshot_ref:git_object_ref,network_mode:"deny",tool_refs:set<tool_ref>(tool_id,0..128)}` | `core.perm.execution.provision.v1` | check / `{D}`; D |
 | identity / `core.identity.resolve.v1` | `{subject_actor_ref:actor_ref,purpose:"performer"|"verifier"|"reviewer"|"publisher"|"observer"}` | `core.perm.identity.read.v1` | check / `{D}`; D |
 | publisher / `core.publish.branch-bounded.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),topic_ref:TopicRef,expected_old_tip:present<git_revision_ref>,new_commit_ref:git_revision_ref,delta_ref:content_ref,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.topic-ref.write.v1` | change / `{D}`; D |
 | publisher / `core.publish.change-request.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),source_result_ref:document_ref(stage_result),head_ref:{name:TopicRef,commit:git_revision_ref},base_ref:{name:TopicRef,commit:git_revision_ref},title_ref:content_ref,body_ref:content_ref,draft:Boolean,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.record.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.change-request.write.v1` | change / `{D}`; D |
@@ -565,6 +569,7 @@ resolved adapter implementation ID/version equal manifest envelope ID/body versi
 profile/manifest source-value canonical-json digests equal their document refs
 package/config/prompt/skill/tool source presence and object refs equal the binding refs
 resolved tool-source object-ref set equals the distinct requested tool package/config refs
+repeated source objects anywhere in the resolved profile have identical format/digest
 request resolved-profile ref equals the recomputed supplied resolved-profile ref
 request selection/repository-context refs equal supplied resolved-profile body refs
 operation binding ID and role equal the selected resolved binding
@@ -676,6 +681,7 @@ missing resolved bindings, wrong outcome family, free/unbound stale selectors,
 mixed evidence precedence errors, and unoffered execution tools;
 content-backed or wrong-repository execution snapshots;
 unnamed or moved change-request base refs and tool configs without immutable refs;
+duplicate source objects with conflicting provenance and a 129-tool binding;
 changed delta with replayed evidence, performer authority/version drift, missing
 or wrong-purpose publisher-policy refs; invalid execution availability shapes,
 source-claim refs, and model/deterministic combinations;
