@@ -47,9 +47,9 @@ command, point it at a target repo, and watch one loop run. For the mental model
    ```
 
    Writes `~/.claude/commands/yshifu.md` with a path derived from this clone (no
-   hardcoded location). It also writes a bridge copy under the legacy `/faber` name,
-   so the old command keeps working until that bridge is retired.
-   Idempotent — re-running is safe. The script prints the next steps.
+   hardcoded location). Idempotent — re-running is safe. The script prints the next
+   steps. If it warns that a retired command file still exists, the installer has
+   left that file untouched; use RESTORE.md's explicit backup/removal checklist.
 
 3. **Make sure the target repo has CI that runs on PRs** (the hard merge gate). This is the
    one real precondition — but **you no longer have to wire it yourself**: if the repo has no
