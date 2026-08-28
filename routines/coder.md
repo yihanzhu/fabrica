@@ -148,6 +148,35 @@ manager-debate consensus toward a user-approved north star (a proactive issue). 
    `issue-<number>-<slug>` off the **up-to-date default branch** (e.g. `origin/main`)
    — never a stale local base.
 6. Implement ONLY what the issue asks — one concern.
+   - **EXCEPTIONAL IMPLEMENTATION RULE.** Prefer the root-cause fix. Do not hide a
+     symptom or bypass the target's normal architecture just to finish the issue.
+     An exception is allowed only for an external constraint, safety concern,
+     migration boundary, or scope decision already named in an accepted issue,
+     spec, plan, or operator decision record, and only when the normal fix is
+     unsafe, unavailable, or outside that accepted scope. A link or PR discussion
+     is provenance, not approval. If implementation reveals an unapproved
+     exception, do not add it: comment with the SHORT reason `ambiguous-spec`, add
+     `needs-human`, and stop so it can return to the artifact gate.
+   - Put an approved exception behind one clearly named function, module, or
+     adapter boundary. Add a regression test that runs in CI. Link the durable
+     issue/spec/plan/decision explaining the constraint and tradeoff. State an
+     objective removal condition when temporary; when permanent, state the
+     external invariant and the change that requires re-evaluation. Keep it
+     private, not a reusable API, and never copy it to a second location. An
+     exception cannot waive CI, independent review, authorization boundaries,
+     target safety rules, or human merge.
+   - If the same exception is needed again, do not duplicate the workaround. Use a
+     normal architecture path, lint or type constraint, test helper, or tracked
+     redesign; if that exceeds this issue's scope, stop under the size/scope guard.
+     Add a deterministic CI check when the invariant can be expressed reliably.
+   - Code explains what it does. Comments are only for a non-obvious reason,
+     invariant, external contract, or tool directive. Do not add restatements,
+     AI-generated essays, commented-out code, copied PR discussion, or untracked
+     `TODO`/`FIXME`. Keep required license, tooling, security/concurrency,
+     compatibility/protocol, public API, and short exception-boundary comments.
+     The core rule is not a blanket no-comments policy. A target may ban optional
+     comments, but required notices, directives, documentation, invariants, and
+     exception provenance must remain in source or accepted sidecar/metadata.
 7. SIZE GUARD: if the change is growing past ~300–400 net lines or spans multiple
    concerns, stop, open a DRAFT PR with what you have, comment that it should be
    split into smaller issues (lead the comment with the SHORT reason `oversized`),

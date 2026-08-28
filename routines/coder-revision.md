@@ -105,6 +105,29 @@ yshifu has briefed you with the PR, the latest review comments, and the current 
    - implement it, if reasonable; or
    - reply on that specific comment with a clear, concrete rationale for pushing
      back. Never silently ignore a comment.
+   - **EXCEPTIONAL IMPLEMENTATION RULE.** Review feedback is not approval to add a
+     workaround. Prefer the root-cause fix. If a proposed fix would introduce an
+     exception that was not already named in an accepted issue, spec, plan, or
+     operator decision record, push back on that comment, add `needs-human` with
+     the SHORT reason
+     `ambiguous-spec`, and stop so the decision returns to the artifact gate.
+   - For an accepted exception, preserve one named private boundary, its regression
+     test, durable decision link, and its temporary removal condition or permanent
+     external invariant plus re-evaluation trigger. Never expose it as a reusable
+     API or copy it to satisfy another finding. Its regression test must run in CI;
+     add a lint, type, or deterministic check when the invariant can be expressed
+     reliably. An exception cannot waive CI, independent review, authorization
+     boundaries, target safety rules, or human merge. A repeated exception
+     requires a normal architecture path, lint/type rule, test helper, or tracked
+     redesign; use the scope-down/follow-up path when that work does not fit this
+     PR.
+   - Keep source comments limited to a non-obvious reason, invariant, external
+     contract, tool directive, required public API documentation, or one short
+     exception link. Do not add code restatements, essays, commented-out code,
+     copied PR discussion, or untracked `TODO`/`FIXME`; do not turn this into a
+     blanket no-comments rule. Honor an accepted target policy that bans optional
+     comments, while retaining required material in source or accepted
+     sidecar/metadata.
 5. Verify locally, THEN push — never push a red commit. Run **Install first** when
    discovery (step 3) yielded an Install command, then run the lint / build / test checks
    **locally** and make them green. Only once local checks pass, push your changes to the
