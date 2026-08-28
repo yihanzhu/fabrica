@@ -14,9 +14,10 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   resolution, declarative fake adapter packages, and hermetic contract tests.
   Do not wire a real adapter, activate a profile, grant authority, or enable an
   autonomous write; live jobs/gates keep their meaning and CI only gains this test.
-- **R2 — one strict JSON family.** Accept six top-level kinds:
+- **R2 — one strict JSON family.** Accept seven top-level kinds:
   `stage_request`, `stage_result`, `adapter_manifest`, `profile`,
-  `resolved_profile`, and `adapter_contract_test_result`. Every valid document is
+  `resolved_profile`, `adapter_contract_test_inventory`, and
+  `adapter_contract_test_result`. Every valid document is
   UTF-8 canonical JSON: compact, keys sorted as jq `-S`, no floats, and exactly one
   final newline. Limits are 1,048,576 bytes, depth 32, 256 collection members,
   8,192 decoded UTF-8 bytes per string, and integers in `0..2147483647`. Unknown
@@ -49,29 +50,26 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   finish condition, verification instructions, required evidence kinds, request
   time, stable request ID, and capability-specific arguments. Retry attempts keep
   the same request ID.
-- **R6 — total status/outcome matrix.** A `stage_result` binds the exact request
-  and resolved profile, attempt, controller/reporter, terminal status, outcome when
-  allowed, structured reason, expected/observed identities, subject/auxiliary
-  outputs, diagnostics, evidence, and timestamps. `executed=true` also requires the
-  exact performer and used capability; `executed=false` forbids both. Allowed
-  combinations are fully defined in Design.
-  No machine outcome represents human approval or merge.
-- **R7 — evidence covers the request.** Each evidence record binds the exact
-  request digest, attempt ID, finish-condition digest, target, source/base, output
-  or release when required, resolved profile, qualification scope, environment,
-  performer, adapter package/config, verification instructions, and a `content`
-  ref to proof bytes. Proof kind is exactly
-  `deterministic|behavioral|architecture|independent-review`; verdict is exactly
-  `passed|failed|inconclusive`. Required evidence kinds are non-empty and unique.
-  A completed result's evidence-kind set equals the request's set: no missing or
-  unrequested kind. Every evidence record binds every subject and auxiliary output.
-  Evidence performer, adapter package, and config must match the request's resolved
-  binding. Qualification is omitted exactly when the request omits it; JSON `null`
-  is invalid. Prior-stage evidence is cited through that stage's exact result ref
-  and cannot be copied into a new record with a new performer.
-  Missing kinds, changed finish conditions, or replay across request, attempt,
-  target, output, profile, environment, or instructions fail validation. A comment,
-  label, check name, mutable URL, prose claim, or unbound hash is not evidence.
+- **R6 — total status/outcome matrix.** A `stage_result` binds request/profile,
+  attempt, reporter, status/outcome/reason, expected/observed identities, outputs,
+  diagnostics, evidence, and times. `executed=true` requires exact performer/used
+  capability; false forbids both. Design defines every combination and timestamp
+  order. No machine outcome represents human approval or merge.
+- **R6a — actual execution metadata.** `executed=false` forbids metadata; true
+  requires a closed `model|deterministic` tagged union. Model requires actual
+  provider/model/effort and prompt/skill refs; deterministic forbids model fields.
+  Snapshot, trace, token usage, and currency/cost microunits each use
+  `recorded|computed|unavailable|not-applicable`; unavailable requires reason, and
+  null or invented zero is invalid. These are run facts, not profile requests.
+- **R7 — evidence covers the request.** Evidence binds request/attempt/finish,
+  target/source/base/output/release, profile/qualification/environment/performer,
+  package/config/instructions, and proof `content_ref`. Kinds are
+  `deterministic|behavioral|architecture|independent-review`; verdicts are
+  `passed|failed|inconclusive`. Requested kinds are non-empty/unique and equal the
+  completed result's set. Every record binds all subject/auxiliary outputs and the
+  resolved performer/package/config. Qualification is absent iff request omits it;
+  null is invalid. Prior evidence stays under its exact stage-result ref. Missing,
+  changed, replayed, mutable, prose-only, or unbound evidence fails validation.
 - **R8 — risk, qualification, grants, and gates stay distinct.** Risk carries a
   claimed tier, reasons, policy ref, and required-gate refs. Core tiers are
   `routine`, `high`, and `bootstrap`; target tiers are namespaced and inert.
@@ -95,17 +93,17 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   merge, approval, branch-rule bypass, human impersonation, policy activation,
   arbitrary shell, arbitrary network, or unbounded branch update. The bounded
   branch entry is a typed proposal whose external safety is enforced later.
+  Producer/reviewer may be model-backed; every other role is deterministic. A model
+  binding also requires `core.perm.model.invoke.v1` in manifest and profile.
 - **R11 — deterministic, caller-selected resolution.** A profile selects exact
   adapter versions, package trees, skill trees, capabilities, permissions, and
-  data-only config refs. It has no inheritance, floating range, ambient default,
-  executable path, environment substitution, remote schema, or literal secret.
-  Resolution reads profile/manifests with `git ls-tree`, `git cat-file`, and
-  `git show` from one caller-supplied exact commit plus a separate `selection_ref`.
-  The profile does not self-declare its Git source. The resolver derives its exact
-  commit/path/blob provenance and records it only in `resolved_profile`. This initiative does not
-  authenticate the caller or selection ref; later policy decides whether it is
-  trusted. Profile data cannot contain or override selection, grant, gate, or
-  activation fields.
+  data-only config refs, with no inheritance, floating range, ambient default,
+  executable path, env substitution, remote schema, or literal secret. Resolution
+  uses one wrapper for every resolver/driver/test Git call; it exports
+  `GIT_NO_REPLACE_OBJECTS=1` before `ls-tree|cat-file|show`. Reads use one exact
+  caller commit plus `selection_ref`. Profile source provenance is resolver-derived,
+  never self-declared. V1 does not authenticate the caller/selection, and profile
+  data cannot override selection, grant, gate, or activation.
 - **R12 — relational validation.** Shape validation alone is insufficient.
   Commands validate: one document; profile/manifests into a resolved profile; a
   request + resolved profile + result; and a complete contract-test result with
@@ -113,46 +111,34 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   role bindings, evidence coverage, status/outcome rules, risk/gate immutability,
   and request/result identity.
 - **R13 — honest fake swap proof.** Four distinct Git package trees represent
-  producer/harness A, producer/harness B, forge A, and forge B. They are declarative
-  fixtures, not executed programs. Each matrix case is an ordered two-stage chain:
-  one producer stage followed by one read-only forge-projection stage. One semantic
-  fixture derives four resolved profiles and eight unique stage requests, linked by
-  one `equivalence_group`. Neutral artifact, risk, gate, status/outcome, evidence, and
-  audit meaning must match; IDs, times, and honest package/profile provenance must
-  differ. The driver verifies each observed package tree against its manifest.
+  producer/harness A/B and forge A/B as data, never programs. Each case is a producer
+  stage then read-only forge projection. One semantic fixture derives four profiles
+  and eight requests under one `equivalence_group`. Neutral artifact/risk/gate/result/
+  evidence/audit meaning matches; IDs, times, package, and profile provenance differ.
 - **R14 — typed contract-test result.** Every case records phase
   `parse|shape|resolve|run|matrix`, observed status/error/assertions, and canonical
-  refs only when produced. An independent inventory fixes each case's ID, phase,
-  raw fixture ref/digest, expected accept/reject, expected stable error when relevant,
-  equivalence group, and non-empty required assertion IDs. Observed cases match every
-  fixed field and ID one-for-one and add observations only. Missing accepted results,
-  changed expectations, tautological/dropped assertions, vacuous pass, or fabricated
-  canonical results fail.
+  refs only when produced. Independent `adapter_contract_test_inventory` fixes suite
+  ID and each case's ID, phase, fixture digest, verdict/error, group, and assertions.
+  Observations match one-for-one; missing results, changed expectations, dropped or
+  tautological assertions, vacuous pass, and fabricated canonical results fail.
 - **R15 — adversarial cases.** Tests cover malformed and noncanonical JSON;
-  limits; wrong version/kind; unknown fields; unsafe blob/tree paths and modes;
-  missing/mismatched refs; invalid status/outcome pairs; missing evidence kinds;
-  cross-scope replay; capability/permission overreach; every forbidden role share;
-  malformed branch proposal or explicit force/delete; merge/approval/bypass claims;
-  profile command/env/selection injection; package
-  relabeling; risk/gate mutation; pass-looking prose; and degraded/empty fixture
-  output. A positive case proves same implementation, separate boundaries.
+  limits/version/kind/fields; unsafe objects/paths; bad refs/status/evidence; replay;
+  capability, permission, role, model-invoke, metadata, branch, merge/approval/bypass,
+  profile injection, package relabeling/replacement objects, and reversed times;
+  risk/gate mutation; pass-looking prose; and degraded/empty output. Positive cases
+  prove same implementation with separate boundaries.
 - **R16 — neutral skill seam.** A profile may carry `skill_package_ref` entries
-  for target-owned `.ystack/skills/<name>` Git trees. The intended package shape is
-  the open [Agent Skills format](https://agentskills.io/specification), with
-  `SKILL.md` plus optional resources. V1 validates the exact tree, canonical path,
-  name, and declared format ID; it does not parse YAML or claim conformance to a
-  changing external spec. Harness locations such as `.claude/skills/` are later
-  generated bridges. `allowed-tools` or other skill text never grants capability.
+  for target `.ystack/skills/<name>` trees in the open
+  [Agent Skills shape](https://agentskills.io/specification). V1 validates tree/path/
+  name/format ID, not YAML or external conformance. Harness roots are later bridges;
+  skill text and `allowed-tools` never grant capability.
 - **R17 — restore, docs, and delivery bound.** Add every load-bearing file to
   `ci/required-files.txt`, keep scripts executable and ShellCheck 0.11.0 clean, and
   run the hermetic suite in CI against a checksum-pinned jq 1.6. README documents
   the commands, exit behavior, jq minimum, and that the core is not wired live.
-  Implementation uses one deterministic PR and is expected to add 520–780 net lines.
-  The plan gives an exact estimate and asks for a soft-budget exception capped at
-  800; above that, it returns to G2 or opens a separate accepted initiative.
-  The plan also fixes the constitution route: an operator-driven session may edit CI;
-  an unattended run writes a `proposals/` patch and stops until the operator applies it
-  to the implementation branch before final review.
+  One deterministic PR is expected at 520–780 net lines; the exact plan requests an
+  exception capped at 800 or returns to G2. Operator-driven work may edit CI; unattended
+  work writes a `proposals/` patch and waits for operator application.
 
 ## Design
 
@@ -165,11 +151,12 @@ payload bytes. Timestamps are UTC RFC 3339 strings. Every JSON integer is in
 | Kind | Required body |
 |---|---|
 | `stage_request` | initiative, workflow, stage, task class, target/source, inputs, risk, resolved-profile ref, selection ref, qualification ref if any, gate-decision refs, environment, one operation, finish condition, instruction ref, evidence kinds, requested time |
-| `stage_result` | request/profile refs, attempt, controller/reporter, `executed`, status, outcome when allowed, reason, expected/observed refs, subject/auxiliary/delta refs, diagnostic content refs, nested evidence, performer/used capability iff executed, times |
-| `adapter_manifest` | adapter ID/version, protocol, roles, offered capabilities/permissions, exact package-tree ref; no entrypoint or command |
+| `stage_result` | request/profile refs, attempt, controller/reporter, `executed`, status/outcome/reason, expected/observed refs, subject/auxiliary/delta/diagnostic refs, nested evidence, performer/used capability iff executed, actual execution metadata, ordered times |
+| `adapter_manifest` | adapter ID/version, protocol, `execution_kind`, roles, offered capabilities/permissions, exact package-tree ref; no entrypoint or command |
 | `profile` | profile ID/version, skill refs, at most one binding for each role with exact adapter/package/config refs, instance/principal/boundary/authority refs, requested capabilities/permissions; no self source ref; every requested role exists |
 | `resolved_profile` | resolver-derived exact profile commit/path/blob, selection ref, manifest/package/config provenance, resolved bindings and validated subsets; no authorization claim |
-| `adapter_contract_test_result` | suite/inventory refs, times, overall status, observed cases/errors/assertions and conditional canonical refs; expected phase/fixture/verdict/error/group/assertion IDs live only in inventory |
+| `adapter_contract_test_inventory` | suite ID and non-empty unique cases fixing ID, phase, fixture ref/digest, expected verdict/error, equivalence group, and required assertion IDs |
+| `adapter_contract_test_result` | exact inventory ref, ordered times, overall status, observed cases/errors/assertions and conditional refs; no expected fields |
 
 - `document_ref`: `kind`, `id`, `sha256` of canonical bytes.
 - `git_object_ref`: repository ID, full commit, path, `object_type: blob|tree`,
@@ -192,6 +179,10 @@ payload bytes. Timestamps are UTC RFC 3339 strings. Every JSON integer is in
 - `actor_ref`: provider-scoped stable principal, adapter implementation and instance,
   execution boundary, and optional authority ref. It contains no credential value.
 - `environment_ref`: stable ID plus SHA-256 fingerprint.
+- nested `execution_metadata`: tagged `model|deterministic`. Model requires actual
+  provider/model/effort and prompt/skill refs; deterministic forbids them. Snapshot,
+  trace, token input/cache/output, and ISO-4217 cost microunits each carry
+  `recorded|computed|unavailable|not-applicable` plus value or required reason.
 - `skill_package_ref`: name, canonical `.ystack/skills/<name>` path, format ID, and
   exact Git tree ref. V1 does not inspect `SKILL.md` contents.
 
@@ -205,6 +196,9 @@ Outcome is one tagged union:
 
 `advisory` is not a gate decision. Only an external `gate_decision_ref` records a
 human or policy gate.
+
+Parsed UTC times satisfy `request.requested_at <= result.started_at <= result.finished_at`;
+contract-test start is not after finish. Reversed or unparseable times fail.
 
 | Status | `executed` | Outcome | Reason/evidence/output |
 |---|---:|---|---|
@@ -257,16 +251,22 @@ behavioral, architecture, and independent-review evidence.
 | publisher | `core.publish.comment.v1` | `core.perm.target.read.v1`, `core.perm.forge.comment.write.v1` | `change` / D |
 | publisher | `core.publish.status.v1` | `core.perm.target.read.v1`, `core.perm.forge.status.write.v1` | `change` / D |
 
+Only producer and reviewer bindings accept `execution_kind:model`; all other rows
+require deterministic. Model bindings add `core.perm.model.invoke.v1`.
+
 There is no wildcard or implied prefix. For every binding and operation:
 
 ```text
+effective_permissions(capability, binding) = capability.required_permissions
+  + core.perm.model.invoke.v1 iff binding.execution_kind = model
 binding.requested_capabilities ⊆ manifest.offered_capabilities
-binding.requested_permissions = union(required permissions for requested capabilities)
-operation.capability ∈ binding.requested_capabilities
-operation.permissions = capability.required_permissions
+binding.requested_permissions = union(effective_permissions for requested capabilities)
 binding.requested_permissions ⊆ manifest.offered_permissions
+operation.capability ∈ binding.requested_capabilities
+operation.permissions = effective_permissions(operation.capability, binding)
 if result.executed: result.used_capability = operation.capability
-if not result.executed: performer and used_capability are absent
+if result.executed: result.execution_metadata.kind = binding.execution_kind
+if not result.executed: performer, used_capability, and execution_metadata are absent
 ```
 
 For executed work, outcome/evidence must match the table and evidence performer,
@@ -308,17 +308,18 @@ validate-run <request-file> <resolved-profile-file> <result-file>
 validate-suite <suite-result-file> <case-inventory-file> <fixture-root>
 ```
 
-`validate` enforces canonical bytes, limits, shape, and local invariants. `resolve`
-uses exact Git objects and rejects symlinks, missing/wrong objects, config outside
+`validate` enforces canonical bytes, limits, shape, and local invariants. One shared
+wrapper sets `GIT_NO_REPLACE_OBJECTS=1` for every resolver/driver/test Git call.
+`resolve` uses exact Git objects and rejects symlinks, missing/wrong objects, config outside
 the selected commit, unsafe paths, mismatched adapter versions/packages, subset
 violations, and separation conflicts. It records the caller-supplied selection ref
 but does not call it trusted or active. `validate-run` performs request/profile/result
 and evidence-coverage checks. `validate-suite` verifies fixture digests, conditional
-refs, non-vacuous status, and one-for-one equality with an independent canonical
-inventory. Each inventory entry fixes case ID, phase, fixture ref, expected verdict
+refs, non-vacuous status, and one-for-one equality with the independently supplied
+typed inventory. Each inventory entry fixes case ID, phase, fixture ref, expected verdict
 and error, group, and required assertion IDs; the result supplies observations only.
-Fixture paths use the same relative-path grammar as Git paths. The command canonicalizes the supplied
-root once, rejects symlinks at the root and every child component, and refuses any
+Fixture paths use the Git-path grammar. The command canonicalizes the root, rejects
+symlinks at every component, and refuses any
 physical path outside it. Exit 0 means valid; nonzero writes one of
 `E_PARSE|E_CANONICAL|E_LIMIT|E_SHAPE|E_REF|E_RESOLVE|E_RELATION|E_SUITE` to stderr
 and no success document to stdout.
@@ -368,7 +369,7 @@ changed inventory, or a missing/dropped rejected case.
   CI wiring, restore coverage, CLI contract, and clear unwired status; unattended
   work reaches CI only through `proposals/` until the operator applies it.
 
-1. Canonical parser, limits, shared refs, and six shape validators.
+1. Canonical parser, limits, shared refs, and seven shape validators.
 2. Resolver, exact object checks, capability/permission registry, and separation.
 3. Run/suite relational checks, evidence coverage, and adversarial cases.
 4. Four declarative packages, two-stage 2×2 matrix, CI/manifest/README sync.
@@ -392,7 +393,7 @@ changed inventory, or a missing/dropped rejected case.
 
 ## Open questions — disposition
 
-- **Smallest extensible result:** six strict JSON kinds, tagged refs, total status/outcome rules, and inert extensions.
+- **Smallest extensible result:** seven strict JSON kinds, tagged refs, total status/outcome rules, and inert extensions.
 - **Risk/capabilities:** risk and selection/qualification/grant/gate refs stay separate from offers, requests, and use.
 - **Canonical skills:** exact `.ystack/skills/<name>` tree refs; bridges and format conformance come later.
 - **Compatibility seams:** canonical records, exact manifests, deterministic resolution, closed IDs, and fake substitution.
