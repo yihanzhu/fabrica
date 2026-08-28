@@ -1,8 +1,9 @@
-# <Target repo> — conventions for the coding agents
+# <Target repo> — conventions for Claude-based coding agents
 
-Drop this file in the root of each target repo. Both the coder and the reviewer
-read it, so it's how you specialize the *one* coder per repo (instead of having
-separate FE/BE agents).
+Drop this file in the root of each target repo. The Claude coder reads it to learn
+the target's commands and conventions. Do not assume an independent reviewer reads
+`CLAUDE.md`; deliver the same accepted review floor through that reviewer's target
+instruction mechanism. This template does not claim to provide that delivery.
 
 > Fill in the skeleton below with your repo's real values. A complete worked
 > example follows at the bottom — read it for the level of concreteness expected,
