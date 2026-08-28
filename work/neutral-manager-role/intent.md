@@ -85,12 +85,22 @@ shadow qualification, telemetry, rollback, and later target packaging.
   designed. No merge of an artifact silently updates the installed `/yshifu`
   command, pasted Claude project persona, or already-open sessions.
 - Default-adapter implementation later proves a thin Claude wrapper, GitHub
-  projection, and Codex debate/review mapping against current behavior in shadow.
-  Alternative wrappers use the same contract and qualification rules.
-- Any live cutover requires exact prompt/profile/config backups, operator approval,
-  a newly generated command, replacement of the live project persona, a new
-  session, self-host and unrelated-target smoke, permission checks, and a tested
-  rollback to the prior prompt and profile.
+  projection, and Codex debate/review mapping, but it cannot activate them. Live
+  activation waits for an accepted default-adapter qualification record and
+  environment-specific evidence from roadmap items 5–7. That record binds the
+  exact workflow scope; accepted role, policy, and contract identities; resolved
+  profile; adapter and configuration identities; permissions; actual model
+  snapshot and reasoning effort; exact tool, prompt, skill, and verification
+  references or versions; and the execution environment. A required fact that the
+  provider does not expose is recorded as unavailable and cannot support live
+  activation. A change to any bound identity invalidates qualification and returns
+  that wrapper and environment to shadow. Alternative wrappers and environments
+  qualify separately under the same contract.
+- After that qualification gate, live cutover also requires exact prompt, profile,
+  and configuration backups; operator approval; a newly generated command;
+  replacement of the live project persona; a new session; self-host and unrelated-
+  target smoke; permission checks; and a tested rollback to the prior prompt and
+  profile.
 - General installation, upgrades, and conflict handling remain in the target-
   packaging roadmap item. This initiative cannot implement them early.
 - Keep each artifact and implementation PR to one concern and the normal size
