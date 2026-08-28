@@ -267,6 +267,7 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
   `merge-ready` PRs, they never merge**. No agent merges: `main` needs a pull request plus an
   approving review the comments-only reviewer cannot give, and no agent has a bypass.
 - **Next** — migrate the current profile behind portable adapters, establish the
-  control/eval/reconciliation foundation, then enable bounded writes one stage at a
-  time. [`ROADMAP.md`](ROADMAP.md) is authoritative. **The merge gate does not widen** —
+  control/eval/reconciliation foundation, then qualify and enable one bounded
+  workflow scope at a time in each execution environment.
+  [`ROADMAP.md`](ROADMAP.md) is authoritative. **The merge gate does not widen** —
   the operator merges in every phase.
