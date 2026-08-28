@@ -212,7 +212,7 @@ An `operator` actor ref is attribution only and never a human decision record.
 | `scope_ref(P?)` | `{purpose:ScopePurpose,decision_record_ref:content_ref,subject_ref:scope_subject_ref,scope_sha256:SHA256}`; when `P` is supplied, `purpose=P` |
 | `actor_ref` | `{role:ActorRole,implementation_id:ID,implementation_version:Version,adapter_instance_id:ID,principal_id:ID,execution_boundary_id:ID,authority_ref?:scope_ref(authority)}` |
 | `environment_ref` | `{environment_id:ID,fingerprint_sha256:SHA256}` |
-| `tool_ref` | `{tool_id:ID,tool_version:Version,package_ref:artifact_ref,config_sha256:SHA256}` |
+| `tool_ref` | `{tool_id:ID,tool_version:Version,package_ref:artifact_ref,config_ref:present<artifact_ref>}` |
 | `change_ref` | `{repository_id:ID,base:git_revision_ref,head:git_revision_ref,delta_ref:content_ref}`; both revisions use `repository_id` |
 
 `ScopePurpose` is exactly `selection`, `repository-context`, `qualification`,
@@ -245,7 +245,8 @@ those bytes.
   requested_capabilities:set<CapabilityID>(value,1..256),
   requested_permissions:set<PermissionID>(value,1..256)}`. `model_request` and
   `prompt_ref` are required exactly when `execution_kind=model`. Tool refs inside a
-  manifest or profile require a `git-object` package ref.
+  manifest or profile require a `git-object` package ref and, when config is
+  present, a `git-object` config ref.
 - `resolved_binding` is exactly `{binding:profile_binding,
   adapter_implementation:{id:ID,version:Version},
   manifest_source:source_value_ref,package_source:source_value_ref,
@@ -487,7 +488,7 @@ credential reads.
 | execution / `core.execution.provision.v1` | `{environment_spec_ref:scope_ref(environment-policy),input_snapshot_ref:git_object_ref,network_mode:"deny",tool_refs:set<tool_ref>(tool_id,0..256)}` | `core.perm.execution.provision.v1` | check / `{D}`; D |
 | identity / `core.identity.resolve.v1` | `{subject_actor_ref:actor_ref,purpose:"performer"|"verifier"|"reviewer"|"publisher"|"observer"}` | `core.perm.identity.read.v1` | check / `{D}`; D |
 | publisher / `core.publish.branch-bounded.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),topic_ref:TopicRef,expected_old_tip:present<git_revision_ref>,new_commit_ref:git_revision_ref,delta_ref:content_ref,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.topic-ref.write.v1` | change / `{D}`; D |
-| publisher / `core.publish.change-request.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),source_result_ref:document_ref(stage_result),head_ref:{name:TopicRef,commit:git_revision_ref},base_ref:git_revision_ref,title_ref:content_ref,body_ref:content_ref,draft:Boolean,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.record.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.change-request.write.v1` | change / `{D}`; D |
+| publisher / `core.publish.change-request.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),source_result_ref:document_ref(stage_result),head_ref:{name:TopicRef,commit:git_revision_ref},base_ref:{name:TopicRef,commit:git_revision_ref},title_ref:content_ref,body_ref:content_ref,draft:Boolean,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.record.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.change-request.write.v1` | change / `{D}`; D |
 | publisher / `core.publish.comment.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),subject:{kind:"issue"|"change-request",id:ID},source_result_ref:document_ref(stage_result),body_ref:content_ref,idempotency_key:IdempotencyKey}` | `core.perm.record.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.comment.write.v1` | change / `{D}`; D |
 | publisher / `core.publish.status.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),commit_ref:git_revision_ref,source_result_ref:document_ref(stage_result),context_id:ID,state:"success"|"failure"|"neutral",details_ref?:content_ref,idempotency_key:IdempotencyKey}` | `core.perm.record.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.status.write.v1` | change / `{D}`; D |
 
@@ -522,7 +523,8 @@ are an allowed output of that result.
 later publisher verifies real branch policy, current tip, ancestry, actual delta,
 credential scope, and atomic compare-and-swap. Branch arguments cannot express
 force, delete, merge, or bypass. Change-request arguments can only ensure/open a
-request; they cannot close, merge, approve, or assign a reviewer. Status is a
+request; the named head and base refs must still advertise their supplied commits
+at the final read. They cannot close, merge, approve, or assign a reviewer. Status is a
 projection, not a gate result. A generic label write is deliberately absent because
 labels may carry gate state; a later fixed projection needs a new core version.
 
@@ -562,6 +564,7 @@ resolved binding.binding equals the profile binding
 resolved adapter implementation ID/version equal manifest envelope ID/body version
 profile/manifest source-value canonical-json digests equal their document refs
 package/config/prompt/skill/tool source presence and object refs equal the binding refs
+resolved tool-source object-ref set equals the distinct requested tool package/config refs
 request resolved-profile ref equals the recomputed supplied resolved-profile ref
 request selection/repository-context refs equal supplied resolved-profile body refs
 operation binding ID and role equal the selected resolved binding
@@ -672,6 +675,7 @@ evidence or output; invalid status/outcome/evidence/time rules; replayed proof;
 missing resolved bindings, wrong outcome family, free/unbound stale selectors,
 mixed evidence precedence errors, and unoffered execution tools;
 content-backed or wrong-repository execution snapshots;
+unnamed or moved change-request base refs and tool configs without immutable refs;
 changed delta with replayed evidence, performer authority/version drift, missing
 or wrong-purpose publisher-policy refs; invalid execution availability shapes,
 source-claim refs, and model/deterministic combinations;
