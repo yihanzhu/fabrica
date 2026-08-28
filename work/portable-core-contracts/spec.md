@@ -24,7 +24,8 @@ authority, or perform an external write.
   evidence write, and conditional model invoke have the exact resource/action bounds
   in Design. None grants shell, arbitrary command, environment, general network,
   credential, generic file/Git-ref write, approval, merge, bypass, deploy, or human
-  impersonation.
+  impersonation. Exact instruction bytes arrive by value through the bounded launch
+  seam in Design; the adapter gets no content-store read authority.
 - **R4 — strict canonical JSON.** A document is exactly one UTF-8 JSON value whose
   bytes equal the pinned jq 1.6 single-root canonicalizer plus one line feed. Reject
   empty/multi-root streams, BOM, invalid UTF-8, duplicate keys, alternate
@@ -50,7 +51,8 @@ authority, or perform an external write.
 - **R9 — one closed operation per request.** A request binds one runnable resolved
   binding, one capability, its exact permissions/arguments, target and inputs,
   risk/gate claims, environment, finish condition, verification instructions,
-  required evidence kinds, and time. Retry sequence/delivery are later concerns.
+  required evidence kinds, and time. The launcher derives one exact instruction set
+  from those refs. Retry sequence and message delivery are later concerns.
 - **R10 — total result truth.** A result records one terminal status and attempt,
   observed execution facts when work ran, outputs, diagnostics, and evidence.
   Completed conclusive execution equals the request. Failed, cancelled, and
@@ -87,9 +89,11 @@ Objects are exact; unlisted fields fail. `T?` is omitted-or-present, never `null
 
 Core `ID` matches `^[a-z0-9][a-z0-9._:-]{0,127}$`. `Int` is
 `0..2147483647`. `SHA256` is 64 lowercase hex. `Version` is an exact ID.
-`ShortText` is 1–1,024 decoded UTF-8 bytes and is never authority. `Time` is a
-real UTC second-level `YYYY-MM-DDTHH:MM:SSZ`. `MediaType` is a lowercase
-`type/subtype` token at most 127 characters. `GitOID` is 40 lowercase hex for
+`ShortText` is 1–1,024 decoded UTF-8 bytes and is never authority. `RawBytes` is an
+uninterpreted byte string used only inside the non-persisted transport frame. `Time`
+is a real UTC second-level `YYYY-MM-DDTHH:MM:SSZ`. `MediaType` is a lowercase
+`type/subtype` token at most 127 characters; `PatchMediaType` is exactly
+`text/x-diff`. `GitOID` is 40 lowercase hex for
 SHA-1 or 64 for SHA-256. `git-key` is the lexical tuple
 `(repository_id,hash_algorithm,commit_id,location kind/value,object_type,object_id,mode)`.
 `selector-tuple` is `(kind,input_id-or-scope_sha256-or-empty)`. Both are compared
@@ -138,8 +142,9 @@ This union is named `Fact<T>`.
 | `actor_ref` | `{role:ActorRole,implementation_id:ID,implementation_version:Version,adapter_instance_id:ID,principal_id:ID,execution_boundary_id:ID,authority_ref?:scope_ref(authority)}` |
 | `environment_ref` | `{environment_id:ID,fingerprint_sha256:SHA256}` |
 | `tool_ref` | `{tool_id:ID,tool_version:Version,package_ref:git_object_ref,config_ref:present<git_object_ref>}` |
-| `change_ref` | `{repository_id:ID,base:present<git_revision_ref>,head:git_revision_ref,delta_ref:content_ref}`; revisions match repository |
-| `source_value_ref` | `{source:git_object_ref,value_format:"raw-bytes"|"canonical-json",value_sha256:SHA256}` |
+| `git_patch_ref` | `content_ref` with `media_type=PatchMediaType` |
+| `change_ref` | `{repository_id:ID,base:present<git_revision_ref>,head:git_revision_ref,delta_ref:git_patch_ref}`; revisions match repository |
+| `source_value_ref` | `{source:git_object_ref,value_format:"raw-bytes"|"canonical-json",value_sha256:SHA256}`; `canonical-json` requires `source.object_type="blob"` |
 
 `RepoPath` is a non-empty repo-relative POSIX path with no empty, `.`, `..`,
 backslash, NUL, or control segment. Root tree is `git_location:{kind:"root"}`, never
@@ -149,8 +154,15 @@ to the resolver.
 Scope purposes are `selection`, `repository-context`, `qualification`, `grant`,
 `policy`, `authority`, `gate-requirement`, `gate-decision`, `config-contract`,
 `output-contract`, `allowed-delta`, `verification-plan`, `review-policy`,
-`finish-condition`, and `verification-instructions`. Scope refs carry identity only;
-v1 never forwards their bytes as commands or permissions.
+`finish-condition`, and `verification-instructions`. Scope refs carry identity only.
+Core never interprets their bytes as authority or lets them change an operation or
+permission. Only the exact operation instruction refs use the launch seam below.
+
+`delivered_scope(P)` is exactly `{ref:scope_ref(P),input_id:ID}`. Its subject must be
+`{type:"artifact",value:{type:"content",value:content_ref}}`. In a request, its
+`input_id` selects exactly one named input whose value equals that complete subject.
+The decision-record ref remains acceptance provenance; it is never the instruction
+payload.
 
 ### Manifest, profile, and resolved profile
 
@@ -219,8 +231,9 @@ grant, qualification, gate, trust, or activation field.
 ```
 
 Profile/manifest sources use `canonical-json` and their value digests equal the
-document refs. Each resolved `binding` equals its profile binding, and its manifest
-ref selects exactly one supplied manifest. Package/config/prompt/skill/tool source
+full canonical document bytes, including the final line feed, in their refs. Each
+resolved `binding` equals its profile binding, and its manifest ref selects exactly
+one supplied manifest. Package/config/prompt/skill/tool source
 objects and presence equal their corresponding binding or tool refs; skill/tool
 source sets are one-to-one with those refs. A resolved implementation ID/version
 equals its manifest document ID/adapter version. Across the resolved profile, one
@@ -237,9 +250,9 @@ Git/repository/object/provenance truth.
 
 | Capability | Exact arguments | Exact permissions | Outcome / evidence |
 |---|---|---|---|
-| `core.harness.produce.v1` | `{artifact_kind:"plan"|"structured-artifact",output_contract_ref:scope_ref(output-contract)}` or `{artifact_kind:"git-patch",allowed_delta_ref:scope_ref(allowed-delta)}` | target.read + scratch.write + evidence.write; model.invoke iff model | change; deterministic only |
-| `core.verify.run.v1` | `{candidate_input_id:ID,verification_plan_ref:scope_ref(verification-plan),network_mode:"deny"}`; input is target Git tree | target.read + candidate.execute + evidence.write | check; deterministic required, behavioral/architecture optional |
-| `core.review.change.v1` | `{change_ref:change_ref,review_policy_ref:scope_ref(review-policy)}` | target.read + evidence.write; model.invoke iff model | check; independent-review only |
+| `core.harness.produce.v1` | `{artifact_kind:"plan"|"structured-artifact",output_contract:delivered_scope(output-contract)}` or `{artifact_kind:"git-patch",allowed_delta:delivered_scope(allowed-delta)}` | target.read + scratch.write + evidence.write; model.invoke iff model | change; deterministic only |
+| `core.verify.run.v1` | `{candidate_input_id:ID,verification_plan:delivered_scope(verification-plan),network_mode:"deny"}`; candidate input is target Git tree | target.read + candidate.execute + evidence.write | check; deterministic required, behavioral/architecture optional |
+| `core.review.change.v1` | `{change_ref:change_ref,review_policy:delivered_scope(review-policy)}` | target.read + evidence.write; model.invoke iff model | check; independent-review only |
 
 Permission IDs and full meaning:
 
@@ -264,6 +277,51 @@ No v1 field can express shell/argv/env/eval, executable manifest, URL/API/query,
 generic filesystem/network, credential/secret, Git-ref write, CR/comment/label/status,
 force/delete, approval/merge/bypass, policy activation, deploy, or human
 impersonation.
+
+### Bounded instruction delivery
+
+`operation_instructions(request)` is the three `delivered_scope` values containing
+the request's finish condition and verification instructions plus one capability
+value: producer output contract or allowed delta, verifier verification plan, or
+reviewer review policy. Their input IDs are distinct and differ from the verifier's
+candidate input ID. Policy, selection, repository context, qualification, grant,
+gate, authority, config contract, and candidate-selected refs are excluded.
+
+The non-persisted v1 transport frame is
+`{version:1,request_ref:document_ref(stage_request),items:set<instruction_item>
+(purpose,3..3)}`. An item is `{purpose:ScopePurpose,scope_ref:scope_ref,
+input_id:ID,content_ref:content_ref,byte_length:Int,bytes:RawBytes}`. Its purpose,
+complete scope ref, input ID, and content ref equal one derived `delivered_scope`, its
+named input, and that scope's content-artifact subject. It never uses
+`decision_record_ref` as payload. The frame is an invocation argument, not a sixth
+core document, artifact, capability, permission, or authority record.
+
+Before a real adapter starts, the caller-controlled launcher pushes exactly this
+frame. It first checks each raw value is at most 1,048,576 bytes and the total is at
+most 3,145,728 bytes. It then hashes the unchanged raw bytes and requires the exact
+content ID, media type, SHA-256, byte length, scope ref, input ID, request ref, and
+purpose above. Hashing happens before decoding; no newline, Unicode, escape, or
+whitespace normalization is allowed. Instruction media type is exactly `text/plain`
+or `application/json`. Text is UTF-8 without BOM or NUL. JSON uses the same
+single-root canonical byte form and size/depth/member/string/integer limits as
+R4/R5, but is not a core envelope. Compression, multipart, missing, extra, duplicate,
+oversized, cross-request, or mismatched items stop before adapter execution.
+
+The launcher passes the verified in-memory buffers once. It passes no content-store
+handle, path, URL, lookup/list operation, credential, or reusable read capability,
+and never re-fetches after checking. Reading these already-delivered call arguments
+is not an external-read permission. Their contents may only narrow the selected
+capability inside the request's fixed target, arguments, permissions, and evidence
+rules. They cannot add authority, tools, network, another input, or executable
+shell/argv/env meaning; a conflict with typed fields fails closed. Verifier
+instruction buffers never enter the candidate sandbox.
+
+The pure validator checks the request's three exact purposes plus their subject,
+input, media-type, and distinct-ID relations. It never accepts the transport frame or
+raw bytes. The later launcher/control-foundation boundary enforces the frame before
+real use and tests missing, extra, duplicate, oversized, wrong-digest,
+cross-purpose/request, re-fetch, candidate-leak, and attempted-lookup cases. Digest
+equality proves byte identity only, not acceptance, safety, or execution authority.
 
 ### Stage request
 
@@ -290,8 +348,8 @@ selected only by the capability table.
  qualification_ref?:scope_ref(qualification),grant_ref?:scope_ref(grant),
  gate_decision_refs:set<scope_ref(gate-decision)>(scope_sha256,0..256),
  environment_ref:environment_ref,operation:operation,
- finish_condition_ref:scope_ref(finish-condition),
- verification_instruction_ref:scope_ref(verification-instructions),
+ finish_condition:delivered_scope(finish-condition),
+ verification_instruction:delivered_scope(verification-instructions),
  required_evidence_kinds:set<"deterministic"|"behavioral"|"architecture"|
                              "independent-review">(value,1..3),requested_at:Time}
 ```
@@ -360,6 +418,8 @@ or `cancelled`.
 
 ```text
 {selector:{kind:"target"},observed:present<git_revision_ref>}
+{selector:{kind:"source"},observed:present<artifact_ref>}
+{selector:{kind:"base"},observed:present<git_revision_ref>}
 {selector:{kind:"resolved-profile"},observed:present<document_ref(resolved_profile)>}
 {selector:{kind:"qualification"},observed:present<scope_ref(qualification)>}
 {selector:{kind:"environment"},observed:present<environment_ref>}
@@ -369,12 +429,14 @@ or `cancelled`.
 ```
 
 Expected is derived from the selected request field/set member and must differ from
-observed in presence or value. A present target observation uses the target
-repository. A present resolved-profile observation keeps the expected kind/ID; a
-present environment keeps the expected environment ID. Input ID selects the exact
-request input. Qualification is the request's sole optional qualification. A gate
-selector names one exact requested decision by its scope digest. No other selector
-or identity rule is inferred.
+observed in presence or canonical value. Target, source, and base each select their
+sole request slot. A present target/base or Git-backed source observation uses the
+target repository; a present base keeps the expected hash algorithm when both are
+present. A present resolved-profile observation keeps the expected kind/ID; a present
+environment keeps the expected environment ID. Input ID selects the exact request
+input. Qualification is the request's sole optional qualification. A gate selector
+names one exact requested decision by its scope digest. Equal values, wrong
+repositories/types, or duplicate selectors fail. No other identity rule is inferred.
 
 `stage_result.body` is:
 
@@ -383,7 +445,7 @@ or identity rule is inferred.
  attempt_id:ID,attempt_number:Int,reported_by:actor_ref,status:TerminalStatus,
  outcome?:outcome,reason?:reason,
  stale_observations?:set<stale_observation>(selector-tuple,1..256),
- outputs:set<output>(output_id,0..256),delta_ref?:content_ref,
+ outputs:set<output>(output_id,0..256),delta_ref?:git_patch_ref,
  diagnostics:set<content_ref>(content_id,0..256),execution?:execution,
  evidence:set<evidence>(evidence_id,0..256),started_at?:Time,finished_at?:Time,
  recorded_at:Time}
@@ -412,8 +474,9 @@ number is at least 1. Time order is
 
 For completed producer results, any non-passing evidence yields
 `change/inconclusive` with no output/delta. Otherwise one output yields
-`change/changed`; `delta_ref` is present and equals `output.ref` only for `git-patch`,
-and is absent for the other artifact kinds. Empty output/delta yields
+`change/changed`; for `git-patch`, `output.ref` is a `git_patch_ref` and `delta_ref`
+is present and equals it. Delta is absent for the other artifact kinds. Empty
+output/delta yields
 `change/no-change`.
 For completed verifier/reviewer results, output/delta are empty: any failed evidence
 yields `check/failed`; otherwise any inconclusive evidence yields
@@ -457,11 +520,12 @@ starts stderr with `E_USAGE`, `E_RUNTIME`, `E_PARSE`, `E_CANONICAL`, `E_LIMIT`,
 
 Tests build one valid five-document bundle and run at least 60 table-driven
 mutations covering canonical roots/limits, exact shapes/enums, root-tree and unsafe
-paths, manifest/profile/source relations, the three capabilities and five permission
-bounds, dormant/protected roles, request/result/status/time/output rules,
+paths, canonical-JSON tree rejection, manifest/profile/source relations, the three
+capabilities and five permission bounds, instruction purpose/subject/input closure,
+dormant/protected roles, request/result/status/time/output and patch-media rules,
 actual-fact incidents, model/tool availability, evidence replay/passing-role rules,
-stale selectors, generic escapes, and all three commands. They do not read Git,
-launch a process, or use a network.
+source/base and other stale selectors, generic escapes, and all three commands. They
+do not read Git, launch a process, or use a network.
 
 Implementation budget:
 
