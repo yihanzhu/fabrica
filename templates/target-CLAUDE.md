@@ -36,9 +36,11 @@ rules it never saw.*
 *Why this matters: a narrow workaround can be necessary, but an unexplained or
 copied workaround quietly becomes architecture.*
 
-- Prefer the root-cause fix. Use an exceptional implementation only for an
-  external constraint, safety concern, migration boundary, or accepted scope
-  decision when the normal fix is unsafe, unavailable, or outside scope. Every
+- This section governs exceptional implementation code, not separately accepted
+  CI or project-bootstrap process gates. Prefer the root-cause fix. Use an
+  exceptional implementation only for an external constraint, safety concern,
+  migration boundary, or accepted scope decision when the normal fix is unsafe,
+  unavailable, or outside scope. Every
   exception must be named before implementation in an accepted issue, spec, plan,
   or operator decision record. A link, code comment, or PR discussion records
   provenance; it is not approval. A newly discovered exception returns to that
