@@ -24,8 +24,9 @@ authority, or changes the live ystack profile.
   selection, qualification, grant, gate, and inventory-acceptance records stay
   outside the core and enter only through typed immutable references.
 - **R3 — strict canonical JSON.** Every document is UTF-8 JSON whose complete bytes
-  equal pinned jq 1.6 invoked as `jq -S -c .`, followed by one line feed. Reject a
-  BOM, invalid UTF-8,
+  equal the pinned jq 1.6 single-root canonicalizer defined in Design, followed by
+  one line feed. Reject a BOM, invalid UTF-8, an empty stream, more than one root
+  JSON value,
   duplicate keys, alternate escaping or whitespace, floats, negative integers,
   `null`, unknown fields, and non-canonical bytes. The full canonical envelope is
   what a document digest covers.
@@ -153,11 +154,13 @@ no leading or trailing hyphen, then `/`, then a 1–128 character lowercase leaf
 from letters, digits, `.`, `_`, or `-`. For example, `com.example/trace` is valid;
 `trace`, `Com.example/x`, and `com..example/x` are not.
 
-The wrapper checks the byte limit before parsing. It canonicalizes once with the
-pinned jq, compares the emitted bytes with the original, then applies the depth,
-member, string, integer, shape, and relational checks. The byte comparison makes a
-duplicate key or alternate escape non-canonical even though jq would otherwise keep
-only the final decoded key. Regression tests protect that boundary.
+The wrapper checks the byte limit before parsing. It invokes pinned jq 1.6 as
+`jq -s -S -c 'if length == 1 then .[0] else error("root-count") end'`, which rejects
+empty and multi-value streams before selecting the one root and emitting canonical
+bytes. It compares those bytes with the original, then applies depth, member,
+string, integer, shape, and relational checks. The byte comparison makes a duplicate
+key or alternate escape non-canonical even though jq would otherwise keep only the
+final decoded key. Regression tests protect that boundary.
 
 ### Normative schema notation and shared shapes
 
@@ -186,6 +189,7 @@ segments made from lowercase letters, digits, `.`, `_`, or `-`; no segment is `.
 `ExtensionPrefix` is the reverse-domain portion of the extension-key grammar.
 `canonical-sha256` as a set key means SHA-256 of the nested value's canonical JSON;
 `value` means the primitive string itself.
+`ErrorCode` matches `^E_[A-Z][A-Z0-9_]{0,62}$`; it is not a lowercase core `ID`.
 
 The adapter-role registry is exactly `producer`, `verifier`, `reviewer`, `forge`,
 `ci`, `execution`, `identity`, and `publisher`. Actor roles may also be `operator`,
@@ -310,12 +314,12 @@ those bytes.
 - `test_assertion_result` is `{assertion_id:ID,passed:Boolean}`.
 - `test_case` is `{case_id:ID,phase:TestPhase,fixture_ref:artifact_ref,
   expected_status:"accepted"|"rejected"|"transport-failed",
-  expected_error_id?:ID,equivalence_group?:ID,
+  expected_error_code?:ErrorCode,equivalence_group?:ID,
   assertion_ids:set<ID>(value,1..256)}`. Error is forbidden for `accepted` and
   required otherwise.
 - `test_observation` is `{case_id:ID,phase:TestPhase,
   observed_status:"accepted"|"rejected"|"transport-failed"|"inconclusive",
-  observed_error_id?:ID,produced_document_refs:set<document_ref>(sha256,0..256),
+  observed_error_code?:ErrorCode,produced_document_refs:set<document_ref>(sha256,0..256),
   assertions:set<test_assertion_result>(assertion_id,1..256)}`. Error is forbidden
   for accepted and required otherwise.
 
@@ -480,7 +484,7 @@ credential reads.
 | reviewer / `core.review.advise.v1` | `{change_ref:change_ref,review_policy_ref:scope_ref(review-policy)}` | `core.perm.target.read.v1`, `core.perm.evidence.write.v1` | advisory / `{R}`; R |
 | forge / `core.forge.observe.v1` | `{observation_kind:ForgeObservation,subject:ForgeSubject}` | `core.perm.forge.read.v1` | check / `{D}`; D |
 | ci / `core.ci.observe.v1` | `{repository_id:ID,commit_ref:git_revision_ref,check_set_ref:scope_ref(check-set),required_only:true}` | `core.perm.ci.read.v1` | check / `{D}`; D |
-| execution / `core.execution.provision.v1` | `{environment_spec_ref:scope_ref(environment-policy),input_snapshot_ref:artifact_ref,network_mode:"deny",tool_refs:set<tool_ref>(tool_id,0..256)}` | `core.perm.execution.provision.v1` | check / `{D}`; D |
+| execution / `core.execution.provision.v1` | `{environment_spec_ref:scope_ref(environment-policy),input_snapshot_ref:git_object_ref,network_mode:"deny",tool_refs:set<tool_ref>(tool_id,0..256)}` | `core.perm.execution.provision.v1` | check / `{D}`; D |
 | identity / `core.identity.resolve.v1` | `{subject_actor_ref:actor_ref,purpose:"performer"|"verifier"|"reviewer"|"publisher"|"observer"}` | `core.perm.identity.read.v1` | check / `{D}`; D |
 | publisher / `core.publish.branch-bounded.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),topic_ref:TopicRef,expected_old_tip:present<git_revision_ref>,new_commit_ref:git_revision_ref,delta_ref:content_ref,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.topic-ref.write.v1` | change / `{D}`; D |
 | publisher / `core.publish.change-request.v1` | `{repository_id:ID,publisher_policy_ref:scope_ref(publisher-policy),source_result_ref:document_ref(stage_result),head_ref:{name:TopicRef,commit:git_revision_ref},base_ref:git_revision_ref,title_ref:content_ref,body_ref:content_ref,draft:Boolean,idempotency_key:IdempotencyKey}` | `core.perm.target.read.v1`, `core.perm.record.read.v1`, `core.perm.content.read.v1`, `core.perm.forge.read.v1`, `core.perm.forge.change-request.write.v1` | change / `{D}`; D |
@@ -582,7 +586,7 @@ can never stand in for a gate decision.
 
 `TestPhase` is exactly `parse`, `document`, `profile-set`, `stage-run`,
 `adapter-run`, or `matrix`. Expected observation is `accepted`, `rejected`, or
-`transport-failed`, with an exact stable error ID when applicable. The inventory
+`transport-failed`, with an exact stable `ErrorCode` when applicable. The inventory
 case set and each assertion-ID set are non-empty, sorted, and unique.
 
 Each result observation has case ID, phase, observed status/error, produced document
@@ -653,10 +657,11 @@ restore manifest, and CI. No second parser or copied registry is allowed.
 
 ### Required adversarial coverage
 
-Tests reject malformed/noncanonical/oversized JSON; BOM, duplicate/escaped keys,
+Tests reject malformed/noncanonical/oversized JSON; empty or multiple-root streams;
+BOM, duplicate/escaped keys,
 deep/wide/long data, floats and integer limits; unknown fields/versions/kinds;
-invalid extension keys/values or an extension used in place of a required core
-field; unsafe IDs, refs, paths,
+invalid error-code or extension keys/values, or an extension used in place of a
+required core field; unsafe IDs, refs, paths,
 hashes, modes, source provenance, or floating refs; capability wildcards, role
 mismatch, extra/missing arguments, command/argv/env/URL/network/secret/entrypoint
 fields, permission drift, and model-role drift; shared protected-role bindings;
@@ -666,6 +671,7 @@ non-reviewer; altered risk/selection/qualification/grant/gate refs; unexecuted
 evidence or output; invalid status/outcome/evidence/time rules; replayed proof;
 missing resolved bindings, wrong outcome family, free/unbound stale selectors,
 mixed evidence precedence errors, and unoffered execution tools;
+content-backed or wrong-repository execution snapshots;
 changed delta with replayed evidence, performer authority/version drift, missing
 or wrong-purpose publisher-policy refs; invalid execution availability shapes,
 source-claim refs, and model/deterministic combinations;
