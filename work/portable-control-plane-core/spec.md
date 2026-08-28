@@ -13,28 +13,22 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
 - **R1 — bounded foundation.** Add contract validation, deterministic profile
   resolution, declarative fake adapter packages, and hermetic contract tests.
   Do not wire a real adapter, activate a profile, grant authority, or enable an
-  autonomous write. Existing live jobs and gates keep their meaning; CI only gains
-  the new hermetic test.
+  autonomous write; live jobs/gates keep their meaning and CI only gains this test.
 - **R2 — one strict JSON family.** Accept six top-level kinds:
   `stage_request`, `stage_result`, `adapter_manifest`, `profile`,
   `resolved_profile`, and `adapter_contract_test_result`. Every valid document is
   UTF-8 canonical JSON: compact, keys sorted as jq `-S`, no floats, and exactly one
-  final newline. Maximum size is 1,048,576 bytes, nesting depth 32, 256 members per
-  object or array, 8,192 decoded UTF-8 bytes per string, and integers from 0 through
-  2,147,483,647.
-  Unknown versions, kinds, core fields,
-  duplicate keys, alternate encodings, malformed JSON, and limit violations fail
-  closed. `core/v1/contracts.jq` is the only executable schema.
+  final newline. Limits are 1,048,576 bytes, depth 32, 256 collection members,
+  8,192 decoded UTF-8 bytes per string, and integers in `0..2147483647`. Unknown
+  versions/kinds/fields, duplicate keys, alternate encodings, malformed JSON, and
+  limit violations fail closed. `core/v1/contracts.jq` is the only executable schema.
 - **R3 — version and extension rules.** Every document carries
   `schema_version: 1`, `kind`, `id`, and optional `extensions`. IDs are 1–128
-  lowercase ASCII letters, digits, dots, colons, underscores, or hyphens.
-  Extension keys match
+  lowercase ASCII letters, digits, dots, colons, underscores, or hyphens. Extension keys match
   `^([a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9])(\.([a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9]))+/[a-z0-9][a-z0-9._-]{0,127}$`
-  (`com.example/trace` passes; `trace`, `Com.example/x`, and `com..x/y` fail) and
-  values are objects. Readers preserve unknown
-  extensions but never use them for authority, risk, gates, status, outcome,
-  evidence verdicts, or qualification. Changed meaning, a new required field, or
-  a changed core enum requires a new major version.
+  (`com.example/trace` passes; `trace`, `Com.example/x`, and `com..x/y` fail); values
+  are objects. Unknown extensions are preserved but inert. Changed meaning, a new
+  required field, or a changed core enum requires a new major version.
 - **R4 — exact references.** A `document_ref` names a canonical document by kind,
   ID, and SHA-256 of its complete canonical bytes. An `artifact_ref` is a tagged
   union: `git_object` names repository, full commit, normalized repo-relative path,
@@ -89,12 +83,9 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   capability and permission IDs. A profile binding **requests** them. Later policy
   may **grant** them. A result records the one capability **used**. Validation proves
   each binding's requested capabilities are a subset of its manifest, requested
-  permissions equal the union required by those capabilities and are a subset of
-  its manifest,
-  the operation is a member/subset of that binding, and the used capability equals
-  the operation. It does not infer a grant. IDs are closed,
-  byte-compared values with no wildcards, aliases, prefixes, or generic shell/API
-  escape. Unknown extensions remain inert.
+  permissions equal their required union and are a manifest subset, the operation
+  belongs to the binding, and used equals requested. It never infers a grant. IDs
+  are closed byte values with no wildcards, aliases, prefixes, or generic escape.
 - **R10 — core separation matrix.** Producer, verifier, reviewer, and publisher
   bindings are pairwise distinct in binding ID, adapter instance, principal, and
   execution boundary. Authority-ref IDs and scope digests must differ when present;
@@ -110,7 +101,8 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   executable path, environment substitution, remote schema, or literal secret.
   Resolution reads profile/manifests with `git ls-tree`, `git cat-file`, and
   `git show` from one caller-supplied exact commit plus a separate `selection_ref`.
-  The result records all source/object/config provenance. This initiative does not
+  The profile does not self-declare its Git source. The resolver derives its exact
+  commit/path/blob provenance and records it only in `resolved_profile`. This initiative does not
   authenticate the caller or selection ref; later policy decides whether it is
   trusted. Profile data cannot contain or override selection, grant, gate, or
   activation fields.
@@ -129,10 +121,13 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   audit meaning must match; IDs, times, and honest package/profile provenance must
   differ. The driver verifies each observed package tree against its manifest.
 - **R14 — typed contract-test result.** Every case records phase
-  `parse|shape|resolve|run|matrix`, raw fixture ref, expected accept/reject, observed
-  status/error, non-empty assertions, and canonical refs only when that phase
-  produced them. Zero cases, zero assertions, missing accepted results, vacuous
-  overall pass, or a rejected fixture with a fabricated canonical result fail.
+  `parse|shape|resolve|run|matrix`, observed status/error/assertions, and canonical
+  refs only when produced. An independent inventory fixes each case's ID, phase,
+  raw fixture ref/digest, expected accept/reject, expected stable error when relevant,
+  equivalence group, and non-empty required assertion IDs. Observed cases match every
+  fixed field and ID one-for-one and add observations only. Missing accepted results,
+  changed expectations, tautological/dropped assertions, vacuous pass, or fabricated
+  canonical results fail.
 - **R15 — adversarial cases.** Tests cover malformed and noncanonical JSON;
   limits; wrong version/kind; unknown fields; unsafe blob/tree paths and modes;
   missing/mismatched refs; invalid status/outcome pairs; missing evidence kinds;
@@ -152,11 +147,12 @@ adapters. Keep the live Claude Code, Codex, and GitHub path unchanged.
   `ci/required-files.txt`, keep scripts executable and ShellCheck 0.11.0 clean, and
   run the hermetic suite in CI against a checksum-pinned jq 1.6. README documents
   the commands, exit behavior, jq minimum, and that the core is not wired live.
-  Implementation uses one deterministic
-  PR. The expected implementation is 520–780 net lines because schema, validator,
-  and negative tests must land together. The plan must give an exact per-file estimate
-  and ask the operator for a documented soft-budget exception capped at 800 lines.
-  Above that cap, it returns to G2 or opens a separate accepted initiative before code.
+  Implementation uses one deterministic PR and is expected to add 520–780 net lines.
+  The plan gives an exact estimate and asks for a soft-budget exception capped at
+  800; above that, it returns to G2 or opens a separate accepted initiative.
+  The plan also fixes the constitution route: an operator-driven session may edit CI;
+  an unattended run writes a `proposals/` patch and stops until the operator applies it
+  to the implementation branch before final review.
 
 ## Design
 
@@ -171,9 +167,9 @@ payload bytes. Timestamps are UTC RFC 3339 strings. Every JSON integer is in
 | `stage_request` | initiative, workflow, stage, task class, target/source, inputs, risk, resolved-profile ref, selection ref, qualification ref if any, gate-decision refs, environment, one operation, finish condition, instruction ref, evidence kinds, requested time |
 | `stage_result` | request/profile refs, attempt, controller/reporter, `executed`, status, outcome when allowed, reason, expected/observed refs, subject/auxiliary/delta refs, diagnostic content refs, nested evidence, performer/used capability iff executed, times |
 | `adapter_manifest` | adapter ID/version, protocol, roles, offered capabilities/permissions, exact package-tree ref; no entrypoint or command |
-| `profile` | profile ID/version, source ref, skill refs, at most one binding for each role with exact adapter/package/config refs, instance/principal/boundary/authority refs, requested capabilities/permissions; every requested role must exist |
-| `resolved_profile` | profile/selection refs, exact manifest/package/config provenance, resolved bindings and validated subsets; no authorization claim |
-| `adapter_contract_test_result` | suite/fixture refs, times, overall status, non-empty cases and assertions, equivalence groups, observed errors and conditional canonical refs |
+| `profile` | profile ID/version, skill refs, at most one binding for each role with exact adapter/package/config refs, instance/principal/boundary/authority refs, requested capabilities/permissions; no self source ref; every requested role exists |
+| `resolved_profile` | resolver-derived exact profile commit/path/blob, selection ref, manifest/package/config provenance, resolved bindings and validated subsets; no authorization claim |
+| `adapter_contract_test_result` | suite/inventory refs, times, overall status, observed cases/errors/assertions and conditional canonical refs; expected phase/fixture/verdict/error/group/assertion IDs live only in inventory |
 
 - `document_ref`: `kind`, `id`, `sha256` of canonical bytes.
 - `git_object_ref`: repository ID, full commit, path, `object_type: blob|tree`,
@@ -309,7 +305,7 @@ remain separate.
 validate <file>
 resolve <repo> <commit> <selection-ref-file> <profile-path> <manifest-path>...
 validate-run <request-file> <resolved-profile-file> <result-file>
-validate-suite <suite-result-file> <fixture-root>
+validate-suite <suite-result-file> <case-inventory-file> <fixture-root>
 ```
 
 `validate` enforces canonical bytes, limits, shape, and local invariants. `resolve`
@@ -317,9 +313,11 @@ uses exact Git objects and rejects symlinks, missing/wrong objects, config outsi
 the selected commit, unsafe paths, mismatched adapter versions/packages, subset
 violations, and separation conflicts. It records the caller-supplied selection ref
 but does not call it trusted or active. `validate-run` performs request/profile/result
-and evidence-coverage checks. `validate-suite` verifies raw fixture digests,
-conditional refs, all assertions, and non-vacuous overall status. Fixture paths use
-the same relative-path grammar as Git paths. The command canonicalizes the supplied
+and evidence-coverage checks. `validate-suite` verifies fixture digests, conditional
+refs, non-vacuous status, and one-for-one equality with an independent canonical
+inventory. Each inventory entry fixes case ID, phase, fixture ref, expected verdict
+and error, group, and required assertion IDs; the result supplies observations only.
+Fixture paths use the same relative-path grammar as Git paths. The command canonicalizes the supplied
 root once, rejects symlinks at the root and every child component, and refuses any
 physical path outside it. Exit 0 means valid; nonzero writes one of
 `E_PARSE|E_CANONICAL|E_LIMIT|E_SHAPE|E_REF|E_RESOLVE|E_RELATION|E_SUITE` to stderr
@@ -353,10 +351,11 @@ semantics, and audit structure. It excludes IDs, times, and adapter/profile prov
 then separately asserts that those excluded provenance fields identify the actual
 different package trees. This proves contract substitution only, not runtime transport.
 
-Negative cases mutate valid canonical fixtures or point at raw invalid bytes. A case
+Negative cases mutate valid canonical fixtures or point at raw invalid bytes. The
+case inventory is authored separately from observed results. A case
 records its validation phase and includes resolved profile/request/result refs only
-when that phase produced them. The suite cannot pass with zero cases/assertions or by
-dropping rejected cases.
+when that phase produced them. The suite cannot pass with zero cases/assertions,
+changed inventory, or a missing/dropped rejected case.
 
 - `core/v1/contracts.jq` — sole executable shapes, enums, registries, and relational
   checks.
@@ -365,8 +364,9 @@ dropping rejected cases.
   relational, and 2×2 tests.
 - `scripts/test/fixtures/portable-core-target/` — unrelated target and four distinct
   declarative fake package trees.
-- `.github/workflows/ci.yml`, `ci/required-files.txt`, and README — test wiring,
-  restore coverage, CLI contract, and clear unwired status.
+- `.github/workflows/ci.yml`, `ci/required-files.txt`, and README — operator-applied
+  CI wiring, restore coverage, CLI contract, and clear unwired status; unattended
+  work reaches CI only through `proposals/` until the operator applies it.
 
 1. Canonical parser, limits, shared refs, and six shape validators.
 2. Resolver, exact object checks, capability/permission registry, and separation.
