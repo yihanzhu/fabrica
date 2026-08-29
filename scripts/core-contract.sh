@@ -70,7 +70,10 @@ else
   fail "E_RUNTIME"
 fi
 
-tmpdir="$(mktemp -d)"
+# mktemp's own stderr diagnostic and the local path it names must never reach our
+# stderr (the public E_* contract), so its failure is caught explicitly instead of
+# letting `set -e` abort past fail().
+tmpdir="$(mktemp -d 2>/dev/null)" || fail "E_RUNTIME"
 trap 'rm -rf "$tmpdir"' EXIT
 byte_limit=1048576
 

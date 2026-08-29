@@ -282,6 +282,18 @@ assert_fail "(f) canonical-json source pointing at a tree, not a blob" "E_SHAPE"
 mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].tool_sources = [{tool_id:"t1",package_source:.body.bindings[0].package_source,config_source:{state:"absent"}},{tool_id:"t1",package_source:.body.bindings[0].package_source,config_source:{state:"absent"}}]' "$tmpdir/rp-f5.json"
 assert_fail "(f) duplicate tool_id in tool_sources" "E_SHAPE" validate-document "$tmpdir/rp-f5.json"
 
+echo "== (n) RepoPath rejects DEL and C1 control characters, not just C0 (validate-document) =="
+mutate "$tmpdir/resolved_profile.json" '.body.profile_source.source.location.value = "profile.json"' "$tmpdir/rp-n1.json"
+assert_fail "(n) repository path containing DEL (U+007F)" "E_SHAPE" validate-document "$tmpdir/rp-n1.json"
+mutate "$tmpdir/resolved_profile.json" '.body.profile_source.source.location.value = "profile.json"' "$tmpdir/rp-n2.json"
+assert_fail "(n) repository path containing a C1 control character (U+0080)" "E_SHAPE" validate-document "$tmpdir/rp-n2.json"
+mutate "$tmpdir/resolved_profile.json" '.body.profile_source.source.location.value = "profile.json"' "$tmpdir/rp-n3.json"
+assert_fail "(n) repository path containing a C1 control character (U+009F, top of range)" "E_SHAPE" validate-document "$tmpdir/rp-n3.json"
+# Pair: a genuinely non-ASCII but non-control path segment stays legal — the fix
+# extends control-character rejection, it does not reject all non-ASCII bytes.
+mutate "$tmpdir/resolved_profile.json" '.body.profile_source.source.location.value = "profile-é.json"' "$tmpdir/rp-n4.json"
+assert_ok "(n) repository path with a non-control non-ASCII character stays legal" validate-document "$tmpdir/rp-n4.json"
+
 echo "== (g) stage_request shape (validate-document) =="
 mutate "$tmpdir/request.json" 'del(.body.risk)' "$tmpdir/r-g1.json"
 assert_fail "(g) missing risk" "E_SHAPE" validate-document "$tmpdir/r-g1.json"
@@ -484,6 +496,39 @@ assert_fail "(l) unavailable prompt fact still claims a conclusive outcome" "E_R
 mutate "$tmpdir/result-model.json" '.body.execution.metadata.prompt = {state:"unavailable", reason_id:"prompt-store-unreachable"} |
     .body.outcome = {family:"change", value:"inconclusive"} | .body.outputs = [] | .body.reason = {reason_id:"r1"}' "$tmpdir/result-model-ok.json"
 assert_ok "(l) unavailable prompt fact correctly reported as a completed-inconclusive record" validate-stage-run "$tmpdir/req-model.json" "$tmpdir/rp-model.json" "$tmpdir/result-model-ok.json"
+# tools follows the same forced-inconclusive path as provider/model/effort/prompt/
+# skills (round-2 routed those five through metadata_requested_unavailable but
+# missed tools) — a completed record whose actual tool use cannot be established
+# must not stay conclusive, and must still validate once it honestly reports
+# inconclusive instead.
+mutate "$tmpdir/result-model.json" '.body.execution.metadata.tools = {state:"unavailable", reason_id:"tool-inventory-unreachable"}' "$tmpdir/result-model-tools-bad.json"
+assert_fail "(l) unavailable tools fact still claims a conclusive outcome" "E_RELATION" validate-stage-run "$tmpdir/req-model.json" "$tmpdir/rp-model.json" "$tmpdir/result-model-tools-bad.json"
+mutate "$tmpdir/result-model.json" '.body.execution.metadata.tools = {state:"unavailable", reason_id:"tool-inventory-unreachable"} |
+    .body.outcome = {family:"change", value:"inconclusive"} | .body.outputs = [] | .body.reason = {reason_id:"r1"}' "$tmpdir/result-model-tools-ok.json"
+assert_ok "(l) unavailable tools fact correctly reported as a completed-inconclusive record" validate-stage-run "$tmpdir/req-model.json" "$tmpdir/rp-model.json" "$tmpdir/result-model-tools-ok.json"
+
+echo "== (m) resolved-profile embedded bindings must still satisfy the profile invariants (validate-document, validate-stage-run) =="
+# validate-document on a bare resolved_profile: shape alone lets an embedded
+# producer binding through with an empty requested_capabilities/requested_permissions
+# set, which profile validation would reject. Reuses profile_binding_capability_ok
+# via resolved_bindings_profile_invariants_ok, not a parallel check.
+mutate "$tmpdir/resolved_profile.json" '.body.bindings |= map(if .binding.role=="producer" then .binding.requested_capabilities=[] | .binding.requested_permissions=[] else . end)' "$tmpdir/rp-m1.json"
+assert_fail "(m) embedded producer binding with emptied capability closure" "E_RELATION" validate-document "$tmpdir/rp-m1.json"
+# shellcheck disable=SC2016  # single-quoted jq $-var on purpose, not a shell var
+mutate "$tmpdir/resolved_profile.json" '(.body.bindings[] | select(.binding.role=="publisher") | .binding.principal_id) as $shared | .body.bindings |= map(if .binding.role=="reviewer" then .binding.principal_id=$shared else . end)' "$tmpdir/rp-m2.json"
+assert_fail "(m) two embedded protected-role bindings share one principal_id" "E_RELATION" validate-document "$tmpdir/rp-m2.json"
+assert_ok "(m) unmutated resolved_profile still validates on its own" validate-document "$tmpdir/resolved_profile.json"
+# The same gap exists behind validate-stage-run: the request/result relations
+# never look at a binding's own requested_capabilities/requested_permissions, only
+# its role, so without this fix a stage run is approved for an operation the
+# embedded binding never actually requested.
+mutate "$tmpdir/resolved_profile.json" '.body.bindings |= map(if .binding.role=="producer" then .binding.requested_capabilities=[] | .binding.requested_permissions=[] else . end)' "$tmpdir/rp-m3.json"
+sha_rp_m3=$(hash_of "$tmpdir/rp-m3.json")
+mutate "$tmpdir/request.json" ".body.resolved_profile_ref.sha256=\"$sha_rp_m3\"" "$tmpdir/req-m3.json"
+sha_req_m3=$(hash_of "$tmpdir/req-m3.json")
+mutate "$tmpdir/result.json" ".body.request_ref.sha256=\"$sha_req_m3\" | .body.resolved_profile_ref.sha256=\"$sha_rp_m3\"" "$tmpdir/result-m3.json"
+assert_fail "(m) stage-run approves an operation its embedded binding never requested" "E_RELATION" validate-stage-run "$tmpdir/req-m3.json" "$tmpdir/rp-m3.json" "$tmpdir/result-m3.json"
+assert_ok "(m) unmutated request/resolved_profile/result triple still validates as a stage-run" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/result.json"
 
 echo "== (k) jq version pin and SHA-tool fallback (environment) =="
 fakebin="$tmpdir/fakebin"
@@ -527,6 +572,26 @@ done
 rm -f "$noshasumbin/sha256sum"
 out2="$(PATH="$noshasumbin" bash "$wrapper" validate-document "$tmpdir/profile.json" 2>&1)"
 assert_eq "(k) falls back to shasum -a 256 when sha256sum is absent (empty output)" "" "$out2"
+
+echo "== (p) sanitized mktemp -d failure mapping (environment) =="
+# A failing `mktemp -d` (read-only/full/unavailable temp dir) must map to sanitized
+# E_RUNTIME, not leak mktemp's own raw diagnostic/path past `set -e`. The stub only
+# shadows mktemp; every other tool still resolves off the real PATH behind it.
+mktemp_diagnostic="mktemp: failed to create a temp directory (stub)"
+failmktempbin="$tmpdir/failmktempbin"
+mkdir -p "$failmktempbin"
+cat > "$failmktempbin/mktemp" <<EOF
+#!/usr/bin/env bash
+echo "$mktemp_diagnostic /some/local/path" >&2
+exit 1
+EOF
+chmod +x "$failmktempbin/mktemp"
+out3="$(PATH="$failmktempbin:$PATH" bash "$wrapper" validate-document "$tmpdir/profile.json" 2>&1 1>/dev/null)" && rc3=0 || rc3=$?
+assert_eq "(p) failing mktemp -d (exit nonzero)" "1" "$([ "$rc3" -ne 0 ] && echo 1 || echo 0)"
+assert_eq "(p) failing mktemp -d maps to sanitized E_RUNTIME" "E_RUNTIME" "$out3"
+assert_not_contains "(p) failing mktemp -d never leaks its raw diagnostic" "$mktemp_diagnostic" "$out3"
+# Pair: the normal (succeeding) mktemp path this fix must not regress.
+assert_ok "(p) unmutated mktemp path still succeeds" validate-document "$tmpdir/profile.json"
 
 echo "-- $passed passed, $failed failed --"
 if [ "$failed" -ne 0 ]; then

@@ -65,8 +65,13 @@ def is_patch_mediatype: type=="string" and .=="text/x-diff";
 def is_reverse_dns:
   type=="string" and
   (split(".") as $labels | ($labels|length)>=2 and all($labels[]; test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")));
+# \x{...} codepoint-brace syntax, not bare \xHH: Oniguruma's bare \xHH matches a
+# raw byte, so it only ever matches single-byte (ASCII) input under UTF-8 mode —
+# \x80-\x9f as bare bytes silently never matches the 2-byte-encoded C1 codepoints
+# it's meant to reject. The brace form matches by actual Unicode codepoint.
 def is_repopath:
-  type=="string" and (length>0) and (test("[\\x00-\\x1f]")|not) and (contains("\\")|not) and
+  type=="string" and (length>0) and
+  (test("[\\x{0000}-\\x{001f}\\x{007f}\\x{0080}-\\x{009f}]")|not) and (contains("\\")|not) and
   (split("/") as $s | all($s[]; .!="" and .!="." and .!=".."));
 def is_bounded_enum_set(mn; mx; allowed):
   (type=="array") and (length>=mn) and (length<=mx) and
@@ -302,7 +307,20 @@ def profile_protected_roles_ok:
   (($ps|map(.authority_ref.scope_sha256)|unique|length)==($ps|length)) and
   (($bs|map(select(.role as $r | protected_roles|index($r)==null))|map(.role))|(unique|length)==length);
 
-
+# resolved_bindings_profile_invariants_ok: closes the gap where a resolved profile
+# is checked (or trusted, inside a stage-run) on its own, without ever passing
+# through mode_profile_set's checks against the plain profile it was resolved
+# from. Re-applies the same capability and protected-role invariants
+# (profile_binding_capability_ok / profile_protected_roles_ok) to the resolved
+# profile's own embedded binding set, so an embedded producer binding with empty
+# requested_capabilities/requested_permissions, or protected bindings sharing a
+# principal/execution boundary, cannot slip past validate-document or
+# validate-stage-run just because they arrived pre-resolved. Reuses the existing
+# predicates rather than duplicating them.
+def resolved_bindings_profile_invariants_ok(resolved_body):
+  (resolved_body.bindings | map(.binding)) as $embedded_bindings |
+  ({bindings: $embedded_bindings} | profile_protected_roles_ok) and
+  ($embedded_bindings | all(.[]; profile_binding_capability_ok));
 
 def is_tool_source:
   has_exact_fields(["tool_id","package_source","config_source"];[]) and (.tool_id|is_id) and
@@ -738,13 +756,15 @@ def is_fact_value_ok(expected):
   else false end;
 
 # metadata_requested_unavailable: true when a requested provider/model/effort/
-# prompt/skills fact is unavailable. The contract forces a completed result whose
-# execution carries such a fact to be inconclusive — availability is an input to
-# the outcome relation, not a presence check that passes independently of it.
-# Deliberately excludes tools (no forced-inconclusive rule names it) and snapshot
-# (not a requested fact — it has no corresponding binding field to be honest about).
+# prompt/skills/tools fact is unavailable. The contract forces a completed result
+# whose execution carries such a fact to be inconclusive — availability is an
+# input to the outcome relation, not a presence check that passes independently
+# of it. tools is included via this same path: a completed result cannot stay
+# conclusive when the actual tool use it evidences cannot be established, exactly
+# like the other requested facts. Deliberately excludes snapshot (not a requested
+# fact — it has no corresponding binding field to be honest about).
 def metadata_requested_unavailable(meta):
-  [meta.provider, meta.model, meta.effort, meta.prompt, meta.skills] | any(.[]; .state=="unavailable");
+  [meta.provider, meta.model, meta.effort, meta.prompt, meta.skills, meta.tools] | any(.[]; .state=="unavailable");
 
 # actual_facts_ok: model bindings additionally require recorded/computed facts to
 # equal the resolved binding's own model_request/prompt_ref/skill_refs (R12 — an
@@ -888,6 +908,7 @@ def mode_document(docs):
   (docs[0].content) as $doc |
   if ($doc|document_ref_ok|not) then "E_SHAPE"
   elif ($doc.kind=="profile" and ($doc.body|profile_protected_roles_ok|not)) then "E_RELATION"
+  elif ($doc.kind=="resolved_profile" and (resolved_bindings_profile_invariants_ok($doc.body)|not)) then "E_RELATION"
   else null end;
 
 def mode_profile_set(docs):
@@ -908,6 +929,7 @@ def mode_stage_run(docs):
   if ($request.content|document_ref_ok|not) or ($request.content.kind != "stage_request") then "E_SHAPE"
   elif ($resolved.content|document_ref_ok|not) or ($resolved.content.kind != "resolved_profile") then "E_SHAPE"
   elif ($result.content|document_ref_ok|not) or ($result.content.kind != "stage_result") then "E_SHAPE"
+  elif (resolved_bindings_profile_invariants_ok($resolved.content.body)|not) then "E_RELATION"
   elif ($request.content.body.resolved_profile_ref.id != $resolved.content.id) or
        ($request.content.body.resolved_profile_ref.sha256 != $resolved.sha256) then "E_REF"
   elif (stage_request_relations_ok($request.content.body; $resolved)|not) then "E_RELATION"
