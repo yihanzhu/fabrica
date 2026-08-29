@@ -160,14 +160,17 @@ authority, or perform an external write.
   Before downstream G2 review, compare every recorded upstream spec blob and
   generation ID with current main. Before downstream plan review, code, CI review,
   and final review, compare those values again and require every G3 self ref to match
-  current main. For each G3 record, `built_against` must equal the downstream map's
-  self refs for that child's full prerequisite closure. Any move, generation mix, or
-  mismatch marks the downstream work stale and returns it through its own G2 and
-  high-risk plan gates; code already written is preserved, but its review evidence
-  is stale. Assembly performs the G3 check for all six upstream children. Shared CI,
-  restore manifest, activation-guard, test-harness, fixture, and documentation paths
-  are not product exports; every downstream exact-head/base review instead reruns
-  and binds their current versions.
+  current main: `merge_commit` is the operator-accepted merge commit and is an
+  ancestor of current main, and both export lists equal current-main Git entries.
+  The append-only registry also contains the exact generation record from R24. For
+  each G3 record, `built_against` must equal the downstream map's self refs for that
+  child's full prerequisite closure. Any move, generation mix, or mismatch marks the
+  downstream work stale and returns it through its own G2 and high-risk plan gates;
+  code already written is preserved, but its review evidence is stale. Assembly
+  performs the G3 check for all six upstream children. Shared CI, restore manifest,
+  activation-guard, test-harness, fixture, and documentation paths are not product
+  exports; every downstream exact-head/base review instead reruns and binds their
+  current versions. The generation registry is separately checked under R24.
 - **R23 — private state is enforced until assembly.** The schema child establishes a
   deterministic generation-aware activation guard. Before the first assembly, it
   requires no public wrapper/root and no non-test caller. During an upgrade, every
@@ -176,23 +179,33 @@ authority, or perform an external write.
   complete generation. It forbids any public/non-test caller or user documentation
   from naming the generation under construction, and that generation has no root
   program until assembly. Only fixed private test drivers may load its members.
-  Assembly G3 adds the new root and either adds or changes the one wrapper. The
-  post-assembly guard permits multiple immutable generation roots but exactly one
-  wrapper selecting one complete generation, while still proving no live profile,
-  manager, template, or
-  install path calls it.
+  Assembly's pre-switch phase adds the new root while the wrapper remains absent or
+  selects the old generation. After private proof, the switch commit either adds or
+  changes the one wrapper. The post-switch guard permits multiple immutable
+  generation roots but exactly one wrapper selecting one complete generation, while
+  still proving no live profile, manager, template, or install path calls it.
 - **R24 — generations switch atomically.** The parent plan chooses and records one
   unused `generation_id` matching `g-[0-9a-f]{64}`. It is public, not a secret or
-  authority value, and can never be reused. All seven child artifacts and G3 records
-  name that exact ID. Their implementation product files write only below its inactive
-  `core/v1/generations/<generation_id>/` subtree, except for shared proof files and
-  the stable public wrapper. Generation-scoped exports become permanently immutable
-  when assembly publishes them. The wrapper is a separate activation export: only
-  assembly may change it, and only in the final switch commit after complete proof.
-  Any upgrade parent plan pins the current wrapper blob and selected generation,
-  chooses a newly accepted unused generation ID, builds a complete inactive
-  generation, and reruns all affected child and assembly gates. The old public
-  generation remains selected until that atomic wrapper switch.
+  authority value, and can never be reused. `core/v1/generation-registry.json` is a
+  canonical, restore-critical, append-only record with exact entries
+  `{generation_id,parent_spec_blob,parent_plan_merge_commit}`. The parent plan checks
+  the ID is absent; the schema child creates or appends its exact entry. CI requires
+  unique IDs and every prior main entry to remain an unchanged ordered prefix, so
+  deleting an old generation subtree never permits ID reuse. All seven child
+  artifacts and G3 records name that exact ID. Their implementation product files
+  write only below its inactive `core/v1/generations/<generation_id>/` subtree,
+  except for shared proof/registry files and the stable public wrapper.
+  Generation-scoped exports become permanently immutable when assembly publishes
+  them. The wrapper is a separate activation export. Assembly first lands the new
+  root and proves the complete generation through private test drivers while the
+  stable wrapper is absent or still selects the old generation. One later switch
+  commit then adds the wrapper for first publication or changes only its literal
+  generation ID for an upgrade. Mandatory CI and independent review run again on
+  that exact post-switch head through the public wrapper; only that evidence may
+  produce `merge-ready` and human merge. Any upgrade parent plan pins the current
+  wrapper blob and selected generation, chooses a newly accepted unused generation
+  ID, and repeats both proof phases. The old public generation remains selected on
+  main until the final assembly merge.
 
 ## Design
 
@@ -231,7 +244,7 @@ No issue comment or branch state substitutes for those exact identities.
 
 | Child | One private responsibility | Direct dependencies | Full upstream closure: specs + G3 | Expected net new lines: product + owned proof |
 |---|---|---|---|---:|
-| `portable-core-schema` | parsed depth/member/string/integer limits; primitives; shared refs; envelopes; document-kind registry; one declarative role/capability/permission/evidence policy table | none | none | 360–460 |
+| `portable-core-schema` | parsed depth/member/string/integer limits; primitives; shared refs; envelopes; document-kind registry; one declarative role/capability/permission/evidence policy table; append-only generation-registry entry | none | none | 360–460 |
 | `portable-core-ingress` | raw-byte limit and bounded snapshot, jq 1.6 canonical bytes, hashes, private temp I/O, sanitized errors | schema | schema | 230–320 |
 | `portable-core-profile-graph` | manifest/profile/resolved-profile exact body shapes, self relations, and supplied-document graph relations | schema | schema | 360–480 |
 | `portable-core-stage-request` | request exact body shape, capability arguments, permissions, target/input/instruction/evidence closure, request-to-binding relation | schema, profile graph | schema, profile graph | 300–400 |
@@ -262,6 +275,7 @@ core/v1/generations/<generation-id>/modules/stage_request.jq
 core/v1/generations/<generation-id>/modules/result_facts.jq
 core/v1/generations/<generation-id>/modules/result_truth.jq
 core/v1/generations/<generation-id>/core-ingress.sh
+core/v1/generation-registry.json
 ```
 
 Allowed jq imports are exact:
@@ -321,10 +335,12 @@ ranges, PR #183 migration ledger ownership, and PR #183 disposition. That parent
 plan creates no `ready` state and authorizes no new
 `ystack/impl/portable-core-contracts` work.
 
-The parent plan includes the exact R24 generation ID in all seven child issue drafts
-and verifies that its subtree does not already exist. After the plan merges, each
-child issue receives its own exact-title/body user-directed acceptance record and
-complete intent → spec-with-risk → high-risk plan → implementation chain. Child
+The parent plan includes the exact R24 generation ID in all seven child issue drafts,
+verifies it is absent from the append-only registry, and verifies its subtree does
+not already exist. For an upgrade it also records the current wrapper blob and
+selected generation. After the plan merges, each child issue receives its own
+exact-title/body user-directed acceptance record and complete intent → spec-with-risk
+→ high-risk plan → implementation chain. Child
 artifact and plan PRs track their child issue and may also track #155. Each child
 implementation closes its own issue. With respect to parent #155, the first six
 implementation PRs use `Tracks #155`; the assembly implementation uses
@@ -909,12 +925,26 @@ Each private child supplies:
 - exact-head jq 1.6 CI and an `owned rules: N/N` report with zero failures;
 - independent review that does not require re-certifying a different owner.
 
-The schema child establishes the pinned jq 1.6 private-package CI step. Each later
-child explicitly adds its own test command to that step; no wildcard discovery or
-ambient executable is allowed. Constitution-path updates remain operator-owned or
-arrive as `proposals/` for operator application. The first six keep the
-generation-aware pre-assembly guard green. Assembly alone advances the guard's
-selected generation under R23/R24 after full-package proof.
+The schema child establishes the pinned jq 1.6 private-package CI step, appends the
+exact R24 registry entry, and proves the prior registry is an unchanged prefix with
+unique generation IDs. Each later child verifies that exact entry and explicitly
+adds its own test command to the CI step; no wildcard discovery or ambient executable
+is allowed. Constitution-path updates remain operator-owned or arrive as
+`proposals/` for operator application. The first six keep the generation-aware
+pre-assembly guard green. Assembly alone advances the guard's selected generation
+under R23/R24 after full-package proof.
+
+Assembly uses two explicit proof boundaries. Its pre-switch head contains the new
+generation root, integration tests, CI, docs, and restore changes, but the stable
+wrapper is absent for first publication or still selects the old generation for an
+upgrade. CI and a read-only independent review prove the new generation through
+private assembly drivers and record that exact head. A later single-parent switch
+commit has that head as its parent and changes only `scripts/core-contract.sh`: it
+adds the wrapper for first publication or changes only the literal generation ID for
+an upgrade. CI and independent review then run through the public wrapper on the
+exact post-switch head/base. Only the post-switch evidence can create
+`merge-ready`; any other switch-commit path or diff returns to the assembly plan
+gate.
 
 The assembly child additionally proves:
 
