@@ -16,24 +16,36 @@ the team is improving the control plane itself.
 
 **Get started →** [QUICKSTART.md](QUICKSTART.md) · **Direction →** [ROADMAP.md](ROADMAP.md)
 
+## Current status
+
+- **Live today:** yshifu drives the GitHub issue/label loop in one Claude Code
+  session. The coder opens PRs, Codex reviews, CI runs, and the operator merges.
+- **Landed v2 foundation:** the hash-linked `work/<slug>/` chain runs by hand;
+  the no-merge guard is active, and the lane helpers are diagnostic only.
+- **Paused:** the event-driven stage workflows from draft PR #146 are not on
+  `main` and must not be described or restored as live.
+- **Next:** the portable core and adapter rollout in [`ROADMAP.md`](ROADMAP.md).
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
 within that session — spawning the coder and running the reviewer — so there is no
-separate human channel to the workers. Claude and Codex never talk directly;
-**the PR is the message bus.**
+separate human channel to the workers. The manager debate uses an issue thread; code
+review uses a PR thread.
 
 | Agent | Vendor | How it runs | Writes? |
 |-------|--------|-------------|---------|
 | **yshifu** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs; **never merges** (labels `merge-ready`, hands the PR to you) |
 | **Coder** | Claude | A subagent yshifu spawns with the issue/PR context — two modes: build (`routines/coder.md`) then fix (`routines/coder-revision.md`) | yes (branches, PRs) |
-| **Manager-reviewer** | Codex (OpenAI) | yshifu runs `scripts/manager-review.sh` at **plan altitude, before coding** — debates a proactive issue vs. the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
+| **Manager-reviewer** | Codex (OpenAI) | yshifu runs `scripts/manager-review.sh` at the **direction altitude** — debates whether a proactive issue serves the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
 | **Code-reviewer** | Codex (OpenAI) | yshifu runs `scripts/codex-review.sh` at **code altitude, after coding** — against the PR diff | **comments only / read-only** |
 
-## The loop
+## The current in-session loop
 
 The loop is **in-session**: yshifu drives every step from one Claude Code chat. There is
 exactly one coder launch per cleared issue, one review path, and one revision path.
+Here, “spec” means the current profile's GitHub issue spec, not the v2
+`work/<slug>/spec.md` artifact.
 
 ```
   one-liner → yshifu drafts spec → opens issue
@@ -143,7 +155,7 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   Codex's built-in review via `scripts/codex-review.sh` — compliant ordinary use, metered.
   Prototype on personal repos; apply terms diligence before any work/shared repo.
 
-> **Autonomous write is paused for re-planning.** The artifact spine is useful, but draft
+> **Event-driven autonomous write is paused for re-planning.** The artifact spine is useful, but draft
 > PR #146 bound the lane to one harness/forge and exposed missing credential, eval, and
 > reconciliation controls. It must not merge. The portable core and control foundation in
 > [`ROADMAP.md`](ROADMAP.md) come before any autonomous write is enabled.
@@ -255,11 +267,9 @@ NORTH_STAR.md              This repo's own target north star + done-signal + log
 RESTORE.md                 Disaster-recovery runbook: rebuild the team from this repo
 ```
 
-## Rollout
+## Direction
 
-- **Phase 1** — prove the in-session loop on one seeded target repo. Front gate held the
-  judgment; merge was manual while the loop earned trust.
-- **Phase 2** — live: the loop runs end to end in-session, and **you merge at the gate**.
+- **Today** — the loop runs end to end in-session, and **you merge at the gate**.
   yshifu labels a PR **`merge-ready`** when its current head is CI-green and the reviewer
   passed that same head, then hands the PR to you — naming the risk on high-risk work, and
   escalating `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal
@@ -269,5 +279,5 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
 - **Next** — migrate the current profile behind portable adapters, establish the
   control/eval/reconciliation foundation, then qualify and enable one bounded
   workflow scope at a time in each execution environment.
-  [`ROADMAP.md`](ROADMAP.md) is authoritative. **The merge gate does not widen** —
-  the operator merges in every phase.
+  [`ROADMAP.md`](ROADMAP.md) is authoritative. **The merge gate does not widen**:
+  the operator remains the only merge authority.
