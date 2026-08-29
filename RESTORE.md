@@ -29,7 +29,10 @@ Accounts and access you need before starting:
 - **GitHub access** to each target repo, plus the **`gh` CLI authenticated** locally
   (`gh auth status` should show you logged in) for labels and the loop's `gh` calls.
 - **`jq` on `PATH`** — the review/debate gates validate Codex's `--json` event stream with it,
-  and the merge helper parses GitHub check JSON with it.
+  and the merge helper parses GitHub check JSON with it. The portable core contract
+  validator (`scripts/core-contract.sh`, section 7 below) additionally requires **jq 1.6
+  exactly** — a different version is refused (`E_RUNTIME`), since a newer jq can format or
+  canonicalize JSON differently. This does not change the `jq` version used elsewhere.
 - **The personal config you must supply** (keep it parameterized — see the note above):
   - the **target repo name(s)**, e.g. `<owner>/<repo>` — the repo(s) the team works in.
     (ystack is its own target repo; add others as you adopt the team elsewhere.)
@@ -321,6 +324,27 @@ These are load-bearing — per the self-modification safety section of
   approved plan. `claimed` means a pickup is active or unresolved and, under the
   one-manager invariant, blocks another spawn. It is not a cross-manager mutex. yshifu
   never infers intake acceptance or self-accepts a plan.
+
+---
+
+## 7. Optional: verify the portable core contract validator
+
+`core/v1/contracts.jq` + `scripts/core-contract.sh` are a **manual, inactive**
+validator — nothing in the restored `/yshifu` command or any target profile calls
+them, so this step is optional and does not affect the restore path above.
+
+To confirm the restored copy still works:
+
+1. Install **jq 1.6 exactly** (not whatever version your OS ships — see
+   `scripts/test/core-contract.test.sh` for the pinned `jq-osx-amd64` asset and its
+   SHA-256, or use the matching official release for your platform). Put it first on
+   `PATH` for this check.
+2. Run `bash scripts/test/core-contract.test.sh`. It builds one small valid
+   document graph, runs it through `scripts/core-contract.sh`, and asserts at least
+   60 positive and mutation cases with zero failures — no Git, network, or `gh`
+   needed.
+3. If it fails, the validator itself is broken; nothing else in the restored team
+   depends on it, so this does not block the rest of the rebuild.
 
 ---
 
