@@ -135,15 +135,15 @@ authority, or perform an external write.
   Tests keep expected verdicts as literal data and never use product policy as their
   oracle. The parent plan freezes two inventories from PR #183 head
   `ab4a7082f02e67b5748c5c54b9214f37d222f53f`:
-  31 discrete review-finding rows from comments 5463604326, 5463851247,
-  5464015820, and 5464192510, plus the 279 assertion results emitted in execution
-  order by `scripts/test/core-contract.test.sh` at that head. Finding IDs are
+  34 discrete review-finding rows from comments 5463604326 (16), 5463851247 (9),
+  5464015820 (5), and 5464192510 (4), plus the 279 assertion results emitted in
+  execution order by `scripts/test/core-contract.test.sh` at that head. Finding IDs are
   `review-rN-fNN`; assertion IDs are `legacy-test-001` through `legacy-test-279`
   with their original output label. Repeated findings remain separate rows but may
   point to the same new owner/rule. Every finding maps to one owner and closing
   rule/test or a reasoned superseding rule. Every assertion maps to one owner;
   `ported` and `replaced-by` name exact new rule/test IDs, while
-  `invalid-old-positive` gives a reason. The required denominators are 31/31 and
+  `invalid-old-positive` gives a reason. The required denominators are 34/34 and
   279/279; neither count proves semantic completeness by itself.
 - **R21 — PR #183 is evidence, not implementation.** No child branches from, merges,
   or wholesale cherry-picks PR #183. Code and tests may move only after receiving one
@@ -973,7 +973,7 @@ The assembly child additionally proves:
   second incomplete/inactive generation never affects the selected one; an upgrade
   diff leaves the old generation untouched and changes the wrapper only after the
   new generation's complete assembly proof;
-- all 31 review-finding rows and all 279 legacy-assertion rows are accounted for; and
+- all 34 review-finding rows and all 279 legacy-assertion rows are accounted for; and
 - pinned jq 1.6 CI on the exact reviewed head.
 
 The final report uses semantic counters, not one undifferentiated assertion total:
@@ -982,13 +982,13 @@ The final report uses semantic counters, not one undifferentiated assertion tota
 owned rules: N/N
 command-to-rule cells: N/N
 forced routes: N/N
-review findings accounted for: 31/31
+review findings accounted for: 34/34
 legacy assertions accounted for: 279/279
 full-package cases: N/N
 failures: 0
 ```
 
-The 31 review rows and 279 assertion rows are migration evidence, not an oracle or
+The 34 review rows and 279 assertion rows are migration evidence, not an oracle or
 semantic acceptance target. Repeated findings remain visible even when several map
 to the same new rule. Code golf, generated long lines, copied registries, a second
 parser, system-jq drift, fewer negative cases, or product logic used as the test
