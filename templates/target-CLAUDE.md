@@ -28,9 +28,12 @@ rules it never saw.*
 - **One concern per PR.** A PR does exactly one thing.
 - Soft size budget **~300–400 net lines**. Past that, split into smaller issues
   rather than one big PR. (Tripwire, not a hard reject — a large mechanical rename
-  is fine.)
-- Every PR links its issue (`Closes #<n>`) and adds/updates tests where the repo
-  has them; CI must stay green.
+  is fine.) An accepted spec/plan may name one evidence-based, one-concern range;
+  it waives only this soft signal, never scope, readability, tests, CI, review, or
+  human merge. A target may keep a stricter rule.
+- Every PR links its intake issue. Pre-code intent/spec/plan PRs use
+  `Tracks #<n>`; only the implementation PR uses `Closes #<n>`. Add/update tests
+  where the repo has them; CI must stay green.
 - Conventional commit messages: `<convention, e.g. feat:/fix:/chore:>`
 
 ## Exceptional implementations and comments
@@ -105,9 +108,12 @@ CI-green bar, and the reviewer reruns to confirm a PR is mergeable.*
 *Why this matters: these are the gate the reviewer checks every PR against.*
 
 - **One concern per PR.** A PR does exactly one thing.
-- Soft size budget **~300–400 net lines**.
-- Every PR links its issue (`Closes #<n>`) and adds/updates Vitest specs next to
-  the code it changes; CI must stay green.
+- Soft size budget **~300–400 net lines**. An accepted spec/plan may name one
+  evidence-based, one-concern range; it waives only this soft signal. A target may
+  keep a stricter rule.
+- Every PR links its intake issue. Pre-code intent/spec/plan PRs use
+  `Tracks #<n>`; only the implementation PR uses `Closes #<n>`. Add/update
+  Vitest specs next to the code it changes; CI must stay green.
 - Conventional commit messages: `feat:` / `fix:` / `chore:` / `docs:` / `test:`.
 
 #### Conventions

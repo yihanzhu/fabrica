@@ -12,10 +12,11 @@ as an optional pre-flight); you don't have to run them yourself.
 ## 1. Labels (yshifu creates these on first use)
 The loop uses these labels as its state (each coder spawn is stateless):
 - `debating` — issue under manager-debate (yshifu + Codex); not yet approved
-- `ready` — cleared to run (your direct approval OR yshifu⇄Codex consensus toward an approved north star); yshifu's cue to spawn the coder
+- `ready` — cleared and unclaimed; yshifu must take a verified claim before coder spawn
+- `claimed` — active/unresolved pickup; crash guard under the hard one-manager-session invariant, not a cross-manager lock
 - `round-0`, `round-1`, `round-2`, `round-3` — review-loop counter
-- `needs-human` — escalation: round cap hit, ambiguous spec, oversized PR, or failure
-- `merge-ready` — current head passed Codex review; the PR is now waiting on **your** merge (yshifu never merges, and the label goes void the moment new commits land)
+- `needs-human` — resumable pause: plan refresh, round cap, ambiguous spec, size, or failure
+- `merge-ready` — exact current head and base passed Codex review; the PR waits on **your** merge (yshifu never merges, and either moving voids the label)
 
 **yshifu creates/reconciles these automatically** on its first-loop-action bootstrap, so you
 normally don't touch this. If you want to bootstrap or reconcile the labels by hand
@@ -41,7 +42,7 @@ and exits non-zero if anything is missing or differs (zero if all match).
 ## 2. Branch protection (main)
 The supported protection shape is **required status checks** — that is the gate
 `scripts/merge-pr.sh` reads and enforces when **you** run it. (No agent merges here:
-yshifu labels a reviewed-clean head `merge-ready` and hands you the PR; `merge-pr.sh` is
+yshifu labels a reviewed-clean head/base `merge-ready` and hands you the PR; `merge-pr.sh` is
 yours, and yshifu never runs it.)
 - ✅ Require status checks to pass before merging (your CI) — the **hard gate**. Mark your
   CI contexts (lint/test/build) as **required**; `merge-pr.sh` discovers the required checks

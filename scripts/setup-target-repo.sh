@@ -99,13 +99,14 @@ fi
 # Each entry: name|color|description (color is a 6-hex code, no leading '#').
 labels=(
   "debating|fbca04|Issue under manager-debate; not yet approved"
-  "ready|0e8a16|Cleared to run (user approval OR consensus); yshifu's cue to spawn the coder"
+  "ready|0e8a16|Cleared and unclaimed; manager must claim before coder spawn"
+  "claimed|1d76db|Active/unresolved pickup; crash guard under one-manager invariant"
   "round-0|c5def5|Review-loop counter: initial PR"
   "round-1|7fb3e0|Review-loop counter: revision 1"
   "round-2|4a90d9|Review-loop counter: revision 2"
   "round-3|1f6fc0|Review-loop counter: revision 3 (cap)"
-  "needs-human|d93f0b|Escalation: round cap hit, ambiguous spec, oversized PR, or failure"
-  "merge-ready|5319e7|This head passed review; waiting on YOUR merge (no agent merges; void once new commits land)"
+  "needs-human|d93f0b|Escalation: plan refresh, round cap, ambiguous spec, size, or failure"
+  "merge-ready|5319e7|Exact reviewed head+base passed; YOUR merge; void if either moves"
   "stale|e4a11b|v2 chain: artifact built from an outdated upstream (frontmatter hash mismatch); do not act on it"
 )
 
@@ -230,7 +231,7 @@ Manual follow-ups this script can't do (see templates/repo-setup.md):
      with yshifu once you run /yshifu (this unlocks proactive autonomous mode). Approve it to yshifu
      in-session, not by editing the file — the shipped approval note is the prior owner's history,
      not a token that approves the goal for you. Until it's set + committed + approved, yshifu acts
-     only on issues you direct (your one-liner -> yshifu drafts the spec -> you approve that drafted
-     spec -> ready). (ystack-self is its own target: running against the control-plane repo uses
+     only on issues you direct (one-liner -> approved intake -> G1 intent -> G2 spec -> risk ->
+     plan gate -> ready -> claimed -> coder). (ystack-self is its own target: running against the control-plane repo uses
      its root NORTH_STAR.md instead.)
 EOF

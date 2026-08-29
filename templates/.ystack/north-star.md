@@ -29,12 +29,13 @@ placeholder and FAILs the gate (it will not debate against a template), and `doc
 Keep the marker on the shipped entry until you replace it.
 
 **Approval gates proactive autonomy.** The active north star is your authorization for proactive
-work: yshifu may consensus-gate and self-apply the `ready` label to a proactive issue **only when
-you have explicitly approved the *active* north star** (approve it *to yshifu in-session* — an
+work: yshifu may consensus-gate a proactive issue's intake **only when you have explicitly
+approved the *active* north star** (approve it *to yshifu in-session* — an
 in-file note is the prior owner's history, not your go). Until you set + commit + approve it,
-yshifu will not auto-pursue — it asks you to set and approve the north star first. (User-directed
-issues are unaffected — your approval of the spec yshifu drafts from your one-liner is its own
-gate.)
+yshifu will not auto-pursue — it asks you to set and approve the north star first. Consensus
+does not apply `ready`: new normal work still needs its durable intake record, merged G1 intent,
+merged G2 spec-with-risk, and applicable plan gate. (User-directed issues are unaffected —
+your approval of the concrete intake draft is their own intake gate.)
 
 ---
 
