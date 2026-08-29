@@ -101,6 +101,6 @@ Next steps:
      — so adoption is 'cd repo -> /yshifu -> go'. Then, in that session, explicitly approve
      your north star to yshifu — this is the root authorization that unlocks proactive
      autonomous mode (approve it with yshifu, not by editing the file). Until it's set +
-     approved, yshifu acts only on issues you direct (your one-liner -> yshifu drafts the spec
-     -> you approve that drafted spec -> ready).
+     approved, yshifu acts only on issues you direct (one-liner -> approved intake -> G1 intent
+     -> G2 spec-with-risk -> plan gate -> ready -> claimed -> coder).
 EOF

@@ -71,10 +71,18 @@ authority, or perform an external write.
   shapes, registries, manifest/profile/resolution relations, and
   request/result/status/evidence rules. It never resolves physical repositories,
   launches a process, reads a raw fixture, or evaluates policy.
-- **R14 — credible delivery bound.** One jq source, one shell front door,
-  table-driven tests, docs, restore entries, and operator-owned CI wiring must fit
-  400 normally formatted net lines. If the plan cannot prove that, return to G2;
-  no code-golf or size exception is accepted.
+- **R14 — reviewable, evidence-backed delivery.** The plan estimates normally
+  formatted size and names cohesive review units for one jq source, one shell front
+  door, table-driven tests, docs, restore entries, and operator-owned CI wiring. Line
+  count is a reviewability signal, not a pass/fail gate. Complete behavior, complete
+  tests, CI, independent review, and the safety boundaries remain hard requirements.
+  Implementation remains one reviewable concern on the deterministic
+  `ystack/impl/portable-core-contracts` branch and PR. The operator accepts the
+  current estimate as an explicit exception to the repository's soft review-size
+  guide; line count alone does not require a split. The plan groups the one PR into
+  clear commits and review sections. Any actual concern or scope expansion returns
+  to the artifact gate. Nothing public or live activates before the full contract
+  and integration proof are accepted.
 - **R15 — no live change.** This work does not activate a profile, extract a real
   adapter, regenerate `/yshifu`, alter an open session, or enable autonomous writes.
   The operator remains the only merge authority.
@@ -543,25 +551,25 @@ model/tool availability, evidence replay/passing-role rules, source/base and oth
 stale selectors, generic escapes, and all three commands. They do not read Git,
 launch a process, or use a network.
 
-Implementation budget:
+Planning estimate from the first implementation preflight:
 
-| `contracts.jq` area | Lines |
+| Area | Normal-format working range |
 |---|---:|
-| canonical/limit/exact-object helpers | 35 |
-| primitive/ref/document shapes | 65 |
-| capability/permission/profile relations | 45 |
-| request/result/status/evidence relations | 60 |
-| **jq subtotal** | **205** |
+| `contracts.jq` | 380–755 |
+| shell wrapper | 50–110 |
+| readable fixtures and adversarial tests | 240–330 |
+| docs, restore manifest, and CI wiring | 30–60 |
+| **Likely total** | **about 800–1,100** |
 
-| Other area | Lines |
-|---|---:|
-| shell wrapper | 30 |
-| table-driven tests and tiny fixtures | 135 |
-| README, restore manifest, CI wiring | 30 |
-| **Total** | **400** |
-
-The plan rejects code golf, long generated lines, copied registries, or a second
-parser. If ordinary formatting exceeds 400 lines, return to G2.
+These numbers guide plan review; they do not waive or reject work. The plan explains
+large differences from the range and chooses review units by responsibility, not by
+an arbitrary line target. Code golf, generated long lines, copied registries, a
+second parser, system-jq drift, reused production logic as the test oracle, or reduced
+negative coverage are never valid ways to appear smaller. This one-concern contract
+keeps one implementation PR despite the estimate; commits and review passes separate
+responsibilities without creating partial product releases. A newly discovered
+concern or scope change returns to the artifact gate, and no plan may invent extra
+implementation PRs for this intent.
 
 ### Downstream handoffs and intent questions
 
@@ -618,8 +626,10 @@ before any publisher can run.
    and human-gate boundaries before real use.
 4. **Forge 2×2 is unresolved by design.** The existing adapter-test intent must wait
    or be separately rescoped; producer-only proof cannot be called its accepted 2×2.
-5. **No implementation exception is accepted.** Strict parsing and the 400-line
-   bound cannot be met with a workaround; return to the artifact gate.
+5. **Size never trades away proof.** The estimate may move, but strict parsing,
+   complete relations, readable code, adversarial tests, CI, and review do not. A
+   materially different concern or scope returns to the artifact gate. The accepted
+   review-size exception changes no safety or proof requirement.
 6. **CI is a constitution path.** Operator-driven work may edit it; unattended work
    must use `proposals/` and wait for application.
 7. **This is user-directed high-risk design.** G2 accepts only this spec, not a plan,

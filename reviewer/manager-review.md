@@ -96,45 +96,61 @@ yshifu runs manager-review.sh <issue#>   (by absolute path, from the target repo
         ↓
 yshifu reads the Codex comment and forms its own view
         ├── CONSENSUS to proceed (yshifu agrees AND Codex says PROCEED)
-        │      → remove `debating`, apply `ready`, and run the loop — NO per-issue
-        │        user approval (the consensus IS the gate for proactive north-star
-        │        work; the user gates the direction, not each issue)
+        │      → remove `debating`; record exact-revision proactive intake acceptance
+        │        — NO per-issue user approval (consensus clears intake only)
+        │      → merge G1 intent → merge G2 spec-with-risk → applicable plan gate
+        │      → only then apply `ready` and run the implementation loop
         ├── REFINE → yshifu edits the issue + posts a reply comment (issue-as-bus)
         │      + re-runs manager-review.sh   ← this is a ROUND; cap ~2 rounds
         │      ↺ repeat
         └── DROP / no consensus by the cap → close the issue with a rationale comment
 ```
 
+Each verdict comment carries `Intake-title-sha256: <64-hex>` and
+`Intake-body-sha256: <64-hex>`. The harness hashes the exact non-null UTF-8 title and
+body from the forge API, with no added newline or normalization, before and after Codex
+runs. If either moved, no verdict is posted. Proactive intake acceptance must cite a
+passed verdict whose markers match both digests it accepts.
+For a resumed session, select the newest comment by the current `gh` operator with
+exactly one manager-reviewer clean header and one matching anchored marker for each
+digest before filtering by verdict.
+Then require exactly one anchored `VERDICT: PROCEED`. A newer REFINE/DROP/malformed
+comment blocks every older go; bare, cross-author, mixed, zero/multiple-verdict, or
+duplicate-marker evidence never clears intake.
+
 Rounds are capped at **~2**: a proposal that can't reach consensus in two passes is
 dropped, not debated forever. The `debating` label marks an issue that is mid-debate (not
-yet approved); it is removed when the issue advances to `ready` or is closed.
+yet accepted); it is removed when consensus advances the issue to the artifact chain or
+the issue is closed.
 
 ## Consensus / veto-only (the rule)
 
 - **Step 0 — the operator must have explicitly approved the active north star.** Before yshifu
-  drafts a proactive issue, runs this manager-debate, or applies `ready` on consensus, yshifu must
+  drafts a proactive issue or runs this manager-debate, yshifu must
   confirm *from the operator* that they have explicitly approved the target's active north star —
   the target repo's committed **`.ystack/north-star.md`** (ystack-self uses its root
   [`NORTH_STAR.md`](../NORTH_STAR.md); see [north star](#north-star) above). yshifu knows this
   **from the operator, not from a line in the file** — a fresh adopter clone showing the shipped
   ystack default (or any `approved-by-user`-style text) is the prior owner's history, **not** this
   operator's go. If the north star is **unset, not committed, not yet approved by this operator, or
-  still the shipped ystack default**, yshifu does **not** start this gate or self-apply `ready` — it
+  still the shipped ystack default**, yshifu does **not** start this gate — it
   asks the operator to set, commit, and approve their own north star first (that approval is the
   root authorization that unlocks all proactive work). This is the same step-0 guard the manager
   prompt (`manager/CLAUDE.md`) and the generated `/yshifu` command (`templates/yshifu-command.md`)
   carry — the consensus gate below is legitimate *only* under an operator-approved north star.
-- **Consensus IS the gate (proactive issues).** For a proactive issue *under an operator-approved
+- **Consensus IS the intake gate (proactive issues).** For a proactive issue *under an operator-approved
   north star* (see step 0 above), the manager-debate
-  is not just a recommendation — it is the **front gate**. On consensus (both yshifu and Codex
-  agree the issue is worth building) yshifu removes `debating`, **applies `ready` itself, and
-  runs the loop — with no per-issue user approval.** This does **not** make yshifu a
-  self-approver: **yshifu acting alone still never applies `ready`** — it takes the *passed*
-  cross-vendor debate (yshifu's agreement **and** Codex PROCEED). The user's gate moved up an
+  is not just a recommendation — it is the **intake gate**. On consensus (both yshifu and Codex
+  agree the issue is worth pursuing) yshifu removes `debating` and records the accepted
+  exact issue revision, with no per-issue user approval. It does **not** apply `ready` yet:
+  new normal work must still pass G1 intent, G2 spec-with-risk, and its plan gate.
+  This does **not** make yshifu a self-approver: yshifu acting alone cannot record proactive
+  intake acceptance — it takes the *passed* cross-vendor debate (yshifu's agreement **and**
+  Codex PROCEED). The user's gate moved up an
   altitude — the user approves the **north star** and is involved at **north-star achieved**,
   **goal drift / transition**, and `needs-human`; *within* an approved north star, the
-  cross-vendor consensus gates proactive work. (**User-directed issues keep the direct gate** —
-  the user's approval of the spec yshifu drafts from their one-liner is the judgment (the
+  cross-vendor consensus gates proactive intake. (**User-directed issues keep the direct gate** —
+  the user's approval of the concrete intake draft is the judgment (the
   one-liner is the request, not the go); this consensus gate is only for the issues yshifu
   raises on its own.)
 - **The manager-reviewer is VETO-ONLY.** It never merges, approves, labels `ready`, or
@@ -152,14 +168,15 @@ yet approved); it is removed when the issue advances to `ready` or is closed.
   a silent shredder.
 
 > **Front gate at the north-star altitude (#49).** Per the user-authorized front-gate
-> change in **#49**, the manager-debate consensus **is** the gate for proactive issues: on
-> consensus yshifu removes `debating`, applies `ready`, and runs the loop — **no per-issue
-> user approval.** The user's gate moved up an altitude: the user approves the **north star /
+> change in **#49**, the manager-debate consensus **is** the intake gate for proactive issues:
+> on consensus yshifu removes `debating` and records exact-revision intake acceptance —
+> **no per-issue user approval.** G1, G2-with-risk, and the plan gate still precede `ready`.
+> The user's gate moved up an altitude: the user approves the **north star /
 > direction** and is involved at **north-star achieved**, **goal drift / transition**, and
-> `needs-human` escalations; *proactive* work inside an approved north star is yshifu's to drive on consensus (user-directed issues still need the user's approval of the drafted spec).
-> This is not self-approval — **yshifu acting alone still never applies `ready`**; it takes the
+> `needs-human` escalations; *proactive* work inside an approved north star is yshifu's to drive on consensus (user-directed issues still need the user's approval of the drafted intake).
+> This is not self-approval — **yshifu acting alone still never accepts proactive intake**; it takes the
 > passed cross-vendor debate (yshifu's agreement **and** Codex PROCEED). **User-directed issues
-> keep the direct gate** (the user's approval of the spec yshifu drafts from their one-liner —
+> keep the direct gate** (the user's approval of the intake yshifu drafts from their one-liner —
 > the one-liner is the request, not the go).
 
 ## How the manager-reviewer actually runs

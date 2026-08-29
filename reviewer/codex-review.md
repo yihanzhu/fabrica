@@ -81,14 +81,14 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
 3. Posts Codex's review to the PR **verbatim**: `gh pr comment <PR#> --body-file <tmpfile>`,
    prefixed only with a short header marking it the Codex cross-vendor reviewer. That header
    also stamps the exact head SHA Codex reviewed as a parseable marker line —
-   **`Reviewed-head: <full-sha>`** — so a later actor can bind a merge to the precise commit
-   this review covered (and refuse if the head has since moved), plus a
+   **`Reviewed-head: <full-sha>`** and **`Reviewed-base: <full-sha>`** — so a later actor
+   can bind a merge to the precise diff this review covered (and refuse if either moved), plus a
    **`reviewer: <model> @ <effort>`** line recording the RESOLVED config that gated this review
    (see **model policy** below). The marker and reviewer lines are part of
    yshifu's header prefix, clearly separate from Codex's verbatim body, so the review stays
-   read-only / comments-only / verbatim. The markers tie the review to one exact commit, and
-   two readers use them. yshifu checks them before it applies `merge-ready` and hands the PR to
-   the operator — a head that has moved since the review voids the label. And
+   read-only / comments-only / verbatim. The markers tie the review to one exact head/base
+   diff, and two readers use them. yshifu checks both before it applies `merge-ready` and
+   hands the PR to the operator — either moving since review voids the label. And
    [`scripts/merge-pr.sh`](../scripts/merge-pr.sh) — the **operator's own** merge helper, which
    no agent runs — reads the same `Reviewed-head`/`Reviewed-base` markers, confirms the PR's
    current head still equals it and that CI is green, then squash-merges pinned to that SHA
@@ -245,17 +245,23 @@ degraded run — codex may not have inspected the diff at all. So a DEGRADED com
 Today the loop is **synchronous** — it runs while a yshifu session is driving it:
 
 ```
-yshifu spawns coder subagent  →  coder opens PR (label round-0)
+yshifu takes build claim on intake, clears ready, spawns coder → PR (round-0)
+        ↓
+yshifu verifies exact PR + one round-0, clears/verifies intake `claimed`
+        ↓
+yshifu requires parent `ready|claimed|needs-human` absent and PR `claimed|needs-human` absent
+        ↓
+yshifu removes `merge-ready` if present and verifies it absent
         ↓
 yshifu runs codex-review.sh <PR#>  (by absolute path, from the target repo's clone)
    (script posts Codex's verdict to the PR, verbatim)
         ↓
 yshifu reads the Codex comment
-        ├── pass      →  yshifu labels the PR `merge-ready` (CI green + this exact head
-        │                passed) and hands it to the operator, who merges
-        └── not pass  →  yshifu spawns coder (fix mode) to address comments
+        ├── pass      →  yshifu labels the PR `merge-ready` (CI green + this exact
+        │                head/base passed) and hands it to the operator, who merges
+        └── not pass  →  yshifu claims exact PR and spawns coder (fix mode)
                               ↓
-                         yshifu re-runs codex-review.sh   (bump round-N)
+                         verify push + higher round, clear PR claim, re-review
                               ↺  repeat
                               └── ~3-round cap → SCOPE DOWN + FOLLOW-UP (productive):
                                     land the converged core (one scoped-down change →
@@ -265,9 +271,19 @@ yshifu reads the Codex comment
                                     standoff / safety-rail / north-star
 ```
 
+This pre-review clear is unconditional, not only for a moved head/base. A same-diff
+re-review can return not-pass; an older `merge-ready` label must not survive and make
+status report a stale pass. Failure to verify the label absent stops before review.
+An open PR with exactly one round label, no claim/pause/merge-ready on the PR, and
+parent-intake `ready|claimed|needs-human` absent
+is a resumable review-loop handoff. No current authenticated review means run one; a
+complete current pass resumes ordinary head/base+CI relabel/handoff or a gate-creating
+bootstrap's human-only no-label handoff, while not-pass resumes diagnosis + fix claim. A
+missing/duplicate round is a paused failure.
+
 yshifu, not the reviewer, drives each step; Claude and Codex never talk directly — the
 **PR is the message bus**. Rounds + escalation live in the **labels**
-(`round-0..3`, `merge-ready`, `needs-human`), not in any agent's memory. **No agent merges** —
+(`claimed`, `round-0..3`, `merge-ready`, `needs-human`), not in any agent's memory. **No agent merges** —
 the loop ends at the handoff, and the operator merges.
 
 ## Future / alternatives (not wired)

@@ -1,8 +1,8 @@
 # ystack
 
 A small autonomous coding team. **yshifu** (the manager) runs the shop in a Claude Code
-session: you approve specs, and yshifu spawns a Claude coder subagent to build and runs a
-Codex reviewer to review.
+session: you approve the direction, user-directed intake, and every merge; yshifu spawns
+a Claude coder subagent to build and runs a Codex reviewer to review.
 
 Claude Code + Codex + GitHub are the **current default profile**, not product
 requirements. The portable target architecture and rollout live in
@@ -27,8 +27,15 @@ separate human channel to the workers. Claude and Codex never talk directly;
 |-------|--------|-------------|---------|
 | **yshifu** (manager) | Claude | You talk to it in a Claude Code chat (`manager/CLAUDE.md`) | issues only; never authors code/PRs; **never merges** (labels `merge-ready`, hands the PR to you) |
 | **Coder** | Claude | A subagent yshifu spawns with the issue/PR context — two modes: build (`routines/coder.md`) then fix (`routines/coder-revision.md`) | yes (branches, PRs) |
-| **Manager-reviewer** | Codex (OpenAI) | yshifu runs `scripts/manager-review.sh` at **plan altitude, before coding** — debates a proactive issue vs. the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
+| **Manager-reviewer** | Codex (OpenAI) | yshifu runs `scripts/manager-review.sh` at **direction/intake altitude** — debates a proactive issue vs. the north star → PROCEED/REFINE/DROP | **veto only / read-only** (never labels or merges) |
 | **Code-reviewer** | Codex (OpenAI) | yshifu runs `scripts/codex-review.sh` at **code altitude, after coding** — against the PR diff | **comments only / read-only** |
+
+Intent/spec/plan authors are temporary stage tasks that reuse the author responsibility;
+they are not new durable roles, and yshifu does not author or accept their work. The
+routine plan check is a temporary read-only instance of the reviewer responsibility: it
+reads the exact pushed head and returns raw evidence with no writes. Yshifu reads the full
+verdict and posts it verbatim with the exact tuple. Until a portable harness wires these
+stages, yshifu coordinates them manually and keeps author and reviewer separate.
 
 ## The loop
 
@@ -36,18 +43,25 @@ The loop is **in-session**: yshifu drives every step from one Claude Code chat. 
 exactly one coder launch per cleared issue, one review path, and one revision path.
 
 ```
-  one-liner → yshifu drafts spec → opens issue
+  one-liner → yshifu drafts an intake issue
                                        │
-        gate (front gate = at the north-star altitude):
-          • user-directed issue → your one-liner is the request → yshifu drafts
-              the spec → YOU approve that drafted spec → yshifu labels it `ready`
-              (drafting alone never earns `ready`)
-          • proactive issue → yshifu⇄Codex manager-debate CONSENSUS
-              → yshifu removes `debating`, labels it `ready` (no per-issue ask)
-          (yshifu alone never self-approves; the consensus IS the gate
-           for proactive north-star work — see manager-review.md)
+        intake gate:
+          • user-directed → YOU approve the concrete intake draft
+          • proactive → yshifu⇄Codex manager-debate CONSENSUS under a north star
+              YOU already approved (no per-issue ask)
+          (yshifu alone never self-approves; see manager-review.md)
                                        ↓
-              yshifu spawns [Coder] subagent  → opens PR (label round-0)
+              G1 intent PR → independent review → YOU merge
+                                       ↓
+              G2 spec-with-risk PR → independent review → YOU merge
+                  • high → plan-only PR → independent review + CI → YOU merge
+                  • routine → push plan-first implementation head → a different
+                      reviewer records the exact head/blobs on the intake issue
+                                       ↓
+              yshifu applies `ready` (all earlier gates passed)
+                                       ↓
+              yshifu takes a durable `claimed` pickup, clears `ready`, and spawns
+              [Coder] subagent  → opens PR (label round-0)
                                        ↓
               yshifu runs scripts/codex-review.sh  → Codex posts comments only
                                        ↓
@@ -62,9 +76,9 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
                                  genuine standoff / safety-rail / north-star →
                                  label `needs-human` → pings YOU
                                        ↓
-              CI green + Codex clean at that head → yshifu labels the PR `merge-ready`
+              CI green + Codex clean at that head/base → yshifu labels the PR `merge-ready`
                  and hands it to YOU → YOU merge (yshifu never merges; a status scan
-                 or brief only reports). New commits void `merge-ready` — re-review first.
+                 or brief only reports). A moved head or base voids `merge-ready` — re-review first.
                  (high-risk / escalations / rail changes / north-star → named at handoff)
 ```
 
@@ -84,32 +98,33 @@ exactly one coder launch per cleared issue, one review path, and one revision pa
   own target) — and yshifu pursues it
   autonomously — you stop reading diffs line by line (you still merge every PR, but on the
   strength of `merge-ready`), and for **proactive** work you stop approving each issue.
-  Two paths clear an issue to run: a **user-directed** issue where your one-liner is the
-  *request* — yshifu drafts the spec, **you still approve that drafted spec**, and *that approval*
-  is the gate yshifu records with `ready` (drafting alone does not earn `ready`; user-directed
-  issues are *not* exempt from per-spec approval);
-  a **proactive** issue on **yshifu⇄Codex manager-debate consensus** — on consensus yshifu
-  removes `debating` and applies `ready` itself, no per-issue ask (this is the only path with no
-  per-issue approval, and it is conditional on your having explicitly approved the active north
-  star). **yshifu acting alone never self-approves**; for proactive north-star work the
-  cross-vendor consensus *is* the gate (see
-  [`reviewer/manager-review.md`](reviewer/manager-review.md)). For *proactive* work you are
-  pulled back in only at the north-star altitude: **north-star achieved**, **goal drift /
-  transition**, and `needs-human` escalations — user-directed issues still come to you for the
-  drafted-spec approval. The accepted roadmap adds a risk-tiered plan gate after intake:
-  high-risk proactive or user-directed work will return to you for plan approval before
-  code. That gate is not wired into the current manager yet; `ready` must not be described
-  as plan approval.
+  Two paths clear intake. For a **user-directed** issue, your one-liner is the
+  *request*: yshifu drafts the intake issue and **you approve that concrete draft**.
+  For a **proactive** issue, **yshifu⇄Codex manager-debate consensus** clears intake
+  without a per-issue ask, but only under an active north star you explicitly approved
+  (see [`reviewer/manager-review.md`](reviewer/manager-review.md)). **yshifu acting
+  alone never self-approves.** Neither intake path earns `ready` by itself.
+  New normal work then follows one pipeline: operator-merged G1 `intent.md` →
+  operator-merged G2 `spec.md` with accepted `risk: high|routine` → the applicable
+  manual plan gate → `ready` → `claimed` pickup → implementation. High risk uses an independently
+  reviewed, operator-merged plan-only PR before code. Routine work pushes `plan.md`
+  as the first implementation-branch commit; a different reviewer records the exact
+  remote head and blobs on the intake issue before code. For *proactive* work you are
+  otherwise pulled back in only at the north-star altitude: **north-star achieved**,
+  **goal drift / transition**, and `needs-human` escalations. You still merge every
+  artifact, plan, and implementation PR.
 - **CI is the hard gate** — ground truth. Autonomy rests on tests first, diverse
   reviewer second.
 - **yshifu never merges — it labels, then hands you the PR.** Merging is the operator's,
   always. `main`'s branch ruleset requires a pull request plus **one approving review**, the
   Codex reviewer is **comments-only and never approves**, and **no agent has a bypass** — so
   there is no agent merge path at all. What yshifu does instead: when a PR's **current head**
-  is CI-green **and** the reviewer passed **that same head**, yshifu applies **`merge-ready`** —
-  a label that means only *"this head passed Codex review"* — and hands the PR to you, naming
-  anything you should weigh. **You merge.** `merge-ready` is **void the moment new commits
-  land**: GitHub keeps the label across a head change, so yshifu clears it, re-runs
+  is CI-green **and** an authenticated review passed **that exact head and base**—re-queried
+  immediately before labeling—yshifu applies
+  **`merge-ready`** — a label that means only *"this head/base passed Codex review"* — and
+  hands the PR to you, naming anything you should weigh. **You merge.** `merge-ready` is
+  **void the moment the head or base moves**: GitHub keeps the label across those changes,
+  so yshifu clears it, re-runs
   `codex-review.sh` on the new head, and re-applies it only on a fresh pass — a stale label is a
   false green. A later **status/Tracking scan and the brief only surface `merge-ready` PRs
   (read-only)** — they never merge either. High-risk PRs are handed over **with the risk named**
@@ -261,7 +276,7 @@ RESTORE.md                 Disaster-recovery runbook: rebuild the team from this
   judgment; merge was manual while the loop earned trust.
 - **Phase 2** — live: the loop runs end to end in-session, and **you merge at the gate**.
   yshifu labels a PR **`merge-ready`** when its current head is CI-green and the reviewer
-  passed that same head, then hands the PR to you — naming the risk on high-risk work, and
+  passed that exact head/base, then hands the PR to you — naming the risk on high-risk work, and
   escalating `needs-human`/round-cap, safety-rail changes, and north-star milestones / goal
   drift. Both the **brief** and a **status / Tracking pass** are **read-only — they surface
   `merge-ready` PRs, they never merge**. No agent merges: `main` needs a pull request plus an
