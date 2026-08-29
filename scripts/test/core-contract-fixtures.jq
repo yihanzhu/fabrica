@@ -61,10 +61,23 @@ def profile_body(manifest_shas):
      binding("publisher"; "b-publisher"; "7" * 64; manifest_shas.publisher)] | sort_by(.binding_id))};
 def profile_doc(manifest_shas): envelope("profile"; "profile-1"; profile_body(manifest_shas));
 
+# manifest_object_id(role): each role's manifest.json is a genuinely different
+# blob (different offered_roles/capabilities), so its resolved manifest_source
+# must claim a distinct git object identity, not the same one for every role —
+# one exact Git object gets only one format/digest claim (core/v1/contracts.jq's
+# source_claims_agree), and four different real digests against one shared fake
+# object id would itself be the violation this fixture is meant to be free of.
+def manifest_object_id(role):
+  (if role == "producer" then "80"
+   elif role == "verifier" then "81"
+   elif role == "reviewer" then "82"
+   elif role == "publisher" then "83"
+   else "8f" end) * 20;
+
 def resolved_binding_for(b; manifest_shas):
   {binding: b,
    adapter_implementation: {id: ("manifest-" + b.role), version: "v1"},
-   manifest_source: {source: blobref("manifest.json"; "8" * 40), value_format: "canonical-json", value_sha256: manifest_shas[b.role]},
+   manifest_source: {source: blobref("manifest.json"; manifest_object_id(b.role)), value_format: "canonical-json", value_sha256: manifest_shas[b.role]},
    package_source: {source: b.package_ref, value_format: "raw-bytes", value_sha256: ("9" * 64)},
    config_source: {state: "absent"}, prompt_source: {state: "absent"},
    skill_sources: [], tool_sources: []};

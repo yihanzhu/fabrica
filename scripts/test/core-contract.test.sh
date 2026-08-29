@@ -200,6 +200,16 @@ python3 -c "
 print('{\"a\":\"' + ('y' * 8193) + '\"}')
 " > "$tmpdir/rb-toolongstring.json"
 assert_fail "(c) decoded string 8,193 bytes (one over the 8,192 limit)" "E_LIMIT" validate-document "$tmpdir/rb-toolongstring.json"
+# The recursive limit walker must also count object keys, not only values, or an
+# oversized key escapes E_LIMIT and surfaces later as E_SHAPE instead.
+python3 -c "
+print('{\"' + ('k' * 8193) + '\":1}')
+" > "$tmpdir/rb-toolongkey.json"
+assert_fail "(c) decoded object key 8,193 bytes (one over the 8,192 limit)" "E_LIMIT" validate-document "$tmpdir/rb-toolongkey.json"
+python3 -c "
+print('{\"' + ('k' * 8192) + '\":1}')
+" > "$tmpdir/rb-keyatlimit.json"
+assert_fail "(c) 8,192-byte object key is at the limit, not over it (shape failure, not E_LIMIT)" "E_SHAPE" validate-document "$tmpdir/rb-keyatlimit.json"
 printf '{"a":1.5}\n' > "$tmpdir/rb-float.json"
 assert_fail "(c) float value" "E_LIMIT" validate-document "$tmpdir/rb-float.json"
 printf '{"a":-1}\n' > "$tmpdir/rb-negative.json"
@@ -252,6 +262,13 @@ mutate "$tmpdir/profile.json" '.body.bindings[0].binding_id = .body.bindings[1].
 assert_fail "(e) duplicate binding_id" "E_SHAPE" validate-document "$tmpdir/p-e8.json"
 mutate "$tmpdir/profile.json" '.body.bindings |= reverse' "$tmpdir/p-e9.json"
 assert_fail "(e) bindings not in canonical binding_id-sorted order" "E_SHAPE" validate-document "$tmpdir/p-e9.json"
+# Model backing is permitted only for producer and reviewer; every other (dormant)
+# role must stay deterministic.
+model_bits='.execution_kind="model" | .model_request={provider_id:"prov-1",model_id:"model-1",effort_id:"effort-1"} | .prompt_ref={revision:{repository_id:"repo-a",hash_algorithm:"sha1",commit_id:("a"*40)},location:{kind:"path",value:"prompt.json"},object_type:"blob",object_id:("c"*40),mode:"100644"}'
+mutate "$tmpdir/profile.json" ".body.bindings |= map(if .role==\"producer\" then ($model_bits | .requested_permissions=([\"core.perm.target.read.v1\",\"core.perm.scratch.write.v1\",\"core.perm.evidence.write.v1\",\"core.perm.model.invoke.v1\"]|sort)) else . end)" "$tmpdir/p-e10.json"
+assert_ok "(e) producer allowed to use model execution" validate-document "$tmpdir/p-e10.json"
+mutate "$tmpdir/profile.json" ".body.bindings |= map(if .role==\"publisher\" then ($model_bits) else . end)" "$tmpdir/p-e11.json"
+assert_fail "(e) dormant role (publisher) forced to model execution" "E_SHAPE" validate-document "$tmpdir/p-e11.json"
 
 echo "== (f) resolved_profile shape (validate-document) =="
 mutate "$tmpdir/resolved_profile.json" 'del(.body.selection_ref)' "$tmpdir/rp-f1.json"
@@ -294,6 +311,15 @@ assert_fail "(g) requested_at with out-of-range month/day/time components" "E_SH
 # itself can catch, so it is the mutation that actually exercises that fix.
 mutate "$tmpdir/request.json" '.body.inputs[0].value = {type:"document", value:{schema_version:1,kind:"not-a-document-kind",id:"x",sha256:("0"*64)}}' "$tmpdir/r-g12.json"
 assert_fail "(g) named input document ref with an unknown document kind" "E_SHAPE" validate-document "$tmpdir/r-g12.json"
+# is_time must validate the calendar, not just per-field ranges: a well-formed-looking
+# non-existent date (Feb 31; Feb 29 in a non-leap year) must still fail, while a real
+# leap day must still pass.
+mutate "$tmpdir/request.json" '.body.requested_at = "2026-02-31T00:00:00Z"' "$tmpdir/r-g13.json"
+assert_fail "(g) requested_at names a day the month does not have" "E_SHAPE" validate-document "$tmpdir/r-g13.json"
+mutate "$tmpdir/request.json" '.body.requested_at = "2025-02-29T00:00:00Z"' "$tmpdir/r-g14.json"
+assert_fail "(g) requested_at names Feb 29 in a non-leap year" "E_SHAPE" validate-document "$tmpdir/r-g14.json"
+mutate "$tmpdir/request.json" '.body.requested_at = "2024-02-29T00:00:00Z"' "$tmpdir/r-g15.json"
+assert_ok "(g) requested_at names Feb 29 in a real leap year" validate-document "$tmpdir/r-g15.json"
 
 echo "== (h) stage_result shape (validate-document) =="
 mutate "$tmpdir/result.json" '.body.evidence = [.body.evidence[0], (.body.evidence[0] | .evidence_id = "ev-2")]' "$tmpdir/s-h1.json"
@@ -373,6 +399,13 @@ sha_p_i10=$(hash_of "$tmpdir/p-i10.json")
 run_expr 'resolved_profile_doc($profile_sha; $manifest_shas)' --arg profile_sha "$sha_p_i10" --argjson manifest_shas "$manifest_shas_i10" > "$tmpdir/rp-i10.json"
 assert_fail "(i) manifest does not offer the binding's requested capability" "E_RELATION" validate-profile-set "$tmpdir/p-i10.json" "$tmpdir/rp-i10.json" \
   "$tmpdir/m-i10.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+# One exact source Git object gets only one format/digest claim across the whole
+# resolved profile — every binding's package_source points at the same shared
+# package_ref object, so two different value_sha256 claims for it must be rejected
+# even though each binding's own manifest-relation check passes in isolation.
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].package_source.value_sha256 = ("f" * 64)' "$tmpdir/rp-i11.json"
+assert_fail "(i) two bindings claim different digests for the same source Git object" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i11.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
 
 echo "== (j) stage-run relations (validate-stage-run) =="
 mutate "$tmpdir/result.json" '.body.outcome.value = "no-change"' "$tmpdir/s-j1.json"
@@ -407,6 +440,50 @@ mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id
 assert_fail "(j) stale observation names an input absent from the request" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j14.json"
 mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = [] | .body.stale_observations = [{selector:{kind:"environment"},observed:{state:"present",value:{environment_id:"env-1",fingerprint_sha256:("4"*64)}}}]' "$tmpdir/s-j15.json"
 assert_ok "(j) stale observation with a genuinely different environment fingerprint is a legal terminal state" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j15.json"
+# A stale resolved-profile observation must pin the expected ID, not just the kind:
+# the same kind with an unrelated ID names a different document entirely, not a
+# staleness claim about this one.
+mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = [] | .body.stale_observations = [{selector:{kind:"resolved-profile"},observed:{state:"present",value:{schema_version:1,kind:"resolved_profile",id:"resolved-1",sha256:("5"*64)}}}]' "$tmpdir/s-j16.json"
+assert_ok "(j) stale resolved-profile observation keeps the request's own ID with a genuinely different digest" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j16.json"
+mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = [] | .body.stale_observations = [{selector:{kind:"resolved-profile"},observed:{state:"present",value:{schema_version:1,kind:"resolved_profile",id:"some-other-resolved-profile",sha256:("5"*64)}}}]' "$tmpdir/s-j17.json"
+assert_fail "(j) stale resolved-profile observation names an unrelated resolved profile ID" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j17.json"
+# Regression guard (round-0 over-corrected this to an unconditional equality): a
+# completed record with failing evidence is explicitly allowed to report execution
+# facts that differ from the resolved binding, so it can preserve what went wrong;
+# a completed non-inconclusive record must still match exactly.
+mutate "$tmpdir/result.json" '.body.execution.environment.environment_id = "env-mismatch"' "$tmpdir/s-j18.json"
+assert_fail "(j) completed non-inconclusive execution environment mismatches the request's environment" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j18.json"
+mutate "$tmpdir/result.json" '.body.evidence[0].verdict = "failed" | .body.outcome = {family:"change",value:"inconclusive"} | .body.outputs = [] | .body.reason = {reason_id:"r1"} | .body.execution.environment.environment_id = "env-mismatch"' "$tmpdir/s-j19.json"
+assert_ok "(j) completed-inconclusive execution environment may differ from the resolved binding" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j19.json"
+
+echo "== (l) unavailable requested facts force a completed result inconclusive (validate-stage-run) =="
+# Builds one alternate model-backed producer binding (base fixtures are all
+# deterministic) and rewires the ref chain the same way (i9)/(i10) do: mutate,
+# rehash, and feed the new digest into the next document.
+model_perms='(["core.perm.target.read.v1","core.perm.scratch.write.v1","core.perm.evidence.write.v1","core.perm.model.invoke.v1"]|sort)'
+prompt_ref_literal='{revision:{repository_id:"repo-a",hash_algorithm:"sha1",commit_id:("a"*40)},location:{kind:"path",value:"prompt.json"},object_type:"blob",object_id:("c"*40),mode:"100644"}'
+mutate "$tmpdir/resolved_profile.json" ".body.bindings |= map(if .binding.role==\"producer\" then
+    .binding.execution_kind=\"model\" | .binding.model_request={provider_id:\"prov-1\",model_id:\"model-1\",effort_id:\"effort-1\"} |
+    .binding.prompt_ref=$prompt_ref_literal | .binding.requested_permissions=$model_perms
+  else . end)" "$tmpdir/rp-model.json"
+sha_rp_model=$(hash_of "$tmpdir/rp-model.json")
+mutate "$tmpdir/request.json" ".body.resolved_profile_ref.sha256=\"$sha_rp_model\" | .body.operation.permissions=$model_perms" "$tmpdir/req-model.json"
+sha_req_model=$(hash_of "$tmpdir/req-model.json")
+mutate "$tmpdir/result.json" ".body.request_ref.sha256=\"$sha_req_model\" | .body.resolved_profile_ref.sha256=\"$sha_rp_model\" |
+    .body.execution.actual_binding.execution_kind=\"model\" | .body.execution.metadata.kind=\"model\" |
+    .body.execution.metadata.snapshot={state:\"unavailable\",reason_id:\"no-snapshot\"} |
+    .body.execution.metadata.provider={state:\"recorded\",value:\"prov-1\",source_ref:{content_id:\"cf-provider\",media_type:\"application/json\",sha256:(\"9\"*64)}} |
+    .body.execution.metadata.model={state:\"recorded\",value:\"model-1\",source_ref:{content_id:\"cf-model\",media_type:\"application/json\",sha256:(\"9\"*64)}} |
+    .body.execution.metadata.effort={state:\"recorded\",value:\"effort-1\",source_ref:{content_id:\"cf-effort\",media_type:\"application/json\",sha256:(\"9\"*64)}} |
+    .body.execution.metadata.prompt={state:\"recorded\",value:$prompt_ref_literal,source_ref:{content_id:\"cf-prompt\",media_type:\"application/json\",sha256:(\"9\"*64)}} |
+    .body.execution.metadata.skills={state:\"recorded\",value:[],source_ref:{content_id:\"cf-skills\",media_type:\"application/json\",sha256:(\"9\"*64)}}
+  " "$tmpdir/result-model.json"
+assert_ok "(l) model-backed completed producer change with all requested facts recorded" validate-stage-run "$tmpdir/req-model.json" "$tmpdir/rp-model.json" "$tmpdir/result-model.json"
+mutate "$tmpdir/result-model.json" '.body.execution.metadata.prompt = {state:"unavailable", reason_id:"prompt-store-unreachable"}' "$tmpdir/result-model-bad.json"
+assert_fail "(l) unavailable prompt fact still claims a conclusive outcome" "E_RELATION" validate-stage-run "$tmpdir/req-model.json" "$tmpdir/rp-model.json" "$tmpdir/result-model-bad.json"
+mutate "$tmpdir/result-model.json" '.body.execution.metadata.prompt = {state:"unavailable", reason_id:"prompt-store-unreachable"} |
+    .body.outcome = {family:"change", value:"inconclusive"} | .body.outputs = [] | .body.reason = {reason_id:"r1"}' "$tmpdir/result-model-ok.json"
+assert_ok "(l) unavailable prompt fact correctly reported as a completed-inconclusive record" validate-stage-run "$tmpdir/req-model.json" "$tmpdir/rp-model.json" "$tmpdir/result-model-ok.json"
 
 echo "== (k) jq version pin and SHA-tool fallback (environment) =="
 fakebin="$tmpdir/fakebin"
@@ -420,6 +497,15 @@ chmod +x "$fakebin/jq"
 out="$(PATH="$fakebin:$PATH" bash "$wrapper" validate-document "$tmpdir/profile.json" 2>&1 1>/dev/null)" && rc=0 || rc=$?
 assert_eq "(k) non-1.6 jq on PATH is rejected (exit)" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 assert_eq "(k) non-1.6 jq on PATH is rejected (token)" "E_RUNTIME" "$out"
+# The exact command form (including the 1-8 manifest count) must be checked before
+# any runtime dependency, so a bad command/arity still reports E_USAGE even on a
+# host without the pinned jq — the well-formed case just above still hits E_RUNTIME,
+# proving this isn't just a deleted check.
+out="$(PATH="$fakebin:$PATH" bash "$wrapper" bogus-command 2>&1 1>/dev/null)" && rc=0 || rc=$?
+assert_eq "(k) usage checked before the jq pin: unknown command (exit)" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+assert_eq "(k) usage checked before the jq pin: unknown command (token)" "E_USAGE" "$out"
+out="$(PATH="$fakebin:$PATH" bash "$wrapper" validate-document 2>&1 1>/dev/null)" && rc=0 || rc=$?
+assert_eq "(k) usage checked before the jq pin: missing arg (token)" "E_USAGE" "$out"
 
 nojqbin="$tmpdir/nojqbin"
 mkdir -p "$nojqbin"

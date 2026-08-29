@@ -25,6 +25,32 @@ fail() {
   exit 1
 }
 
+# Parse and validate the exact command form FIRST — including the 1-8 manifest
+# count — before any runtime-dependency check. A wrong command or argument count
+# must always report E_USAGE, even on a host missing the pinned jq (plan.md).
+cmd="${1:-}"
+case "$cmd" in
+  validate-document)
+    [ "$#" -eq 2 ] || fail "E_USAGE"
+    mode="document"
+    docs=("$2")
+    ;;
+  validate-profile-set)
+    # cmd + PROFILE + RESOLVED_PROFILE + 1..8 manifests = 4..11 total args.
+    [ "$#" -ge 4 ] && [ "$#" -le 11 ] || fail "E_USAGE"
+    mode="profile-set"
+    docs=("${@:2}")
+    ;;
+  validate-stage-run)
+    [ "$#" -eq 4 ] || fail "E_USAGE"
+    mode="stage-run"
+    docs=("$2" "$3" "$4")
+    ;;
+  *)
+    fail "E_USAGE"
+    ;;
+esac
+
 # Resolve the schema from this script's own repo root, never a caller path.
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/.." && pwd -P)"
@@ -109,23 +135,4 @@ validate() {
   esac
 }
 
-cmd="${1:-}"
-case "$cmd" in
-  validate-document)
-    [ "$#" -eq 2 ] || fail "E_USAGE"
-    validate "document" "$2"
-    ;;
-  validate-profile-set)
-    # cmd + PROFILE + RESOLVED_PROFILE + 1..8 manifests = 4..11 total args.
-    [ "$#" -ge 4 ] && [ "$#" -le 11 ] || fail "E_USAGE"
-    shift
-    validate "profile-set" "$@"
-    ;;
-  validate-stage-run)
-    [ "$#" -eq 4 ] || fail "E_USAGE"
-    validate "stage-run" "$2" "$3" "$4"
-    ;;
-  *)
-    fail "E_USAGE"
-    ;;
-esac
+validate "$mode" "${docs[@]}"

@@ -31,18 +31,21 @@ def utf8_len: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 6553
 def is_id: type=="string" and test("^[a-z0-9][a-z0-9._:-]{0,127}$");
 def is_sha256: type=="string" and test("^[0-9a-f]{64}$");
 def is_shorttext: type=="string" and (utf8_len as $l | $l>=1 and $l<=1024);
-# is_time: shape (^...$) plus real UTC field ranges — a well-formed-looking string
-# like "2026-99-99T99:99:99Z" must not pass, since it later participates in lexical
-# time ordering (R4/time_le) as if it were a genuine instant.
+# is_time: shape (^...$) plus real UTC calendar/field ranges — a well-formed-looking
+# string like "2026-99-99T99:99:99Z" or a non-existent calendar date such as
+# "2026-02-31T00:00:00Z" / "2025-02-29T00:00:00Z" (non-leap year) must not pass,
+# since it later participates in lexical time ordering (R4/time_le) as if it were
+# a genuine instant.
 def is_time:
   type=="string" and
   test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") and
-  (capture("^[0-9]{4}-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<s>[0-9]{2})Z$") |
-   ((.mo|tonumber)>=1 and (.mo|tonumber)<=12) and
-   ((.d|tonumber)>=1 and (.d|tonumber)<=31) and
-   ((.h|tonumber)>=0 and (.h|tonumber)<=23) and
-   ((.mi|tonumber)>=0 and (.mi|tonumber)<=59) and
-   ((.s|tonumber)>=0 and (.s|tonumber)<=59));
+  (capture("^(?<y>[0-9]{4})-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<s>[0-9]{2})Z$") as $c |
+   ($c.y|tonumber) as $y | ($c.mo|tonumber) as $mo | ($c.d|tonumber) as $d |
+   ($c.h|tonumber) as $h | ($c.mi|tonumber) as $mi | ($c.s|tonumber) as $s |
+   ($y % 4 == 0 and ($y % 100 != 0 or $y % 400 == 0)) as $leap |
+   ([31,(if $leap then 29 else 28 end),31,30,31,30,31,31,30,31,30,31]) as $days_in_month |
+   ($mo>=1 and $mo<=12) and ($d>=1 and $d<=$days_in_month[$mo-1]) and
+   ($h>=0 and $h<=23) and ($mi>=0 and $mi<=59) and ($s>=0 and $s<=59));
 def is_gitoid: type=="string" and (test("^[0-9a-f]{40}$") or test("^[0-9a-f]{64}$"));
 def has_exact_fields(req; opt):
   . as $obj |
@@ -270,7 +273,10 @@ def is_profile_binding:
   (.requested_permissions|is_bounded_enum_set(0;5;permission_ids)) and
   (if .execution_kind=="model" then (has("model_request") and has("prompt_ref"))
    else ((has("model_request")|not) and (has("prompt_ref")|not) and (.skill_refs==[])) end) and
-  (if .role=="verifier" then .execution_kind=="deterministic" else true end);
+  # The contract permits model backing only for producer and reviewer; every other
+  # (dormant) role — verifier, publisher, forge, ci, execution, identity — must be
+  # deterministic.
+  (if .role=="producer" or .role=="reviewer" then true else .execution_kind=="deterministic" end);
 
 def profile_binding_capability_ok:
   (capability_for_role(.role)) as $expected |
@@ -352,11 +358,33 @@ def binding_manifest_relation_ok(b; m; rb):
   ((rb.skill_sources | map(source_git_key) | sort) == (b.skill_refs | map(git_key) | sort)) and
   (rb.adapter_implementation.id == m.id) and (rb.adapter_implementation.version == m.body.adapter_version);
 
+def present_source_value(p): if p.state=="present" then [p.value] else [] end;
+
+# resolved_binding_source_claims: every source_value_ref a resolved binding makes
+# (manifest/package/optional config/optional prompt/skills/each tool's optional
+# package+config), used to enforce one format/digest claim per exact source Git
+# object across the whole resolved profile (R6/one-claim-per-source), not just
+# within a single binding.
+def resolved_binding_source_claims(rb):
+  [rb.manifest_source, rb.package_source] +
+  present_source_value(rb.config_source) + present_source_value(rb.prompt_source) +
+  rb.skill_sources +
+  (rb.tool_sources | map([.package_source] + present_source_value(.config_source)) | add // []);
+
+def resolved_profile_source_claims(resolved_body):
+  [resolved_body.profile_source] +
+  (resolved_body.bindings | map(resolved_binding_source_claims(.)) | add // []);
+
+def source_claims_agree(resolved_body):
+  (resolved_profile_source_claims(resolved_body) | group_by(source_git_key)) as $groups |
+  all($groups[]; (map(.value_format) | unique | length) == 1 and (map(.value_sha256) | unique | length) == 1);
+
 def profile_set_relations_ok(profile_pair; resolved_body; manifests):
   (profile_pair.content.body) as $profile_body |
   ($profile_body.bindings) as $bindings |
   (resolved_body.bindings) as $rbindings |
   (resolved_body.profile_source.value_sha256 == profile_pair.sha256) and
+  (source_claims_agree(resolved_body)) and
   (all($bindings[]; . as $b |
     (find_one(manifests; .content.id == $b.manifest_ref.id and .sha256 == $b.manifest_ref.sha256) | length) == 1)) and
   (all(manifests[]; . as $m |
@@ -587,7 +615,9 @@ def stale_observation_ok($req_body; $obs):
   elif $k=="resolved-profile" then
     ({state:"present", value: $req_body.resolved_profile_ref}) as $exp |
     ($obs.observed != $exp) and
-    (if $obs.observed.state=="present" then $obs.observed.value.kind=="resolved_profile" else true end)
+    (if $obs.observed.state=="present" then
+       $obs.observed.value.kind=="resolved_profile" and $obs.observed.value.id==$req_body.resolved_profile_ref.id
+     else true end)
   elif $k=="qualification" then
     ((if ($req_body|has("qualification_ref")) then {state:"present", value: $req_body.qualification_ref} else {state:"absent"} end)) as $exp |
     ($obs.observed != $exp)
@@ -707,6 +737,15 @@ def is_fact_value_ok(expected):
   elif .state=="unavailable" then true
   else false end;
 
+# metadata_requested_unavailable: true when a requested provider/model/effort/
+# prompt/skills fact is unavailable. The contract forces a completed result whose
+# execution carries such a fact to be inconclusive — availability is an input to
+# the outcome relation, not a presence check that passes independently of it.
+# Deliberately excludes tools (no forced-inconclusive rule names it) and snapshot
+# (not a requested fact — it has no corresponding binding field to be honest about).
+def metadata_requested_unavailable(meta):
+  [meta.provider, meta.model, meta.effort, meta.prompt, meta.skills] | any(.[]; .state=="unavailable");
+
 # actual_facts_ok: model bindings additionally require recorded/computed facts to
 # equal the resolved binding's own model_request/prompt_ref/skill_refs (R12 — an
 # actual fact is an honest claim about what actually ran, not just a syntactically
@@ -782,13 +821,19 @@ def stage_result_relations_ok(request_pair; resolved_pair; result_body):
    else true end) and
   (if result_body.status=="completed" then
      (($req.body.required_evidence_kinds | sort) == (result_body.evidence | map(.kind) | sort)) and
-     (if (result_body.evidence | any(.[]; .verdict != "passed")) then
+     (if ((result_body.evidence | any(.[]; .verdict != "passed")) or
+          metadata_requested_unavailable(result_body.execution.metadata)) then
         (result_body.outcome.family == outcome_family_for_role($op.role)) and
         (result_body.outcome.value == "inconclusive") and
         (result_body.outputs == []) and (result_body | has("delta_ref") | not) and
         (result_body | has("reason"))
       else completed_outcome_relation_ok($op; result_body) end) and
-     completed_execution_matches_binding($op; $rb; result_body.execution; $req.body.environment_ref) and
+     # The contract allows a completed-inconclusive record's execution facts to
+     # differ from the resolved binding, so the record can preserve what actually
+     # went wrong; only a completed non-inconclusive result requires the equality.
+     (if result_body.outcome.value != "inconclusive" then
+        completed_execution_matches_binding($op; $rb; result_body.execution; $req.body.environment_ref)
+      else true end) and
      (result_body.evidence | all(.[]; select(.kind=="independent-review") |
         (.verdict != "passed") or
         (result_body.execution.performer.role=="reviewer" and
@@ -807,7 +852,10 @@ def stage_result_relations_ok(request_pair; resolved_pair; result_body):
 def limits_violated:
   def bad(d):
     if d > 32 then true
-    elif type=="object" then (keys_unsorted|length) > 256 or any(.[]; bad(d+1))
+    elif type=="object" then
+      (keys_unsorted|length) > 256 or
+      (keys_unsorted|any(.[]; utf8_len > 8192)) or
+      any(.[]; bad(d+1))
     elif type=="array" then (length) > 256 or any(.[]; bad(d+1))
     elif type=="string" then (utf8_len) > 8192
     elif type=="number" then (. != (.|floor)) or . < 0 or . > 2147483647
