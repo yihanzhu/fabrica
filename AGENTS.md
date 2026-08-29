@@ -30,9 +30,24 @@ Two goals drive the backlog:
   (runs the Codex reviewer against a PR).
 
 ## Stack & commands
-- Markdown + shell. The setup/reviewer tooling lives in `scripts/*.sh`; validators are
-  still to come.
-- CI: `.github/workflows/ci.yml` (structure check + shellcheck). **CI must stay green —
+- Markdown + shell. The setup/reviewer tooling lives in `scripts/*.sh`. The first real
+  validator has landed: `core/v1/contracts.jq` (the portable core contract, a pure jq
+  schema/relation checker) plus its front door `scripts/core-contract.sh` and its test
+  suite `scripts/test/core-contract.test.sh` / `scripts/test/core-contract-fixtures.jq`.
+  It is manual and inactive — nothing in the live profile calls it yet. Run its tests
+  locally with:
+
+  ```sh
+  bash scripts/test/core-contract.test.sh
+  ```
+
+  This needs **jq 1.6 exactly** on `PATH` first (a newer jq formats JSON differently,
+  which breaks the canonical-byte checks). Grab the pinned release for your platform
+  from the jq GitHub releases (e.g. `jq-osx-amd64` on Apple Silicon, run through
+  Rosetta) and verify its SHA-256 before use; see the header of
+  `scripts/test/core-contract.test.sh` for the exact download/verify steps.
+- CI: `.github/workflows/ci.yml` (structure check + shellcheck + the test suites above,
+  including the portable core contract's own jq-1.6-pinned step). **CI must stay green —
   it is the hard merge gate.** Add real tests as code lands.
   - **Shellcheck is pinned to `0.11.0`** (the `SHELLCHECK_VERSION` constant in
     `ci.yml` is the single source of truth). CI downloads that exact static release and
