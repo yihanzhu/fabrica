@@ -77,10 +77,12 @@ authority, or perform an external write.
   count is a reviewability signal, not a pass/fail gate. Complete behavior, complete
   tests, CI, independent review, and the safety boundaries remain hard requirements.
   Implementation remains one reviewable concern on the deterministic
-  `ystack/impl/portable-core-contracts` branch and PR. If that cannot stay coherent,
-  return to the artifact gate for separately accepted child intents before planning
-  or code. Nothing public or live activates before the full contract and integration
-  proof are accepted.
+  `ystack/impl/portable-core-contracts` branch and PR. The operator accepts the
+  current estimate as an explicit exception to the repository's soft review-size
+  guide; line count alone does not require a split. The plan groups the one PR into
+  clear commits and review sections. Any actual concern or scope expansion returns
+  to the artifact gate. Nothing public or live activates before the full contract
+  and integration proof are accepted.
 - **R15 — no live change.** This work does not activate a profile, extract a real
   adapter, regenerate `/yshifu`, alter an open session, or enable autonomous writes.
   The operator remains the only merge authority.
@@ -563,9 +565,10 @@ These numbers guide plan review; they do not waive or reject work. The plan expl
 large differences from the range and chooses review units by responsibility, not by
 an arbitrary line target. Code golf, generated long lines, copied registries, a
 second parser, system-jq drift, reused production logic as the test oracle, or reduced
-negative coverage are never valid ways to appear smaller. If one PR is no longer
-cohesive and reviewable, stop before code and return to the artifact gate for
-separately accepted child scopes. A plan or operator comment cannot invent extra
+negative coverage are never valid ways to appear smaller. This one-concern contract
+keeps one implementation PR despite the estimate; commits and review passes separate
+responsibilities without creating partial product releases. A newly discovered
+concern or scope change returns to the artifact gate, and no plan may invent extra
 implementation PRs for this intent.
 
 ### Downstream handoffs and intent questions
@@ -625,7 +628,8 @@ before any publisher can run.
    or be separately rescoped; producer-only proof cannot be called its accepted 2×2.
 5. **Size never trades away proof.** The estimate may move, but strict parsing,
    complete relations, readable code, adversarial tests, CI, and review do not. A
-   materially different delivery shape returns to the operator before code.
+   materially different concern or scope returns to the artifact gate. The accepted
+   review-size exception changes no safety or proof requirement.
 6. **CI is a constitution path.** Operator-driven work may edit it; unattended work
    must use `proposals/` and wait for application.
 7. **This is user-directed high-risk design.** G2 accepts only this spec, not a plan,
