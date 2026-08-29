@@ -96,7 +96,10 @@ authority, or perform an external write.
   switch the public shell command, root
   dispatcher, full-package user documentation, final restore instructions, and
   three public command forms. Every child immediately lists its own restore-critical
-  files in `ci/required-files.txt`; assembly owns only the final package/user view.
+  files in `ci/required-files.txt`, except that first-publication assembly adds the
+  new public wrapper and its exact manifest entry together in the R24 switch commit.
+  During an upgrade that entry already exists and stays byte-identical. Assembly
+  owns only the final package/user view.
 - **R17 — code loading is fixed.** The assembly wrapper resolves its own physical
   repository root and contains one literal accepted generation ID. It loads that
   generation's one literal root program, one literal ingress library, and one literal
@@ -198,11 +201,14 @@ authority, or perform an external write.
   Generation-scoped exports become permanently immutable when assembly publishes
   them. The wrapper is a separate activation export. Assembly first lands the new
   root and proves the complete generation through private test drivers while the
-  stable wrapper is absent or still selects the old generation. One later switch
-  commit then adds the wrapper for first publication or changes only its literal
-  generation ID for an upgrade. Mandatory CI and independent review run again on
-  that exact post-switch head through the public wrapper; only that evidence may
-  produce `merge-ready` and human merge. Any upgrade parent plan pins the current
+  stable wrapper is absent or still selects the old generation. On first publication,
+  the later switch commit changes exactly two paths: it adds
+  `scripts/core-contract.sh` and adds the exact `scripts/core-contract.sh` entry to
+  `ci/required-files.txt`. On an upgrade, the entry must already exist and remain
+  byte-identical, and the switch commit changes only the wrapper's literal generation
+  ID. The structure check, public-wrapper CI, and independent review run again on
+  that exact post-switch head; only that evidence may produce `merge-ready` and human
+  merge. Any upgrade parent plan pins the current
   wrapper blob and selected generation, chooses a newly accepted unused generation
   ID, and repeats both proof phases. The old public generation remains selected on
   main until the final assembly merge.
@@ -939,10 +945,12 @@ generation root, integration tests, CI, docs, and restore changes, but the stabl
 wrapper is absent for first publication or still selects the old generation for an
 upgrade. CI and a read-only independent review prove the new generation through
 private assembly drivers and record that exact head. A later single-parent switch
-commit has that head as its parent and changes only `scripts/core-contract.sh`: it
-adds the wrapper for first publication or changes only the literal generation ID for
-an upgrade. CI and independent review then run through the public wrapper on the
-exact post-switch head/base. Only the post-switch evidence can create
+commit has that head as its parent. For first publication it changes exactly two
+paths: it adds `scripts/core-contract.sh` and adds that exact entry to
+`ci/required-files.txt`. For an upgrade it changes only the wrapper's literal
+generation ID; the existing manifest entry remains byte-identical. The structure
+check, public-wrapper CI, and independent review then run on the exact post-switch
+head/base. Only the post-switch evidence can create
 `merge-ready`; any other switch-commit path or diff returns to the assembly plan
 gate.
 
