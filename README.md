@@ -241,6 +241,35 @@ so yshifu's decisions rest on evidence. This is a **prompt-level** wiring: it ta
 effect once `scripts/install.sh` regenerates the live `/yshifu` command, not merely by
 merging the doc change — `doctor.sh`'s static validation is unaffected.
 
+## Portable core contract
+
+`core/v1/contracts.jq` defines the smallest vendor-neutral record family later
+adapters can share: five documents (`adapter_manifest`, `profile`, `resolved_profile`,
+`stage_request`, `stage_result`), three capabilities, and five permissions — see
+[`work/portable-core-contracts/spec.md`](work/portable-core-contracts/spec.md). It is a
+**pure, offline validator**: it checks shapes, references, and relations between
+caller-supplied documents. It never reads Git, launches a process, calls a model, or
+proves that a claim is true — a passing check is not trust or authority.
+
+Run it through the one public front door, `scripts/core-contract.sh`:
+
+```sh
+scripts/core-contract.sh validate-document DOCUMENT
+scripts/core-contract.sh validate-profile-set PROFILE RESOLVED_PROFILE MANIFEST...
+scripts/core-contract.sh validate-stage-run REQUEST RESOLVED_PROFILE RESULT
+```
+
+Every argument is a path to one canonical-JSON document. Success is exit 0 with empty
+output; failure is a nonzero exit with one `E_*` token on stderr (see the header comment
+in `core/v1/contracts.jq` for the full list). The wrapper requires **jq 1.6 exactly** —
+see `scripts/test/core-contract.test.sh` for the pinned-binary setup on Apple Silicon.
+Local test command: `bash scripts/test/core-contract.test.sh`.
+
+This is a **manual, inactive validator** today: nothing in the live profile, `/yshifu`,
+or any target template calls it. It does not select, activate, or change any current
+behavior — it exists so later profile-resolution and adapter-contract-test work has a
+stable, tested vocabulary to build on.
+
 ## Layout
 
 ```
@@ -260,6 +289,8 @@ scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
+core/v1/contracts.jq       Portable core contract v1 (pure jq validator; manual, inactive — see "Portable core contract" above)
+scripts/core-contract.sh   Shell front door to core/v1/contracts.jq: validate-document / validate-profile-set / validate-stage-run
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
 templates/yshifu-command.md Template for the /yshifu command (path placeholder)
 templates/target-CLAUDE.md Drop into each target repo (conventions + PR-size rule)

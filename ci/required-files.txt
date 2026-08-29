@@ -47,6 +47,7 @@ scripts/manager-review.sh
 scripts/merge-pr.sh
 scripts/setup-target-repo.sh
 scripts/doctor.sh
+scripts/core-contract.sh
 
 # Sourced libraries (not executed directly; sourced by the scripts above)
 scripts/lib/north-star.sh
@@ -85,3 +86,9 @@ scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh
 scripts/test/models-conf-parser.test.sh
 scripts/test/codex-degraded-gate.test.sh
+scripts/test/core-contract.test.sh
+
+# Portable core contract v1 (manual validator; not part of any live profile —
+# see work/portable-core-contracts/plan.md)
+core/v1/contracts.jq
+scripts/test/core-contract-fixtures.jq

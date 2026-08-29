@@ -1,0 +1,37 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 5f02a8c..e0cf1a9 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -163,6 +163,32 @@ jobs:
+           git config --global user.name "ci"
+           bash scripts/test/v2-check-rename.test.sh
+ 
++      - name: Portable core contract tests
++        env:
++          # jq 1.6 exactly — core/v1/contracts.jq's canonical-JSON rules depend on this
++          # exact release's formatting. The ubuntu-latest preinstalled jq is newer, so a
++          # coder testing locally with a different jq version could pass locally and fail
++          # here (or vice versa); this pin plus AGENTS.md's local setup keep them in sync.
++          # SHA-256 is the official jq-1.6 release asset's digest for jq-linux64.
++          JQ16_SHA256: "af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"
++        run: |
++          set -euo pipefail
++          mkdir -p /tmp/ystack-jq-1.6
++          curl --proto '=https' --tlsv1.2 -fsSL \
++            https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64 \
++            -o /tmp/ystack-jq-1.6/jq
++          printf '%s  %s\n' "$JQ16_SHA256" /tmp/ystack-jq-1.6/jq | sha256sum -c -
++          chmod 0555 /tmp/ystack-jq-1.6/jq
++          export PATH="/tmp/ystack-jq-1.6:$PATH"
++          got="$(jq --version)"
++          if [ "$got" != "jq-1.6" ]; then
++            echo "jq version mismatch: expected jq-1.6, got $got"; exit 1
++          fi
++          echo "jq pinned to $got — ok"
++          # This PATH prepend is scoped to this one step; every other step (including
++          # Shellcheck's own script sweep above) keeps using the runner's system jq.
++          bash scripts/test/core-contract.test.sh
++
+       - name: Rename gate
+         run: |
+           # Patrols tracked files for old names left over from the rename.

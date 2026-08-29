@@ -1,0 +1,381 @@
+#!/usr/bin/env bash
+# scripts/test/core-contract.test.sh — hermetic positive, raw-byte, shape,
+# relation, and status tests for core/v1/contracts.jq + scripts/core-contract.sh.
+#
+# Builds one valid five-document graph with scripts/test/core-contract-fixtures.jq,
+# independently canonicalizing and hashing each document (pinned jq + an external
+# SHA tool — never the product wrapper) before wiring its digest into the next
+# document's ref, so no fixture digest is ever self-referential. Runs the real
+# `scripts/core-contract.sh` end to end (no Git, no process launch, no network) and
+# asserts exit status, empty success stdout, the exact first stderr token, and the
+# absence of a distinctive fixture path/secret from stderr. Requires jq 1.6 exactly
+# on PATH (see AGENTS.md for the pinned local binary).
+#
+# Run: scripts/test/core-contract.test.sh
+
+set -euo pipefail
+LC_ALL=C
+export LC_ALL
+
+test_dir="$(cd "$(dirname "$0")" && pwd -P)"
+repo_root="$(cd "$test_dir/../.." && pwd -P)"
+wrapper="$repo_root/scripts/core-contract.sh"
+fixtures="$test_dir/core-contract-fixtures.jq"
+for f in "$wrapper" "$fixtures"; do
+  [ -f "$f" ] || { echo "FAIL: missing $f" >&2; exit 1; }
+done
+
+if [ "$(jq --version 2>/dev/null || true)" != "jq-1.6" ]; then
+  echo "FAIL: this test requires jq 1.6 exactly on PATH (see AGENTS.md)" >&2
+  exit 1
+fi
+
+sha_tool="sha256sum"
+command -v sha256sum >/dev/null 2>&1 || sha_tool="shasum -a 256"
+
+tmpdir="$(mktemp -d)"
+cleanup() { rm -rf "$tmpdir"; }
+trap cleanup EXIT
+
+passed=0
+failed=0
+assert_eq() {
+  if [ "$2" = "$3" ]; then passed=$((passed + 1)); echo "pass: $1"
+  else failed=$((failed + 1)); echo "FAIL: $1"; echo "      expected: [$2]"; echo "      actual:   [$3]"; fi
+}
+assert_not_contains() {
+  case "$3" in
+    *"$2"*) failed=$((failed + 1)); echo "FAIL: $1 (unexpectedly contains [$2])" ;;
+    *) passed=$((passed + 1)); echo "pass: $1" ;;
+  esac
+}
+
+run_expr() {
+  # run_expr EXPR [jq-args...] -> canonical JSON on stdout
+  local expr="$1"; shift
+  local prog="$tmpdir/prog.$$.$RANDOM.jq"
+  cat "$fixtures" > "$prog"
+  printf '%s\n' "$expr" >> "$prog"
+  jq -n "$@" -f "$prog" | jq -S -c .
+}
+hash_of() { $sha_tool "$1" | awk '{print $1}'; }
+
+# mutate BASE_FILE JQ_FILTER OUT_FILE — apply a jq filter to an existing canonical
+# doc and re-canonicalize (used for shape/relation mutations; raw-byte mutations
+# are crafted directly instead, since jq cannot emit non-canonical JSON on purpose).
+mutate() { jq -S -c "$2" "$1" > "$3"; }
+
+# stderr_of/status_of CMD... — run scripts/core-contract.sh, capturing stderr text
+# and exit status into globals so a single invocation can be asserted on both axes.
+LAST_STDERR=""
+LAST_STATUS=0
+run_wrapper() {
+  local out
+  out="$(bash "$wrapper" "$@" 2>&1 1>/dev/null)" && LAST_STATUS=0 || LAST_STATUS=$?
+  LAST_STDERR="$out"
+}
+assert_fail() {
+  # assert_fail LABEL EXPECTED_TOKEN ARGS...
+  local label="$1" expected="$2"; shift 2
+  run_wrapper "$@"
+  assert_eq "$label (exit nonzero)" "1" "$([ "$LAST_STATUS" -ne 0 ] && echo 1 || echo 0)"
+  assert_eq "$label (token)" "$expected" "$LAST_STDERR"
+}
+assert_ok() {
+  local label="$1"; shift
+  local out
+  out="$(bash "$wrapper" "$@" 2>&1)" && LAST_STATUS=0 || LAST_STATUS=$?
+  assert_eq "$label (exit 0)" "0" "$LAST_STATUS"
+  assert_eq "$label (empty stdout+stderr)" "" "$out"
+}
+
+echo "== building the valid five-document graph =="
+
+for role in producer verifier reviewer publisher; do
+  run_expr "manifest_doc(\"$role\")" > "$tmpdir/manifest-$role.json"
+done
+sha_producer=$(hash_of "$tmpdir/manifest-producer.json")
+sha_verifier=$(hash_of "$tmpdir/manifest-verifier.json")
+sha_reviewer=$(hash_of "$tmpdir/manifest-reviewer.json")
+sha_publisher=$(hash_of "$tmpdir/manifest-publisher.json")
+manifest_shas=$(jq -n --arg p "$sha_producer" --arg v "$sha_verifier" --arg r "$sha_reviewer" --arg u "$sha_publisher" \
+  '{producer:$p, verifier:$v, reviewer:$r, publisher:$u}')
+
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'profile_doc($manifest_shas)' --argjson manifest_shas "$manifest_shas" > "$tmpdir/profile.json"
+sha_profile=$(hash_of "$tmpdir/profile.json")
+
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'resolved_profile_doc($profile_sha; $manifest_shas)' \
+  --arg profile_sha "$sha_profile" --argjson manifest_shas "$manifest_shas" > "$tmpdir/resolved_profile.json"
+sha_resolved=$(hash_of "$tmpdir/resolved_profile.json")
+
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'stage_request_doc($resolved_sha)' --arg resolved_sha "$sha_resolved" > "$tmpdir/request.json"
+sha_request=$(hash_of "$tmpdir/request.json")
+
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'stage_result_doc($request_sha; $resolved_sha)' \
+  --arg request_sha "$sha_request" --arg resolved_sha "$sha_resolved" > "$tmpdir/result.json"
+
+echo "== (a) positive path: every document, profile-set, and stage-run validate clean =="
+for f in manifest-producer manifest-verifier manifest-reviewer manifest-publisher profile resolved_profile request result; do
+  assert_ok "(a) validate-document $f" validate-document "$tmpdir/$f.json"
+done
+assert_ok "(a) validate-profile-set" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+assert_ok "(a) validate-stage-run" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/result.json"
+
+echo "== (b) CLI usage / arity =="
+assert_fail "(b) unknown command" "E_USAGE" bogus-command
+assert_fail "(b) no command" "E_USAGE"
+assert_fail "(b) validate-document no arg" "E_USAGE" validate-document
+assert_fail "(b) validate-document extra arg" "E_USAGE" validate-document "$tmpdir/profile.json" extra
+assert_fail "(b) validate-stage-run too few args" "E_USAGE" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json"
+assert_fail "(b) validate-stage-run too many args" "E_USAGE" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/result.json" extra
+assert_fail "(b) validate-profile-set zero manifests" "E_USAGE" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json"
+assert_fail "(b) validate-profile-set nine manifests" "E_USAGE" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer.json"
+for i in 1 2 3 4; do
+  mutate "$tmpdir/manifest-producer.json" ".id = \"extra-manifest-$i\" | .body.package_ref.object_id = (\"$i\"*40)" "$tmpdir/extra-manifest-$i.json"
+done
+assert_ok "(b) validate-profile-set eight manifests (boundary, 4 extra unreferenced but distinct)" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json" \
+  "$tmpdir/extra-manifest-1.json" "$tmpdir/extra-manifest-2.json" "$tmpdir/extra-manifest-3.json" "$tmpdir/extra-manifest-4.json"
+assert_fail "(b) validate-profile-set unreadable input" "E_RUNTIME" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" "$tmpdir/does-not-exist.json"
+
+echo "== (c) raw-byte and canonical boundary (direct-crafted bytes, validate-document) =="
+printf '' > "$tmpdir/rb-empty.json"
+assert_fail "(c) empty input" "E_PARSE" validate-document "$tmpdir/rb-empty.json"
+printf '{"a":1}\n{"b":2}\n' > "$tmpdir/rb-multiroot.json"
+assert_fail "(c) multi-root stream" "E_PARSE" validate-document "$tmpdir/rb-multiroot.json"
+printf '\xef\xbb\xbf{"a":1}\n' > "$tmpdir/rb-bom.json"
+assert_fail "(c) BOM prefix" "E_CANONICAL" validate-document "$tmpdir/rb-bom.json"
+printf '\xff\xfe{"a":1}\n' > "$tmpdir/rb-badutf8.json"
+assert_fail "(c) invalid UTF-8" "E_PARSE" validate-document "$tmpdir/rb-badutf8.json"
+printf '{"a":1,"a":2}\n' > "$tmpdir/rb-dupkeys.json"
+assert_fail "(c) duplicate keys (non-canonical)" "E_CANONICAL" validate-document "$tmpdir/rb-dupkeys.json"
+printf '{ "a": 1 }\n' > "$tmpdir/rb-altwhitespace.json"
+assert_fail "(c) alternate whitespace (non-canonical)" "E_CANONICAL" validate-document "$tmpdir/rb-altwhitespace.json"
+printf '{"a":"\\u0041"}\n' > "$tmpdir/rb-altescape.json"
+assert_fail "(c) alternate escaping (non-canonical)" "E_CANONICAL" validate-document "$tmpdir/rb-altescape.json"
+printf '{"a":1}' > "$tmpdir/rb-nolf.json"
+assert_fail "(c) missing final LF (non-canonical)" "E_CANONICAL" validate-document "$tmpdir/rb-nolf.json"
+printf '{"a":1}\n\n' > "$tmpdir/rb-extralf.json"
+assert_fail "(c) extra final LF (non-canonical)" "E_CANONICAL" validate-document "$tmpdir/rb-extralf.json"
+printf '{"b":1,"a":2}\n' > "$tmpdir/rb-unsortedkeys.json"
+assert_fail "(c) unsorted keys (non-canonical)" "E_CANONICAL" validate-document "$tmpdir/rb-unsortedkeys.json"
+python3 -c "
+def build(bump):
+    K = 256
+    lengths = [4093]*248 + [4092]*8
+    lengths[0] += bump
+    return '{\"a\":[' + ','.join('\"' + ('x'*L) + '\"' for L in lengths) + ']}\n'
+import sys
+with open(sys.argv[1], 'w') as f: f.write(build(0))
+with open(sys.argv[2], 'w') as f: f.write(build(1))
+" "$tmpdir/rb-atlimit.json" "$tmpdir/rb-overlimit.json"
+[ "$(wc -c < "$tmpdir/rb-atlimit.json" | tr -d ' ')" -eq 1048576 ] || { echo "FAIL: at-limit fixture miscounted" >&2; exit 1; }
+[ "$(wc -c < "$tmpdir/rb-overlimit.json" | tr -d ' ')" -eq 1048577 ] || { echo "FAIL: over-limit fixture miscounted" >&2; exit 1; }
+assert_fail "(c) at exact 1,048,576-byte boundary is still just a shape failure, not E_LIMIT" "E_SHAPE" validate-document "$tmpdir/rb-atlimit.json"
+assert_fail "(c) one byte over the 1,048,576 limit" "E_LIMIT" validate-document "$tmpdir/rb-overlimit.json"
+python3 -c "
+depth = 33
+s = '{\"a\":' * depth + '1' + '}' * depth
+print(s)
+" > "$tmpdir/rb-toodeep.json"
+assert_fail "(c) depth 33 (one over the 32 limit)" "E_LIMIT" validate-document "$tmpdir/rb-toodeep.json"
+python3 -c "
+import json
+obj = {('k%d' % i): 1 for i in range(257)}
+print(json.dumps(obj, separators=(',', ':'), sort_keys=True))
+" > "$tmpdir/rb-toomanymembers.json"
+assert_fail "(c) 257 object members (one over the 256 limit)" "E_LIMIT" validate-document "$tmpdir/rb-toomanymembers.json"
+python3 -c "
+print('{\"a\":\"' + ('y' * 8193) + '\"}')
+" > "$tmpdir/rb-toolongstring.json"
+assert_fail "(c) decoded string 8,193 bytes (one over the 8,192 limit)" "E_LIMIT" validate-document "$tmpdir/rb-toolongstring.json"
+printf '{"a":1.5}\n' > "$tmpdir/rb-float.json"
+assert_fail "(c) float value" "E_LIMIT" validate-document "$tmpdir/rb-float.json"
+printf '{"a":-1}\n' > "$tmpdir/rb-negative.json"
+assert_fail "(c) negative integer" "E_LIMIT" validate-document "$tmpdir/rb-negative.json"
+printf '{"a":9999999999}\n' > "$tmpdir/rb-hugeint.json"
+assert_fail "(c) integer over 2147483647" "E_LIMIT" validate-document "$tmpdir/rb-hugeint.json"
+
+secret="zzz-super-secret-path-marker-zzz"
+printf '{"%s":1}\n' "$secret" > "$tmpdir/rb-secretpath.json"
+run_wrapper validate-document "$tmpdir/rb-secretpath.json"
+assert_not_contains "(c) stderr never echoes the input path or a distinctive fixture byte" "$secret" "$LAST_STDERR"
+assert_not_contains "(c) stderr never echoes the tmp input path itself" "$tmpdir" "$LAST_STDERR"
+
+echo "== (d) manifest shape (validate-document) =="
+mutate "$tmpdir/manifest-producer.json" '.body.offered_roles = []' "$tmpdir/m-d1.json"
+assert_fail "(d) offered_roles below minimum" "E_SHAPE" validate-document "$tmpdir/m-d1.json"
+mutate "$tmpdir/manifest-producer.json" '.body.offered_roles = ["not-a-role"]' "$tmpdir/m-d2.json"
+assert_fail "(d) offered_roles unknown enum" "E_SHAPE" validate-document "$tmpdir/m-d2.json"
+mutate "$tmpdir/manifest-producer.json" '.body.extra_field = 1' "$tmpdir/m-d3.json"
+assert_fail "(d) unknown top-level field" "E_SHAPE" validate-document "$tmpdir/m-d3.json"
+mutate "$tmpdir/manifest-producer.json" 'del(.body.adapter_version)' "$tmpdir/m-d4.json"
+assert_fail "(d) missing required field" "E_SHAPE" validate-document "$tmpdir/m-d4.json"
+mutate "$tmpdir/manifest-producer.json" '.body.offered_tools = [{tool_id:"t1",tool_version:"v1",package_ref:.body.package_ref,config_ref:{state:"absent"}},{tool_id:"t1",tool_version:"v1",package_ref:.body.package_ref,config_ref:{state:"absent"}}]' "$tmpdir/m-d5.json"
+assert_fail "(d) duplicate tool_id in offered_tools" "E_SHAPE" validate-document "$tmpdir/m-d5.json"
+mutate "$tmpdir/manifest-producer.json" '.kind = "not-a-kind"' "$tmpdir/m-d6.json"
+assert_fail "(d) unknown document kind" "E_SHAPE" validate-document "$tmpdir/m-d6.json"
+mutate "$tmpdir/manifest-producer.json" '.schema_version = 2' "$tmpdir/m-d7.json"
+assert_fail "(d) wrong schema_version" "E_SHAPE" validate-document "$tmpdir/m-d7.json"
+
+echo "== (e) profile shape + protected-role relations (validate-document) =="
+mutate "$tmpdir/profile.json" '.body.bindings = [.body.bindings[0]]' "$tmpdir/p-e1.json"
+assert_fail "(e) below 4-binding minimum" "E_SHAPE" validate-document "$tmpdir/p-e1.json"
+mutate "$tmpdir/profile.json" '.body.bindings[0].requested_capabilities = ["core.verify.run.v1"]' "$tmpdir/p-e2.json"
+assert_fail "(e) producer requesting verifier's capability" "E_SHAPE" validate-document "$tmpdir/p-e2.json"
+mutate "$tmpdir/profile.json" 'del(.body.bindings[3].authority_ref)' "$tmpdir/p-e3.json"
+assert_fail "(e) protected role missing authority_ref" "E_RELATION" validate-document "$tmpdir/p-e3.json"
+mutate "$tmpdir/profile.json" '.body.bindings[1].authority_ref.scope_sha256 = .body.bindings[0].authority_ref.scope_sha256' "$tmpdir/p-e4.json"
+assert_fail "(e) two protected roles share one authority scope" "E_RELATION" validate-document "$tmpdir/p-e4.json"
+mutate "$tmpdir/profile.json" '.body.bindings[1].principal_id = .body.bindings[0].principal_id' "$tmpdir/p-e5.json"
+assert_fail "(e) two protected roles share one principal_id" "E_RELATION" validate-document "$tmpdir/p-e5.json"
+mutate "$tmpdir/profile.json" '.body.bindings[1].execution_kind = "model"' "$tmpdir/p-e6.json"
+assert_fail "(e) verifier forced to model execution" "E_SHAPE" validate-document "$tmpdir/p-e6.json"
+mutate "$tmpdir/profile.json" '.body.bindings[0].skill_refs = [.body.bindings[0].package_ref]' "$tmpdir/p-e7.json"
+assert_fail "(e) deterministic binding with non-empty skill_refs" "E_SHAPE" validate-document "$tmpdir/p-e7.json"
+mutate "$tmpdir/profile.json" '.body.bindings[0].binding_id = .body.bindings[1].binding_id' "$tmpdir/p-e8.json"
+assert_fail "(e) duplicate binding_id" "E_SHAPE" validate-document "$tmpdir/p-e8.json"
+
+echo "== (f) resolved_profile shape (validate-document) =="
+mutate "$tmpdir/resolved_profile.json" 'del(.body.selection_ref)' "$tmpdir/rp-f1.json"
+assert_fail "(f) missing selection_ref" "E_SHAPE" validate-document "$tmpdir/rp-f1.json"
+mutate "$tmpdir/resolved_profile.json" '.body.selection_ref.purpose = "grant"' "$tmpdir/rp-f2.json"
+assert_fail "(f) selection_ref carries the wrong purpose" "E_SHAPE" validate-document "$tmpdir/rp-f2.json"
+mutate "$tmpdir/resolved_profile.json" '.body.bindings = [.body.bindings[0],.body.bindings[1],.body.bindings[2]]' "$tmpdir/rp-f3.json"
+assert_fail "(f) resolved bindings below the 4 minimum" "E_SHAPE" validate-document "$tmpdir/rp-f3.json"
+mutate "$tmpdir/resolved_profile.json" '.body.profile_source.value_format = "canonical-json" | .body.profile_source.source.object_type = "tree"' "$tmpdir/rp-f4.json"
+assert_fail "(f) canonical-json source pointing at a tree, not a blob" "E_SHAPE" validate-document "$tmpdir/rp-f4.json"
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].tool_sources = [{tool_id:"t1",package_source:.body.bindings[0].package_source,config_source:{state:"absent"}},{tool_id:"t1",package_source:.body.bindings[0].package_source,config_source:{state:"absent"}}]' "$tmpdir/rp-f5.json"
+assert_fail "(f) duplicate tool_id in tool_sources" "E_SHAPE" validate-document "$tmpdir/rp-f5.json"
+
+echo "== (g) stage_request shape (validate-document) =="
+mutate "$tmpdir/request.json" 'del(.body.risk)' "$tmpdir/r-g1.json"
+assert_fail "(g) missing risk" "E_SHAPE" validate-document "$tmpdir/r-g1.json"
+mutate "$tmpdir/request.json" '.body.risk.tier = {namespace:"core",name:"not-a-tier"}' "$tmpdir/r-g2.json"
+assert_fail "(g) unknown core risk tier" "E_SHAPE" validate-document "$tmpdir/r-g2.json"
+mutate "$tmpdir/request.json" '.body.operation.permissions = []' "$tmpdir/r-g3.json"
+assert_fail "(g) operation permissions below the 1 minimum" "E_SHAPE" validate-document "$tmpdir/r-g3.json"
+mutate "$tmpdir/request.json" '.body.operation.arguments = {artifact_kind:"git-patch"}' "$tmpdir/r-g4.json"
+assert_fail "(g) git-patch arguments missing allowed_delta" "E_SHAPE" validate-document "$tmpdir/r-g4.json"
+mutate "$tmpdir/request.json" '.body.required_evidence_kinds = []' "$tmpdir/r-g5.json"
+assert_fail "(g) required_evidence_kinds below minimum" "E_SHAPE" validate-document "$tmpdir/r-g5.json"
+mutate "$tmpdir/request.json" '.body.required_evidence_kinds = ["independent-review"]' "$tmpdir/r-g6.json"
+assert_fail "(g) producer required_evidence_kinds must be exactly deterministic" "E_SHAPE" validate-document "$tmpdir/r-g6.json"
+mutate "$tmpdir/request.json" '.body.finish_condition.input_id = .body.verification_instruction.input_id' "$tmpdir/r-g7.json"
+assert_fail "(g) finish_condition and verification_instruction share one input_id" "E_SHAPE" validate-document "$tmpdir/r-g7.json"
+mutate "$tmpdir/request.json" '.body.requested_at = "not-a-time"' "$tmpdir/r-g8.json"
+assert_fail "(g) malformed requested_at" "E_SHAPE" validate-document "$tmpdir/r-g8.json"
+mutate "$tmpdir/request.json" '.body.operation.role = "publisher"' "$tmpdir/r-g9.json"
+assert_fail "(g) bootstrap producer-only rule violated by a non-producer role" "E_SHAPE" validate-document "$tmpdir/r-g9.json"
+
+echo "== (h) stage_result shape (validate-document) =="
+mutate "$tmpdir/result.json" '.body.evidence = [.body.evidence[0], (.body.evidence[0] | .evidence_id = "ev-2")]' "$tmpdir/s-h1.json"
+assert_fail "(h) two evidence items share one kind" "E_SHAPE" validate-document "$tmpdir/s-h1.json"
+mutate "$tmpdir/result.json" '.body.status = "not-a-status"' "$tmpdir/s-h2.json"
+assert_fail "(h) unknown terminal status" "E_SHAPE" validate-document "$tmpdir/s-h2.json"
+mutate "$tmpdir/result.json" '.body.attempt_number = 0' "$tmpdir/s-h3.json"
+assert_fail "(h) attempt_number below 1" "E_SHAPE" validate-document "$tmpdir/s-h3.json"
+mutate "$tmpdir/result.json" '.body.execution.used_capability = {kind:"registered", id:"not-a-capability"}' "$tmpdir/s-h4.json"
+assert_fail "(h) registered capability outside the closed set" "E_SHAPE" validate-document "$tmpdir/s-h4.json"
+mutate "$tmpdir/result.json" '.body.execution.metadata.tools.state = "not-applicable"' "$tmpdir/s-h5.json"
+assert_fail "(h) tools fact cannot be not-applicable for any execution" "E_SHAPE" validate-document "$tmpdir/s-h5.json"
+mutate "$tmpdir/result.json" 'del(.body.outputs[0].ref)' "$tmpdir/s-h6.json"
+assert_fail "(h) output missing its content ref" "E_SHAPE" validate-document "$tmpdir/s-h6.json"
+
+echo "== (i) profile-set relations (validate-profile-set) =="
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].package_source.source.object_id = ("f"*40)' "$tmpdir/rp-i1.json"
+assert_fail "(i) resolved package_source does not match the binding's package_ref" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i1.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].adapter_implementation.version = "not-v1"' "$tmpdir/rp-i2.json"
+assert_fail "(i) resolved adapter_implementation.version does not match the manifest" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i2.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/resolved_profile.json" '.body.bindings = [.body.bindings[1],.body.bindings[2],.body.bindings[3],.body.bindings[0]] | .body.bindings[3].binding.binding_id = "no-such-binding"' "$tmpdir/rp-i3.json"
+assert_fail "(i) resolved bindings do not cover the same binding_id set as the profile" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i3.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/profile.json" '.body.bindings[0].manifest_ref.id = "no-such-manifest"' "$tmpdir/p-i4.json"
+assert_fail "(i) mutated profile's own digest no longer matches the resolved profile's profile_ref" "E_REF" validate-profile-set "$tmpdir/p-i4.json" "$tmpdir/resolved_profile.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/manifest-producer.json" '.id = "extra-manifest-unrelated"' "$tmpdir/extra-manifest-unrelated.json"
+assert_fail "(i) a referenced manifest is simply not supplied (profile/resolved digests untouched)" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/extra-manifest-unrelated.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/resolved_profile.json" '.body.profile_ref.sha256 = ("0"*64)' "$tmpdir/rp-i5.json"
+assert_fail "(i) resolved profile_ref digest does not match the supplied profile" "E_REF" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i5.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+cp "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer-dup.json"
+assert_fail "(i) two supplied manifests share one document id" "E_REF" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-producer-dup.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].config_source = {state:"present", value:{source:.body.bindings[0].package_source.source, value_format:"raw-bytes", value_sha256:("1"*64)}}' "$tmpdir/rp-i6.json"
+assert_fail "(i) resolved config_source present without a config_ref on the binding" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i6.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+
+echo "== (j) stage-run relations (validate-stage-run) =="
+mutate "$tmpdir/result.json" '.body.outcome.value = "no-change"' "$tmpdir/s-j1.json"
+assert_fail "(j) producer outcome mismatches non-empty outputs" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j1.json"
+mutate "$tmpdir/result.json" '.body.execution.performer.role = "verifier" | .body.execution.actual_binding.role = "verifier"' "$tmpdir/s-j2.json"
+assert_fail "(j) execution performer role does not match the request's binding role" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j2.json"
+mutate "$tmpdir/result.json" '.body.evidence = [{evidence_id:"ev-1",kind:"independent-review",verdict:"passed",proof_ref:{content_id:"p1",media_type:"application/json",sha256:("2"*64)}}]' "$tmpdir/s-j3.json"
+assert_fail "(j) producer result carries reviewer-only evidence kind" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j3.json"
+mutate "$tmpdir/result.json" '.body.finished_at = "2020-01-01T00:00:00Z"' "$tmpdir/s-j4.json"
+assert_fail "(j) finished_at precedes started_at" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j4.json"
+mutate "$tmpdir/result.json" '.body.attempt_number = 0' "$tmpdir/s-j5.json"
+assert_fail "(j) attempt_number below 1 (shape catches it first)" "E_SHAPE" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j5.json"
+mutate "$tmpdir/result.json" '.body.request_ref.sha256 = ("0"*64)' "$tmpdir/s-j6.json"
+assert_fail "(j) result request_ref digest does not match the supplied request" "E_REF" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j6.json"
+mutate "$tmpdir/result.json" '.body.resolved_profile_ref.sha256 = ("0"*64)' "$tmpdir/s-j7.json"
+assert_fail "(j) result resolved_profile_ref digest does not match the supplied resolved profile" "E_REF" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j7.json"
+mutate "$tmpdir/result.json" 'del(.body.finished_at)' "$tmpdir/s-j8.json"
+assert_fail "(j) completed status missing finished_at (status presence matrix)" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j8.json"
+mutate "$tmpdir/result.json" '.body.status = "skipped" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = []' "$tmpdir/s-j9.json"
+assert_ok "(j) skipped status with matching empty fields is a legal terminal state" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j9.json"
+mutate "$tmpdir/result.json" '.body.status = "skipped" | .body.reason = {reason_id:"r1"} | del(.body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = []' "$tmpdir/s-j10.json"
+assert_fail "(j) skipped status still carrying an outcome" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j10.json"
+mutate "$tmpdir/request.json" '.body.operation.binding_id = "no-such-binding"' "$tmpdir/r-j11.json"
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'stage_result_doc($request_sha; $resolved_sha)' --arg request_sha "$(hash_of "$tmpdir/r-j11.json")" --arg resolved_sha "$sha_resolved" > "$tmpdir/s-j11.json"
+assert_fail "(j) request operation names a binding absent from the resolved profile" "E_RELATION" validate-stage-run "$tmpdir/r-j11.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j11.json"
+
+echo "== (k) jq version pin and SHA-tool fallback (environment) =="
+fakebin="$tmpdir/fakebin"
+mkdir -p "$fakebin"
+cat > "$fakebin/jq" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "jq-1.7"; exit 0; fi
+exec /usr/bin/env jq "$@"
+EOF
+chmod +x "$fakebin/jq"
+out="$(PATH="$fakebin:$PATH" bash "$wrapper" validate-document "$tmpdir/profile.json" 2>&1 1>/dev/null)" && rc=0 || rc=$?
+assert_eq "(k) non-1.6 jq on PATH is rejected (exit)" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+assert_eq "(k) non-1.6 jq on PATH is rejected (token)" "E_RUNTIME" "$out"
+
+nojqbin="$tmpdir/nojqbin"
+mkdir -p "$nojqbin"
+for b in bash sh cat head wc awk tr mktemp rm dirname cmp env printf sha256sum shasum; do
+  p="$(command -v "$b" 2>/dev/null || true)"
+  [ -n "$p" ] && ln -sf "$p" "$nojqbin/$b"
+done
+rm -f "$nojqbin/sha256sum" "$nojqbin/shasum"
+out="$(PATH="$nojqbin" bash "$wrapper" validate-document "$tmpdir/profile.json" 2>&1 1>/dev/null)" && rc=0 || rc=$?
+assert_eq "(k) missing SHA tool -> E_RUNTIME (exit)" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+assert_eq "(k) missing SHA tool -> E_RUNTIME (token)" "E_RUNTIME" "$out"
+
+noshasumbin="$tmpdir/noshasumbin"
+mkdir -p "$noshasumbin"
+for b in bash sh jq cat head wc awk tr mktemp rm dirname cmp env printf shasum; do
+  p="$(command -v "$b" 2>/dev/null || true)"
+  [ -n "$p" ] && ln -sf "$p" "$noshasumbin/$b"
+done
+rm -f "$noshasumbin/sha256sum"
+out2="$(PATH="$noshasumbin" bash "$wrapper" validate-document "$tmpdir/profile.json" 2>&1)"
+assert_eq "(k) falls back to shasum -a 256 when sha256sum is absent (empty output)" "" "$out2"
+
+echo "-- $passed passed, $failed failed --"
+if [ "$failed" -ne 0 ]; then
+  exit 1
+fi
