@@ -145,20 +145,22 @@ authority, or perform an external write.
   review rounds are defect evidence, not acceptance evidence. The #180 bridge ended
   when G1 changed the intent blob and how the work is split and delivered; it
   authorizes no child, branch, PR, or resume.
-- **R22 — cross-child pins fail closed.** Each child spec records its direct upstream
-  accepted spec blobs. Each downstream high-risk plan waits for and records all
-  required upstream G3 tuples. A tuple is exactly
-  `{merge_commit, exports:[{path,mode,type,oid}]}` using that child's closed product
-  export list in Design. Before downstream G2 review, compare only the direct spec
-  blobs with current main. Before downstream plan review, code, CI review, and final
-  review, compare those blobs again and also require each G3 merge commit to be an
-  ancestor of current main and every export tuple to equal the current-main Git
-  entry. Any move or mismatch marks the downstream work stale and returns it through
-  its own G2 and high-risk plan gates; code already written is preserved, but its
-  review evidence is stale. Assembly performs the G3 check for all six upstream
-  children. Shared CI, restore manifest, activation-guard, test-harness, fixture,
-  and documentation paths are not product exports; every downstream exact-head/base
-  review instead reruns and binds their current versions.
+- **R22 — cross-child pins fail closed.** Each child spec records the full required
+  upstream accepted-spec closure. Each downstream high-risk plan waits for and
+  records the full required upstream G3 closure. A G3 tuple is exactly
+  `{spec_blob,merge_commit,exports:[{path,mode,type,oid}]}` using that child's closed
+  product export list in Design. The upstream implementation PR/review/G3 record
+  must bind that same accepted `spec_blob`. Before downstream G2 review, compare
+  every recorded upstream spec blob with current main. Before downstream plan review,
+  code, CI review, and final review, compare those blobs again; also require every G3
+  tuple's `spec_blob` to match, each merge commit to be an ancestor of current main,
+  and every export tuple to equal the current-main Git entry. Any move or mismatch
+  marks the downstream work stale and returns it through its own G2 and high-risk
+  plan gates; code already written is preserved, but its review evidence is stale.
+  Assembly performs the G3 check for all six upstream children. Shared CI, restore
+  manifest, activation-guard, test-harness, fixture, and documentation paths are not
+  product exports; every downstream exact-head/base review instead reruns and binds
+  their current versions.
 - **R23 — private state is enforced until assembly.** The schema child establishes a
   deterministic activation guard. Every first-six child runs it in CI and proves
   there is no public command/root dispatcher, install/export/profile wiring, user
@@ -193,14 +195,15 @@ The diagram shows scheduling order, not every source import. The table below is
 the exact direct-dependency list and its full upstream G3 closure. Children on the
 same level may proceed in parallel after their common prerequisites merge.
 
-Each child spec frontmatter adds `upstream-spec-blobs`, an exact direct-dependency
-map of `slug → git-blob` (`{}` when none). Each child plan adds `upstream-g3`, a
-full-closure map of `slug → {merge_commit,exports:[{path,mode,type,oid}]}`. G2 review
-compares the first map with the current-main child spec files. Plan review, code, CI
-review, and final review also compare the second map under R22. No issue comment or
-branch state substitutes for those exact identities.
+Each child spec frontmatter adds `upstream-spec-blobs`, an exact full-closure map of
+`slug → git-blob` (`{}` when none), using the `Full upstream closure` column for
+the slug set. Each child plan adds `upstream-g3`, a map of
+`slug → {spec_blob,merge_commit,exports:[{path,mode,type,oid}]}` over that same full
+closure. G2 review compares the first map with the current-main child spec files.
+Plan review, code, CI review, and final review also compare the second map under R22.
+No issue comment or branch state substitutes for those exact identities.
 
-| Child | One private responsibility | Direct dependencies | All required upstream G3 | Expected net new lines: product + owned proof |
+| Child | One private responsibility | Direct dependencies | Full upstream closure: specs + G3 | Expected net new lines: product + owned proof |
 |---|---|---|---|---:|
 | `portable-core-schema` | parsed depth/member/string/integer limits; primitives; shared refs; envelopes; document-kind registry; one declarative role/capability/permission/evidence policy table | none | none | 360–460 |
 | `portable-core-ingress` | raw-byte limit and bounded snapshot, jq 1.6 canonical bytes, hashes, private temp I/O, sanitized errors | schema | schema | 230–320 |
@@ -739,9 +742,8 @@ Before completed outcome reduction, evidence kinds equal the request exactly, on
 item per requested kind. Producer permits only deterministic evidence. Verifier
 permits deterministic plus only the requested behavioral/architecture kinds.
 Reviewer permits only independent-review. `fact_gap` means a requested
-provider/model/effort/prompt/skill fact is unavailable, or the selected binding
-requests one or more tools and tools are unavailable. Snapshot is excluded because
-it has no requested counterpart.
+provider/model/effort/prompt/skill fact is unavailable, or the tools fact is
+unavailable. Snapshot is excluded because it has no requested counterpart.
 
 | Role | Failed evidence | Inconclusive evidence or `fact_gap` | Outputs | Required outcome |
 |---|---:|---:|---:|---|
