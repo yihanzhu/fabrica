@@ -76,9 +76,11 @@ authority, or perform an external write.
   door, table-driven tests, docs, restore entries, and operator-owned CI wiring. Line
   count is a reviewability signal, not a pass/fail gate. Complete behavior, complete
   tests, CI, independent review, and the safety boundaries remain hard requirements.
-  If more than one PR is needed, the plan returns to the operator before code to
-  record exact slices and branches. Nothing public or live activates before the full
-  contract and integration proof are accepted.
+  Implementation remains one reviewable concern on the deterministic
+  `ystack/impl/portable-core-contracts` branch and PR. If that cannot stay coherent,
+  return to the artifact gate for separately accepted child intents before planning
+  or code. Nothing public or live activates before the full contract and integration
+  proof are accepted.
 - **R15 — no live change.** This work does not activate a profile, extract a real
   adapter, regenerate `/yshifu`, alter an open session, or enable autonomous writes.
   The operator remains the only merge authority.
@@ -562,8 +564,9 @@ large differences from the range and chooses review units by responsibility, not
 an arbitrary line target. Code golf, generated long lines, copied registries, a
 second parser, system-jq drift, reused production logic as the test oracle, or reduced
 negative coverage are never valid ways to appear smaller. If one PR is no longer
-cohesive and reviewable, stop before code and ask the operator to record an exact
-multi-PR delivery shape; implementation cannot invent one mid-flight.
+cohesive and reviewable, stop before code and return to the artifact gate for
+separately accepted child scopes. A plan or operator comment cannot invent extra
+implementation PRs for this intent.
 
 ### Downstream handoffs and intent questions
 
