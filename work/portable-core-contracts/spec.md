@@ -1,6 +1,7 @@
 ---
-intent-blob: 3ed8bb434c096ec126d680019a9491ab8a113e31
-drafted: 2026-08-28
+intent-blob: f77fc1fdd8f7af228e7f211740901b265fc545ae
+risk: high
+drafted: 2026-08-29
 ---
 
 # Spec: portable core contracts
@@ -67,27 +68,300 @@ authority, or perform an external write.
   snapshot, effort, prompt, skills, and tools are recorded/computed/unavailable.
   Missing facts carry a reason and are never copied from requested profile values.
   Trace, usage, and cost move to telemetry.
-- **R13 — pure validation.** One schema source validates canonical bytes, exact
-  shapes, registries, manifest/profile/resolution relations, and
-  request/result/status/evidence rules. It never resolves physical repositories,
-  launches a process, reads a raw fixture, or evaluates policy.
-- **R14 — reviewable, evidence-backed delivery.** The plan estimates normally
-  formatted size and names cohesive review units for one jq source, one shell front
-  door, table-driven tests, docs, restore entries, and operator-owned CI wiring. Line
-  count is a reviewability signal, not a pass/fail gate. Complete behavior, complete
-  tests, CI, independent review, and the safety boundaries remain hard requirements.
-  Implementation remains one reviewable concern on the deterministic
-  `ystack/impl/portable-core-contracts` branch and PR. The operator accepts the
-  current estimate as an explicit exception to the repository's soft review-size
-  guide; line count alone does not require a split. The plan groups the one PR into
-  clear commits and review sections. Any actual concern or scope expansion returns
-  to the artifact gate. Nothing public or live activates before the full contract
-  and integration proof are accepted.
+- **R13 — one contract package, several private owners.** V1 is one versioned
+  package with the semantic identity `core.contracts.v1`. Shared types and policy
+  tables, profile rules, request rules, result-fact rules, and result-truth rules
+  each have one private owner. A later owner may import an earlier one; it may not
+  copy a document kind, role, capability, permission, evidence, outcome, shape, or
+  acceptance rule into a second home. Product modules never resolve physical
+  repositories, launch a candidate process, depend on test fixtures, or evaluate
+  policy.
+- **R14 — seven ordered child initiatives.** Delivery uses exactly
+  `portable-core-schema`, `portable-core-ingress`,
+  `portable-core-profile-graph`, `portable-core-stage-request`,
+  `portable-core-result-facts`, `portable-core-result-truth`, and
+  `portable-core-assembly`. Every child has its own intake, intent, spec with
+  `risk: high`, high-risk plan, implementation PR, real CI proof, independent
+  review, and human merge. Every child artifact and plan PR tracks its child intake.
+  Each child implementation closes that intake. With respect to parent #155, the
+  first six implementations use `Tracks #155`; assembly also uses `Closes #155`.
 - **R15 — no live change.** This work does not activate a profile, extract a real
   adapter, regenerate `/yshifu`, alter an open session, or enable autonomous writes.
   The operator remains the only merge authority.
+- **R16 — partial packages stay private.** The first six children add only private
+  package members, test drivers, fixtures, and their exact CI proof. They do not add
+  or change a public validator command, install path, profile selection, or live
+  caller for the generation under construction. During an upgrade the prior public
+  package remains unchanged and selected. Only `portable-core-assembly` may add or
+  switch the public shell command, root
+  dispatcher, full-package user documentation, final restore instructions, and
+  three public command forms. Every child immediately lists its own restore-critical
+  files in `ci/required-files.txt`, except that first-publication assembly adds the
+  new public wrapper and its exact manifest entry together in the R24 switch commit.
+  During an upgrade that entry already exists and stays byte-identical. Assembly
+  owns only the final package/user view.
+- **R17 — code loading is fixed.** The assembly wrapper resolves its own physical
+  repository root and contains one literal accepted generation ID. It loads that
+  generation's one literal root program, one literal ingress library, and one literal
+  private module directory. It passes jq 1.6 exactly one `-L` directory, which
+  disables jq's builtin module search list. Product jq files may use only exact statements of the form
+  `import "NAME" as NAME;`, where `NAME` is one of the five accepted module names.
+  `include`, import metadata (including `search`), JSON imports, and names containing
+  `/`, `.`, `..`, `~`, `$ORIGIN`, or backslash are forbidden. Caller arguments, cwd,
+  `HOME`, module-search environment, config, document content, URLs, and ambient jq
+  modules cannot select a jq module or shell library. The resolved repository root
+  and every package-path directory component are real directories reached without a
+  symlink. The stable `scripts/core-contract.sh` wrapper plus the selected generation's
+  ingress library, root program, and every module are regular non-symlink files inside
+  that same physical repository. Any mismatch stops as `E_RUNTIME`. These
+  restrictions close both search mechanisms documented by the
+  [jq 1.6 module rules](https://jqlang.org/manual/v1.6/#modules): the default list
+  selected by `-L` and the optional `search` import metadata. Host executables found
+  through `PATH` are an operator-controlled runtime dependency, not part of this
+  module-search guarantee; CI separately pins the exact jq 1.6 release asset.
+- **R18 — every document receives its complete self-check.** Every command applies
+  the same ordered per-document pipeline to every supplied document: parsed limits,
+  shape, ref syntax, and all self-contained relations owned by that document's
+  module. A command may then add only its named cross-document checks. No command may
+  choose a smaller version of a document's self-check.
+- **R19 — assembly routes; it does not redefine rules.** The root dispatcher owns
+  command routing, fixed error order, and composition only. It contains no profile,
+  request, result, capability, permission, evidence, or outcome rule. A defect in a
+  private owner returns to that child's artifact gate; assembly never patches it by
+  copying the rule.
+- **R20 — proof is complete by rule, route, and two frozen ledgers.** Every owned
+  rule has a stable `<owner>.<name>` rule ID listed in its child spec, direct valid
+  and invalid cases, every required command-to-rule route, and a forced-route test.
+  Tests keep expected verdicts as literal data and never use product policy as their
+  oracle. The parent plan freezes two inventories from PR #183 head
+  `ab4a7082f02e67b5748c5c54b9214f37d222f53f`:
+  31 discrete review-finding rows from comments 5463604326, 5463851247,
+  5464015820, and 5464192510, plus the 279 assertion results emitted in execution
+  order by `scripts/test/core-contract.test.sh` at that head. Finding IDs are
+  `review-rN-fNN`; assertion IDs are `legacy-test-001` through `legacy-test-279`
+  with their original output label. Repeated findings remain separate rows but may
+  point to the same new owner/rule. Every finding maps to one owner and closing
+  rule/test or a reasoned superseding rule. Every assertion maps to one owner;
+  `ported` and `replaced-by` name exact new rule/test IDs, while
+  `invalid-old-positive` gives a reason. The required denominators are 31/31 and
+  279/279; neither count proves semantic completeness by itself.
+- **R21 — PR #183 is evidence, not implementation.** No child branches from, merges,
+  or wholesale cherry-picks PR #183. Code and tests may move only after receiving one
+  owner and fresh proof on the child's accepted base. The old commit history and four
+  review rounds are defect evidence, not acceptance evidence. The #180 bridge ended
+  when G1 changed the intent blob and how the work is split and delivered; it
+  authorizes no child, branch, PR, or resume.
+- **R22 — cross-child pins fail closed.** Each child spec records the full required
+  upstream accepted-spec closure. Each downstream high-risk plan waits for and
+  records the full required upstream G3 closure. Define
+  `g3_ref={spec_blob,generation_id,merge_commit,
+  generation_exports:[{path,mode,type,oid}],
+  activation_exports:[{path,mode,type,oid}]}` and
+  `g3_record={self:g3_ref,built_against:{slug:g3_ref}}`. Each upstream
+  implementation PR/review/G3 record binds its accepted spec, generation, own closed
+  product exports, and the exact full dependency closure it was built against.
+  Before downstream G2 review, compare every recorded upstream spec blob and
+  generation ID with current main. Before downstream plan review, code, CI review,
+  and final review, compare those values again and require every G3 self ref to match
+  current main: `merge_commit` is the operator-accepted merge commit and is an
+  ancestor of current main, and both export lists equal current-main Git entries.
+  The append-only registry also contains the exact generation record from R24. For
+  each G3 record, `built_against` must equal the downstream map's self refs for that
+  child's full prerequisite closure. Any move, generation mix, or mismatch marks the
+  downstream work stale and returns it through its own G2 and high-risk plan gates;
+  code already written is preserved, but its review evidence is stale. Assembly
+  performs the G3 check for all six upstream children. Shared CI, restore manifest,
+  activation-guard, test-harness, fixture, and documentation paths are not product
+  exports; every downstream exact-head/base review instead reruns and binds their
+  current versions. The generation registry is separately checked under R24.
+- **R23 — private state is enforced until assembly.** The schema child establishes a
+  deterministic generation-aware activation guard. Before the first assembly, it
+  requires no public wrapper/root and no non-test caller. During an upgrade, every
+  first-six child permits the one stable wrapper and already published immutable
+  generation roots, but requires that wrapper to keep selecting exactly one previous
+  complete generation. It forbids any public/non-test caller or user documentation
+  from naming the generation under construction, and that generation has no root
+  program until assembly. Only fixed private test drivers may load its members.
+  Assembly's pre-switch phase adds the new root while the wrapper remains absent or
+  selects the old generation. After private proof, the switch commit either adds or
+  changes the one wrapper. The post-switch guard permits multiple immutable
+  generation roots but exactly one wrapper selecting one complete generation, while
+  still proving no live profile, manager, template, or install path calls it.
+- **R24 — generations switch atomically.** The parent plan chooses and records one
+  unused `generation_id` matching `g-[0-9a-f]{64}`. It is public, not a secret or
+  authority value, and can never be reused. `core/v1/generation-registry.json` is a
+  canonical, restore-critical, append-only record with exact entries
+  `{generation_id,parent_spec_blob,parent_plan_merge_commit}`. The parent plan checks
+  the ID is absent; the schema child creates or appends its exact entry. CI requires
+  unique IDs and every prior main entry to remain an unchanged ordered prefix, so
+  deleting an old generation subtree never permits ID reuse. All seven child
+  artifacts and G3 records name that exact ID. Their implementation product files
+  write only below its inactive `core/v1/generations/<generation_id>/` subtree,
+  except for shared proof/registry files and the stable public wrapper.
+  Generation-scoped exports become permanently immutable when assembly publishes
+  them. The wrapper is a separate activation export. Assembly first lands the new
+  root and proves the complete generation through private test drivers while the
+  stable wrapper is absent or still selects the old generation. On first publication,
+  the later switch commit changes exactly two paths: it adds
+  `scripts/core-contract.sh` and adds the exact `scripts/core-contract.sh` entry to
+  `ci/required-files.txt`. On an upgrade, the entry must already exist and remain
+  byte-identical, and the switch commit changes only the wrapper's literal generation
+  ID. The structure check, public-wrapper CI, and independent review run again on
+  that exact post-switch head; only that evidence may produce `merge-ready` and human
+  merge. Any upgrade parent plan pins the current
+  wrapper blob and selected generation, chooses a newly accepted unused generation
+  ID, and repeats both proof phases. The old public generation remains selected on
+  main until the final assembly merge.
 
 ## Design
+
+### Package owners and child order
+
+`core.contracts.v1` names the semantic contract package. It is not a trust claim,
+Git identity, grant, or authority. Exact source provenance remains a caller-owned
+Git tree claim outside this validator.
+
+The accepted dependency graph is:
+
+```text
+portable-core-schema
+  ├─> portable-core-ingress
+  └─> portable-core-profile-graph
+        └─> portable-core-stage-request
+              ├─> portable-core-result-facts
+              └─> portable-core-result-truth
+portable-core-result-facts ────────────┘
+
+all six private children ──> portable-core-assembly
+```
+
+The diagram shows scheduling order, not every source import. The table below is
+the exact direct-dependency list and its full upstream G3 closure. Children on the
+same level may proceed in parallel after their common prerequisites merge.
+
+Each child spec frontmatter adds the parent-plan-recorded `generation-id` plus
+`upstream-spec-blobs`, an exact full-closure map of `slug → git-blob` (`{}` when
+none), using the `Full upstream closure` column for the slug set. Each child plan
+adds `upstream-g3`, a map of `slug → g3_record` over that same full closure. G2
+review compares generation and the spec map with current main. Plan review, code,
+CI review, and final review also compare every G3 record under R22, including that
+each record's `built_against` refs exactly match the selected upstream generation.
+No issue comment or branch state substitutes for those exact identities.
+
+| Child | One private responsibility | Direct dependencies | Full upstream closure: specs + G3 | Expected net new lines: product + owned proof |
+|---|---|---|---|---:|
+| `portable-core-schema` | parsed depth/member/string/integer limits; primitives; shared refs; envelopes; document-kind registry; one declarative role/capability/permission/evidence policy table; append-only generation-registry entry | none | none | 360–460 |
+| `portable-core-ingress` | raw-byte limit and bounded snapshot, jq 1.6 canonical bytes, hashes, private temp I/O, sanitized errors | schema | schema | 230–320 |
+| `portable-core-profile-graph` | manifest/profile/resolved-profile exact body shapes, self relations, and supplied-document graph relations | schema | schema | 360–480 |
+| `portable-core-stage-request` | request exact body shape, capability arguments, permissions, target/input/instruction/evidence closure, request-to-binding relation | schema, profile graph | schema, profile graph | 300–400 |
+| `portable-core-result-facts` | actual-binding/execution/fact shapes plus comparison with the request-owned expected execution projection | schema, profile graph, stage request | schema, profile graph, stage request | 280–380 |
+| `portable-core-result-truth` | stage-result exact body shape, six-status presence, stale observations, evidence closure, outcome reduction, outputs/delta/time | schema, profile graph, stage request, result facts | schema, profile graph, stage request, result facts | 380–500 |
+| `portable-core-assembly` | fixed dispatcher, public wrapper, command routing, full-package proof, aggregate CI, user docs, and final restore view | all six | all six | 300–420 |
+| **Package total** | | | | **about 2,210–2,960** |
+
+These are normally formatted net-new-line ranges relative to each child's accepted
+base, including product code and owned proof. They are planning inputs only. Every
+child G2/plan independently records `review_size: standard|accepted-exception`; it
+does not inherit an exception from this parent. The ranges are not permission to add
+a second responsibility, compress code, copy policy, or reduce negative tests. A
+child that cannot stay independently reviewable returns to its own artifact gate
+before code.
+
+The schema policy table is the only source for literal role/capability/permission/
+evidence sets and mappings. Profile, request, and result owners do not redefine those
+constants; they alone own the rules that apply the shared constants to their exact
+document shapes and cross-document relations.
+
+This spec fixes the private package layout:
+
+```text
+core/v1/generations/<generation-id>/modules/schema.jq
+core/v1/generations/<generation-id>/modules/profile_graph.jq
+core/v1/generations/<generation-id>/modules/stage_request.jq
+core/v1/generations/<generation-id>/modules/result_facts.jq
+core/v1/generations/<generation-id>/modules/result_truth.jq
+core/v1/generations/<generation-id>/core-ingress.sh
+core/v1/generation-registry.json
+```
+
+Allowed jq imports are exact:
+
+| Importer | Allowed module names |
+|---|---|
+| `schema.jq` | none |
+| `profile_graph.jq` | `schema` |
+| `stage_request.jq` | `schema`, `profile_graph` |
+| `result_facts.jq` | `schema`, `profile_graph`, `stage_request` |
+| `result_truth.jq` | `schema`, `profile_graph`, `stage_request`, `result_facts` |
+| assembly `contracts.jq` | all five, once each |
+
+CI statically rejects every other import/include/module directive or metadata form
+and behaviorally proves fake search roots cannot change the loaded program.
+
+Within one planned generation, export ownership is closed and disjoint:
+
+| Child | `generation_exports` — immutable after publication | `activation_exports` — assembly switch only |
+|---|---|---|
+| `portable-core-schema` | `core/v1/generations/<generation-id>/modules/schema.jq` | none |
+| `portable-core-ingress` | `core/v1/generations/<generation-id>/core-ingress.sh` | none |
+| `portable-core-profile-graph` | `core/v1/generations/<generation-id>/modules/profile_graph.jq` | none |
+| `portable-core-stage-request` | `core/v1/generations/<generation-id>/modules/stage_request.jq` | none |
+| `portable-core-result-facts` | `core/v1/generations/<generation-id>/modules/result_facts.jq` | none |
+| `portable-core-result-truth` | `core/v1/generations/<generation-id>/modules/result_truth.jq` | none |
+| `portable-core-assembly` | `core/v1/generations/<generation-id>/contracts.jq` | `scripts/core-contract.sh` |
+
+No other path may appear in either G3 export list. Before assembly publishes the
+generation, a needed generation-export change returns through the owning child's
+artifact and plan gates, then refreshes every affected downstream pin/record. After
+assembly publishes it, no child edits any generation export; an upgrade follows R24
+under a new generation. The stable wrapper may change only as assembly's final
+activation export. Shared proof and aggregate paths may change only within accepted
+child scope and are revalidated on the current head/base; they never masquerade as a
+generation or activation export.
+
+The assembly child alone adds:
+
+```text
+core/v1/generations/<generation-id>/contracts.jq
+scripts/core-contract.sh
+```
+
+`contracts.jq` uses literal, namespaced imports. `core-contract.sh` resolves its
+own physical repository root, contains the literal accepted generation ID, sources
+only that generation's fixed ingress library, and runs jq with that generation's
+literal module root. The public command accepts no code, generation, module, schema,
+search-path, or test-hook argument.
+
+### Parent plan, child intake, and the failed attempt
+
+Merging this G2 amendment accepts the package design and `risk: high`; it does not
+approve a child intake, plan, or code. A new parent high-risk plan-only PR then pins
+this spec and records the seven exact child issue drafts, dependency order, review
+ranges, PR #183 migration ledger ownership, and PR #183 disposition. That parent
+plan creates no `ready` state and authorizes no new
+`ystack/impl/portable-core-contracts` work.
+
+The parent plan includes the exact R24 generation ID in all seven child issue drafts,
+verifies it is absent from the append-only registry, and verifies its subtree does
+not already exist. For an upgrade it also records the current wrapper blob and
+selected generation. After the plan merges, each child issue receives its own
+exact-title/body user-directed acceptance record and complete intent → spec-with-risk
+→ high-risk plan → implementation chain. Child
+artifact and plan PRs track their child issue and may also track #155. Each child
+implementation closes its own issue. With respect to parent #155, the first six
+implementation PRs use `Tracks #155`; the assembly implementation uses
+`Closes #155`.
+
+PR #183 remains frozen in its exact paused state after the final review round while
+G2 and the parent plan are under review: head
+`ab4a7082f02e67b5748c5c54b9214f37d222f53f`, reviewed base
+`14988a8a5392e888ff1aaee4c48afa5024bee003`, `round-3 + needs-human`, clean
+worktree, and open PR. Any unexplained move stops the amendment process. After G2 and
+the parent plan merge and all seven child issue numbers exist, the operator records
+the replacement links and closes #183 as superseded before any child code starts.
+It is never merged. Its exact head remains a read-only source snapshot until
+assembly G3, but no old CI, review, branch, plan, bridge, or commit is reused as
+acceptance evidence.
 
 ### Canonical notation and primitives
 
@@ -154,10 +428,10 @@ This union is named `Fact<T>`.
 | `change_ref` | `{repository_id:ID,base:present<git_revision_ref>,head:git_revision_ref,delta_ref:git_patch_ref}`; revisions match repository |
 | `source_value_ref` | `{source:git_object_ref,value_format:"raw-bytes"|"canonical-json",value_sha256:SHA256}`; `canonical-json` requires `source.object_type="blob"` |
 
-`RepoPath` is a non-empty repo-relative POSIX path with no empty, `.`, `..`,
-backslash, NUL, or control segment. Root tree is `git_location:{kind:"root"}`, never
-an empty path. Symlink/gitlink modes are not representable; physical checks belong
-to the resolver.
+`RepoPath` is a non-empty repo-relative POSIX path with no empty, `.`, `..`, or
+backslash segment and no Unicode control code U+0000–U+001F or U+007F–U+009F. Root
+tree is `git_location:{kind:"root"}`, never an empty path. Symlink/gitlink modes are
+not representable; physical checks belong to the resolver.
 
 Scope purposes are `selection`, `repository-context`, `qualification`, `grant`,
 `policy`, `authority`, `gate-requirement`, `gate-decision`, `config-contract`,
@@ -261,6 +535,19 @@ ID/version equals its manifest document ID/adapter version. Across the resolved
 profile, one exact source object has only one format/digest claim; a set cannot
 contain the same `git-key` twice. Missing/extra tools, a matching tool ID with any
 different version/package/config, or config without a manifest contract fails.
+
+`portable-core-profile-graph` gives these rules two named checks:
+
+- `resolved_profile_self_ok` needs no supplied profile or manifest. It checks the
+  embedded binding's capability/permission closure, protected-role separation,
+  profile-source digest claim, each manifest-source digest against its embedded
+  `manifest_ref.sha256`, each `adapter_implementation.id` against that manifest ref
+  ID, package/config/prompt/skill/tool source projections, and one claim per exact
+  source object. Every command that receives a resolved profile runs this full check.
+- `profile_set_graph_ok` owns only relations that need the separately supplied
+  profile or manifests: profile-to-resolved equality, exact supplied manifest set
+  and digests, offered roles/execution/capabilities/permissions/tools, adapter
+  implementation version, package equality, and config-contract presence.
 
 `validate-profile-set` recomputes supplied document refs and enforces exact manifest
 set, binding-ID set, role/execution offer, package/config/tool relations, capability
@@ -390,6 +677,16 @@ request behavioral and architecture.
 
 ### Stage result and evidence
 
+`portable-core-result-facts` owns the shapes and comparisons for actual binding,
+performer, environment, observed capability, model/tool facts, and whether execution
+matches the selected request/binding or preserves an incident mismatch.
+`portable-core-stage-request` owns one expected-execution projection from the
+request and resolved binding; result facts imports that projection instead of
+copying request selection rules. Result facts never chooses status or outcome.
+`portable-core-result-truth` alone owns status presence, evidence closure, stale
+observations, outcome precedence, outputs/delta, and time. This keeps execution
+comparison from silently overriding the outcome state machine.
+
 `outcome` is `{family:"change",value:"changed"|"no-change"|"inconclusive"}` or
 `{family:"check",value:"passed"|"failed"|"inconclusive"}`. `reason` is
 `{reason_id:ID,summary?:ShortText}`. `output` is
@@ -494,16 +791,29 @@ number is at least 1. Time order is
 `requested <= started <= finished <= recorded` with execution and
 `requested <= recorded` without it. Orchestrator owns sequence/history.
 
-For completed producer results, any non-passing evidence yields
-`change/inconclusive` with no output/delta. Otherwise one output yields
-`change/changed`; for `git-patch`, `output.ref` is a `git_patch_ref` and `delta_ref`
-is present and equals it. Delta is absent for the other artifact kinds. Empty
-output/delta yields
-`change/no-change`.
-For completed verifier/reviewer results, output/delta are empty: any failed evidence
-yields `check/failed`; otherwise any inconclusive evidence yields
-`check/inconclusive`; otherwise the result is `check/passed`. Completed-inconclusive
-always has a reason.
+Before completed outcome reduction, evidence kinds equal the request exactly, one
+item per requested kind. Producer permits only deterministic evidence. Verifier
+permits deterministic plus only the requested behavioral/architecture kinds.
+Reviewer permits only independent-review. `fact_gap` means a requested
+provider/model/effort/prompt/skill fact is unavailable, or the tools fact is
+unavailable. Snapshot is excluded because it has no requested counterpart.
+
+| Role | Failed evidence | Inconclusive evidence or `fact_gap` | Outputs | Required outcome |
+|---|---:|---:|---:|---|
+| producer | one or more | yes or no | must be 0 | `change/inconclusive`; reason required, delta absent |
+| producer | none | yes | must be 0 | `change/inconclusive`; reason required, delta absent |
+| producer | none | no | 0 | `change/no-change`; reason and delta absent |
+| producer | none | no | 1 | `change/changed`; git-patch requires equal patch output/delta, other artifact kinds forbid delta |
+| producer | none | no | more than 1 | invalid |
+| verifier/reviewer | one or more | yes or no | 0 | `check/failed`; failed has precedence, reason absent |
+| verifier/reviewer | none | yes | 0 | `check/inconclusive`; reason required |
+| verifier/reviewer | none | no | 0 | `check/passed`; reason absent |
+| verifier/reviewer | none or one or more | yes or no | nonzero | invalid |
+
+The required reduction order is explicit: checks use failed evidence first, then
+inconclusive evidence or `fact_gap`, then passed. Changes use any non-passing
+evidence or `fact_gap` before changed/no-change by output count. No compound
+condition may produce an outcome different from the table.
 
 For completed non-inconclusive execution, actual binding equals the corresponding
 projection of the selected resolved binding. Performer is an adapter actor with
@@ -512,7 +822,8 @@ environment equals the request, and capability is the requested registered ID.
 Recorded/computed provider, model, effort, prompt,
 and skills equal the selected model binding; deterministic fields follow the
 not-applicable rule. Recorded/computed tools are a subset of requested/offered tools;
-an unavailable requested fact makes the result inconclusive. Snapshot has no
+an unavailable requested fact is a `fact_gap`: it blocks passed/changed/no-change
+but never overrides failed check evidence in the table above. Snapshot has no
 requested counterpart and may be unavailable. Failed, cancelled, or
 completed-inconclusive execution may differ and preserves observed facts. Any other
 difference forbids completed non-inconclusive. Metadata kind matches actual binding.
@@ -525,9 +836,9 @@ plus registered `core.review.change.v1`. Wrong performer/capability may carry on
 non-passing request-allowed evidence. Prior evidence enters only through
 `prior_evidence_refs` and cannot satisfy current evidence.
 
-### Pure validator and delivery
+### Public validator, routing, and error boundary
 
-`scripts/core-contract.sh` exposes exactly:
+The assembly child exposes exactly:
 
 ```text
 validate-document DOCUMENT
@@ -536,58 +847,186 @@ validate-stage-run REQUEST RESOLVED_PROFILE RESULT
 ```
 
 No command accepts a repository path, physical root, executable, environment map,
-URL, or credential. Success is exit 0 with empty stdout. Failure is nonzero and
-starts stderr with `E_USAGE`, `E_RUNTIME`, `E_PARSE`, `E_CANONICAL`, `E_LIMIT`,
-`E_SHAPE`, `E_REF`, or `E_RELATION`; input bytes and local paths are not echoed.
+URL, credential, module path, schema path, or test switch. Success is exit 0 with
+empty stdout. Failure is nonzero and starts stderr with `E_USAGE`, `E_RUNTIME`,
+`E_PARSE`, `E_CANONICAL`, `E_LIMIT`, `E_SHAPE`, `E_REF`, or `E_RELATION`; input
+bytes, caller paths, private temp paths, and raw tool diagnostics are not echoed.
 
-Tests build one valid five-document bundle and run at least 60 table-driven
-mutations covering canonical roots/limits, exact shapes/enums, root-tree and unsafe
-paths, canonical-JSON tree rejection, manifest/profile/source relations, the three
-capabilities and five permission bounds, full package/tool/config equality,
-instruction purpose/subject/input closure, dormant/protected roles, empty
-deterministic skills, verifier target-revision equality,
-request/result/status/time/output and patch-media rules, actual-fact incidents,
-model/tool availability, evidence replay/passing-role rules, source/base and other
-stale selectors, generic escapes, and all three commands. They do not read Git,
-launch a process, or use a network.
+The public order is fixed:
 
-Planning estimate from the first implementation preflight:
+```text
+usage → runtime → raw-byte limit → parse → canonical
+      → parsed structural limits → shape → ref → relation
+```
 
-| Area | Normal-format working range |
-|---|---:|
-| `contracts.jq` | 380–755 |
-| shell wrapper | 50–110 |
-| readable fixtures and adversarial tests | 240–330 |
-| docs, restore manifest, and CI wiring | 30–60 |
-| **Likely total** | **about 800–1,100** |
+Command/arity checks run before jq, SHA, package-member, or input access. An input
+with more than 1,048,576 bytes returns `E_LIMIT` before parsing, even if its bytes are
+also invalid JSON. An input within that byte bound reaches parsing; parsed
+depth/member/string/integer limits return `E_LIMIT` only after canonical-byte proof.
+The dispatcher runs one semantic layer across every supplied document before it
+enters the next layer. Only after every document passes its complete self-check does
+a command run its cross-document graph.
 
-These numbers guide plan review; they do not waive or reject work. The plan explains
-large differences from the range and chooses review units by responsibility, not by
-an arbitrary line target. Code golf, generated long lines, copied registries, a
-second parser, system-jq drift, reused production logic as the test oracle, or reduced
-negative coverage are never valid ways to appear smaller. This one-concern contract
-keeps one implementation PR despite the estimate; commits and review passes separate
-responsibilities without creating partial product releases. A newly discovered
-concern or scope change returns to the artifact gate, and no plan may invent extra
-implementation PRs for this intent.
+`portable-core-ingress` owns one private error boundary for every raw-byte and temp
+operation. Forced-failure proof covers at least:
+
+- unreadable input and the byte-limit read;
+- canonicalizer and byte-comparison failure;
+- SHA command failure or empty digest;
+- `mktemp` failure;
+- every later private-temp create, truncate, append, and redirect failure;
+- driver input and validator-output write failure;
+- non-1.6 jq;
+- validator nonzero exit, extra output, or unknown token.
+
+Each failure emits only its allowed token. Stderr contains no caller path, temp path,
+stub message, or fixture bytes.
+
+### Command-to-rule matrix
+
+`D(K)` is `validate-document` for kind `K`; `P` is `validate-profile-set`; `S` is
+`validate-stage-run`.
+
+| Owner | Rule group | D | P | S |
+|---|---|---|---|---|
+| assembly | command form, fixed member/import guard, command routing, and public error order | applicable | applicable | applicable |
+| ingress | raw-byte limit/snapshot, canonical bytes, hash, and sanitized I/O | each input | each input | each input |
+| schema | parsed structural limits, envelope, primitives, shared refs, and fixed registry/policy constants | supplied document | every supplied document | every supplied document |
+| profile graph | manifest self | `D(adapter_manifest)` | every manifest | — |
+| profile graph | profile self and protected-role closure | `D(profile)` | profile | — |
+| profile graph | resolved-profile self and source projections | `D(resolved_profile)` | resolved profile | resolved profile |
+| profile graph | profile/resolved/manifest external graph | — | yes | — |
+| stage request | request body, capability/permission/input/instruction/evidence self closure | `D(stage_request)` | — | request |
+| stage request | request-to-resolved binding/ref relation | — | — | yes |
+| result facts | actual-binding/execution/fact shapes | `D(stage_result)` when present | — | result when present |
+| result facts | actual-versus-request/resolved execution assessment | — | — | yes |
+| result truth | result body, status presence, stale-selector/output/evidence local shape, and started/finished/recorded local order | `D(stage_result)` | — | result |
+| result truth | request/resolved refs, stale expected/difference/repository checks, requested-at time floor, exact evidence set, outcome, and execution-truth relation | — | — | yes |
+
+No row mixes owners. Each child spec expands its groups into rows for every stable
+rule ID. Every required cell has one accepted fixture, one rule-targeted rejection,
+and deterministic proof that the command calls that owner. The proof mechanism is
+private test infrastructure and is never selectable through the public wrapper.
+Route proof shows the owner is called; ordinary valid/invalid cases show the owner's
+rule. Neither substitutes for the other.
+
+### Module and full-package proof
+
+Fixtures contain data only. They never import product registries or predicates and
+never ask product code to build a valid value or choose the expected result. Expected
+error, route, evidence, and outcome values are literal test data derived from this
+spec. Tests use pinned jq 1.6 only to emit canonical bytes and an external SHA-256
+tool only to compute digests. A mutation that changes a referenced document rebuilds
+downstream refs independently so it reaches the intended rule.
+
+Each private child supplies:
+
+- direct valid and invalid cases for every owned rule ID;
+- exact-boundary and one-over cases for every owned bound;
+- a closing rule/test for every assigned `review-rN-fNN` finding row;
+- a closing test ID or reason for every assigned `legacy-test-NNN` assertion row;
+- a data-only fixture extension;
+- the current private-activation guard and restore manifest entry for every new
+  package/test file;
+- exact-head jq 1.6 CI and an `owned rules: N/N` report with zero failures;
+- independent review that does not require re-certifying a different owner.
+
+The schema child establishes the pinned jq 1.6 private-package CI step, appends the
+exact R24 registry entry, and proves the prior registry is an unchanged prefix with
+unique generation IDs. Each later child verifies that exact entry and explicitly
+adds its own test command to the CI step; no wildcard discovery or ambient executable
+is allowed. Constitution-path updates remain operator-owned or arrive as
+`proposals/` for operator application. The first six keep the generation-aware
+pre-assembly guard green. Assembly alone advances the guard's selected generation
+under R23/R24 after full-package proof.
+
+Assembly uses two explicit proof boundaries. Its pre-switch head contains the new
+generation root, integration tests, CI, docs, and restore changes, but the stable
+wrapper is absent for first publication or still selects the old generation for an
+upgrade. CI and a read-only independent review prove the new generation through
+private assembly drivers and record that exact head. A later single-parent switch
+commit has that head as its parent. For first publication it changes exactly two
+paths: it adds `scripts/core-contract.sh` and adds that exact entry to
+`ci/required-files.txt`. For an upgrade it changes only the wrapper's literal
+generation ID; the existing manifest entry remains byte-identical. The structure
+check, public-wrapper CI, and independent review then run on the exact post-switch
+head/base. Only the post-switch evidence can create
+`merge-ready`; any other switch-commit path or diff returns to the assembly plan
+gate.
+
+The assembly child additionally proves:
+
+- successful `validate-document` for all five kinds;
+- profile-set success plus 1/8/9 manifest boundaries, missing manifests, and extras;
+- stage-run success for producer, verifier, and reviewer;
+- all six terminal statuses and every row of the completed outcome table, including
+  failed-plus-inconclusive and failed-plus-`fact_gap`;
+- every command-to-rule cell and forced route;
+- raw-byte and sanitized-error behavior through the public shell wrapper;
+- combined-defect rows proving oversized invalid JSON returns raw `E_LIMIT`, while
+  within-limit invalid JSON returns `E_PARSE`, plus later-layer order pairs;
+- the exact import allowlist/grammar, no `search` metadata, fake cwd, fake
+  `HOME/.jq`, and ambient same-name modules cannot change loaded code; every expected
+  directory fails if missing, not a directory, or a symlink; wrapper, ingress, root
+  program, and module files fail if missing, nonregular, or symlinks;
+- the wrapper's literal generation cannot be changed by arguments or environment; a
+  second incomplete/inactive generation never affects the selected one; an upgrade
+  diff leaves the old generation untouched and changes the wrapper only after the
+  new generation's complete assembly proof;
+- all 31 review-finding rows and all 279 legacy-assertion rows are accounted for; and
+- pinned jq 1.6 CI on the exact reviewed head.
+
+The final report uses semantic counters, not one undifferentiated assertion total:
+
+```text
+owned rules: N/N
+command-to-rule cells: N/N
+forced routes: N/N
+review findings accounted for: 31/31
+legacy assertions accounted for: 279/279
+full-package cases: N/N
+failures: 0
+```
+
+The 31 review rows and 279 assertion rows are migration evidence, not an oracle or
+semantic acceptance target. Repeated findings remain visible even when several map
+to the same new rule. Code golf, generated long lines, copied registries, a second
+parser, system-jq drift, fewer negative cases, or product logic used as the test
+oracle never justify a smaller child.
 
 ### Downstream handoffs and intent questions
 
-1. **Smallest records/refs:** five documents plus the shared refs above. Evidence is
-   nested; policy/test/telemetry bodies stay outside core.
-2. **V1 capability/permission set:** three capabilities and five permissions.
-   Dormant roles preserve identity/separation but cannot execute.
-3. **Validator boundary:** canonical shape, lexical refs, offer/request/provenance,
-   role separation, and request/result/status/evidence relations. No Git truth,
-   authentication, execution, policy truth, or external effect.
-4. **Resolver seam:** consume canonical profile/manifests plus caller-owned exact
-   sources, selection, repository context, and physical repo map; emit canonical
-   resolved profile/source claims. Resolver alone checks Git truth.
-5. **Adapter-test seam:** accepted inventory and observations are runner-owned exact
-   artifacts supplied as verifier input/proof. Adapter-facing traffic uses only the
-   five core docs; runner independently executes, revalidates every core document,
-   recomputes assertions/Git facts, and ignores adapter self-reported verdicts. Its
-   test-only format is not core schema or authority.
+1. **Dependency order and one clear home:** the seven children and owner table above
+   are exact. Raw-byte ingress is separate from request `named_input` closure. Result
+   facts compare observed execution; result truth alone chooses status/outcome.
+2. **Package identity and loading:** `core.contracts.v1` is one semantic package.
+   Assembly loads only its literal root and private module directory with jq 1.6
+   `-L`; external Git refs carry exact source claims when needed.
+3. **Child slugs and final wait:** every independently merged part uses the exact
+   child slug above. Assembly waits for all six upstream accepted specs and G3
+   commits before its own code and is the only child that exposes public commands.
+4. **PR #183 reuse:** its final head is a read-only source snapshot. The migration
+   ledger assigns each moved rule/test one owner and new proof. Old round fixes remain
+   evidence; hard-to-read predicates, temp I/O, and result precedence are rewritten,
+   not copied.
+5. **Proof matrices:** owned-rule cases, command-to-rule routes, completed outcome
+   rows, forced failures, and full-package cases are all complete independently.
+   Counting assertions or passing an earlier failure class cannot stand in for a
+   missing cell.
+6. **Review ranges:** the child table replaces the old 800–1,100 one-PR estimate.
+   Result facts and result truth are separate because PR #183 repeatedly mixed
+   execution equality with outcome precedence. A range is a planning signal; a
+   second responsibility returns to that child's artifact gate.
+
+The resolver seam remains unchanged: it consumes canonical profile/manifests plus
+caller-owned exact sources, selection, repository context, and physical repo map;
+it emits canonical resolved-profile/source claims and alone checks Git truth.
+
+The adapter-test seam also remains unchanged. Accepted inventory and observations
+are runner-owned exact artifacts supplied as verifier input/proof. Adapter-facing
+traffic uses only the five core docs; the runner independently executes, revalidates
+every core document, recomputes assertions/Git facts, and ignores adapter
+self-reported verdicts. Its test-only format is not core schema or authority.
 
 The accepted adapter-test intent still promises a producer/forge 2×2 matrix. This
 minimal core has no executable forge capability, so that G2 must wait for a separate
@@ -602,16 +1041,28 @@ before any publisher can run.
 
 ## Out of scope
 
+- Changing any v1 document, field, enum, capability, permission, canonical-byte,
+  digest, error-class, or claims-not-authority meaning.
+- Adding a public command, dynamic module path, partial-package activation, or live
+  caller before `portable-core-assembly` G3.
+- Creating or approving the seven child issues/plans/code in this G2 PR. The parent
+  plan and each child gate own those later decisions.
+- Resuming, merging, rebasing, resetting, force-pushing, or otherwise changing PR
+  #183. Its later close-as-superseded decision follows the accepted parent plan.
 - Core test-inventory/result kinds, fake runner, fixture/process execution, 2×2,
   timeout/cleanup, and external-target smoke.
 - Forge, CI, execution, identity, or publisher operations; GitHub/GitLab/native
   transports; CR/comment/label/status; topic CAS; any external write.
-- Git reads, physical repo mapping, object/mode/symlink/replacement checks,
-  config/tool provenance truth, authentication, credentials, grants, policy/gate
-  evaluation, qualification, sandbox/network enforcement, and kill switch.
+- Git reads, physical repo mapping, caller-supplied Git object/mode/symlink/
+  replacement truth checks, config/tool provenance truth, authentication,
+  credentials, grants, policy/gate evaluation, qualification, sandbox/network
+  enforcement, and kill switch.
 - Retry/reconciliation/backpressure, deployment/rollback, production incidents,
   telemetry/trace/usage/cost, packaging/install/migration, skill bridges, non-Git
   stores, or live profile activation.
+- Amending `portable-profile-resolution` or another downstream artifact here. Any
+  downstream spec that pins the old core spec/G3 returns through its own artifact
+  and plan gates before implementation.
 - Continuing #154, closing parent #153, or claiming these records prove portability,
   authorization, isolation, or correct execution.
 
@@ -626,13 +1077,31 @@ before any publisher can run.
    and human-gate boundaries before real use.
 4. **Forge 2×2 is unresolved by design.** The existing adapter-test intent must wait
    or be separately rescoped; producer-only proof cannot be called its accepted 2×2.
-5. **Size never trades away proof.** The estimate may move, but strict parsing,
-   complete relations, readable code, adversarial tests, CI, and review do not. A
-   materially different concern or scope returns to the artifact gate. The accepted
-   review-size exception changes no safety or proof requirement.
+5. **Smaller children do not weaken proof.** The seven ranges are evidence-based
+   planning signals. Strict parsing, complete relations, readable code, adversarial
+   tests, exact CI, and independent review remain hard gates. A child outside its
+   range explains the evidence; a second responsibility returns to its artifact gate.
 6. **CI is a constitution path.** Operator-driven work may edit it; unattended work
    must use `proposals/` and wait for application.
-7. **This is user-directed high-risk design.** G2 accepts only this spec, not a plan,
-   implementation, proactive work, or activation.
+7. **This is user-directed high-risk design.** The package defines security controls,
+   broad architecture, workflow dependencies, and operator-owned CI. G2 accepts this
+   `risk: high` classification and this spec only; it does not approve the parent
+   plan, any child intake, code, or activation.
 8. **Nothing changes live.** `/yshifu`, manager persona, adapters, and sessions stay
    unchanged. Human merge remains the only merge path.
+9. **Children do not inherit intake approval.** Each exact child issue needs its own
+   current-title/body acceptance record and full artifact chain. Parent G2/plan,
+   dependency links, or quoted scope prove provenance but never create `ready`.
+10. **Old evidence is stale by design.** The #180 bridge ended with the G1 intent
+    change. PR #183 reviews and CI remain useful failure evidence, not acceptance.
+    `portable-profile-resolution/spec.md` still pins the old core spec/G3 and must be
+    amended before its own implementation can proceed.
+11. **The host toolchain is operator-controlled.** The public wrapper does not claim
+    to defend against a malicious `jq`, SHA tool, `mktemp`, or other executable on
+    `PATH`; caller documents and command arguments cannot set that environment. CI
+    pins jq 1.6 by release-asset digest. Later control-foundation/qualification work
+    owns executable provenance for other environments.
+12. **Published generations are immutable.** A repair never edits the active
+    generation in place. It creates and qualifies a complete new generation, then
+    assembly switches the stable wrapper once. Removing old generations is a later
+    migration/restore decision and is not bundled with activation.
