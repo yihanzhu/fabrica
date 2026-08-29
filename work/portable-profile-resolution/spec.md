@@ -33,10 +33,11 @@ merge commit before any resolver code is written.
   revision. It uses `validate-document` for the extracted profile and manifests,
   then `validate-profile-set` for the complete output graph. Resolver code may
   use a narrow transport guard for locator strings and one mechanical manifest-
-  source index needed to make output construction possible. Core independently
-  rechecks that exact manifest set in the final graph. Passing either early check
-  is never core validity. Resolver code cannot copy or reinterpret core document
-  shapes, registries, capability/permission rules, offer/request relations, or
+  source index needed to make output construction possible, plus one fixed core-v1
+  field projection that collects the selected Git closure for physical checking.
+  Core independently rechecks the exact manifest set and output shapes. Passing an
+  early check/projection is never core validity. Resolver code cannot copy or
+  reinterpret registries, capability/permission rules, offer/request relations, or
   protected-role separation.
 - **R3 — dependency identity is explicit.** This G2 pins core schema major 1 and
   the accepted core G2 blob above. It does not claim that the validator exists yet.
@@ -47,15 +48,17 @@ merge commit before any resolver code is written.
   profile and manifest source locators, `selection_ref`, and
   `repository_context_ref` in the invocation frame. A profile or manifest cannot
   choose or replace any of them. The resolver carries both scope refs unchanged.
-  It validates their core shape through the final output but does not authenticate
+  Final core validation owns their shape when that stage is reached; earlier fixed
+  transport/map/object precedence may fail first. The resolver does not authenticate
   their decision records or turn either ref into authority.
 - **R5 — repository mapping is exact and private.** The caller separately supplies
   one logical repository ID to one physical local repository root. An initial check
   requires mappings for the profile and every supplied manifest locator so their
   documents can be read; unused physical roots are not opened, canonicalized, or
   probed. After the mechanical manifest-source index succeeds, the map ID set must
-  equal every repository ID in the selected output graph. A missing selected ID
-  fails before an unused extra ID. No final extra, missing, duplicate-ID, or
+  equal every repository ID in every `git_object_ref` that will appear anywhere in
+  the emitted resolved profile, including nested scope subjects. A missing selected
+  ID fails before an unused extra ID. No final extra, missing, duplicate-ID, or
   duplicate-physical-repository entry is allowed. The association remains an
   unauthenticated caller claim. Roots and derived Git paths are used only inside the
   resolver and are never written to stdout, canonical records, or diagnostics.
@@ -63,7 +66,10 @@ merge commit before any resolver code is written.
   manifests, binding packages/configs/prompts/skills, and requested tool
   packages/configs, the resolver proves the mapped repository's storage hash
   algorithm, full commit object, root tree, literal path walk, final object ID,
-  object type, file mode, and raw object payload. It accepts only full lowercase
+  object type, file mode, and raw object payload. The same physical check covers
+  every Git-object variant nested in selection, repository-context, authority, or
+  other scope refs copied to output; the scope decision itself remains unauthenticated.
+  It accepts only full lowercase
   SHA-1 or SHA-256 IDs of the correct length. It never accepts a branch, tag,
   abbreviated ID, revision expression, pathspec, working-tree file, index entry,
   or mutable ref.
@@ -75,10 +81,10 @@ merge commit before any resolver code is written.
   trace, or ambient `PATH` state. Every Git command then uses one private wrapper with
   replacement objects and lazy fetching disabled, scratch-owned Git config/refs,
   and no hook, remote, filter, checkout, worktree materialization, or ref update. Its
-  only mapped Git input is the explicitly bound, pre-inventoried object directory in
-  raw reader mode. Unsafe or non-local state is rejected. Verified bytes may be
-  copied only into disposable private object views; mapped repositories stay
-  read-only.
+  Git processes receive no mapped path, Git directory, config, ref namespace, or
+  object directory. A descriptor-stable native helper first copies one bounded,
+  no-follow object-store snapshot into scratch; Git reads only that private copy.
+  Unsafe or non-local state is rejected and mapped repositories stay read-only.
 - **R8 — paths and symlinks cannot redirect a read.** Physical roots are absolute,
   bounded, and free of symlink components. The resolver identifies the canonical
   common Git directory and object store and uses those identities for one-to-one
@@ -87,7 +93,8 @@ merge commit before any resolver code is written.
   string to Git as a pathspec. Every intermediate component must be a tree. A
   symlink, gitlink, wrong case, missing component, wrong mode, or wrong type fails.
 - **R9 — one snapshot owns each observed value.** The resolver reads every commit,
-  traversed tree, and selected source payload once into a private, bounded snapshot.
+  traversed tree, and selected source payload once from a descriptor-stable private
+  copy of the mapped object store into a private, bounded value snapshot.
   It recomputes the repository-native object ID from the exact type and payload and
   requires it to match the claimed OID. Verified commit/tree snapshots enter the
   disposable private object view for that canonical physical repository and storage
@@ -134,13 +141,16 @@ merge commit before any resolver code is written.
   confirmation that `manifest_sources` is an array, its length is checked before
   locator shape, uniqueness, or content. Zero or more than eight fails as
   `E_INPUT manifest-count` before the repository map or any Git source is opened.
-  Each invocation file and extracted canonical document is at most
-  1,048,576 bytes. One selected raw
-  object payload is at most 16,777,216 bytes and all snapshots together are at most
-  67,108,864 bytes. The map has at most 1,024 entries and an absolute root is at
-  most 4,096 UTF-8 bytes. Core JSON depth/member/string/integer limits apply to
-  extracted core documents. All temporary data lives under one mode-0700 directory
-  created with `umask 077` and is removed on every exit.
+  Each invocation file and extracted canonical document is at most 1,048,576 bytes.
+  Admin snapshots are capped at 33,554,432 bytes; the descriptor-stable private
+  object-store copy at 268,435,456 bytes with a 67,108,864-byte per-file cap; and
+  selected value snapshots at 67,108,864 bytes with a 16,777,216-byte per-value cap.
+  All scratch bytes together stay at or below 536,870,912. Git subprocesses and the
+  whole invocation also have fixed time, address-space, process, and descriptor
+  limits from Design. The map has at most 1,024 entries and an absolute root at most
+  4,096 UTF-8 bytes. Core JSON depth/member/string/integer limits apply to extracted
+  core documents. All temporary data lives under one mode-0700 directory created
+  with `umask 077` and is removed on every exit.
 - **R15 — failures are closed and sanitized.** After the trusted-launch precondition,
   success is exit 0 and exactly one canonical `resolved_profile` on stdout. Failure
   is nonzero, stdout is empty, and
@@ -169,11 +179,12 @@ merge commit before any resolver code is written.
   config files needed to locate and characterize the object store. Private config
   parsing disables includes and rejects every `include`/`includeIf` key without
   opening its target. A bounded no-follow inventory rejects nonregular/symlinked
-  repository metadata and object-store entries before binding. No Git command uses
-  a mapped cwd or Git directory. Raw exact-OID reads use a clean scratch Git directory
-  plus one explicit mapped object-directory binding; mapped local/worktree config,
-  refs, grafts, index, and working tree never load. The binding is absent for every
-  private `hash-object -w` and `ls-tree`, so no command can write the mapped store.
+  repository metadata and object-store entries before copying. No Git command uses
+  a mapped cwd, Git directory, or object directory. The helper copies regular object-
+  store files through already-open directory descriptors into the private scratch
+  store under fixed per-file, aggregate, entry, and name limits. Mapped local/worktree
+  config, refs, grafts, index, working tree, and pathnames never enter Git. Every
+  `cat-file`, `hash-object`, and `ls-tree` operation uses only the private snapshot.
 
 ## Design
 
@@ -321,9 +332,9 @@ opening the map. The transport checks protect the Git call boundary; they do not
 declare a core ref valid. The complete constructed graph still must pass the accepted
 core validator.
 
-### Selected source graph
+### Selected source graph and Git closure
 
-The selected graph contains only sources that appear in the emitted
+The selected source-value graph contains only sources that appear in the emitted
 `resolved_profile`:
 
 1. the one profile source;
@@ -335,8 +346,49 @@ The selected graph contains only sources that appear in the emitted
 
 Unrequested tools offered by a manifest are manifest claims, not selected sources.
 They are checked lexically and relationally by core but are not physically resolved
-or added to the repository-map set in this invocation. A later profile that requests
-one must resolve it then.
+as source values. A later profile that requests one must resolve it then.
+
+The selected Git closure is broader than the source-value graph. After the manifest
+index closes, the resolver collects every candidate `git_object_ref` at the fixed
+core-v1 output field paths below. This includes all source-value `source`
+refs; binding package/config/prompt/skill and requested-tool refs; and Git-object
+artifact variants nested in selection, repository-context, binding-authority, or
+other copied scope subjects. It walks the closed field paths mechanically and
+does not interpret the scope purpose, decision record, or authority. Content and
+document refs add no repository ID. Unrequested manifest offers that are not copied
+to the resolved profile remain outside this closure.
+
+The projection is closed. It contains `profile_source.source`; the Git-object
+artifact variant of `selection_ref.subject_ref` and
+`repository_context_ref.subject_ref`; and, for every resolved binding:
+
+- the binding's Git-object authority subject when present, package, optional config,
+  optional prompt, skills, requested-tool packages, and present requested-tool
+  configs;
+- `manifest_source.source`, `package_source.source`, present config/prompt sources,
+  skill sources, tool package sources, and present tool config sources.
+
+It contains no `profile_ref`, `manifest_ref`, content/document ref, scope decision-
+record ref/digest, adapter/model/identity ID, unrequested offered tool, or arbitrary
+string named `repository_id`. The implementation projects only these fixed field
+paths, then requires the projection from the completed output to equal the planned
+pre-assembly closure exactly. Independent tests build their expected projection
+without calling resolver code.
+
+Every closure member contributes its `revision.repository_id` to the final map set
+and receives the same exact commit/path/type/mode/OID physical check. A nested scope
+Git object gains no source-value record or trust by being checked; the existing scope
+ref is copied unchanged.
+
+For caller-supplied selection and repository-context scopes, the pre-core projector
+checks only the exact `subject_ref.type=artifact`, nested artifact
+`type=git-object`, and transport-safe Git-object fields needed for a safe call. A
+candidate at that path which passes this guard enters the closure even when another
+part of its enclosing scope is malformed; physical checking is not scope acceptance,
+and final core still rejects the malformed scope if reached. A value that does not
+match the discriminants/guard does not drive Git. Map-set precedence may reject a
+map supplied only for such an ignored malformed value before final core. This total
+rule is a transport-safety projection, not a duplicate core scope validator.
 
 The resolver first requires mappings for the profile locator and every supplied
 manifest locator, but it does not yet reject unused map entries. It reads each
@@ -362,7 +414,7 @@ when the join is missing or ambiguous. The final `validate-profile-set` call sti
 independently checks the exact supplied manifest set and every core relation.
 
 Only after this index succeeds does the resolver derive the repository-ID set from
-the selected graph above. That set must exactly equal the map ID set. A selected ID
+the complete selected Git closure above. That set must exactly equal the map ID set. A selected ID
 without a map is `E_REPOSITORY map-missing`; only when none is missing does an unused
 map ID return `E_REPOSITORY map-extra`. This check happens before any selected
 package/config/prompt/skill/tool object is read. An extra manifest with its own valid
@@ -414,12 +466,42 @@ For each mapping it is allowed to open, the reader:
 7. rejects any `objects/info/alternates`, `objects/info/http-alternates`, or
    `objects/pack/*.promisor` entry by no-follow inspection before the mapped object
    directory is exposed to Git;
-8. descriptor-walks the complete mapped `objects` tree before binding it: every
+8. descriptor-walks the complete mapped `objects` tree before copying it: every
    component is a non-symlink directory or regular file on the object-root device,
    and the bounded entry inventory contains no FIFO, device, socket, mount crossing,
-   or unknown path type. Loose objects, pack/index/bitmap/MIDX files, commit-graph
-   files, and any other bytes Git may inspect therefore remain beneath the mapped
-   object root. The same inventory is rechecked before success.
+   or unknown path type. It classifies exact hash-format loose-object names and
+   lexically valid paired `pack-<hash>.pack`/`.idx` files. An unpaired/duplicate pack
+   member fails. Only those loose objects and pack/index pairs are copied; MIDX,
+   commit-graph, bitmap, reverse-index, keep, cruft-mtime, and other regular metadata
+   are accepted only through a closed name/type allowlist, inventoried, and not
+   exposed to private Git. An unknown/transient entry fails closed.
+9. through already-open descriptors, byte-copies the closed object set into a new
+   mode-0700 private reader store, using no hardlink, reflink, mapped pathname, or
+   alternate. Directories stay open throughout recursion and their identity/mtime/
+   ctime are checked before and after. Each leaf is opened no-follow/nonblocking,
+   `fstat`-checked, charged before allocation, copied with bounded `pread`, checked
+   for exact EOF and unchanged dev/inode/type/size/mtime/ctime, then hashed. The copy
+   creates destination paths only from the strict ASCII object-name grammar, with
+   new exclusive mode-0600 files reduced to 0400 after completion. Pack and matching
+   index FDs are both opened before either copy; both post-copy stable tuples are
+   checked before closing. The copy publishes from staging only after the full
+   inventory succeeds.
+
+The helper treats the admin copies, inventories, and raw object-store staging tree
+as one private transaction and publishes it with fixed `renameat` only on success.
+All mapped descriptors close before Git starts, and the resolver never reopens a
+mapped pathname or performs a final mapped-state check. A source version established
+before a leaf/directory is opened may be copied; a change overlapping its copy fails
+the stable tuple checks; a change after private publish is irrelevant. A cross-file
+mixed epoch is allowed only as untrusted private bytes: inconsistent pack/index data
+fails inside scratch, while every successful selected object still passes full
+OID/type/size verification.
+
+The helper recognizes both v1 hash-width name grammars because common config is
+parsed only from the published private admin copy. After parsing selects the storage
+algorithm, the runtime requires the receipt to contain no copied loose/pack name of
+the other width, then creates matching reader/verified Git views. A mixed-width store
+is `E_REPOSITORY object-format`; no Git starts first.
 
 The profile/all-supplied-manifest locator phase opens only their mapped physical
 roots. Unused roots are still represented in the parsed map but are not opened,
@@ -429,11 +511,11 @@ roots in the exact selected graph; every other map ID has already failed
 map check.
 
 The bounded `.git`, `commondir`, common/active-worktree config, linked-worktree
-backlink, and replacement-state snapshots are the only mapped administration bytes
-read. Mapped local/worktree includes, aliases, hooks, filters, credential helpers,
+backlink, replacement-state, and object-store copies are the only mapped bytes read.
+Mapped paths, local/worktree includes, aliases, hooks, filters, credential helpers,
 fsmonitor commands, refs, grafts, index, and working tree never enter a Git process.
-Persistent changes to the captured paths/files before success fail the state recheck;
-a privileged ABA rewrite remains under the host-mutation concern below.
+Concurrent mapped mutation may make a bounded copy or later OID/relation check fail,
+but Git still sees only stable private regular files.
 
 ### Scratch Git reader and verified object view
 
@@ -451,27 +533,22 @@ developer-tool config when only the system path is redirected. `GIT_CONFIG` affe
 the `git config` command but does not isolate ordinary Git commands; those are safe
 because their Git/common directory and ref namespace are scratch-owned, not mapped.
 
-For each canonical physical repository and storage algorithm, the wrapper creates a
-mode-0700 bare scratch Git directory with an empty template, private config, empty
-ref namespace, and private object directory. Its closed config contains only the
-required repository-format/object-format facts plus `core.multiPackIndex=false`,
-`core.commitGraph=false`, and `core.useReplaceRefs=false`; no candidate or mapped
-config value is copied. Mapped object reads use that scratch Git directory and set
-exactly one wrapper-owned `GIT_OBJECT_DIRECTORY` to the canonical mapped `objects`
-directory. Only raw `cat-file --batch` with one wrapper-
-written full OID is allowed in this reader mode. The wrapper reads Git's actual
-OID/type/size header, enforces the payload limit, then snapshots exactly that many
-raw bytes; it never requests type conversion or tag peeling. The mapped Git
-directory, config, refs, grafts, worktree, and index are never loaded, and the
-scratch ref/graft namespace is empty.
+For each canonical physical repository and storage algorithm, the wrapper creates
+two mode-0700 bare scratch Git directories with empty templates, private configs,
+empty ref/graft namespaces, and private object directories: one reader snapshot and
+one verified view. Their closed configs contain only the required repository-format/
+object-format facts plus `core.multiPackIndex=false`, `core.commitGraph=false`, and
+`core.useReplaceRefs=false`; no candidate or mapped config value is copied.
 
-After each raw payload snapshot, the wrapper removes the mapped object-directory
-binding. It recomputes the native OID with fixed `hash-object -t TYPE --stdin
---no-filters` and imports a verified commit/tree into the private object directory
+The no-follow helper populates only the reader snapshot's object directory before
+Git starts. Raw `cat-file --batch` with one wrapper-written full OID runs only there.
+The wrapper reads Git's actual OID/type/size header, enforces the payload limit, then
+snapshots exactly that many raw bytes; it never requests type conversion or tag
+peeling. It recomputes the native OID in the empty verified view with fixed
+`hash-object -t TYPE --stdin --no-filters`, then imports a verified commit/tree there
 with fixed `hash-object -w -t commit|tree --stdin --no-filters`. The returned OID
-must equal the verified OID. `hash-object -w` is forbidden whenever the mapped
-object-directory binding is present. One-level `ls-tree -z` runs only in the private
-verified view. No scratch object ref is created.
+must equal the verified OID. One-level `ls-tree -z` runs only in the verified view.
+No mapped object-directory environment binding or scratch object ref ever exists.
 
 All Git arguments are wrapper-built. The wrapper forbids `cat-file --filters`,
 `--textconv`, `--follow-symlinks`, `hash-object --path`, candidate-selected types,
@@ -493,8 +570,8 @@ For each `git_object_ref`, the resolver follows this order:
    It imports that verified snapshot into a private object database of the same hash
    format.
 4. It reads the commit's exact root-tree OID from that snapshot, reads that tree once
-   through the scratch reader bound only to the mapped object directory, recomputes
-   its native OID, and imports the verified tree snapshot into the private database.
+   from the stable private reader snapshot, recomputes its native OID, and imports
+   the verified tree snapshot into the private database.
 5. A `root` location must equal that root tree with type `tree` and mode `040000`.
    For a `path`, the resolver splits the accepted `RepoPath` itself. It enumerates
    one level of the verified private tree with NUL-delimited output and matches one
@@ -577,8 +654,8 @@ Manifest arguments are sorted by `(kind,id,sha256)`. Success from core
 must be exit 0 with empty stdout and stderr. The resolver passes through a known core
 failure token unchanged. An unknown token, extra output, missing dependency, or
 unexpected exit becomes `E_RUNTIME`. Only after core succeeds and the physical repo
-state recheck passes does the resolver write the already-validated canonical
-resolved-profile snapshot to stdout.
+snapshot/inventory checks remain valid does the resolver write the already-validated
+canonical resolved-profile snapshot to stdout.
 
 ### Config, skill, identity, and secret boundary
 
@@ -619,8 +696,13 @@ Limits apply before allocation or use:
 | each `packed-refs` snapshot | 16,777,216 bytes |
 | all admin snapshots/names in one invocation | 33,554,432 bytes / 8,192 names |
 | mapped object-store inventory | 262,144 entries / 16,777,216 name bytes |
+| each copied object-store file | 67,108,864 bytes |
+| all copied object-store files | 268,435,456 bytes |
 | each selected object payload | 16,777,216 bytes |
-| all object snapshots in one invocation | 67,108,864 bytes |
+| all selected value snapshots | 67,108,864 bytes |
+| all scratch bytes, including invocation/output/verified-view overhead | 536,870,912 bytes |
+| one Git subprocess | 15 CPU seconds / 30 wall seconds / 536,870,912 address-space bytes / 67,108,864 output-file bytes / 64 descriptors / one Git child at a time |
+| complete invocation | 300 wall seconds |
 | each extracted core document | accepted core limits |
 
 After request raw-size, parse, and canonical-byte checks, the resolver confirms only
@@ -631,8 +713,30 @@ one-extra-byte probe and returns
 `E_LIMIT` before parsing or hashing the over-limit value. The running total is
 checked before each new snapshot. A selected graph that needs more than 1,024
 physical repositories, 33,554,432 admin bytes, 8,192 enumerated admin names, or
-262,144 object-store entries/16,777,216 object-name bytes, or 67,108,864 object-
-snapshot bytes cannot be resolved in v1.
+262,144 object-store entries/16,777,216 object-name bytes, 268,435,456 copied object-
+store bytes, 67,108,864 selected value bytes, or 536,870,912 total scratch bytes
+cannot be resolved in v1. An over-limit admin or copied object-store file fails
+before Git sees that private store. An over-limit selected payload fails after its
+bounded batch header and before body allocation or hashing.
+The global scratch counter is stricter than the category counters: every written
+byte is charged each time it is materialized, including reader copies, value
+snapshots, verified-view objects, canonical inputs/outputs, and diagnostics.
+Charging never rolls back after deletion. Before a copy, the helper charges the
+`fstat` size in per-file, category, then global order; before a Git payload, the
+wrapper charges the batch header size in the same order. Before `hash-object -w`, it
+charges a host-tuple-pinned conservative encoded upper bound covering the Git object
+header and worst-case compressor/file overhead, then checks the actual private file
+size without refunding the reservation. Reusing one cached snapshot does not charge
+again, but writing the same bytes into another file/buffer does. The invocation
+reserves 256 global bytes at start for one fixed terminal diagnostic, so reporting a
+limit cannot itself exceed the limit.
+
+The trusted parent applies hard CPU/address-space/output-file/descriptor limits
+before it execs the runtime; the runtime and every child inherit them and cannot
+raise them. The runtime wrapper owns a fixed 30-second Git watchdog, kills and reaps
+on expiry, and permits only one Git child at a time. The parent/runtime apply the
+300-second invocation deadline. Candidate data and ambient state cannot raise or
+disable any limit.
 
 Map entries, manifest sources, bindings, skills, and tools are normalized only by
 their specified lexical sort keys. No locale, filesystem order, Git output order,
@@ -663,6 +767,8 @@ real core validator keep their accepted meaning. The resolver adds:
 
 - `E_INPUT` — the private request/map has wrong fields, types, counts, duplicate
   entries, or an unsafe physical-root string;
+- `E_LIMIT` — a resolver transport, admin snapshot/name, object-store copy,
+  selected-value, scratch, process, descriptor, or time limit above is exceeded;
 - `E_RELATION manifest-source-ambiguous|manifest-source-missing|manifest-source-extra`
   — the resolver's only relation reasons; individually core-valid profile/manifests
   cannot form the total one-to-one source index required for assembly;
@@ -689,7 +795,7 @@ The first failure class is chosen in this order:
 11. no-follow layout/config/object-store checks for newly selected roots, then all
     remaining selected Git object checks;
 12. mechanical assembly and final core profile-set validation;
-13. final repository-state recheck and output.
+13. final private snapshot/inventory check and output.
 
 Within core validation, the accepted order remains limits, shape, ref, then
 relation. The resolver may originate `E_RELATION` only for the three fixed
@@ -732,9 +838,21 @@ resolver exists to close.
 
 The root-cause boundary is the one private
 `resolver/v1/nofollow-snapshot.c` helper. It exposes only the fixed descriptor-walk,
-type/identity check, bounded snapshot, and inventory operations required above. It
-is not a reusable filesystem API, command launcher, package surface, installed tool,
-or second copy under tests. The resolver runtime is its only product caller.
+type/identity check, bounded snapshot, bounded regular-file copy into private
+scratch, and inventory operations required by one `snapshot-repository` action. It
+is not a reusable filesystem API, arbitrary copy command, Git launcher, supervisor,
+package surface, installed tool, or second copy under tests. The resolver runtime is
+its only product caller.
+
+Its only inputs are one transport-guarded mapping root, one launcher-owned empty
+scratch slot, and runtime-owned remaining admin/object/name/global budget values from
+the invocation ledger. It cannot accept an arbitrary source-relative path, hash
+algorithm, executable, or candidate-controlled limit. It stages one repository
+snapshot, returns only a sanitized private receipt with physical identities,
+per-hash-width counts, charged bytes, and fixed reason IDs, and never returns a mapped
+or derived path. The runtime debits that receipt before another repository call;
+the helper precharges against the supplied remainder before every destination create
+or read. Failure removes the unpublished staging tree before Git can start.
 
 This exception is temporary. Remove it when every supported resolver runtime offers
 an accepted, reconstructable descriptor API with equivalent `openat` no-follow/
@@ -782,6 +900,9 @@ Positive fixtures prove:
 - one manifest shared by bindings and the exact 1/8 manifest boundaries;
 - package blobs/trees, optional config/prompt, skill sets, and requested tool
   package/config sources;
+- selection, repository-context, and binding-authority scope subjects whose
+  Git-object variants live in a third mapped repository, while content/document
+  subject variants add no repository mapping;
 - model and deterministic bindings while the real core checks their relations;
 - identical output after request/map permutations, changed cwd/environment, and
   resolution from a second physical clone with the same objects;
@@ -790,8 +911,8 @@ Positive fixtures prove:
 
 Repository-administration fixtures prove bare, normal, and linked-worktree layout
 classification without `git -C` or mapped `--git-dir`. Loose and packed SHA-1/SHA-256
-objects remain readable through the matching scratch Git directory and explicit
-object-directory binding. Harmless but executable-looking mapped config keys—alias,
+objects are copied through stable descriptors and remain readable only from the
+matching private reader snapshot. Harmless but executable-looking mapped config keys—alias,
 filter, textconv, hook, fsmonitor, credential helper, and replace settings—remain
 inert because mapped config is never process config.
 
@@ -811,15 +932,30 @@ enter a successful output. Rejected request/map canaries must not enter an error
 Canonical IDs, repository-relative paths, bindings, and scope refs are expected in
 successful output and tested as such.
 
+Nested-scope closure rows remove the third-repository map, add an unrelated map, or
+move the claimed scope-subject object/type/mode. They must produce `map-missing`,
+`map-extra`, or the physical object error before success. The resolver copies the
+scope ref unchanged and never treats physical existence as an accepted decision or
+authority. Unrequested manifest offers remain outside the closure.
+An outer-malformed caller scope with an exact guarded Git subject still enters the
+closure and reaches physical proof before final core rejects the scope. A malformed
+discriminant/Git candidate does not drive Git; a map supplied only for that ignored
+candidate may hit `map-extra` first. These rows pin the pre-core precedence instead
+of assuming every malformed scope reaches core.
+
 Negative Git fixtures cover wrong storage algorithm/OID length, abbreviated IDs,
 branch/tag/revision syntax, missing/wrong commit type, corrupt or missing objects,
 wrong root tree, wrong path case, literal names such as `--help`, `-C`, and
 `:(glob)*`, wrong final OID/type/mode, intermediate blob, symlink, gitlink,
 replacement refs, grafts,
 alternates, promisor/partial-clone state, compatibility object format, lazy-fetch
-attempts, and persistent mapped-repository state drift before completion. A network
-trap proves no command contacts a remote. A path-walk trap changes a mapped tree
-after its snapshot and proves enumeration uses only the private verified view.
+attempts, and concurrent mapped-object changes during descriptor copying. A network
+trap proves no command contacts a remote. Loose/pack/directory swap tests after the
+helper opens its descriptors must either fail the bounded copy/OID checks or produce
+the same private bytes; Git never opens the swapped mapped pathname. A path-walk
+trap changes the mapped store after copying and proves enumeration uses only the
+private verified view. Race fixtures use a test-only barrier in the same helper
+source, not probabilistic sleeps or a second copy implementation.
 
 Repository-administration failures cover symlink/FIFO/device/oversize `.git`,
 `commondir`, backlink, common config, active `config.worktree`, and `packed-refs`;
@@ -830,9 +966,11 @@ conditional includes that point to regular canaries and blocking FIFOs. Private
 `--file --no-includes` parsing must report `config-include` without opening either
 target. Mapped config commands,
 aliases, filters, hooks, and credential helpers must never affect scratch `cat-file`
-output; replace/graft/alternate fixtures fail before object reads. A before/after
-object-directory inventory plus a failing final validator proves no
-`hash-object -w` can run while the mapped object-directory binding is present.
+output; replace/graft/alternate fixtures fail before object copying. A before/after
+mapped object-store inventory plus a failing final validator proves the mapped store
+never changes and all `hash-object -w` effects stay inside the verified private view.
+File-access evidence after the helper exits contains only runtime and private-scratch
+paths, never a mapped root or object pathname.
 Selected loose-object paths and pack `.idx`/`.pack`/MIDX/commit-graph paths are
 separately replaced by symlink, FIFO, device, socket, and cross-device fixtures;
 each must fail during the bounded inventory without a Git open or hang.
@@ -840,6 +978,19 @@ Malicious MIDX PNAM values containing `..` or an absolute path point at an exter
 FIFO canary; fixed `core.multiPackIndex=false` must keep the MIDX and canary unopened.
 File-access evidence must also show that neither mapped MIDX nor commit-graph files
 are opened in reader mode.
+
+Resource rows cover exact-limit and one-over admin totals, entry/name counts,
+per-file and aggregate private object-store copies, selected payload totals, global
+scratch bytes, Git address space/descriptors, per-process CPU/wall time, and total
+invocation time. Oversize regular/sparse pack and index fixtures fail before Git;
+test-owned CPU/sleep/memory/descriptor/file-size workers must hit the fixed `E_LIMIT`
+path. Real delta-depth and malformed-pack fixtures may close as `E_OBJECT` or
+`E_LIMIT`, but they cannot hang, leak, emit partial stdout, or leave private children/
+scratch data behind.
+Multi-repository rows spend almost all object/global budget in the first helper
+receipt, then make the second repository exact-limit or one-over. The one-over call
+must fail inside the helper before source read/destination creation or Git start,
+proving the runtime-owned remaining ledger controls every helper invocation.
 
 Negative graph fixtures cover a noncanonical or non-blob profile/manifest object.
 The resolver source-index tests assert the three fixed ambiguous, missing, and extra
@@ -878,9 +1029,10 @@ reviewed head, and a one-file-at-G2 scope check for this spec PR.
    binding copies, manifest/package/config/prompt/skill/tool sources, and derived
    adapter implementation IDs/versions. It adds no trust claim.
 2. **Repository mapping without path leakage.** The invocation-only map is an exact
-   logical-ID set over canonical physical repository identities. Physical roots are
-   neither hashed into IDs nor copied to output or errors. Equivalent clones produce
-   identical canonical output.
+   logical-ID set over every Git-object ref projected from the resolved profile,
+   including Git-object scope subjects, and canonical physical repository identities.
+   Physical roots are neither hashed into IDs nor copied to output or errors.
+   Equivalent clones produce identical canonical output.
 3. **Git, path, hash, and symlink checks.** The resolver accepts SHA-1 and SHA-256
    storage repos, full commit/object IDs, literal one-component tree walking, exact
    type/mode/OID and raw-payload verification, mapped config parsed only as bounded
@@ -941,11 +1093,11 @@ reviewed head, and a one-file-at-G2 scope check for this spec PR.
    silently convert a SHA-1 repository or its commit graph to SHA-256.
 7. **Git state can move around immutable objects.** Full OIDs and one-read snapshots
    prevent mutable-ref and double-read drift. The private object view keeps path
-   enumeration on verified tree bytes. Repository-state rechecks catch persistent
-   context drift, but they do not grant authority to that context. A caller that
-   cannot prevent a hostile host from swapping repository/config files during the
-   process must first supply an isolated repository snapshot; defending against a
-   privileged ABA rewrite of the mapped host filesystem is outside this child.
+   enumeration on verified tree bytes. Descriptor-relative copying prevents a mapped
+   pathname swap from reaching Git; concurrent writes can only yield copied bytes
+   that later fail pack/OID/relation checks or form the exact content-addressed
+   closure requested. A privileged actor that can alter the resolver process or its
+   mode-0700 private scratch after launch remains outside this child.
 8. **Mapped config is never trusted process input.** The no-follow helper and scratch
    Git namespace are mandatory product boundaries, not test conveniences. A layout,
    extension, ref backend, include, or object-store entry outside the closed v1 set
