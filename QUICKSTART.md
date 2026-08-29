@@ -47,9 +47,9 @@ command, point it at a target repo, and watch one loop run. For the mental model
    ```
 
    Writes `~/.claude/commands/yshifu.md` with a path derived from this clone (no
-   hardcoded location). It also writes a bridge copy under the legacy `/faber` name,
-   so the old command keeps working until that bridge is retired.
-   Idempotent — re-running is safe. The script prints the next steps.
+   hardcoded location). Idempotent — re-running is safe. The script prints the next
+   steps. If it warns that a retired command file still exists, the installer has
+   left that file untouched; use RESTORE.md's explicit backup/removal checklist.
 
 3. **Make sure the target repo has CI that runs on PRs** (the hard merge gate). This is the
    one real precondition — but **you no longer have to wire it yourself**: if the repo has no
@@ -134,26 +134,30 @@ command, point it at a target repo, and watch one loop run. For the mental model
    Until you set + approve your own, yshifu will only act on issues you ask for directly and
    will ask you to set + approve the north star before pursuing anything proactively.
 
-7. **Give yshifu a one-liner** — describe the change you want. yshifu drafts a spec and
-   opens a GitHub issue. You talk only to yshifu.
+7. **Give yshifu a one-liner** — describe the change you want. yshifu drafts a concrete
+   intake issue. You talk only to yshifu.
 
-8. **Approve the drafted spec.** For a user-directed issue, the front gate is *your* approval
-   of the spec yshifu drafted in step 7 — your one-liner was the request; this is the go.
-   yshifu records that approval by applying the `ready` label (it never self-approves), which
-   is its cue to spawn the coder. (For proactive issues yshifu raises toward your approved north
-   star, the gate is yshifu⇄Codex consensus instead — no per-issue ask — which is exactly why
-   approving the north star in step 6 matters.)
+8. **Clear the pre-code gates.** For user-directed work, approve that intake draft — your
+   one-liner was the request; this is the intake go. yshifu records the exact accepted issue
+   title and body digests in an issue comment. (For proactive work under your approved north star,
+   yshifu⇄Codex consensus records proactive intake acceptance instead.) New normal work then
+   follows one pipeline: independently reviewed G1 intent PR → **you merge** → independently
+   reviewed G2 spec-with-risk PR → **you merge** → plan gate. High risk uses a
+   reviewed plan-only PR that **you merge** before code. Routine work pushes `plan.md` as
+   the first implementation-branch commit; a different reviewer records the exact remote
+   head/base/blobs on the intake issue. Only after all of that does yshifu apply `ready`,
+   take a verified `claimed` pickup, clear `ready`, and spawn the coder.
 
-9. **Watch one loop:** yshifu spawns the coder subagent → coder opens a PR (`round-0`) →
+9. **Watch one loop:** yshifu claims and spawns the coder → coder opens a PR (`round-0`) →
    yshifu runs `"<ystack>/scripts/codex-review.sh" <PR#>` from inside the target repo's
    clone — by absolute path, since the harness lives only in the ystack clone, not the
    target repo → Codex posts review comments only. Fixes bump `round-N`; the cap (~3) or
    an ambiguous spec escalates with `needs-human`. When CI is green and Codex passed that
-   exact head, yshifu labels the PR `merge-ready` and hands it to **you — you merge, always.**
+   exact head/base, yshifu labels the PR `merge-ready` and hands it to **you — you merge, always.**
    yshifu never merges — merging is yours, and it is a rail, not a preference. (Protect `main`
    with a ruleset that requires a pull request plus an approving review and the rail is enforced
    too: the reviewer is comments-only and cannot approve, and no agent gets a bypass.) The label
-   only says "reviewed clean at this head", and it goes void the moment new commits land. A PR
+   only says "reviewed clean at this head/base", and it goes void when either moves. A PR
    that needs your judgment on top of the review (safety-rail / north-star / high-risk) is
    flagged as such when it is handed over. `scripts/merge-pr.sh` stays in the repo for your own
    use; yshifu never runs it.

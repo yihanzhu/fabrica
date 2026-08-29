@@ -191,22 +191,13 @@ report_warn() {
 
 # (a) /yshifu points at this clone -------------------------------------------------
 yshifu_cmd="$HOME/.claude/commands/yshifu.md"
-faber_cmd="$HOME/.claude/commands/faber.md" # legacy fallback: installed before the rename
+legacy_faber_cmd="$HOME/.claude/commands/faber.md" # legacy command retired after the rename
 # Match a path BOUNDARY ("$repo_root/"), not a bare prefix: the generated command
 # embeds paths like "<root>/manager/CLAUDE.md", so the trailing slash anchors the
 # match to a path component and stops a clone whose path is a prefix of another's
 # (e.g. /work/ystack vs an installed /work/ystack-old) from false-passing.
-if [ ! -f "$yshifu_cmd" ] && [ -f "$faber_cmd" ]; then # legacy fallback
-  # A pre-rename install may sit here during the bridge — but only a FRESH
-  # bridge copy counts. A stale pre-rename render still declares the old
-  # persona and old paths, contradicting the renamed manager/CLAUDE.md it
-  # loads, so it fails with the one-command fix. # legacy fallback
-  if grep -qE 'FABRICA_|\.fabrica/' "$faber_cmd"; then # legacy fallback
-    report 1 "(a) stale legacy /faber command found (pre-rename render) — re-run scripts/install.sh (it writes fresh copies under both names)"
-  else
-    yshifu_cmd="$faber_cmd" # legacy fallback
-    report 0 "(a) legacy-named /faber bridge copy found (fresh content) — valid until it is retired"
-  fi
+if [ -e "$legacy_faber_cmd" ] || [ -L "$legacy_faber_cmd" ]; then # legacy retired command must be removed explicitly
+  report 1 "(a) retired legacy /faber command still exists at $legacy_faber_cmd — preserve it if customized, then move or delete it; scripts/install.sh no longer recreates it"
 fi
 if [ ! -f "$yshifu_cmd" ]; then
   report 1 "(a) /yshifu command installed at $yshifu_cmd (missing — run scripts/install.sh)"

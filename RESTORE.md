@@ -53,20 +53,79 @@ human channel.
    `~/.claude/commands/yshifu.md` from [`templates/yshifu-command.md`](templates/yshifu-command.md),
    substituting this clone's own path for the placeholder — so the command never hardcodes
    a repo location. Idempotent: re-running is safe, and an existing differing `yshifu.md` is
-   backed up to `yshifu.md.bak` before overwriting. It also writes a bridge copy under the legacy `/faber` name (same content, same backup rule) until that bridge is retired.
+   backed up to `yshifu.md.bak` before overwriting. A retired legacy command file is not
+   recreated or deleted by the installer. If legacy `~/.claude/commands/faber.md` remains,
+   the installer warns and leaves it byte-for-byte untouched. Retire it in this order before
+   running doctor/full smoke:
+   1. Verify the new command exists and names this clone:
+      `test -f ~/.claude/commands/yshifu.md && grep -qF "$(pwd -P)/" ~/.claude/commands/yshifu.md`.
+   2. Inspect whether the legacy file is the generated bridge or contains custom work. Never
+      discard custom content.
+   3. Move it outside the active command-discovery tree into a unique timestamped
+      directory; never overwrite the installer's fixed `.bak` or an earlier retirement:
+
+      ```sh
+      set -eu
+      legacy_cmd="$HOME/.claude/commands/faber.md" # legacy operator cleanup
+      if [ ! -e "$legacy_cmd" ] && [ ! -L "$legacy_cmd" ]; then
+        echo "retired command is already absent: $legacy_cmd" >&2
+        exit 1
+      fi
+      claude_root="$(cd "$HOME/.claude" && pwd -P)"
+      retired_root="$HOME/.claude/retired-commands"
+      if [ -L "$retired_root" ] || { [ -e "$retired_root" ] && [ ! -d "$retired_root" ]; }; then
+        echo "refusing unsafe retired-command root: $retired_root" >&2
+        exit 1
+      fi
+      if [ ! -e "$retired_root" ]; then
+        mkdir -m 700 "$retired_root"
+      fi
+      if [ ! -O "$retired_root" ] || [ -n "$(find "$retired_root" -prune \( -perm -020 -o -perm -002 \) -print -quit)" ]; then
+        echo "retired-command root must be owned by this user and not group/other writable" >&2
+        exit 1
+      fi
+      retired_real="$(cd "$retired_root" && pwd -P)"
+      case "$retired_real" in
+        "$claude_root"/*) ;;
+        *) echo "retired-command root escaped $claude_root" >&2; exit 1 ;;
+      esac
+      stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+      retired_dir="$(mktemp -d "$retired_real/legacy-faber-$stamp.XXXXXX")" # legacy backup
+      retired="$retired_dir/command.md"
+      if [ -e "$retired" ] || [ -L "$retired" ]; then
+        echo "refusing to overwrite retirement destination: $retired" >&2
+        exit 1
+      fi
+      if ! mv "$legacy_cmd" "$retired"; then
+        echo "failed to move retired command; original path was not intentionally removed" >&2
+        exit 1
+      fi
+      printf 'retired=%s\n' "$retired"
+      ```
+   4. Run `scripts/doctor.sh`, restart Claude Code, and run the full `/yshifu` smoke below.
+   5. Roll back only if the command path is still absent:
+      Set `retired` to the exact path printed above, then run
+      `legacy_cmd="$HOME/.claude/commands/faber.md"; test ! -e "$legacy_cmd" && test ! -L "$legacy_cmd" && mv "$retired" "$legacy_cmd"`.
+      If either path conflicts, stop and inspect it; never overwrite. The move preserves the
+      original bytes and mode. # legacy rollback
    Do **not** recreate this command by hand.
 4. Give that session GitHub access (`gh` CLI or the GitHub connector) so yshifu can read
    state and open issues.
 
 yshifu **never writes code or opens PRs** and **never approves on your behalf** — it opens
 issues and orchestrates the loop. yshifu **never merges either**: when a PR is CI-green and
-Codex passed that head, it labels the PR `merge-ready` and hands it to you, naming the risk
+Codex passed that exact head/base, it labels the PR `merge-ready` and hands it to you, naming the risk
 when there is one (safety-rail changes, north-star / goal drift, high-risk back-look). The
-front gate is **your approval of the drafted spec** (for a user-directed issue, your
-one-liner is the request → yshifu drafts the spec → you approve that drafted spec — drafting
-alone never earns `ready`): once you approve the spec, yshifu applies the `ready` label as the
-record of your go (it never labels a spec you haven't approved). That `ready` label is yshifu's
-own cue to spawn the coder subagent — one launch per issue, not a separate automated trigger.
+intake gate is **your approval of the concrete intake draft** for user-directed work;
+proactive work uses yshifu⇄Codex consensus under your approved north star. yshifu records
+the accepted exact issue title/body digests on the issue. Neither path directly earns `ready`.
+New normal work then needs operator-merged G1 intent and G2 spec-with-risk, and the
+applicable plan gate. Only then does yshifu apply `ready`. Before spawn it records a
+unique claim, adds/verifies `claimed`, consumes the existing `ready` label, and verifies
+the exact state. Under the hard one-manager-session invariant, a crash leaves `claimed`
+visible and blocks duplicate pickup; it is not a cross-manager mutex. Parallel managers
+pause with `needs-human`. This
+remains an in-session action, not a separate automated trigger.
 
 ---
 
@@ -87,9 +146,13 @@ Notes:
 - The `/yshifu` command (step 1) already points yshifu at these files, so once it is
   installed yshifu will use them when it spawns a coder; there is no separate trigger,
   repository, or connector setting to configure.
-- The coder instructions self-guard: the coder confirms the issue carries `ready` (yshifu's
-  record that it is cleared to run — your spec-approval OR yshifu⇄Codex consensus) before
-  doing anything. That keeps the front gate intact even inside the spawn.
+- The coder instructions self-guard: build requires intake `claimed` with
+  `ready|needs-human` absent; fix requires PR `claimed`, PR `needs-human` absent, and
+  parent-intake `ready|claimed|needs-human` absent. Both match a unique claim ID and exact tuple
+  before doing anything.
+  For normal work, `ready` means the durable intake record, G1/G2, and applicable plan
+  gate all cleared; named bootstraps use their dedicated approved plan. Approval or
+  consensus alone is not enough.
 
 ---
 
@@ -126,7 +189,7 @@ Do this **once per target repo**. The full checklist already exists — **reuse 
 not re-derive it: [`templates/repo-setup.md`](templates/repo-setup.md).
 
 That checklist covers:
-- **Labels** — the `debating` / `ready` / `round-0..round-3` / `needs-human` / `merge-ready`
+- **Labels** — the `debating` / `ready` / `claimed` / `round-0..round-3` / `needs-human` / `merge-ready`
   set the loop uses as its state (each coder spawn is stateless, so the round lives in the
   label; `debating` marks a proactive issue under manager-debate, not yet approved).
   The `gh label create` loop is in that file. `setup-target-repo.sh` is the **canonical
@@ -135,6 +198,10 @@ That checklist covers:
   restore **without mutating anything**, run the read-only dry mode —
   `scripts/setup-target-repo.sh --check <owner>/<repo>` — which reports per label
   `matches` / `differs` / `missing` and exits non-zero if anything is missing or differs.
+  After activating this policy, audit old `ready` issues too. Remove it from every
+  already-open implementation PR before `legacy-open` fix mode. A PR-absent issue keeps
+  it only with a complete new build tuple (and exact approved plan record for a named
+  bootstrap). The reconciled description does not turn an old label into evidence.
 - **Branch protection on `main`** — require CI status checks to pass; keep GitHub's
   **native auto-merge button off** (merging is the operator's, gated on green CI and a
   `merge-ready` label — never a server-side trigger, and never an agent). Caveat: that section of `repo-setup.md` is a **UI checkbox checklist with no
@@ -198,18 +265,22 @@ loop will stall at exactly that gap. Then prove the team end to end:
 Run **one trivial issue** through the full loop end to end, all from your yshifu session:
 
 1. Ask **yshifu** for a throwaway change (e.g. a one-line doc tweak). Your ask is the
-   *request*; yshifu drafts the spec and opens an issue.
-2. **You** approve that drafted spec (the front gate — approving the spec yshifu drafted,
-   not just the topic); **yshifu** then applies the `ready` label as the record of your
-   approval, and **spawns a coder subagent**.
-3. Confirm the coder opens a PR that says `Closes #<n>` and carries `round-0`.
+   *request*; yshifu drafts an intake issue.
+2. **You** approve that concrete intake. Confirm yshifu records the exact title/body digests,
+   then coordinate G1 intent and G2 spec-with-risk PRs through independent review and
+   **your merge**. Confirm the plan gate passes: high risk uses a reviewed plan-only
+   PR you merge; routine work uses a plan-first remote head accepted by a different reviewer.
+   Only then confirm **yshifu** applies `ready`, takes a verified `claimed` pickup,
+   clears `ready`, and **spawns a coder subagent**.
+3. Confirm the implementation PR says `Closes #<n>` and carries `round-0`; the earlier
+   artifact/plan PRs must have used non-closing `Tracks #<n>`.
 4. Confirm the review path:
    - **yshifu runs** `scripts/codex-review.sh <PR#>` and **Codex** posts review comments
      to the PR (and nothing else — no approve, no merge).
    - **CI** runs on the PR and goes green.
 5. If there's feedback, confirm **yshifu spawns a fix-mode coder** that pushes follow-up
    commits and bumps the `round-N` label, then re-runs `codex-review.sh`.
-6. Confirm the merge path: for a clean PR (CI green + Codex passed at that head) yshifu
+6. Confirm the merge path: for a clean PR (CI green + Codex passed at that head/base) yshifu
    applies **`merge-ready`** and hands it over — **you merge**. Nothing else has a merge
    path: `main` requires a pull request and an approving review, the reviewer is
    comments-only, and no agent has a bypass.
@@ -230,8 +301,8 @@ These are load-bearing — per the self-modification safety section of
 
 - **Reviewer stays read-only / comments-only.** Codex never pushes, approves-to-merge, or
   merges, and is never the author.
-- **Merging is yours, always.** yshifu labels a reviewed-clean head `merge-ready` and hands
-  the PR over; it never merges, and the label goes void the moment new commits land. The
+- **Merging is yours, always.** yshifu labels a reviewed-clean head/base `merge-ready` and hands
+  the PR over; it never merges, and the label goes void when the reviewed head or base moves. The
   in-session auto-merge v1 allowed was retired when the branch ruleset landed. Carve-outs
   survive as handoff duties: safety-rail changes, ambiguous specs, anything escalated
   (`needs-human`/round-cap), north-star milestones / goal drift, and high-risk back-look
@@ -241,13 +312,15 @@ These are load-bearing — per the self-modification safety section of
   stateless, this state lives in the **labels** (`round-0..3`, `needs-human`), not in agent
   memory — so the labels (step 4) are part of the safety system, not decoration.
 - **CI is the hard gate.** Merges require green CI; restore CI before trusting the loop.
-- **Front gate clears via one of two paths; `ready` records that an issue is cleared.** A
-  **user-directed** issue runs after you approve the spec yshifu drafts (your one-liner is the
-  request → yshifu drafts the spec → you approve that drafted spec). A **proactive** issue runs
-  after you've approved the active north star **and** yshifu⇄Codex manager-debate reaches
-  consensus — no per-issue ask. `ready` means "cleared to run" via *either* path; yshifu never
-  self-applies it acting alone (a proactive issue takes the passed consensus, not yshifu by
-  itself) and never on a user-directed spec you haven't approved.
+- **One of two intake paths starts one shared artifact/plan pipeline.** A
+  **user-directed** issue starts after you approve the concrete intake draft. A
+  **proactive** issue starts after you've approved the active north star and yshifu⇄Codex
+  manager-debate reaches consensus — no per-issue ask. The exact accepted issue title/body digests
+  is recorded. Then G1 intent, G2 spec-with-risk, and the applicable plan gate must pass.
+  `ready` means that whole sequence cleared; named bootstraps use only their dedicated
+  approved plan. `claimed` means a pickup is active or unresolved and, under the
+  one-manager invariant, blocks another spawn. It is not a cross-manager mutex. yshifu
+  never infers intake acceptance or self-accepts a plan.
 
 ---
 
@@ -261,10 +334,11 @@ Real lessons from setting this up:
 - **Local `gh` auth is what the loop uses.** yshifu, the spawned coder, and
   `codex-review.sh` all run in your local Claude Code session and hit GitHub through your
   local `gh` auth. If GitHub calls fail, check `gh auth status` first.
-- **Coder won't start on an issue?** Expected unless the issue carries exactly `ready`
-  (yshifu's record that it is cleared to run — your spec-approval for a user-directed issue,
-  OR yshifu⇄Codex consensus for a proactive one) — the coder instructions stop on anything
-  else (step 2). Confirm the issue is cleared and yshifu applied `ready`.
+- **Coder won't start on an issue?** `ready` is only the unclaimed cue. The manager must
+  take a unique `claimed` pickup and clear `ready`; the coder then requires that claim,
+  no `needs-human`, and an exact tuple. Under one manager, an unresolved claim blocks
+  another spawn; parallel managers require `needs-human`. Approval
+  or consensus alone is not runnable; confirm every applicable gate and claim transition.
 - **No Codex review on the PR?** The review is not automatic — **yshifu must run**
   `scripts/codex-review.sh <PR#>` from the target repo's clone. Check the Codex CLI is
   installed and signed in (`codex` runs), and that the script is invoked by absolute path.

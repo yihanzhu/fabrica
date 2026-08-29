@@ -13,13 +13,21 @@ set -euo pipefail
 #   (b3) an untagged old env key fails — the tag, not the key family, is what exempts.
 #   (c) a line tagged with a same-line "legacy" comment passes (exit 0).
 #   (d) old names under work/ are ignored (exit 0).
+#   (e) installer writes only /yshifu and leaves a custom retired command untouched.
+#   (f) doctor requires /yshifu and reports a retired command instead of using it.
 #
 # Run: scripts/test/v2-check-rename.test.sh   (exits non-zero if any assert fails)
 
 test_dir="$(cd "$(dirname "$0")" && pwd -P)"
 gate="$test_dir/../check-rename.sh"
+installer="$test_dir/../install.sh"
+doctor="$test_dir/../doctor.sh"
 if [ ! -x "$gate" ]; then
   echo "FAIL: gate not found or not executable at $gate" >&2
+  exit 1
+fi
+if [ ! -x "$installer" ] || [ ! -x "$doctor" ]; then
+  echo "FAIL: installer or doctor not found/executable" >&2
   exit 1
 fi
 
@@ -58,6 +66,20 @@ assert_contains() {
       echo "FAIL: $1"
       echo "      needle:   [$2]"
       echo "      haystack: [$3]"
+      ;;
+  esac
+}
+assert_not_contains() {
+  # assert_not_contains <label> <needle> <haystack>
+  case "$3" in
+    *"$2"*)
+      failed=$((failed + 1))
+      echo "FAIL: $1"
+      echo "      unexpected: [$2]"
+      ;;
+    *)
+      passed=$((passed + 1))
+      echo "pass: $1"
       ;;
   esac
 }
@@ -152,12 +174,88 @@ test_work_dir_ignored() {
   assert_contains "(d) work/-only repo reports clean" "check-rename: clean" "$out"
 }
 
+# --- (e) installer creates only /yshifu and preserves unrelated retired file ----
+test_installer_retires_bridge() {
+  local fresh_home="$tmproot/install-fresh"
+  local custom_home="$tmproot/install-custom"
+  local link_home="$tmproot/install-link"
+  local fresh_yshifu="no" fresh_faber="no" custom_after custom_backup="no"
+  local custom_out link_out link_still="no"
+
+  mkdir -p "$fresh_home" "$custom_home/.claude/commands"
+  HOME="$fresh_home" "$installer" >/dev/null
+  [ -f "$fresh_home/.claude/commands/yshifu.md" ] && fresh_yshifu="yes"
+  [ -e "$fresh_home/.claude/commands/faber.md" ] && fresh_faber="yes"
+  assert_eq "(e) fresh install creates /yshifu" "yes" "$fresh_yshifu"
+  assert_eq "(e) fresh install does not create retired command" "no" "$fresh_faber"
+
+  printf '%s\n' "custom command owned by the operator" > \
+    "$custom_home/.claude/commands/faber.md"
+  custom_out="$(HOME="$custom_home" "$installer" 2>&1)"
+  custom_after="$(cat "$custom_home/.claude/commands/faber.md")"
+  [ -e "$custom_home/.claude/commands/faber.md.bak" ] && custom_backup="yes"
+  assert_eq "(e) install leaves a custom retired command untouched" \
+    "custom command owned by the operator" "$custom_after"
+  assert_eq "(e) install does not back up the custom retired command" \
+    "no" "$custom_backup"
+  assert_contains "(e) install warns about the retired command" \
+    "WARNING: retired legacy /faber command remains" "$custom_out"
+
+  mkdir -p "$link_home/.claude/commands"
+  ln -s "$link_home/missing-target" "$link_home/.claude/commands/faber.md"
+  link_out="$(HOME="$link_home" "$installer" 2>&1)"
+  [ -L "$link_home/.claude/commands/faber.md" ] && link_still="yes"
+  assert_eq "(e) install leaves a dangling retired symlink untouched" "yes" "$link_still"
+  assert_contains "(e) install warns about a dangling retired symlink" \
+    "WARNING: retired legacy /faber command remains" "$link_out"
+}
+
+# --- (f) doctor has no retired fallback and reports the residual -----------------
+test_doctor_rejects_retired_bridge() {
+  local doctor_text has_fallback="no" doctor_home="$tmproot/doctor-home"
+  local doctor_link_home="$tmproot/doctor-link-home"
+  local doctor_out doctor_rc=0 doctor_link_out doctor_link_rc=0
+  doctor_text="$(cat "$doctor")"
+  # Match the retired literal assignment, not a variable expansion.
+  # shellcheck disable=SC2016
+  case "$doctor_text" in
+    *'yshifu_cmd="$faber_cmd"'*|*'legacy-named /faber bridge copy found'*)
+      has_fallback="yes"
+      ;;
+  esac
+  assert_eq "(f) doctor has no retired command fallback" "no" "$has_fallback"
+  assert_contains "(f) doctor reports a retired command residual" \
+    "retired legacy /faber command still exists" "$doctor_text"
+
+  mkdir -p "$doctor_home/.claude/commands"
+  printf '%s\n' "retired bridge" > "$doctor_home/.claude/commands/faber.md"
+  doctor_out="$(HOME="$doctor_home" PATH="/usr/bin:/bin" /bin/bash "$doctor" 2>&1)" || \
+    doctor_rc=$?
+  assert_eq "(f) doctor exits nonzero while retired command remains" "1" "$doctor_rc"
+  assert_contains "(f) doctor runtime reports the exact residual" \
+    "retired legacy /faber command still exists" "$doctor_out"
+  assert_not_contains "(f) doctor never calls the retired command valid" \
+    "valid until it is retired" "$doctor_out"
+
+  mkdir -p "$doctor_link_home/.claude/commands"
+  ln -s "$doctor_link_home/missing-target" \
+    "$doctor_link_home/.claude/commands/faber.md"
+  doctor_link_out="$(HOME="$doctor_link_home" PATH="/usr/bin:/bin" \
+    /bin/bash "$doctor" 2>&1)" || doctor_link_rc=$?
+  assert_eq "(f) doctor exits nonzero for dangling retired symlink" \
+    "1" "$doctor_link_rc"
+  assert_contains "(f) doctor runtime reports dangling retired symlink" \
+    "retired legacy /faber command still exists" "$doctor_link_out"
+}
+
 test_clean_repo_passes
 test_stray_name_fails
 test_case_insensitive_persona
 test_untagged_env_key_fails
 test_tagged_line_passes
 test_work_dir_ignored
+test_installer_retires_bridge
+test_doctor_rejects_retired_bridge
 
 echo
 echo "passed: $passed, failed: $failed"
