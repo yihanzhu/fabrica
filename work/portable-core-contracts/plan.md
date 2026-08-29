@@ -60,6 +60,9 @@ change because the validator is not part of the live profile or target setup.
    - Accept only the three exact command/argument forms in the spec. Wrong command or
      arity is `E_USAGE`; an unreadable input, wrong jq version, missing schema, or
      missing SHA tool is `E_RUNTIME`. Never echo the rejected path.
+   - `validate-profile-set` accepts 1–8 manifest arguments. Reject zero or more than
+     eight as `E_USAGE` before opening or snapshotting any input; the profile's eight
+     binding maximum is also the CLI resource bound.
    - Snapshot at most 1,048,577 bytes from each input before parsing. Reject the extra
      byte as `E_LIMIT`; all later canonical and hash work reads the same snapshot.
    - Run the exact jq 1.6 single-root canonicalizer from the spec. Capture its exact
@@ -132,6 +135,9 @@ change because the validator is not part of the live profile or target setup.
      token, and absence of fixture bytes and local paths from stderr. Add a PATH stub
      proving a non-1.6 jq fails as `E_RUNTIME`. Exercise `sha256sum`, the `shasum`
      fallback, and the no-SHA-tool failure without changing expected digests.
+   - Exercise 0, 1, 8, and 9 manifest arguments. Zero and nine return `E_USAGE`
+     before any named input is read; use unreadable/sentinel paths to prove that the
+     count gate precedes snapshot work.
 
 6. **Wire restore and CI only after the complete local suite passes.**
 
