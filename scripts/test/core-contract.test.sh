@@ -115,8 +115,8 @@ run_expr 'stage_request_doc($resolved_sha)' --arg resolved_sha "$sha_resolved" >
 sha_request=$(hash_of "$tmpdir/request.json")
 
 # shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
-run_expr 'stage_result_doc($request_sha; $resolved_sha)' \
-  --arg request_sha "$sha_request" --arg resolved_sha "$sha_resolved" > "$tmpdir/result.json"
+run_expr 'stage_result_doc($request_sha; $resolved_sha; $manifest_shas)' \
+  --arg request_sha "$sha_request" --arg resolved_sha "$sha_resolved" --argjson manifest_shas "$manifest_shas" > "$tmpdir/result.json"
 
 echo "== (a) positive path: every document, profile-set, and stage-run validate clean =="
 for f in manifest-producer manifest-verifier manifest-reviewer manifest-publisher profile resolved_profile request result; do
@@ -140,7 +140,11 @@ assert_fail "(b) validate-profile-set nine manifests" "E_USAGE" validate-profile
 for i in 1 2 3 4; do
   mutate "$tmpdir/manifest-producer.json" ".id = \"extra-manifest-$i\" | .body.package_ref.object_id = (\"$i\"*40)" "$tmpdir/extra-manifest-$i.json"
 done
-assert_ok "(b) validate-profile-set eight manifests (boundary, 4 extra unreferenced but distinct)" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
+# The accepted contract requires the supplied manifest set to be exact — extras
+# unreferenced by any binding widen a supposedly closed profile set, so eight
+# manifests (four referenced, four not) is syntactically within the 1-8 CLI bound
+# but must still be rejected at the relation level, not accepted.
+assert_fail "(b) validate-profile-set eight manifests (boundary, 4 extra unreferenced) is rejected" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" \
   "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json" \
   "$tmpdir/extra-manifest-1.json" "$tmpdir/extra-manifest-2.json" "$tmpdir/extra-manifest-3.json" "$tmpdir/extra-manifest-4.json"
 assert_fail "(b) validate-profile-set unreadable input" "E_RUNTIME" validate-profile-set "$tmpdir/profile.json" "$tmpdir/resolved_profile.json" "$tmpdir/does-not-exist.json"
@@ -224,6 +228,8 @@ mutate "$tmpdir/manifest-producer.json" '.kind = "not-a-kind"' "$tmpdir/m-d6.jso
 assert_fail "(d) unknown document kind" "E_SHAPE" validate-document "$tmpdir/m-d6.json"
 mutate "$tmpdir/manifest-producer.json" '.schema_version = 2' "$tmpdir/m-d7.json"
 assert_fail "(d) wrong schema_version" "E_SHAPE" validate-document "$tmpdir/m-d7.json"
+mutate "$tmpdir/manifest-producer.json" '.body.offered_permissions = (.body.offered_permissions | sort | reverse)' "$tmpdir/m-d8.json"
+assert_fail "(d) offered_permissions enum set not in canonical sorted order" "E_SHAPE" validate-document "$tmpdir/m-d8.json"
 
 echo "== (e) profile shape + protected-role relations (validate-document) =="
 mutate "$tmpdir/profile.json" '.body.bindings = [.body.bindings[0]]' "$tmpdir/p-e1.json"
@@ -236,12 +242,16 @@ mutate "$tmpdir/profile.json" '.body.bindings[1].authority_ref.scope_sha256 = .b
 assert_fail "(e) two protected roles share one authority scope" "E_RELATION" validate-document "$tmpdir/p-e4.json"
 mutate "$tmpdir/profile.json" '.body.bindings[1].principal_id = .body.bindings[0].principal_id' "$tmpdir/p-e5.json"
 assert_fail "(e) two protected roles share one principal_id" "E_RELATION" validate-document "$tmpdir/p-e5.json"
-mutate "$tmpdir/profile.json" '.body.bindings[1].execution_kind = "model"' "$tmpdir/p-e6.json"
+# Selects the verifier binding by role, not array position — canonical sorted
+# order (core/v1/contracts.jq's is_bounded_set) no longer places it at a fixed index.
+mutate "$tmpdir/profile.json" '.body.bindings |= map(if .role=="verifier" then .execution_kind="model" else . end)' "$tmpdir/p-e6.json"
 assert_fail "(e) verifier forced to model execution" "E_SHAPE" validate-document "$tmpdir/p-e6.json"
 mutate "$tmpdir/profile.json" '.body.bindings[0].skill_refs = [.body.bindings[0].package_ref]' "$tmpdir/p-e7.json"
 assert_fail "(e) deterministic binding with non-empty skill_refs" "E_SHAPE" validate-document "$tmpdir/p-e7.json"
 mutate "$tmpdir/profile.json" '.body.bindings[0].binding_id = .body.bindings[1].binding_id' "$tmpdir/p-e8.json"
 assert_fail "(e) duplicate binding_id" "E_SHAPE" validate-document "$tmpdir/p-e8.json"
+mutate "$tmpdir/profile.json" '.body.bindings |= reverse' "$tmpdir/p-e9.json"
+assert_fail "(e) bindings not in canonical binding_id-sorted order" "E_SHAPE" validate-document "$tmpdir/p-e9.json"
 
 echo "== (f) resolved_profile shape (validate-document) =="
 mutate "$tmpdir/resolved_profile.json" 'del(.body.selection_ref)' "$tmpdir/rp-f1.json"
@@ -274,6 +284,16 @@ mutate "$tmpdir/request.json" '.body.requested_at = "not-a-time"' "$tmpdir/r-g8.
 assert_fail "(g) malformed requested_at" "E_SHAPE" validate-document "$tmpdir/r-g8.json"
 mutate "$tmpdir/request.json" '.body.operation.role = "publisher"' "$tmpdir/r-g9.json"
 assert_fail "(g) bootstrap producer-only rule violated by a non-producer role" "E_SHAPE" validate-document "$tmpdir/r-g9.json"
+mutate "$tmpdir/request.json" '.body.risk.tier = {namespace:"core",name:"routine"}' "$tmpdir/r-g10.json"
+assert_fail "(g) absent target requires bootstrap risk tier, not merely a producer role" "E_SHAPE" validate-document "$tmpdir/r-g10.json"
+mutate "$tmpdir/request.json" '.body.requested_at = "2026-99-99T99:99:99Z"' "$tmpdir/r-g11.json"
+assert_fail "(g) requested_at with out-of-range month/day/time components" "E_SHAPE" validate-document "$tmpdir/r-g11.json"
+# named_input's "document" variant (input_ref -> document_ref_shape) is the one
+# spot with no accompanying exact-kind check next to it (unlike every document_ref(K)
+# use, which also compares .kind==K) — an unknown .kind here only is_document_kind
+# itself can catch, so it is the mutation that actually exercises that fix.
+mutate "$tmpdir/request.json" '.body.inputs[0].value = {type:"document", value:{schema_version:1,kind:"not-a-document-kind",id:"x",sha256:("0"*64)}}' "$tmpdir/r-g12.json"
+assert_fail "(g) named input document ref with an unknown document kind" "E_SHAPE" validate-document "$tmpdir/r-g12.json"
 
 echo "== (h) stage_result shape (validate-document) =="
 mutate "$tmpdir/result.json" '.body.evidence = [.body.evidence[0], (.body.evidence[0] | .evidence_id = "ev-2")]' "$tmpdir/s-h1.json"
@@ -288,6 +308,8 @@ mutate "$tmpdir/result.json" '.body.execution.metadata.tools.state = "not-applic
 assert_fail "(h) tools fact cannot be not-applicable for any execution" "E_SHAPE" validate-document "$tmpdir/s-h5.json"
 mutate "$tmpdir/result.json" 'del(.body.outputs[0].ref)' "$tmpdir/s-h6.json"
 assert_fail "(h) output missing its content ref" "E_SHAPE" validate-document "$tmpdir/s-h6.json"
+mutate "$tmpdir/result.json" '.body.execution.used_capability = {kind:"unclassified", id:"core.harness.produce.v1"}' "$tmpdir/s-h7.json"
+assert_fail "(h) unclassified used_capability id equals a registered capability id" "E_SHAPE" validate-document "$tmpdir/s-h7.json"
 
 echo "== (i) profile-set relations (validate-profile-set) =="
 mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].package_source.source.object_id = ("f"*40)' "$tmpdir/rp-i1.json"
@@ -296,7 +318,11 @@ assert_fail "(i) resolved package_source does not match the binding's package_re
 mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].adapter_implementation.version = "not-v1"' "$tmpdir/rp-i2.json"
 assert_fail "(i) resolved adapter_implementation.version does not match the manifest" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i2.json" \
   "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
-mutate "$tmpdir/resolved_profile.json" '.body.bindings = [.body.bindings[1],.body.bindings[2],.body.bindings[3],.body.bindings[0]] | .body.bindings[3].binding.binding_id = "no-such-binding"' "$tmpdir/rp-i3.json"
+# Renames (rather than reorders) the last binding so the array stays in the
+# required canonical sorted-by-binding_id order (core/v1/contracts.jq's
+# is_bounded_set now enforces that order) while still breaking the binding_id-set
+# match against the profile.
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[-1].binding.binding_id = "b-zzz-no-such-binding"' "$tmpdir/rp-i3.json"
 assert_fail "(i) resolved bindings do not cover the same binding_id set as the profile" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i3.json" \
   "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
 mutate "$tmpdir/profile.json" '.body.bindings[0].manifest_ref.id = "no-such-manifest"' "$tmpdir/p-i4.json"
@@ -314,6 +340,39 @@ assert_fail "(i) two supplied manifests share one document id" "E_REF" validate-
 mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].config_source = {state:"present", value:{source:.body.bindings[0].package_source.source, value_format:"raw-bytes", value_sha256:("1"*64)}}' "$tmpdir/rp-i6.json"
 assert_fail "(i) resolved config_source present without a config_ref on the binding" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i6.json" \
   "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/resolved_profile.json" '.body.profile_source.value_sha256 = ("0"*64)' "$tmpdir/rp-i7.json"
+assert_fail "(i) resolved profile_source digest does not match the supplied profile's real bytes" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i7.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/resolved_profile.json" '.body.bindings[0].manifest_source.value_sha256 = ("0"*64)' "$tmpdir/rp-i8.json"
+assert_fail "(i) resolved manifest_source digest does not match the supplied manifest's real bytes" "E_RELATION" validate-profile-set "$tmpdir/profile.json" "$tmpdir/rp-i8.json" \
+  "$tmpdir/manifest-producer.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+# These two rebuild a fully hash-consistent profile+resolved_profile pair around
+# the mutated manifest (mutate() alone can't: changing a referenced manifest's
+# bytes changes its digest, and profile.json/resolved_profile.json embed digests
+# of each other, so a bare byte-level mutation would only trip the earlier
+# "referenced manifest not supplied" check instead of the offer relation itself).
+mutate "$tmpdir/manifest-producer.json" '.body.offered_roles = ["verifier"]' "$tmpdir/m-i9.json"
+sha_i9=$(hash_of "$tmpdir/m-i9.json")
+manifest_shas_i9=$(jq -n --arg p "$sha_i9" --arg v "$sha_verifier" --arg r "$sha_reviewer" --arg u "$sha_publisher" \
+  '{producer:$p, verifier:$v, reviewer:$r, publisher:$u}')
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'profile_doc($manifest_shas)' --argjson manifest_shas "$manifest_shas_i9" > "$tmpdir/p-i9.json"
+sha_p_i9=$(hash_of "$tmpdir/p-i9.json")
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'resolved_profile_doc($profile_sha; $manifest_shas)' --arg profile_sha "$sha_p_i9" --argjson manifest_shas "$manifest_shas_i9" > "$tmpdir/rp-i9.json"
+assert_fail "(i) manifest does not offer the binding's role" "E_RELATION" validate-profile-set "$tmpdir/p-i9.json" "$tmpdir/rp-i9.json" \
+  "$tmpdir/m-i9.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
+mutate "$tmpdir/manifest-producer.json" '.body.offered_capabilities = []' "$tmpdir/m-i10.json"
+sha_i10=$(hash_of "$tmpdir/m-i10.json")
+manifest_shas_i10=$(jq -n --arg p "$sha_i10" --arg v "$sha_verifier" --arg r "$sha_reviewer" --arg u "$sha_publisher" \
+  '{producer:$p, verifier:$v, reviewer:$r, publisher:$u}')
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'profile_doc($manifest_shas)' --argjson manifest_shas "$manifest_shas_i10" > "$tmpdir/p-i10.json"
+sha_p_i10=$(hash_of "$tmpdir/p-i10.json")
+# shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
+run_expr 'resolved_profile_doc($profile_sha; $manifest_shas)' --arg profile_sha "$sha_p_i10" --argjson manifest_shas "$manifest_shas_i10" > "$tmpdir/rp-i10.json"
+assert_fail "(i) manifest does not offer the binding's requested capability" "E_RELATION" validate-profile-set "$tmpdir/p-i10.json" "$tmpdir/rp-i10.json" \
+  "$tmpdir/m-i10.json" "$tmpdir/manifest-verifier.json" "$tmpdir/manifest-reviewer.json" "$tmpdir/manifest-publisher.json"
 
 echo "== (j) stage-run relations (validate-stage-run) =="
 mutate "$tmpdir/result.json" '.body.outcome.value = "no-change"' "$tmpdir/s-j1.json"
@@ -338,8 +397,16 @@ mutate "$tmpdir/result.json" '.body.status = "skipped" | .body.reason = {reason_
 assert_fail "(j) skipped status still carrying an outcome" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j10.json"
 mutate "$tmpdir/request.json" '.body.operation.binding_id = "no-such-binding"' "$tmpdir/r-j11.json"
 # shellcheck disable=SC2016  # single-quoted jq $-vars on purpose, not shell vars
-run_expr 'stage_result_doc($request_sha; $resolved_sha)' --arg request_sha "$(hash_of "$tmpdir/r-j11.json")" --arg resolved_sha "$sha_resolved" > "$tmpdir/s-j11.json"
+run_expr 'stage_result_doc($request_sha; $resolved_sha; $manifest_shas)' --arg request_sha "$(hash_of "$tmpdir/r-j11.json")" --arg resolved_sha "$sha_resolved" --argjson manifest_shas "$manifest_shas" > "$tmpdir/s-j11.json"
 assert_fail "(j) request operation names a binding absent from the resolved profile" "E_RELATION" validate-stage-run "$tmpdir/r-j11.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j11.json"
+mutate "$tmpdir/result.json" '.body.outputs = [.body.outputs[0], (.body.outputs[0] | .output_id = "o2")]' "$tmpdir/s-j12.json"
+assert_fail "(j) completed producer change with more than one output" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j12.json"
+mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = [] | .body.stale_observations = [{selector:{kind:"target"},observed:{state:"absent"}}]' "$tmpdir/s-j13.json"
+assert_fail "(j) stale observation repeats the request's own unchanged (absent) target" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j13.json"
+mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = [] | .body.stale_observations = [{selector:{kind:"input",input_id:"no-such-input"},observed:{state:"present",value:{type:"document",value:{schema_version:1,kind:"profile",id:"profile-1",sha256:("0"*64)}}}}]' "$tmpdir/s-j14.json"
+assert_fail "(j) stale observation names an input absent from the request" "E_RELATION" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j14.json"
+mutate "$tmpdir/result.json" '.body.status = "stale" | .body.reason = {reason_id:"r1"} | del(.body.outcome, .body.execution, .body.started_at, .body.finished_at) | .body.evidence = [] | .body.outputs = [] | .body.stale_observations = [{selector:{kind:"environment"},observed:{state:"present",value:{environment_id:"env-1",fingerprint_sha256:("4"*64)}}}]' "$tmpdir/s-j15.json"
+assert_ok "(j) stale observation with a genuinely different environment fingerprint is a legal terminal state" validate-stage-run "$tmpdir/request.json" "$tmpdir/resolved_profile.json" "$tmpdir/s-j15.json"
 
 echo "== (k) jq version pin and SHA-tool fallback (environment) =="
 fakebin="$tmpdir/fakebin"

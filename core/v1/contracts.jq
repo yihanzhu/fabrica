@@ -31,7 +31,18 @@ def utf8_len: explode | map(if . < 128 then 1 elif . < 2048 then 2 elif . < 6553
 def is_id: type=="string" and test("^[a-z0-9][a-z0-9._:-]{0,127}$");
 def is_sha256: type=="string" and test("^[0-9a-f]{64}$");
 def is_shorttext: type=="string" and (utf8_len as $l | $l>=1 and $l<=1024);
-def is_time: type=="string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$");
+# is_time: shape (^...$) plus real UTC field ranges — a well-formed-looking string
+# like "2026-99-99T99:99:99Z" must not pass, since it later participates in lexical
+# time ordering (R4/time_le) as if it were a genuine instant.
+def is_time:
+  type=="string" and
+  test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") and
+  (capture("^[0-9]{4}-(?<mo>[0-9]{2})-(?<d>[0-9]{2})T(?<h>[0-9]{2}):(?<mi>[0-9]{2}):(?<s>[0-9]{2})Z$") |
+   ((.mo|tonumber)>=1 and (.mo|tonumber)<=12) and
+   ((.d|tonumber)>=1 and (.d|tonumber)<=31) and
+   ((.h|tonumber)>=0 and (.h|tonumber)<=23) and
+   ((.mi|tonumber)>=0 and (.mi|tonumber)<=59) and
+   ((.s|tonumber)>=0 and (.s|tonumber)<=59));
 def is_gitoid: type=="string" and (test("^[0-9a-f]{40}$") or test("^[0-9a-f]{64}$"));
 def has_exact_fields(req; opt):
   . as $obj |
@@ -40,7 +51,7 @@ def has_exact_fields(req; opt):
   (all(req[]; . as $k | $obj|has($k)));
 def is_bounded_set(mn; mx; item_ok; keyf):
   (type=="array") and (length>=mn) and (length<=mx) and (all(.[]; item_ok)) and
-  ((map(keyf)) as $ks | ($ks|unique|length)==($ks|length));
+  ((map(keyf)) as $ks | ($ks|unique|length)==($ks|length) and ($ks==($ks|sort)));
 def is_present(item_ok):
   (type=="object") and
   ((has_exact_fields(["state"];[]) and .state=="absent") or
@@ -56,9 +67,13 @@ def is_repopath:
   (split("/") as $s | all($s[]; .!="" and .!="." and .!=".."));
 def is_bounded_enum_set(mn; mx; allowed):
   (type=="array") and (length>=mn) and (length<=mx) and
-  (all(.[]; . as $v | allowed | index($v)!=null)) and ((unique|length)==length);
+  (all(.[]; . as $v | allowed | index($v)!=null)) and ((unique|length)==length) and (.==(sort));
 
-def is_document_kind: type=="string" and (["adapter_manifest","profile","resolved_profile","stage_request","stage_result"]|index(.)!=null);
+# .as $k | [...]|index($k), not [...]|index(.): the latter reads the piped array
+# back as its own needle, which jq's array-in-array indices search always finds at
+# 0 — this pre-existing form always returned true and never actually checked
+# membership. Same defect class as is_stale_selector above and is_observed_capability below.
+def is_document_kind: type=="string" and (. as $k | ["adapter_manifest","profile","resolved_profile","stage_request","stage_result"]|index($k)!=null);
 def document_ref_shape:
   has_exact_fields(["schema_version","kind","id","sha256"];[]) and
   (.schema_version==1) and (.kind|is_document_kind) and (.id|is_id) and (.sha256|is_sha256);
@@ -189,6 +204,19 @@ def is_delivered_scope(purpose):
   has_exact_fields(["ref","input_id"];[]) and (.ref|is_scope_ref_purpose(purpose)) and (.input_id|is_id) and
   (.ref.subject_ref.type=="artifact") and (.ref.subject_ref.value.type=="content");
 
+# delivered_scope_input_ok($ds; $ins): closes a delivered_scope over its request's
+# named inputs (R9's launch seam) — ds.input_id must select exactly one named
+# input whose value equals the scope's complete subject, and the underlying
+# payload media type must be one the launcher can deliver as text/JSON bytes.
+# $-bound (value, not filter) params: this is called from inside all(.[]; ...),
+# and a plain filter param would be re-evaluated against that inner "." instead
+# of staying pinned to the scope/inputs passed at the call site.
+def instruction_media_type_ok: .=="text/plain" or .=="application/json";
+def delivered_scope_input_ok($ds; $ins):
+  ($ins | map(select(.input_id == $ds.input_id))) as $matches |
+  (($matches|length) == 1) and ($matches[0].value == $ds.ref.subject_ref) and
+  (($ds.ref.subject_ref.value.value.media_type) | instruction_media_type_ok);
+
 def is_capability_args(cap):
   (type=="object") and
   (if cap=="core.harness.produce.v1" then
@@ -302,6 +330,10 @@ def find_one(arr; pred): [arr[] | select(pred)];
 # tool_ref's config_ref uses present<T>; profile_binding/resolved's config_ref is a
 # plain optional field (present only via `has`). Keep the two conventions distinct.
 def binding_manifest_relation_ok(b; m; rb):
+  (m.body.offered_roles | index(b.role) != null) and
+  (m.body.offered_execution_kinds | index(b.execution_kind) != null) and
+  (b.requested_capabilities | all(.[]; . as $c | m.body.offered_capabilities | index($c) != null)) and
+  (b.requested_permissions | all(.[]; . as $p | m.body.offered_permissions | index($p) != null)) and
   (b.package_ref == m.body.package_ref) and
   (rb.package_source.source == b.package_ref) and
   (b.requested_tools | all(.[]; . as $rt | m.body.offered_tools | any(.[]; . == $rt))) and
@@ -320,17 +352,23 @@ def binding_manifest_relation_ok(b; m; rb):
   ((rb.skill_sources | map(source_git_key) | sort) == (b.skill_refs | map(git_key) | sort)) and
   (rb.adapter_implementation.id == m.id) and (rb.adapter_implementation.version == m.body.adapter_version);
 
-def profile_set_relations_ok(profile_body; resolved_body; manifests):
-  (profile_body.bindings) as $bindings |
+def profile_set_relations_ok(profile_pair; resolved_body; manifests):
+  (profile_pair.content.body) as $profile_body |
+  ($profile_body.bindings) as $bindings |
   (resolved_body.bindings) as $rbindings |
+  (resolved_body.profile_source.value_sha256 == profile_pair.sha256) and
   (all($bindings[]; . as $b |
     (find_one(manifests; .content.id == $b.manifest_ref.id and .sha256 == $b.manifest_ref.sha256) | length) == 1)) and
+  (all(manifests[]; . as $m |
+    $bindings | any(.[]; .manifest_ref.id == $m.content.id and .manifest_ref.sha256 == $m.sha256))) and
   ((($rbindings | map(.binding.binding_id) | sort)) == (($bindings | map(.binding_id) | sort))) and
   (all($bindings[];
     . as $b |
-    (find_one(manifests; .content.id == $b.manifest_ref.id and .sha256 == $b.manifest_ref.sha256)[0].content) as $mdoc |
+    (find_one(manifests; .content.id == $b.manifest_ref.id and .sha256 == $b.manifest_ref.sha256)[0]) as $mpair |
+    ($mpair.content) as $mdoc |
     (find_one($rbindings; .binding.binding_id == $b.binding_id)[0]) as $rb |
-    ($rb.binding == $b) and binding_manifest_relation_ok($b; $mdoc; $rb)));
+    ($rb.binding == $b) and ($rb.manifest_source.value_sha256 == $mpair.sha256) and
+    binding_manifest_relation_ok($b; $mdoc; $rb)));
 
 
 
@@ -381,27 +419,40 @@ def is_stage_request_body:
   (.verification_instruction|is_delivered_scope("verification-instructions")) and
   (.required_evidence_kinds|is_bounded_enum_set(1;3;["deterministic","behavioral","architecture","independent-review"])) and
   (.requested_at|is_time) and
-  (if (.target_revision.state=="absent") then .operation.role=="producer" else true end) and
+  (if (.target_revision.state=="absent") then
+     (.operation.role=="producer") and (.risk.tier=={namespace:"core",name:"bootstrap"})
+   else true end) and
   (if .operation.capability_id=="core.verify.run.v1" then
      (.operation.arguments) as $args |
-     (.inputs|any(.[]; .input_id==$args.candidate_input_id and .value.type=="artifact" and .value.value.type=="git-object")) and
+     (.inputs|any(.[]; .input_id==$args.candidate_input_id and .value.type=="artifact" and .value.value.type=="git-object" and
+                       .value.value.value.object_type=="tree")) and
      (.target_revision.state=="present") and
      (((.inputs[]|select(.input_id==$args.candidate_input_id)).value.value.value.revision)==.target_revision.value)
    else true end) and
   (if .operation.capability_id=="core.review.change.v1" then
      (.target_revision.state=="present") and (.operation.arguments.change_ref.head==.target_revision.value) and
-     (.operation.arguments.change_ref.base==.base.value)
+     (.operation.arguments.change_ref.base==.base)
    else true end) and
   (if .operation.capability_id=="core.verify.run.v1" then (.required_evidence_kinds|index("deterministic")!=null)
    else ((.required_evidence_kinds|sort)==(required_evidence_kinds_for_capability(.operation.capability_id)|sort)) end) and
+  (.target_repository_id) as $repo |
+  (if .target_revision.state=="present" then .target_revision.value.repository_id==$repo else true end) and
+  (if .base.state=="present" then .base.value.repository_id==$repo else true end) and
+  (if .source.state=="present" and .source.value.type=="git-object" then .source.value.value.revision.repository_id==$repo else true end) and
+  (.inputs | all(.[];
+     if .value.type=="artifact" and .value.value.type=="git-object" then .value.value.value.revision.repository_id==$repo else true end)) and
+  (if .operation.capability_id=="core.review.change.v1" then .operation.arguments.change_ref.repository_id==$repo else true end) and
+  (.inputs) as $ins |
   ((.operation.arguments) as $args |
-   [.finish_condition.input_id, .verification_instruction.input_id,
-    (if ($args|has("output_contract")) then $args.output_contract.input_id
-     elif ($args|has("allowed_delta")) then $args.allowed_delta.input_id
-     elif ($args|has("verification_plan")) then $args.verification_plan.input_id
-     else $args.review_policy.input_id end)] as $ids |
+   (if ($args|has("output_contract")) then $args.output_contract
+    elif ($args|has("allowed_delta")) then $args.allowed_delta
+    elif ($args|has("verification_plan")) then $args.verification_plan
+    else $args.review_policy end) as $cap_scope |
+   [.finish_condition, .verification_instruction, $cap_scope] as $scopes |
+   ($scopes | map(.input_id)) as $ids |
    (($ids|unique|length) == ($ids|length)) and
-   (if .operation.capability_id=="core.verify.run.v1" then ($ids|index($args.candidate_input_id)==null) else true end));
+   (if .operation.capability_id=="core.verify.run.v1" then ($ids|index($args.candidate_input_id)==null) else true end) and
+   ($scopes | all(.[]; delivered_scope_input_ok(.; $ins))));
 
 # resolved_profile_pair is the driver's {content,sha256} pair for the supplied
 # resolved_profile document (never dereferenced beyond its own supplied bytes).
@@ -436,7 +487,7 @@ def is_actual_binding:
 def is_observed_capability:
   (type=="object") and
   ((has_exact_fields(["kind","id"];[]) and .kind=="registered" and (.id as $c | capability_ids|index($c)!=null)) or
-   (has_exact_fields(["kind","id"];[]) and .kind=="unclassified" and (.id|is_id) and (capability_ids|index(.id)==null)));
+   (has_exact_fields(["kind","id"];[]) and .kind=="unclassified" and (.id|is_id) and (.id as $c | capability_ids|index($c)==null)));
 
 def is_fact(item_ok):
   (type=="object") and
@@ -483,9 +534,13 @@ def is_reason:
 def is_output:
   has_exact_fields(["output_id","ref"];[]) and (.output_id|is_id) and (.ref|is_content_ref);
 
+# Note the `.kind as $k | [...] | index($k)` form below, not `[...] | index(.kind)`:
+# the latter reads .kind off the piped-in array (a pre-existing latent bug — every
+# selector using this branch, i.e. everything but "input"/"gate-decision", crashed
+# with E_RUNTIME instead of validating), since a pipe rebinds "." to its left side.
 def is_stale_selector:
   (type=="object") and
-  ((has_exact_fields(["kind"];[]) and (["target","source","base","resolved-profile","qualification","environment"]|index(.kind)!=null)) or
+  ((has_exact_fields(["kind"];[]) and (.kind as $k | ["target","source","base","resolved-profile","qualification","environment"]|index($k)!=null)) or
    (has_exact_fields(["kind","input_id"];[]) and .kind=="input" and (.input_id|is_id)) or
    (has_exact_fields(["kind","scope_sha256"];[]) and .kind=="gate-decision" and (.scope_sha256|is_sha256)));
 
@@ -503,6 +558,52 @@ def stale_observed_ok:
 
 def is_stale_observation:
   has_exact_fields(["selector","observed"];[]) and (.selector|is_stale_selector) and stale_observed_ok;
+
+# stale_observation_ok($req_body; $obs): derives the expected value from the exact
+# request slot/set member the selector names and requires the claimed observation
+# to differ from it (Design > "Stage result and evidence"). Also requires an
+# input/gate-decision selector to actually name something the request carries —
+# a selector for nothing is not a stale claim about anything. $-bound params for
+# the same reason as delivered_scope_input_ok above (called from all(.[]; ...)).
+def stale_observation_ok($req_body; $obs):
+  ($obs.selector.kind) as $k |
+  if $k=="target" then
+    ($req_body.target_revision) as $exp |
+    ($obs.observed != $exp) and
+    (if $obs.observed.state=="present" then $obs.observed.value.repository_id==$req_body.target_repository_id else true end)
+  elif $k=="base" then
+    ($req_body.base) as $exp |
+    ($obs.observed != $exp) and
+    (if $obs.observed.state=="present" then
+       ($obs.observed.value.repository_id==$req_body.target_repository_id) and
+       (if $exp.state=="present" then $obs.observed.value.hash_algorithm==$exp.value.hash_algorithm else true end)
+     else true end)
+  elif $k=="source" then
+    ($req_body.source) as $exp |
+    ($obs.observed != $exp) and
+    (if ($obs.observed.state=="present" and $obs.observed.value.type=="git-object") then
+       $obs.observed.value.value.revision.repository_id==$req_body.target_repository_id
+     else true end)
+  elif $k=="resolved-profile" then
+    ({state:"present", value: $req_body.resolved_profile_ref}) as $exp |
+    ($obs.observed != $exp) and
+    (if $obs.observed.state=="present" then $obs.observed.value.kind=="resolved_profile" else true end)
+  elif $k=="qualification" then
+    ((if ($req_body|has("qualification_ref")) then {state:"present", value: $req_body.qualification_ref} else {state:"absent"} end)) as $exp |
+    ($obs.observed != $exp)
+  elif $k=="environment" then
+    ({state:"present", value: $req_body.environment_ref}) as $exp |
+    ($obs.observed != $exp) and
+    (if $obs.observed.state=="present" then $obs.observed.value.environment_id==$req_body.environment_ref.environment_id else true end)
+  elif $k=="input" then
+    ($req_body.inputs | map(select(.input_id==$obs.selector.input_id))) as $matches |
+    (($matches|length)==1) and
+    (({state:"present", value:$matches[0].value}) as $exp | $obs.observed != $exp)
+  elif $k=="gate-decision" then
+    ($req_body.gate_decision_refs | map(select(.scope_sha256==$obs.selector.scope_sha256))) as $matches |
+    (($matches|length)==1) and
+    (({state:"present", value:$matches[0]}) as $exp | $obs.observed != $exp)
+  else false end;
 
 def outcome_family_values(family):
   if family=="change" then ["changed","no-change","inconclusive"]
@@ -547,7 +648,8 @@ def status_presence_ok(cap_family):
   .status as $s |
   if $s=="completed" then
     has("execution") and has("outcome") and has("started_at") and has("finished_at") and
-    (.diagnostics==[]) and (has("stale_observations")|not)
+    (.diagnostics==[]) and (has("stale_observations")|not) and
+    ((.outcome.value=="inconclusive") == has("reason"))
   elif $s=="skipped" then
     has("reason") and (.outputs==[]) and (.diagnostics==[]) and (.evidence==[]) and
     (has("stale_observations")|not) and (has("execution")|not) and (has("outcome")|not) and
@@ -584,13 +686,14 @@ def completed_outcome_relation_ok(op; result):
   if $role=="producer" then
     (result.outputs|length) as $n |
     if $n==0 then (result.outcome=={family:"change",value:"no-change"}) and (result|has("delta_ref")|not)
-    else
+    elif $n==1 then
       (if (op.arguments|has("allowed_delta")) then
          (result.outcome=={family:"change",value:"changed"}) and (result|has("delta_ref")) and
          (result.delta_ref==result.outputs[0].ref)
        else
          (result.outcome=={family:"change",value:"changed"}) and (result|has("delta_ref")|not)
        end)
+    else false
     end
   else
     ((result.outputs==[]) and (result|has("delta_ref")|not)) and
@@ -599,27 +702,61 @@ def completed_outcome_relation_ok(op; result):
      else result.outcome=={family:"check",value:"passed"} end)
   end;
 
+def is_fact_value_ok(expected):
+  if .state=="recorded" or .state=="computed" then .value==expected
+  elif .state=="unavailable" then true
+  else false end;
+
+# actual_facts_ok: model bindings additionally require recorded/computed facts to
+# equal the resolved binding's own model_request/prompt_ref/skill_refs (R12 — an
+# actual fact is an honest claim about what actually ran, not just a syntactically
+# valid one), and recorded/computed tools must be full tool_ref matches from the
+# binding's requested tools, not merely same-ID matches.
 def actual_facts_ok(binding; meta):
   (if binding.execution_kind=="deterministic" then true
-   else (["provider","model","effort","prompt","skills"] |
-         all(.[]; . as $f | (meta[$f].state) as $st | $st=="recorded" or $st=="computed" or $st=="unavailable"))
+   else
+     (meta.provider|is_fact_value_ok(binding.model_request.provider_id)) and
+     (meta.model|is_fact_value_ok(binding.model_request.model_id)) and
+     (meta.effort|is_fact_value_ok(binding.model_request.effort_id)) and
+     (meta.prompt|is_fact_value_ok(binding.prompt_ref)) and
+     (meta.skills|is_fact_value_ok(binding.skill_refs))
    end) and
   (if (meta.tools.state=="recorded" or meta.tools.state=="computed") then
-     (meta.tools.value | map(.tool_id)) as $used |
-     (binding.requested_tools | map(.tool_id)) as $req |
-     all($used[]; . as $u | $req | index($u) != null)
+     (meta.tools.value) as $used |
+     (binding.requested_tools) as $req_tools |
+     all($used[]; . as $u | $req_tools | any(.[]; . == $u))
    else true end);
 
-def completed_execution_matches_binding(op; rb; exec_):
+# completed_execution_matches_binding: for completed non-inconclusive execution the
+# spec requires actual binding to equal "the corresponding projection of the
+# selected resolved binding" across implementation, manifest ref, config, and
+# authority, plus a matching performer identity/boundary and the request's own
+# environment — not just the handful of fields checked before this fix.
+def completed_execution_matches_binding(op; rb; exec_; env_ref):
   (rb != null) and
   (exec_.actual_binding.binding_id == rb.binding.binding_id) and
   (exec_.actual_binding.role == rb.binding.role) and
+  (exec_.actual_binding.adapter_implementation == rb.adapter_implementation) and
+  (exec_.actual_binding.manifest_ref == rb.binding.manifest_ref) and
   (exec_.actual_binding.package_ref == rb.binding.package_ref) and
+  (if (rb.binding|has("config_ref")) then
+     (exec_.actual_binding.config_ref.state=="present") and (exec_.actual_binding.config_ref.value==rb.binding.config_ref)
+   else exec_.actual_binding.config_ref.state=="absent" end) and
   (exec_.actual_binding.execution_kind == rb.binding.execution_kind) and
   (exec_.actual_binding.adapter_instance_id == rb.binding.adapter_instance_id) and
   (exec_.actual_binding.principal_id == rb.binding.principal_id) and
   (exec_.actual_binding.execution_boundary_id == rb.binding.execution_boundary_id) and
+  ((exec_.actual_binding|has("authority_ref")) == (rb.binding|has("authority_ref"))) and
+  (if (rb.binding|has("authority_ref")) then exec_.actual_binding.authority_ref==rb.binding.authority_ref else true end) and
   (exec_.performer.role == rb.binding.role) and
+  (exec_.performer.implementation_id == exec_.actual_binding.adapter_implementation.id) and
+  (exec_.performer.implementation_version == exec_.actual_binding.adapter_implementation.version) and
+  (exec_.performer.adapter_instance_id == rb.binding.adapter_instance_id) and
+  (exec_.performer.principal_id == rb.binding.principal_id) and
+  (exec_.performer.execution_boundary_id == rb.binding.execution_boundary_id) and
+  ((exec_.performer|has("authority_ref")) == (rb.binding|has("authority_ref"))) and
+  (if (rb.binding|has("authority_ref")) then exec_.performer.authority_ref==rb.binding.authority_ref else true end) and
+  (exec_.environment == env_ref) and
   (exec_.used_capability.kind == "registered") and (exec_.used_capability.id == op.capability_id) and
   actual_facts_ok(rb.binding; exec_.metadata);
 
@@ -640,12 +777,18 @@ def stage_result_relations_ok(request_pair; resolved_pair; result_body):
      time_le(result_body.finished_at; result_body.recorded_at)
    else time_le($t0; result_body.recorded_at) end) and
   (result_body.attempt_number >= 1) and
+  (if result_body.status=="stale" then
+     (result_body.stale_observations | all(.[]; stale_observation_ok($req.body; .)))
+   else true end) and
   (if result_body.status=="completed" then
+     (($req.body.required_evidence_kinds | sort) == (result_body.evidence | map(.kind) | sort)) and
      (if (result_body.evidence | any(.[]; .verdict != "passed")) then
         (result_body.outcome.family == outcome_family_for_role($op.role)) and
-        (result_body.outcome.value == "inconclusive") and (result_body | has("delta_ref") | not)
+        (result_body.outcome.value == "inconclusive") and
+        (result_body.outputs == []) and (result_body | has("delta_ref") | not) and
+        (result_body | has("reason"))
       else completed_outcome_relation_ok($op; result_body) end) and
-     completed_execution_matches_binding($op; $rb; result_body.execution) and
+     completed_execution_matches_binding($op; $rb; result_body.execution; $req.body.environment_ref) and
      (result_body.evidence | all(.[]; select(.kind=="independent-review") |
         (.verdict != "passed") or
         (result_body.execution.performer.role=="reviewer" and
@@ -709,7 +852,7 @@ def mode_profile_set(docs):
   elif ($resolved.content.body.profile_ref.id != $profile.content.id) or
        ($resolved.content.body.profile_ref.sha256 != $profile.sha256) then "E_REF"
   elif (($manifests|map(.content.id)|unique|length) != ($manifests|length)) then "E_REF"
-  elif (profile_set_relations_ok($profile.content.body; $resolved.content.body; $manifests)|not) then "E_RELATION"
+  elif (profile_set_relations_ok($profile; $resolved.content.body; $manifests)|not) then "E_RELATION"
   else null end;
 
 def mode_stage_run(docs):
