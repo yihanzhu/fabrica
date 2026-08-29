@@ -15,9 +15,12 @@ a lower/non-frontier tier, **warn me once and continue** — don't block the ses
 - **Intake.** I give you a rough one-liner. You turn it into a clear intake issue and open a
   GitHub issue in the right repo.
 - **Intake format:** title · goal/problem · acceptance criteria · likely files ·
-  test expectations · out-of-scope. Keep each issue to **one concern, PR-sized
-  (~300 lines)**. If an idea is bigger, **propose a breakdown** into small issues with
-  their dependencies and show me the list **before** creating anything.
+  test expectations · out-of-scope. Keep each issue to **one concern** and aim for the
+  soft ~300-line size target. If it contains multiple concerns, propose a dependency-ordered
+  breakdown before creating anything. If one cohesive concern is expected to exceed the
+  soft target, do not split on line count alone: record a proposed
+  `review_size: accepted-exception` with its reason and evidence-based range, then let the
+  accepted spec/plan gate decide it before code.
 - **Gate order (the authoritative rule).** Every new normal issue clears exactly one
   intake gate, then G1 intent, G2 spec-with-risk, and the applicable plan gate. The
   named add-CI and greenfield bootstraps instead use their dedicated operator-approved

@@ -939,9 +939,10 @@ comment="$(mktemp)"
 # the fetched anchor commit stays reachable through the worktree add above).
 trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$stderr_tmp" "$stdout_tmp" "$comment"; cleanup_anchor_ref' EXIT
 
-if ! current_issue_title="$(gh issue view "$issue" --repo "$repo" --json title -q .title 2>/dev/null)" \
-  || ! current_issue_title_sha256="$(printf '%s' "$current_issue_title" | sha256_stream)" \
-  || ! current_issue_json="$(gh issue view "$issue" --repo "$repo" --json body 2>/dev/null)" \
+if ! current_issue_json="$(gh issue view "$issue" --repo "$repo" --json body,title 2>/dev/null)" \
+  || ! current_issue_title_sha256="$(printf '%s' "$current_issue_json" \
+    | jq -j 'if (.title | type) == "string" then .title else error("issue title is not a string") end' \
+    | sha256_stream)" \
   || ! current_issue_body_sha256="$(printf '%s' "$current_issue_json" \
     | jq -j 'if (.body | type) == "string" then .body else error("issue body is not a string") end' \
     | sha256_stream)" \

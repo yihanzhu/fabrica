@@ -146,6 +146,8 @@ case "$cmd $sub" in
   "issue view")
     if printf '%s\n' "$@" | grep -q 'title,body'; then
       printf '%s\n' '{"title":"A proactive proposal","body":"issue body text"}'
+    elif printf '%s\n' "$@" | grep -q 'body,title'; then
+      printf '%s\n' '{"title":"A proactive proposal","body":"issue body text"}'
     elif printf '%s\n' "$@" | grep -q 'comments'; then
       echo "(no comments yet)"
     elif printf '%s\n' "$@" | grep -q 'body'; then

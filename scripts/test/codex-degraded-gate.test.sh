@@ -337,6 +337,11 @@ case "$cmd $sub" in
   "issue view")
     if printf '%s\n' "$@" | grep -q 'title,body'; then
       printf '%s\n' '{"title":"A proposal","body":"issue body text"}'
+    elif printf '%s\n' "$@" | grep -q 'body,title'; then
+      title_after="${FAKE_GH_ISSUE_TITLE_AFTER:-A proposal}"
+      body_after="${FAKE_GH_ISSUE_BODY_AFTER:-issue body text}"
+      jq -nc --arg title "$title_after" --arg body "$body_after" \
+        '{title: $title, body: $body}'
     elif printf '%s\n' "$@" | grep -q 'comments'; then
       echo "(no comments yet)"
     elif printf '%s\n' "$@" | grep -q 'body'; then
