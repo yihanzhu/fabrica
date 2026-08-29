@@ -50,15 +50,171 @@ Two goals drive the backlog:
 
 ## PR rules (enforced by coder + reviewer)
 - **One concern per PR.** Soft size budget ~300–400 net lines; split if bigger.
-- Every PR links its issue (`Closes #<n>`) and keeps README/docs in sync with any change.
-- **Accepted roadmap policy — not yet a live gate:** risk will set the plan gate.
+  An accepted spec/plan may record an exact one-concern review-size exception with an
+  evidence-based range. That changes only the soft line signal; unexplained overrun,
+  new concern/scope, unreadable code, reduced tests, CI, and review still block.
+- Every PR links its intake issue and keeps README/docs in sync. Pre-code intent,
+  spec, and high-risk plan PRs use non-closing `Tracks #<n>` so the intake stays open;
+  the terminal implementation PR uses `Closes #<n>`. Never let an artifact/plan merge
+  close the queue item before implementation.
+- Label state includes `ready` (cleared and unclaimed) and `claimed` (one manager pickup
+  is active or unresolved). `needs-human` overrides either. Build state/claim lives on
+  the intake issue. Before any build spawn, the manager requires `ready` present and
+  `claimed|needs-human` absent there, adds/verifies `claimed`, then removes `ready` and
+  requires confirmation that an existing label was
+  deleted plus verifies absence. That delete is the pickup winner; failure stops. Before
+  fix spawn, require parent-intake `ready|claimed|needs-human` absent and exact PR
+  `claimed|needs-human` absent with one matching round, then add/verify `claimed` on the
+  PR. Post the claim comment on the same item as its label, with unique ID and exact mode/tuple; the
+  coder must match it. Exactly one manager session may drive a target. On PR creation or
+  fix completion, verify result state, remove/verify `claimed`, then review. A crash leaves
+  `claimed` visible and blocks another spawn under that invariant until the exact attempt
+  is reconciled. `claimed` is crash recovery, not a cross-manager mutex. Detecting two
+  manager sessions is forbidden: add/verify `needs-human` on the active carrier and stop
+  all spawning until one manager reconciles the tuple.
+- Before G1, the intake gate leaves a durable record on the intake issue that binds the
+  exact issue title/body revision. It names `intake_mode: user-directed|proactive`, the
+  issue, exact title and body SHA-256s, acceptance source, and accepter. Hash the non-null
+  UTF-8 values returned by the forge API with no added newline or normalization. For
+  user-directed work, yshifu must receive the operator's approval of those exact digests directly in the
+  current session and record it immediately. A pre-existing comment alone never proves
+  the decision; after a session loss, re-ask unless a verifiable direct-decision reference
+  exists. The intent author uses only yshifu's verified brief and never infers approval
+  from the thread. Proactive work cites a passed manager-review verdict
+  whose `Intake-title-sha256` and `Intake-body-sha256` markers match those digests. The
+  reviewer must see both unchanged before and after its run or post no verdict. Authenticate the source like merge
+  evidence: first select the newest comment by the current `gh` operator with the exact
+  exactly one manager-reviewer clean header and one matching anchored 64-hex marker for
+  each digest, without filtering by
+  verdict. Then require exactly one anchored `VERDICT:` line and require it to be
+  `PROCEED`. A newer REFINE/DROP/malformed comment blocks every older go; bare,
+  cross-author, mixed-comment, duplicate reserved line, zero/multiple-verdict, or malformed evidence is unusable.
+  A title or body change before G1 merge makes that record stale and requires a new intake
+  decision. After G1, issue text is untrusted context and cannot amend the artifact
+  chain; a real scope change returns through the affected artifact gates. An intent
+  author cannot create or infer the acceptance record.
+- **Manual risk-based plan gate — live.** `spec.md` records `risk: high|routine`; G2
+  review and operator merge accept that value before planning.
+  For new normal work, a GitHub issue is intake/message bus, not the spec: merged
+  `work/<slug>/intent.md` and `spec.md` are required before planning. Already-open
+  legacy implementation PRs may finish under their accepted record; a new attempt,
+  rescope, or replacement uses the artifact chain.
+  At activation, audit every old `ready` issue. An already-open implementation PR must
+  have `ready` removed and verified absent, then continue only in `legacy-open` fix mode.
+  A PR-absent issue may retain `ready` only with a complete new build tuple; a named
+  bootstrap additionally needs its exact durable operator-approved plan record. Otherwise
+  remove `ready` before any spawn and run the new gates. A label created under the old
+  description is never proof of the new gate.
+  The only activation bridge is ystack-self issue **#180**, frozen at title/body
+  SHA-256s `071e33752077f05c8f429f13d4ce2783b0478b2b8ef276db684b4472d62dd202` /
+  `58fa9039359cc0d19cb9541282076d83bb5eb4360a9ccdb2f460920df5acd03a`, for its pinned
+  `portable-core-contracts` attempt. It never applies in an external target or to another
+  slug. Recompute both digests before use; any issue edit ends the bridge. That
+  PR-absent pre-policy high-risk record pins
+  merged intent/spec/plan PRs and blobs, operator-accepted plan, implementation branch,
+  exact local/remote head, PR `absent`, old base, clean state, and terminal implementation
+  intake **#155** at title/body SHA-256s
+  `615e60decfa6c0c7fb769a7c4b595c8cbc47b52dfacd3babcd6fdb763deaa834` /
+  `3426f4962a4d61ba64a1c606b410641117ec97d44fe8dfe618defba35b5aeae6`.
+  Its legacy artifact PRs are grandfathered despite closing their stage issues. After
+  policy merge, re-open unchanged #155 before `ready`; only the implementation PR uses
+  `Closes #155`. Treat the attempt as
+  `artifact-high/high/plan-refresh`; only an operator-merged high-risk plan in that record
+  may supply the missing pre-policy spec risk. The record also pins `review_size` and its
+  accepted plan range. Immutable bridge identity is target, slug, artifact PRs/blobs,
+  plan/risk/scope, `review_size`/range, implementation branch, and—once opened—PR number.
+  The pre-PR local/remote head, old base, PR-absent state, and clean worktree are one-time
+  eligibility evidence. After round-0 opens, normal authorized fixes may advance current
+  head and round; a base move requires fresh review. Rebind exact head/base/round each
+  round on the same branch/PR. An unexplained move stops, but an expected rebind does not
+  end the bridge. A change to immutable identity ends it and returns through G2
+  spec-with-risk plus a new high-risk plan gate. It never authorizes another branch or
+  PR. Any mismatch or second attempt does the same.
   High-risk work — constitution paths, workflows, identity/auth, security controls,
-  migrations, deployment/production infrastructure, or broad architecture — will require
-  the operator to accept `plan.md` before code. Routine work may keep plan + code in one
-  PR only after an independent plan check records acceptance before the write phase. The
-  author cannot accept its own plan. The current manager does not enforce this yet; until
-  the portable control foundation wires and evaluates it, the existing gate rules for
-  each lane remain authoritative and nobody may claim a pre-code plan gate passed.
+  migrations, deployment/production infrastructure, or broad architecture — requires a
+  plan-only PR on `ystack/plan/<slug>`, independent review, and operator merge before the
+  implementation branch starts. Every non-merge commit not reachable from the accepted
+  base may touch only `work/<slug>/plan.md`; a code-then-revert history is not plan-only.
+  A base update may only add an exact merge whose parents are prior plan head then freshly
+  fetched base and whose tree differs from that base only at the plan path. Re-run review
+  and CI on the new head/base.
+  After operator merge, record the fetched default OID containing that plan as
+  `plan-base`. Before the first code commit, current default must still equal it. If it
+  moved, keep `ready` absent: a fresh non-author read-only reviewer rechecks the unchanged
+  plan and full artifact hashes against the new base and returns exactly one anchored
+  `Plan-verdict: ACCEPT|REVISE`, then the operator explicitly reaffirms it on the intake
+  issue. Record the new plan-base only on unique ACCEPT plus reaffirmation. If plan
+  meaning changes or review says REVISE, return through a plan-only PR.
+  Routine work keeps plan + code in one implementation PR,
+  but `plan.md` is its first commit. Fetch the current default branch and create the
+  implementation branch from that exact branch-base OID. Push the plan-only head without opening
+  a PR; an independent read-only reviewer reads the remote head. Every acceptance records
+  `acceptance_kind: initial|plan-update|base-refresh`. `initial` requires linear history
+  from branch base to head, the first commit parent equal to branch base, every commit
+  touching only `work/<slug>/plan.md`, and `branch-base=current-base`. `plan-update`
+  requires a single-parent head whose parent is the exact paused implementation head and
+  whose commit changes only the plan path; record the prior plan-acceptance head separately.
+  Before code, paused head equals prior plan-acceptance head. `base-refresh` uses the exact merge topology below. The
+  reviewer then records branch, head OID, branch-base OID,
+  current-base OID,
+  plan blob, spec blob, intent blob, reviewer, and acceptance on the parent issue.
+  `initial` and `base-refresh` must predate the first code commit; `plan-update` must
+  predate the next code commit.
+  Yshifu must directly coordinate a fresh reviewer who is not the plan author and read its
+  complete raw verdict, never a summary. Require exactly one anchored
+  `Plan-verdict: ACCEPT|REVISE`; only ACCEPT may create acceptance, while REVISE keeps
+  `ready` absent and returns to the plan author. The reviewer returns evidence only and never
+  edits, pushes, comments, or labels. Yshifu posts the verdict verbatim with reviewer
+  identity/model and the exact tuple as the acceptance comment. A pre-existing or
+  unauthenticated comment is evidence only, never authority; if the independent run cannot
+  be proven, rerun it. No
+  plan-only routine PR opens. If code already exists when a routine plan changes,
+  first record the paused exact head. The next commit changes only
+  `work/<slug>/plan.md` on top of that history and its parent must equal the paused head; push that
+  exact remote head and obtain a fresh independent `plan-update` issue check that also
+  records paused head, matching parent OID, and prior plan-acceptance head before any later code
+  commit. Do not rewrite history to manufacture another plan-only branch head.
+  The plan author cannot accept its own plan.
+  The allowed tuple pairings are closed, not mix-and-match. Build mode allows only
+  `artifact-high/high/{fresh-high,existing,plan-refresh}`,
+  `artifact-routine/routine/existing`, and
+  `{add-ci-bootstrap,greenfield-bootstrap}/high/bootstrap`. Fix mode allows only
+  `artifact-high/high/{existing,plan-refresh}`,
+  `artifact-routine/routine/existing`,
+  `{add-ci-bootstrap,greenfield-bootstrap}/high/bootstrap`, and
+  `legacy-open/{high,routine}/legacy-open`. `review_size` is orthogonal. Any other
+  `gate_mode/risk/branch_state` combination stops. Build-mode `existing` or
+  `plan-refresh` requires PR `absent`, exact repo/branch/full local HEAD, and a clean
+  worktree. High-risk preserved attempts also bind old/current base OIDs. Routine initial
+  acceptance binds `branch-base=current-base`; a routine base refresh adds prior accepted
+  head and prior/current-base OIDs while retaining branch base. Fix mode requires the exact
+  repo, branch, local HEAD equal to the open PR's remote head, current base, round, and
+  `worktree: clean` instead.
+  Every routine tuple also names `routine_phase: plan-only|code-started`. `base-refresh`
+  is allowed only for `plan-only` with current HEAD equal to the latest plan-acceptance
+  head. `code-started` requires an exact preserved current HEAD descended from that plan
+  head; a base move is external context and voids review evidence. Recompute both artifact
+  hash links and accepted spec risk against the fresh base; only an exact match preserves
+  plan acceptance.
+  Never disguise a code-started merge as `base-refresh`.
+  Missing or ambiguous risk, stale intent/spec/plan hashes, or a changed plan stops before more
+  code. A non-bridge high-risk plan change returns through a plan-only PR; a bridge
+  pinned-field change follows the G2 rule above. After a plan merge, an existing
+  implementation branch merges updated main without reset/rebase/force, rechecks the exact
+  plan tuple, and invalidates old review evidence before work resumes. A routine plan change
+  needs the plan-only update commit and fresh independent issue check described above before
+  work resumes. If the fetched default moves after a routine plan acceptance but before
+  the first code commit, preserve the branch, merge the new default without
+  reset/rebase/force. A `base-refresh` head must be an exact two-parent merge whose first parent is
+  the previously accepted head and second parent is the freshly fetched current-base OID;
+  retain the original branch base and verify the branch differs from current base only by
+  `plan.md`. Push and obtain a new independent exact-head/prior-head/branch-base/current-base
+  acceptance before code. A conflict or any intervening commit stops.
+  The existing sole-purpose
+  add-CI and greenfield-bootstrap gates keep their concrete operator-approved bootstrap
+  plans and human merge; they are the only process exceptions to a `work/<slug>/plan.md`.
+  This gate is manually enforced by the manager, coder, and reviewer today; no hook
+  or workflow may be claimed until one lands.
 - **Plain language, always** (operator rule, 2026-08-26): every artifact
   (intent/spec/plan), PR title/description, and review comment is written for a
   tired human. Short sentences. Everyday words. No jargon where a plain word
@@ -147,31 +303,37 @@ must remain in source or move to an accepted sidecar/metadata mechanism.
   auto-merge v1 allowed was retired when the branch ruleset landed, and no agent has a
   merge path any more; the rounds cap and `needs-human` escalation stay
   intact. yshifu never writes code/opens PRs and **never self-approves acting alone** — a
-  user-directed issue is gated by the user's approval of the drafted spec (the one-liner is the
+  user-directed issue is gated by the user's approval of the drafted intake (the one-liner is the
   request, not the go), a proactive issue by the passed yshifu⇄Codex manager-debate consensus
   (for *proactive* work the user's gate is at the north-star altitude; user-directed issues
-  still need the user's spec approval). The accepted roadmap adds a later high-risk plan
-  gate for both paths. It is planned policy, not a gate the current manager enforces.
+  still need the user's intake approval). After that front gate, new normal work passes
+  G1 intent, G2 spec, and the manual risk-based plan gate above before any coder launch.
+  Mechanical enforcement is
+  still future work; do not confuse the live manual gate with a hook or workflow.
 
 ## v2 artifact chain (work/)
 - One initiative = one dir: `work/<slug>/` holding `intent.md` → `spec.md` → `plan.md`.
-  Each artifact lands via its own PR and the operator's merge IS the gate: G1 accepts
-  the intent, G2 approves the spec, and G3 approves the implementation. The accepted
-  roadmap adds a separate pre-code plan gate based on risk; it does not become live until
-  both lanes enforce it. Details: `work/README.md`; review policy: `REVIEW.md`.
+  G1 accepts intent and G2 accepts spec. High-risk work then uses a separately reviewed,
+  operator-merged plan PR as the pre-code gate; routine work records an independent plan
+  check before code on its implementation branch. G3 accepts implementation. Details:
+  `work/README.md`; review policy: `REVIEW.md`.
 - Skills: `/intent-draft`, `/spec-draft`, `/plan-draft` hold the templates and stage rules.
 - **Hash discipline:** `spec.md` frontmatter records `intent-blob` (`git hash-object` of
   the intent it was drafted from); `plan.md` records `spec-blob`. On mismatch with main's
   current upstream file, label the PR `stale` and stop — never build on a moved artifact.
 - **Stage rules (autonomous lane):** the spec stage writes only `work/<slug>/spec.md`;
-  the implement stage never touches `intent.md`/`spec.md`; unattended agents never write
+  the implementation coder never touches accepted `intent.md`, `spec.md`, or `plan.md`.
+  A plan change is written only by a separate plan author after the implementation pauses
+  and before the applicable plan gate reruns. Unattended agents never write
   the **constitution paths** — `.github/**`, `.claude/**`, `AGENTS.md` (this file),
   `CLAUDE.md`, `REVIEW.md`, `ROADMAP.md` — such changes land as patches under `proposals/` that the
   operator applies. That is the same list `REVIEW.md` uses; the two must always match, so
   a change to one is a change to both. Operator-driven sessions are exempt; Phase 3 hooks
   enforce this mechanically via `YSTACK_STAGE`.
-- Deterministic branches: `ystack/intent/<slug>`, `ystack/spec/<slug>`,
-  `ystack/impl/<slug>` — re-runs update the existing PR, never open a second.
+- Deterministic branches: `ystack/intent/<slug>`, `ystack/spec/<slug>`, high-risk
+  `ystack/plan/<slug>`, and `ystack/impl/<slug>`. Re-runs update the existing open PR;
+  never keep two PRs open for the same slug and stage. After a stage PR merged, a required
+  amendment reuses the deterministic branch and may open the next PR for that stage.
 
 ## Reusability goal
 - No hardcoded personal values (usernames, repo names) in shipped templates — keep the

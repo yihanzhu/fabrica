@@ -27,7 +27,8 @@ set -euo pipefail
 # The debate is over ROUNDS, on the issue: this script posts ONE Codex verdict comment;
 # yshifu reads it and either advances (consensus to proceed), refines (edit the issue +
 # reply + re-run — another round), or drops (close with rationale). Consensus-only: the
-# coder loop starts only when BOTH yshifu and Codex agree. The reviewer is VETO-ONLY — it
+# artifact pipeline advances only when BOTH yshifu and Codex agree; the coder still waits
+# for durable intake acceptance, G1/G2, risk, and the plan gate. The reviewer is VETO-ONLY — it
 # never labels `ready`, edits the issue, or merges; its only effect is the verdict comment.
 #
 # This script ONLY writes a single ISSUE comment. It never edits the issue, applies or
@@ -640,12 +641,37 @@ fi
 # its bundled jq, so we extract each field with gh's own jq — no external jq dependency. The
 # title/body fetch also serves as the access check; the comments are rendered into a readable
 # "@author (createdAt): body" thread, oldest first (gh returns them in chronological order).
-if ! issue_title="$(gh issue view "$issue" --repo "$repo" --json title -q .title 2>/dev/null)"; then
+# The exact API body string is SHA-256-bound to the verdict comment. Re-fetch after Codex
+# returns and refuse to post if it moved, so a passed verdict cannot be paired with a later edit.
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    return 127
+  fi
+}
+
+if ! issue_json="$(gh issue view "$issue" --repo "$repo" --json title,body 2>/dev/null)"; then
   echo "error: cannot read issue #${issue} on ${repo} via gh" >&2
   echo "       confirm the issue exists and you have access, then re-run" >&2
   exit 1
 fi
-issue_body="$(gh issue view "$issue" --repo "$repo" --json body -q .body)"
+issue_title="$(printf '%s' "$issue_json" | jq -r '.title')"
+issue_body="$(printf '%s' "$issue_json" | jq -r '.body')"
+if ! issue_title_sha256="$(printf '%s' "$issue_title" | sha256_stream)" \
+  || [ -z "$issue_title_sha256" ]; then
+  echo "error: cannot compute the exact issue-title SHA-256" >&2
+  exit 1
+fi
+if ! issue_body_sha256="$(printf '%s' "$issue_json" \
+  | jq -j 'if (.body | type) == "string" then .body else error("issue body is not a string") end' \
+  | sha256_stream)" || [ -z "$issue_body_sha256" ]; then
+  echo "error: cannot compute the exact issue-body SHA-256" >&2
+  echo "       need sha256sum or shasum and a non-null issue body" >&2
+  exit 1
+fi
 issue_comments="$(gh issue view "$issue" --repo "$repo" --json comments \
   -q 'if (.comments | length) == 0 then "(no comments yet)" else (.comments[] | "@\(.author.login) (\(.createdAt)):\n\(.body)\n") end')"
 
@@ -875,6 +901,25 @@ if ! grep -q '[^[:space:]]' "$tmp"; then
   exit 1
 fi
 
+# Verdict shape is authorization evidence, not free-form prose. Require exactly one
+# anchored verdict line and one of the three allowed values. This rejects PROCEED+DROP,
+# duplicates, and lookalike prose before any durable comment is posted.
+verdict_line_count="$(grep -Ec '^VERDICT:' "$tmp" || true)"
+valid_verdict_count="$(grep -Ec '^VERDICT: (PROCEED|REFINE|DROP)$' "$tmp" || true)"
+if [ "$verdict_line_count" -ne 1 ] || [ "$valid_verdict_count" -ne 1 ]; then
+  echo 'error: Codex produced a malformed manager verdict; not posting' >&2
+  echo '       require exactly one VERDICT: PROCEED|REFINE|DROP line' >&2
+  exit 1
+fi
+
+# The harness owns these authentication lines. Reject raw model output that tries to
+# reproduce them; otherwise one posted comment could contain two candidate headers or
+# digests and make a resumed acceptance parser ambiguous.
+if grep -Eq '^## Codex manager-reviewer \(cross-vendor, read-only\)$|^Intake-(title|body)-sha256:' "$tmp"; then
+  echo 'error: Codex output contained reserved manager-review marker lines; not posting' >&2
+  exit 1
+fi
+
 # Compose the issue comment: a short header marking it the cross-vendor manager-reviewer,
 # then Codex's verdict VERBATIM. The header is yshifu's prefix — clearly separate from
 # Codex's verbatim body — so this stays read-only / comments-only / verbatim (no Claude
@@ -893,10 +938,26 @@ comment="$(mktemp)"
 # folded in so the per-run anchor ref (#102) is dropped on exit as well (kept alive until now so
 # the fetched anchor commit stays reachable through the worktree add above).
 trap 'git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"; rm -f "$tmp" "$stderr_tmp" "$stdout_tmp" "$comment"; cleanup_anchor_ref' EXIT
+
+if ! current_issue_title="$(gh issue view "$issue" --repo "$repo" --json title -q .title 2>/dev/null)" \
+  || ! current_issue_title_sha256="$(printf '%s' "$current_issue_title" | sha256_stream)" \
+  || ! current_issue_json="$(gh issue view "$issue" --repo "$repo" --json body 2>/dev/null)" \
+  || ! current_issue_body_sha256="$(printf '%s' "$current_issue_json" \
+    | jq -j 'if (.body | type) == "string" then .body else error("issue body is not a string") end' \
+    | sha256_stream)" \
+  || [ "$current_issue_title_sha256" != "$issue_title_sha256" ] \
+  || [ "$current_issue_body_sha256" != "$issue_body_sha256" ]; then
+  echo "error: issue title/body moved during manager review; verdict not posted" >&2
+  echo "       re-run manager-review.sh against the current intake revision" >&2
+  exit 1
+fi
+
 {
   echo "## Codex manager-reviewer (cross-vendor, read-only)"
   echo
   echo "reviewer: ${model_display} @ ${YSTACK_DEBATE_EFFORT}"
+  echo "Intake-title-sha256: ${issue_title_sha256}"
+  echo "Intake-body-sha256: ${issue_body_sha256}"
   if [ "$MC_TARGET_OVERRIDE_GATE_WARNING" = "1" ]; then
     echo "warning: target override attempted to set gate effort — ignored"
   fi

@@ -23,15 +23,17 @@ Two rules keep it accurate:
   detection keeps working without any code edit.
 
 **Approval gates proactive autonomy.** The active north star is the user's authorization for
-*all* proactive work: yshifu may consensus-gate and self-apply `ready` to a proactive issue
-**only when the operator has explicitly approved the *active* north star** (yshifu knows this
+*all* proactive work: yshifu may consensus-gate a proactive issue's intake **only when the
+operator has explicitly approved the *active* north star** (yshifu knows this
 from the operator, not from a line in this file). Until the operator approves it, yshifu does
 **not** auto-pursue — it asks them to set and approve the north star first. The approval notes
 below are **descriptive owner-history**, not a machine token: a fresh clone inheriting them is
 **not** auto-approved for a new operator. The shipped entry below is **ystack's own** direction;
 an **adopter must replace it with their own north star and explicitly approve that** before
-proactive autonomous mode applies to their repo. (User-directed issues are unaffected — the
-user's approval of the spec yshifu drafts from their one-liner is its own gate.)
+proactive autonomous mode applies to their repo. Consensus does not apply `ready`: new normal
+work still needs its durable intake record, merged G1 intent, merged G2 spec-with-risk,
+and applicable plan gate. (User-directed issues are unaffected — the user's approval of the
+concrete intake draft is their own intake gate.)
 
 ---
 

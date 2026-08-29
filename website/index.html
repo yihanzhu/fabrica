@@ -279,10 +279,11 @@
           <div class="step-body">
             <span class="step-tag">yshifu · Claude<span class="step-vendor step-vendor--cool">Codex debates</span></span>
             <h3>yshifu drafts a PR-sized issue</h3>
-            <p>yshifu breaks the work into one concern — roughly 300–400 lines. For
-               <em>proactive</em> work, Codex debates the plan first and it proceeds only on
-               <em>consensus</em>: veto-only, defaulting to drop. User-directed work is gated
-               by your approval of the drafted spec.</p>
+            <p>yshifu breaks the work into one concern. For <em>proactive</em> work,
+               Codex debates intake first and it proceeds only on <em>consensus</em>:
+               veto-only, defaulting to drop. User-directed work starts with your approval
+               of the intake draft. Both paths then pass G1 intent, G2 spec-with-risk, and the
+               plan gate before the coder starts.</p>
           </div>
         </li>
 
@@ -311,9 +312,10 @@
           <span class="step-num" aria-hidden="true">5</span>
           <div class="step-body">
             <span class="step-tag">CI green · Merge</span>
-            <h3>CI is the hard gate; yshifu merges</h3>
-            <p>Nothing lands until the tests are green. yshifu merges only a clean, low-risk
-               PR — SHA-pinned to the exact head Codex reviewed.</p>
+            <h3>CI and review clear it; you merge</h3>
+            <p>Nothing lands until the tests are green and Codex passed the exact current
+               head and base. yshifu marks it <code>merge-ready</code> and hands it to you;
+               the operator merges, always.</p>
           </div>
         </li>
 

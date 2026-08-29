@@ -144,10 +144,14 @@ case "$cmd $sub" in
       echo "someone/${name}"
     fi ;;
   "issue view")
-    if printf '%s\n' "$@" | grep -q 'title'; then
-      echo "A proactive proposal"
+    if printf '%s\n' "$@" | grep -q 'title,body'; then
+      printf '%s\n' '{"title":"A proactive proposal","body":"issue body text"}'
     elif printf '%s\n' "$@" | grep -q 'comments'; then
       echo "(no comments yet)"
+    elif printf '%s\n' "$@" | grep -q 'body'; then
+      printf '%s\n' '{"body":"issue body text"}'
+    elif printf '%s\n' "$@" | grep -q 'title'; then
+      echo "A proactive proposal"
     else
       echo "issue body text"
     fi ;;
