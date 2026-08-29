@@ -20,6 +20,12 @@ adapter and workflow can share without naming Claude, Codex, GitHub, or another
 vendor. Until that vocabulary is settled, evidence, profile resolution, role
 separation, and stage results can drift between implementations.
 
+The first implementation attempt also proved that one large validator PR is not
+reviewable enough for this contract. Four exact review rounds found 15, then 8,
+then 4, then 4 actionable gaps. The same rule families kept resurfacing across
+document, profile-set, and stage-run validation. PR #183 is preserved at its
+round-cap state as evidence and possible source material; it is not accepted code.
+
 ## Proposed outcome
 
 ystack has a compact, versioned contract layer for stage requests and results,
@@ -33,6 +39,11 @@ The contracts reject malformed, ambiguous, overreaching, or internally inconsist
 data with hermetic tests. They carry claims and exact references without pretending
 to authenticate them or grant authority. The current live profile keeps working
 unchanged.
+
+The contract is delivered as one versioned package through small parts that land
+in dependency order and can be reviewed on their own. Every rule has one clear
+home. Incomplete parts stay private and inactive. A final assembly exposes the
+public validator only after the full package and its cross-part proof pass.
 
 ## Affected users and systems
 
@@ -63,6 +74,9 @@ telemetry initiatives that consume these records.
   its own trust root, profile, gate, grant, or policy.
 - Extensions cannot alter core safety meaning. Any new core field or changed meaning
   requires a new contract version.
+- This amendment changes only how the work is split and delivered. The five
+  document kinds, three capability IDs, five permission IDs, v1 field meanings,
+  canonical bytes, error classes, and claims-not-authority boundary stay unchanged.
 - The implementation includes strict, offline positive and adversarial validation
   tests, but not an executable adapter test runner or 2×2 adapter matrix.
 - It defines profile/manifest record shapes and the references needed by the
@@ -72,20 +86,35 @@ telemetry initiatives that consume these records.
 - Do not draft another spec or implementation under `portable-control-plane-core`,
   or claim this child closes the accepted parent. The operator records the old G2
   PR as superseded when all three replacement G1 PRs exist.
-- Keep the change small enough for one reviewable implementation PR. If design
-  cannot meet that bound without weakening the contracts, return to G2.
+- Keep one versioned contract identity and one public command entry. Private files
+  and implementation parts may separate responsibility, but they must not copy a
+  role or capability list, record shape, policy table, or acceptance rule into a
+  second home.
+- Deliver parts in dependency order and keep each one small enough to review on its
+  own. A partial part cannot expose a public validator or claim the v1 package works.
+  The final assembly owns the public command and full-package proof.
+- Every independently merged implementation part uses its own child slug and normal
+  artifact, CI, independent-review, and human-merge gates. If a proposed part is not
+  reviewable without weakening proof, split it before code rather than compressing
+  code or reducing tests.
+- Keep PR #183 frozen until accepted G2 and plan artifacts decide its exact reuse
+  and disposition. Do not merge it under the old delivery plan. Reuse only code and
+  tests that give every rule one clear home and pass independent review; do not treat
+  its commit history as accepted implementation evidence.
 - Any constitution-path change follows the operator/`proposals/` boundary, and the
   operator remains the merge authority.
 
 ## Open questions
 
-- What is the smallest set of top-level records and shared references that preserves
-  the complete future lifecycle without implementing later stages now?
-- Which capability and permission IDs belong in v1, and what is the closed argument
-  schema for each?
-- Which shape, relational, path, provenance, and status/outcome rules must the core
-  validator enforce in this initiative?
-- What exact profile, selection, and provenance refs must the later deterministic
-  resolver consume and produce without changing v1 meaning?
-- What exact boundary lets the later adapter-contract-test initiative consume these
-  contracts without adding a second schema or trusting self-reported observations?
+- What is the smallest dependency order that gives shared types, profile relations,
+  request closure, result status/outcome rules, and final assembly one clear home?
+- How do we identify the whole versioned package and load its fixed files without
+  allowing caller-supplied code or search paths?
+- What are the exact child slugs and dependencies, and what must the final assembly
+  wait for before it may expose the public validator?
+- Which parts of PR #183 can be moved behind the new boundaries, and which
+  hard-to-read rules or tests must be rewritten rather than copied?
+- Which tests show which commands run which rules, and which outcome-table,
+  forced-failure, and full-package cases prove every rule runs everywhere it must?
+- What evidence-based review-size range applies to each child, and do the result
+  status/outcome rules need to split again before implementation begins?
