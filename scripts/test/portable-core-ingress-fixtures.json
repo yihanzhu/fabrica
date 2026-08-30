@@ -72,6 +72,7 @@
     "portable-core-ingress.private-activation-guard",
     "portable-core-ingress.private-temp",
     "portable-core-ingress.private-temp-errors-sanitized",
+    "portable-core-ingress.raw-depth-limit",
     "portable-core-ingress.raw-byte-limit",
     "portable-core-ingress.restore-manifest",
     "portable-core-ingress.sanitized-errors",

@@ -196,6 +196,12 @@ empty_file="$ingress_tmp/empty.json"
 multi_file="$ingress_tmp/multi.json"
 bom_file="$ingress_tmp/bom.json"
 utf8_file="$ingress_tmp/invalid-utf8.json"
+utf8_inside_file="$ingress_tmp/invalid-utf8-inside-string.json"
+utf8_truncated_file="$ingress_tmp/truncated-utf8.json"
+utf8_overlong_file="$ingress_tmp/overlong-utf8.json"
+utf8_surrogate_file="$ingress_tmp/surrogate-utf8.json"
+utf8_too_high_file="$ingress_tmp/too-high-utf8.json"
+utf8_valid_boundaries_file="$ingress_tmp/valid-utf8-boundaries.json"
 duplicate_file="$ingress_tmp/duplicate.json"
 whitespace_file="$ingress_tmp/whitespace.json"
 escape_file="$ingress_tmp/escape.json"
@@ -213,6 +219,13 @@ leading_dot_file="$ingress_tmp/leading-dot.json"
 printf '{}\n{}\n' > "$multi_file"
 printf '\357\273\277{}\n' > "$bom_file"
 printf '\200\n' > "$utf8_file"
+printf '{"x":"\200"}\n' > "$utf8_inside_file"
+printf '{"x":"\302"}\n' > "$utf8_truncated_file"
+printf '{"x":"\300\257"}\n' > "$utf8_overlong_file"
+printf '{"x":"\355\240\200"}\n' > "$utf8_surrogate_file"
+printf '{"x":"\364\220\200\200"}\n' > "$utf8_too_high_file"
+printf '{"x":"\302\200\337\277\340\240\200\357\277\277\360\220\200\200\364\217\277\277"}\n' \
+  > "$utf8_valid_boundaries_file"
 printf '{"a":1,"a":2}\n' > "$duplicate_file"
 printf '{ "a": 1 }\n' > "$whitespace_file"
 printf '{"x":"\\u0061"}\n' > "$escape_file"
@@ -250,6 +263,16 @@ document_finish_failure bom-prefix E_CANONICAL "$bom_file"
 mark_test portable-core-ingress.test.legacy-045-bom-prefix
 document_finish_failure invalid-utf8 E_PARSE "$utf8_file"
 mark_test portable-core-ingress.test.legacy-047-invalid-utf-8
+document_finish_failure invalid-utf8-inside-string E_PARSE "$utf8_inside_file"
+document_finish_failure truncated-utf8 E_PARSE "$utf8_truncated_file"
+document_finish_failure overlong-utf8 E_PARSE "$utf8_overlong_file"
+document_finish_failure surrogate-utf8 E_PARSE "$utf8_surrogate_file"
+document_finish_failure too-high-utf8 E_PARSE "$utf8_too_high_file"
+start_ingress document
+expect_success valid-utf8-boundaries-snapshot \
+  portable_core_ingress_snapshot "$utf8_valid_boundaries_file"
+expect_success valid-utf8-boundaries-driver portable_core_ingress_finish_driver
+stop_ingress
 document_finish_failure duplicate-keys E_CANONICAL "$duplicate_file"
 mark_test portable-core-ingress.test.legacy-049-duplicate-keys-non-canonical
 document_finish_failure alternate-whitespace E_CANONICAL "$whitespace_file"
@@ -287,6 +310,36 @@ PY
 [ "$(wc -c < "$ingress_tmp/at-limit.json" | tr -d ' ')" -eq 1048576 ]
 [ "$(wc -c < "$ingress_tmp/over-limit.json" | tr -d ' ')" -eq 1048577 ]
 
+python3 - "$ingress_tmp/depth-32.json" "$ingress_tmp/depth-33.json" \
+  "$ingress_tmp/depth-257.json" "$ingress_tmp/depth-string.json" <<'PY'
+import json
+import sys
+
+for path, depth in zip(sys.argv[1:4], (32, 33, 257)):
+    open(path, "wb").write(("[" * depth + "0" + "]" * depth + "\n").encode())
+value = ("[{" * 40) + '"quoted"' + "\\" + ("]}" * 40)
+encoded = json.dumps({"x": value}, ensure_ascii=False, separators=(",", ":")) + "\n"
+open(sys.argv[4], "wb").write(encoded.encode())
+PY
+
+start_ingress document
+expect_success depth-32-snapshot portable_core_ingress_snapshot "$ingress_tmp/depth-32.json"
+expect_success depth-32-driver portable_core_ingress_finish_driver
+stop_ingress
+start_ingress document
+portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
+expect_failure depth-33-limit E_LIMIT portable_core_ingress_finish_driver
+stop_ingress
+start_ingress document
+portable_core_ingress_snapshot "$ingress_tmp/depth-257.json"
+expect_failure depth-257-limit E_LIMIT portable_core_ingress_finish_driver
+stop_ingress
+start_ingress document
+expect_success depth-string-snapshot portable_core_ingress_snapshot "$ingress_tmp/depth-string.json"
+expect_success depth-string-driver portable_core_ingress_finish_driver
+stop_ingress
+mark_rule portable-core-ingress.raw-depth-limit
+
 start_ingress document
 expect_success at-limit-snapshot portable_core_ingress_snapshot "$ingress_tmp/at-limit.json"
 expect_success at-limit-driver portable_core_ingress_finish_driver
@@ -313,6 +366,23 @@ portable_core_ingress_snapshot "$ingress_tmp/over-limit.json"
 expect_failure multi-runtime-before-limit E_RUNTIME portable_core_ingress_snapshot \
   "$ingress_tmp/missing-later-input-SECRET.json"
 stop_ingress
+printf '{"x":' > "$ingress_tmp/unclosed-within-depth.json"
+start_ingress profile-set
+portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
+portable_core_ingress_snapshot "$utf8_inside_file"
+expect_failure multi-utf8-after-depth E_PARSE portable_core_ingress_finish_driver
+stop_ingress
+start_ingress profile-set
+portable_core_ingress_snapshot "$utf8_inside_file"
+portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
+expect_failure multi-utf8-before-depth E_PARSE portable_core_ingress_finish_driver
+stop_ingress
+start_ingress profile-set
+portable_core_ingress_snapshot "$ingress_tmp/unclosed-within-depth.json"
+portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
+expect_failure multi-depth-precheck-before-jq-parse E_LIMIT portable_core_ingress_finish_driver
+stop_ingress
+document_finish_failure unclosed-within-depth E_PARSE "$ingress_tmp/unclosed-within-depth.json"
 
 snapshot_original="$ingress_tmp/snapshot-original.json"
 printf '{"v":1}\n' > "$snapshot_original"
@@ -441,6 +511,27 @@ chmod +x "$wc_failure"
 PORTABLE_CORE_INGRESS_WC="$wc_failure"
 runtime_failure byte-count-failure E_RUNTIME portable_core_ingress_snapshot "$canonical_file"
 stop_ingress
+start_ingress document
+portable_core_ingress_snapshot "$canonical_file"
+rm "$PORTABLE_CORE_INGRESS_SNAPSHOT"
+runtime_failure private-snapshot-read-failure E_RUNTIME portable_core_ingress_finish_driver
+stop_ingress
+start_ingress document
+od_failure="$ingress_tmp/od-failure"
+printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "od SECRET path" >&2' 'exit 2' > "$od_failure"
+chmod +x "$od_failure"
+PORTABLE_CORE_INGRESS_OD="$od_failure"
+portable_core_ingress_snapshot "$canonical_file"
+runtime_failure byte-scanner-read-failure E_RUNTIME portable_core_ingress_finish_driver
+stop_ingress
+start_ingress document
+awk_failure="$ingress_tmp/awk-failure"
+printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "awk SECRET path" >&2' 'exit 2' > "$awk_failure"
+chmod +x "$awk_failure"
+PORTABLE_CORE_INGRESS_AWK="$awk_failure"
+portable_core_ingress_snapshot "$canonical_file"
+runtime_failure byte-scanner-logic-failure E_RUNTIME portable_core_ingress_finish_driver
+stop_ingress
 
 fake_jq_bin="$ingress_tmp/fake-jq-bin"
 mkdir -p "$fake_jq_bin"
@@ -459,7 +550,7 @@ make_isolated_bin() {
   local tool_path
   mkdir -p "$destination"
   ln -s "$ingress_jq" "$destination/jq"
-  for tool in dirname head wc cmp cat rm mktemp; do
+  for tool in dirname head wc cmp cat rm mktemp od awk; do
     tool_path="$(command -v "$tool")"
     ln -s "$tool_path" "$destination/$tool"
   done

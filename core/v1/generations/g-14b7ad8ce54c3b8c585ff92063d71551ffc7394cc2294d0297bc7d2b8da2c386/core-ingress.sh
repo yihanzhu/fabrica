@@ -144,6 +144,21 @@ portable_core_ingress_open() {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
+  PORTABLE_CORE_INGRESS_OD="$(command -v od 2>/dev/null)" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  PORTABLE_CORE_INGRESS_AWK="$(command -v awk 2>/dev/null)" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  case "$PORTABLE_CORE_INGRESS_OD:$PORTABLE_CORE_INGRESS_AWK" in
+    /*:/*) ;;
+    *)
+      portable_core_ingress_error E_RUNTIME
+      return 1
+      ;;
+  esac
 
   temp_path="$(mktemp -d /tmp/ystack-portable-core-ingress.XXXXXXXX 2>/dev/null)" || {
     portable_core_ingress_error E_RUNTIME
@@ -172,6 +187,7 @@ portable_core_ingress_open() {
   PORTABLE_CORE_INGRESS_RAW_PATHS=()
   PORTABLE_CORE_INGRESS_RAW_SIZES=()
   PORTABLE_CORE_INGRESS_CANONICAL_PATHS=()
+  PORTABLE_CORE_INGRESS_DEPTH_OVER=()
 }
 
 portable_core_ingress_begin() {
@@ -205,6 +221,7 @@ portable_core_ingress_begin() {
   PORTABLE_CORE_INGRESS_RAW_PATHS=()
   PORTABLE_CORE_INGRESS_RAW_SIZES=()
   PORTABLE_CORE_INGRESS_CANONICAL_PATHS=()
+  PORTABLE_CORE_INGRESS_DEPTH_OVER=()
 }
 
 portable_core_ingress_digest() {
@@ -236,6 +253,96 @@ portable_core_ingress_digest() {
     return 1
   }
   PORTABLE_CORE_INGRESS_SHA256="$digest"
+}
+
+portable_core_ingress_scan_raw() {
+  local raw_path="$1"
+  local scan_status
+  local -a pipeline_status
+
+  portable_core_ingress_regular_file "$raw_path" && [ -r "$raw_path" ] || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  if "$PORTABLE_CORE_INGRESS_OD" -An -v -t u1 "$raw_path" 2>/dev/null |
+      "$PORTABLE_CORE_INGRESS_AWK" '
+        BEGIN {
+          in_string = 0; escaped = 0; need = 0; invalid = 0;
+          next_min = 128; next_max = 191; depth = 0; max_depth = 0
+        }
+        {
+          for (i = 1; i <= NF; i++) {
+            byte = $i + 0
+            ascii = (need == 0 && byte <= 127)
+            if (need > 0) {
+              if (byte < next_min || byte > next_max) {
+                invalid = 1; need = 0
+              } else {
+                need--; next_min = 128; next_max = 191
+              }
+            } else if (byte <= 127) {
+              # ASCII is valid and also drives JSON string/depth state below.
+            } else if (byte >= 194 && byte <= 223) {
+              need = 1; next_min = 128; next_max = 191
+            } else if (byte == 224) {
+              need = 2; next_min = 160; next_max = 191
+            } else if ((byte >= 225 && byte <= 236) ||
+                       (byte >= 238 && byte <= 239)) {
+              need = 2; next_min = 128; next_max = 191
+            } else if (byte == 237) {
+              need = 2; next_min = 128; next_max = 159
+            } else if (byte == 240) {
+              need = 3; next_min = 144; next_max = 191
+            } else if (byte >= 241 && byte <= 243) {
+              need = 3; next_min = 128; next_max = 191
+            } else if (byte == 244) {
+              need = 3; next_min = 128; next_max = 143
+            } else {
+              invalid = 1
+            }
+
+            if (ascii) {
+              if (in_string) {
+                if (escaped) escaped = 0
+                else if (byte == 92) escaped = 1
+                else if (byte == 34) in_string = 0
+              } else if (byte == 34) {
+                in_string = 1
+              } else if (byte == 91 || byte == 123) {
+                depth++
+                if (depth > max_depth) max_depth = depth
+              } else if ((byte == 93 || byte == 125) && depth > 0) {
+                depth--
+              }
+            }
+          }
+        }
+        END {
+          if (invalid || need != 0) exit 31
+          if (max_depth > 32) exit 32
+        }
+      ' >/dev/null 2>/dev/null; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  [ "${#pipeline_status[@]}" -eq 2 ] && [ "${pipeline_status[0]}" -eq 0 ] || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  scan_status="${pipeline_status[1]}"
+  case "$scan_status" in
+    0) PORTABLE_CORE_INGRESS_SCAN_DEPTH_OVER=false ;;
+    31)
+      portable_core_ingress_error E_PARSE
+      return 1
+      ;;
+    32) PORTABLE_CORE_INGRESS_SCAN_DEPTH_OVER=true ;;
+    *)
+      portable_core_ingress_error E_RUNTIME
+      return 1
+      ;;
+  esac
 }
 
 portable_core_ingress_snapshot() {
@@ -293,6 +400,17 @@ portable_core_ingress_finish_driver() {
 
   for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
     if [ "${PORTABLE_CORE_INGRESS_RAW_SIZES[$input_index]}" -gt 1048576 ]; then
+      portable_core_ingress_error E_LIMIT
+      return 1
+    fi
+  done
+  for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
+    raw_path="${PORTABLE_CORE_INGRESS_RAW_PATHS[$input_index]}"
+    portable_core_ingress_scan_raw "$raw_path" || return 1
+    PORTABLE_CORE_INGRESS_DEPTH_OVER[input_index]="$PORTABLE_CORE_INGRESS_SCAN_DEPTH_OVER"
+  done
+  for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
+    if [ "${PORTABLE_CORE_INGRESS_DEPTH_OVER[$input_index]}" = true ]; then
       portable_core_ingress_error E_LIMIT
       return 1
     fi
