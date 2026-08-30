@@ -5,6 +5,10 @@
     "parent_spec_blob": "c6511d96c1a5e6aed27ba2075b5add65c121f782",
     "review_ledger_sha256": "31793a3ad42acf4df117ea158a78738e056bae550269483870487c3e146b27f9",
     "legacy_ledger_sha256": "3d5a6fb192f9bcaba5c4b89314d30f88a03b9d8a1e1e634297c267b14f096092",
+    "schema_mapping_sha256": "d2f61003076898c657890086631fc4b43c0e0251ae5cb54ef7d2fb8ff2e6dfb8",
+    "prior_manifest_lines": 89,
+    "prior_manifest_sha256": "f2aa3a585979988f6c77d91ca6adcb6373b9d3eeaf1db1b0bdb678f113e50955",
+    "prior_registry_entries": 0,
     "review_rows": 8,
     "legacy_rows": 44
   },

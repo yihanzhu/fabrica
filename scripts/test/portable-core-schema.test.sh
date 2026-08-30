@@ -87,7 +87,9 @@ schema_registry_passed=0
 schema_guard_total=0
 schema_guard_passed=0
 schema_seen_rules="$schema_test_tmp/seen-rules"
+schema_seen_tests="$schema_test_tmp/seen-tests"
 : > "$schema_seen_rules"
+: > "$schema_seen_tests"
 
 fail_case() {
   echo "FAIL: $1" >&2
@@ -125,7 +127,12 @@ mark_rule() {
   printf '%s\n' "$1" >> "$schema_seen_rules"
 }
 
+mark_test() {
+  printf '%s\n' "$1" >> "$schema_seen_tests"
+}
+
 mark_rule portable-core-schema.active-pinned-jq16-ci
+mark_test portable-core-schema.test.active-pinned-jq16-ci
 expect_true exact-fields-valid '{a:1} | schema::exact_fields(["a"];[])'
 expect_false exact-fields-extra '{a:1,b:2} | schema::exact_fields(["a"];[])'
 mark_rule portable-core-schema.exact-fields
@@ -135,12 +142,14 @@ expect_false bounded-set-reversed '["b","a"] | schema::bounded_set(1;2;type == "
 expect_false bounded-set-duplicate '["a","a"] | schema::bounded_set(1;2;type == "string";.)'
 expect_false bounded-set-one-over '["a","b","c"] | schema::bounded_set(1;2;type == "string";.)'
 mark_rule portable-core-schema.set-sorted-unique
+mark_test portable-core-schema.test.set-reversed-and-duplicate-rejected
 
 expect_true permission-set-order-valid \
   '["core.perm.evidence.write.v1","core.perm.target.read.v1"] | schema::enum_set_ok(0;5;schema::permission_ids)'
 expect_false permission-set-order-invalid \
   '["core.perm.target.read.v1","core.perm.evidence.write.v1"] | schema::enum_set_ok(0;5;schema::permission_ids)'
 mark_rule portable-core-schema.permission-set-order
+mark_test portable-core-schema.test.legacy-097-offered-permissions-enum-set-not-in-canonical-sorted-order
 
 expect_true present-absent '{state:"absent"} | schema::present_ok(schema::id_ok)'
 expect_true present-value '{state:"present",value:"value.example"} | schema::present_ok(schema::id_ok)'
@@ -158,6 +167,9 @@ expect_false int-negative '-1 | schema::int_ok'
 expect_false int-one-over '2147483648 | schema::int_ok'
 expect_false int-float '1.5 | schema::int_ok'
 mark_rule portable-core-schema.integer-domain
+mark_test portable-core-schema.test.legacy-075-float-value
+mark_test portable-core-schema.test.legacy-077-negative-integer
+mark_test portable-core-schema.test.legacy-079-integer-over-2147483647
 
 expect_true sha-valid '$f.valid.sha256 | schema::sha256_ok'
 expect_false sha-invalid '"Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" | schema::sha256_ok'
@@ -176,6 +188,13 @@ expect_false time-calendar '"2024-04-31T00:00:00Z" | schema::time_ok'
 expect_false time-non-leap '"2025-02-29T00:00:00Z" | schema::time_ok'
 mark_rule portable-core-schema.utc-timestamp-valid-instant
 mark_rule portable-core-schema.time
+mark_test portable-core-schema.test.utc-timestamp-field-range-rejected
+mark_test portable-core-schema.test.utc-timestamp-calendar-date-rejected
+mark_test portable-core-schema.test.legacy-153-malformed-requested-at
+mark_test portable-core-schema.test.legacy-159-requested-at-with-out-of-range-month-day-time-components
+mark_test portable-core-schema.test.legacy-163-requested-at-names-a-day-the-month-does-not-have
+mark_test portable-core-schema.test.legacy-165-requested-at-names-feb-29-in-a-non-leap-year
+mark_test portable-core-schema.test.legacy-167-requested-at-names-feb-29-in-a-real-leap-year
 
 expect_true media-boundary '("a/" + ("b" * 125)) | schema::media_type_ok'
 expect_false media-one-over '("a/" + ("b" * 126)) | schema::media_type_ok'
@@ -204,18 +223,25 @@ expect_false repo-path-c1-low '("src/" + ([128] | implode)) | schema::repo_path_
 expect_false repo-path-c1-high '("src/" + ([159] | implode)) | schema::repo_path_ok'
 mark_rule portable-core-schema.repository-path-no-controls
 mark_rule portable-core-schema.repo-path-controls
+mark_test portable-core-schema.test.repository-path-del-c1-rejected
+mark_test portable-core-schema.test.legacy-131-repository-path-containing-del-u-plus-007f
+mark_test portable-core-schema.test.legacy-133-repository-path-containing-a-c1-control-character-u-plus-0080
+mark_test portable-core-schema.test.legacy-135-repository-path-containing-a-c1-control-character-u-plus-009f-top-of-range
+mark_test portable-core-schema.test.legacy-137-repository-path-with-a-non-control-non-ascii-character-stays-legal
 
 expect_true depth-boundary \
   'def nest($n): reduce range(0;$n) as $i (0; [.]); nest(32) | schema::parsed_limits_ok'
 expect_false depth-one-over \
   'def nest($n): reduce range(0;$n) as $i (0; [.]); nest(33) | schema::parsed_limits_ok'
 mark_rule portable-core-schema.parsed-depth-limit
+mark_test portable-core-schema.test.legacy-065-depth-33-one-over-the-32-limit
 
 expect_true member-boundaries \
   '([range(0;256)] | schema::parsed_limits_ok) and (reduce range(0;256) as $i ({}; .["k\($i)"]=$i) | schema::parsed_limits_ok)'
 expect_false array-member-one-over '[range(0;257)] | schema::parsed_limits_ok'
 expect_false object-member-one-over 'reduce range(0;257) as $i ({}; .["k\($i)"]=$i) | schema::parsed_limits_ok'
 mark_rule portable-core-schema.parsed-member-limit
+mark_test portable-core-schema.test.legacy-067-257-object-members-one-over-the-256-limit
 
 expect_true decoded-string-boundary '("a" * 8192) | schema::parsed_limits_ok'
 expect_false decoded-string-one-over '("a" * 8193) | schema::parsed_limits_ok'
@@ -225,6 +251,10 @@ expect_true decoded-multibyte-boundary '("é" * 4096) | schema::parsed_limits_ok
 expect_false decoded-multibyte-one-over '("é" * 4097) | schema::parsed_limits_ok'
 mark_rule portable-core-schema.decoded-string-limit
 mark_rule portable-core-schema.decoded-string-byte-limit
+mark_test portable-core-schema.test.oversize-object-key-e-limit
+mark_test portable-core-schema.test.legacy-069-decoded-string-8-193-bytes-one-over-the-8-192-limit
+mark_test portable-core-schema.test.legacy-071-decoded-object-key-8-193-bytes-one-over-the-8-192-limit
+mark_test portable-core-schema.test.legacy-073-8-192-byte-object-key-is-at-the-limit-not-over-it-shape-failure-not-e-limit
 
 expect_true parsed-non-numeric-scalars '[true,false,null] | schema::parsed_limits_ok'
 
@@ -251,8 +281,10 @@ mark_rule portable-core-schema.document-kind
 expect_true envelope-five-kinds 'all($f.valid.envelopes[]; . as $doc | $doc | schema::envelope_ok($doc.kind))'
 expect_false envelope-unknown '$f.valid.envelopes[0] + {kind:"unknown"} | schema::document_envelope_ok'
 mark_rule portable-core-schema.envelope-kind
+mark_test portable-core-schema.test.legacy-093-unknown-document-kind
 expect_false envelope-version '$f.valid.envelopes[0] + {schema_version:2} | schema::document_envelope_ok'
 mark_rule portable-core-schema.envelope-version
+mark_test portable-core-schema.test.legacy-095-wrong-schema-version
 expect_false envelope-extra '$f.valid.envelopes[0] + {extra:true} | schema::document_envelope_ok'
 expect_false envelope-body-type '$f.valid.envelopes[0] + {body:[]} | schema::document_envelope_ok'
 mark_rule portable-core-schema.envelope-exact-fields
@@ -260,6 +292,7 @@ mark_rule portable-core-schema.envelope-exact-fields
 expect_true document-ref-valid '$f.valid.document_ref | schema::document_ref_kind_ok("stage_result")'
 expect_false document-ref-kind '$f.valid.document_ref + {kind:"unknown"} | schema::document_ref_ok'
 mark_rule portable-core-schema.document-ref-kind
+mark_test portable-core-schema.test.legacy-161-named-input-document-ref-with-an-unknown-document-kind
 
 expect_true git-revision-valid '$f.valid.git_revision_sha1 | schema::git_revision_ref_ok'
 expect_false git-revision-algorithm '$f.valid.git_revision_sha1 + {hash_algorithm:"sha256"} | schema::git_revision_ref_ok'
@@ -276,6 +309,8 @@ mark_rule portable-core-schema.git-object-ref
 
 expect_true content-ref-valid '$f.valid.content_ref | schema::content_ref_ok'
 expect_false content-ref-invalid '$f.valid.content_ref + {media_type:"Application/json"} | schema::content_ref_ok'
+expect_false content-ref-url-id '$f.valid.content_ref + {content_id:"https:payload"} | schema::content_ref_ok'
+expect_false content-ref-path-id '$f.valid.content_ref + {content_id:"path/value"} | schema::content_ref_ok'
 mark_rule portable-core-schema.content-ref
 
 expect_true artifact-ref-variants '({type:"git-object",value:$f.valid.git_blob} | schema::artifact_ref_ok) and ({type:"content",value:$f.valid.content_ref} | schema::artifact_ref_ok)'
@@ -317,6 +352,7 @@ mark_rule portable-core-schema.change-ref
 expect_true source-value-valid '{source:$f.valid.git_blob,value_format:"canonical-json",value_sha256:$f.valid.sha256} | schema::source_value_ref_ok'
 expect_false source-value-tree '{source:$f.valid.git_tree,value_format:"canonical-json",value_sha256:$f.valid.sha256} | schema::source_value_ref_ok'
 mark_rule portable-core-schema.source-value-ref
+mark_test portable-core-schema.test.legacy-127-canonical-json-source-pointing-at-a-tree-not-a-blob
 
 expect_true delivered-scope-valid '{ref:{purpose:"output-contract",decision_record_ref:$f.valid.content_ref,subject_ref:{type:"artifact",value:{type:"content",value:$f.valid.content_ref}},scope_sha256:$f.valid.sha256},input_id:"input.example"} | schema::delivered_scope_ok("output-contract")'
 expect_false delivered-scope-document '{ref:{purpose:"output-contract",decision_record_ref:$f.valid.content_ref,subject_ref:{type:"document",value:$f.valid.document_ref},scope_sha256:$f.valid.sha256},input_id:"input.example"} | schema::delivered_scope_ok("output-contract")'
@@ -375,10 +411,12 @@ if "$schema_jq" -e '
 else
   fail_case "registry entry shape and uniqueness"
 fi
-if ! git -C "$schema_root" cat-file -e "$schema_base:core/v1/generation-registry.json" 2>/dev/null; then
+if "$schema_jq" -e --arg base "$schema_base" \
+    '.metadata.construction_base == $base and .metadata.prior_registry_entries == 0' \
+    "$schema_fixture" >/dev/null; then
   schema_registry_passed=$((schema_registry_passed + 1))
 else
-  fail_case "construction base unexpectedly contains a generation registry"
+  fail_case "first-publication prior-registry tuple"
 fi
 if "$schema_jq" -n -e '
     def prefix($prior;$candidate):
@@ -403,34 +441,51 @@ if "$schema_jq" -n -e '
 else
   fail_case "registry duplicate generation rejection"
 fi
-schema_prior_manifest="$schema_test_tmp/prior-manifest"
-git -C "$schema_root" show "$schema_base:ci/required-files.txt" > "$schema_prior_manifest"
-schema_prior_size="$(wc -c < "$schema_prior_manifest" | tr -d ' ')"
-head -c "$schema_prior_size" "$schema_manifest" > "$schema_test_tmp/manifest-prefix"
-if cmp -s "$schema_prior_manifest" "$schema_test_tmp/manifest-prefix"; then
+schema_prior_lines="$("$schema_jq" -r '.metadata.prior_manifest_lines' "$schema_fixture")"
+schema_prior_digest="$("$schema_jq" -r '.metadata.prior_manifest_sha256' "$schema_fixture")"
+head -n "$schema_prior_lines" "$schema_manifest" > "$schema_test_tmp/manifest-prefix"
+schema_manifest_start=$((schema_prior_lines + 1))
+schema_manifest_end=$((schema_prior_lines + 7))
+schema_manifest_block="$(sed -n "${schema_manifest_start},${schema_manifest_end}p" "$schema_manifest")"
+schema_expected_block="$(printf '\n# Inactive portable core generation under construction\ncore/v1/generation-registry.json\ncore/v1/generations/%s/modules/schema.jq\nscripts/test/portable-core-schema-fixtures.json\nscripts/test/portable-core-schema-ledger.tsv\nscripts/test/portable-core-schema.test.sh' "$schema_generation")"
+if [ "$(sha256_path "$schema_test_tmp/manifest-prefix")" = "$schema_prior_digest" ] &&
+   [ "$schema_manifest_block" = "$schema_expected_block" ]; then
   schema_registry_passed=$((schema_registry_passed + 1))
 else
-  fail_case "required-files additions are not an unchanged byte prefix append"
+  fail_case "required-files deterministic append proof"
 fi
 mark_rule portable-core-schema.generation-registry-entry
 mark_rule portable-core-schema.generation-registry-prefix
 
 guard_paths_ok() {
   local paths_file="$1"
-  ! grep -Eq '(^|/)scripts/core-contract\.sh$|/contracts\.jq$|/core-ingress\.sh$' "$paths_file"
+  local generation_path
+  while IFS= read -r generation_path; do
+    case "$generation_path" in
+      "core/v1/generations/$schema_generation/core-ingress.sh"|\
+      "core/v1/generations/$schema_generation/modules/schema.jq"|\
+      "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
+      "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
+      "core/v1/generations/$schema_generation/modules/result_facts.jq"|\
+      "core/v1/generations/$schema_generation/modules/result_truth.jq") ;;
+      *) return 1 ;;
+    esac
+  done < "$paths_file"
 }
 
-schema_guard_total=8
+schema_guard_total=10
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
-if [ "$(cat "$schema_generation_files")" = \
-     "core/v1/generations/$schema_generation/modules/schema.jq" ] &&
+if guard_paths_ok "$schema_generation_files" &&
+   grep -Fqx "core/v1/generations/$schema_generation/modules/schema.jq" \
+     "$schema_generation_files" &&
    [ ! -e "$schema_root/scripts/core-contract.sh" ] &&
-   [ ! -e "$schema_root/core/v1/generations/$schema_generation/contracts.jq" ]; then
+   [ ! -e "$schema_root/core/v1/generations/$schema_generation/contracts.jq" ] &&
+   [ -z "$(find "$schema_root/core/v1/generations/$schema_generation" -type l -print -quit)" ]; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "incomplete generation exposes a public wrapper, root, or extra member"
+  fail_case "incomplete generation has a public, unknown, missing, or symlink member"
 fi
 if [ -d "$schema_module_dir" ] && [ ! -L "$schema_module_dir" ] &&
    [ -f "$schema_module" ] && [ ! -L "$schema_module" ] &&
@@ -464,7 +519,7 @@ else
   fail_case "ambient module path changed the fixed schema import"
 fi
 schema_live_hits="$schema_test_tmp/live-hits"
-if grep -RIl --exclude='portable-core-schema*' -- "$schema_generation" \
+if grep -RIl --exclude='portable-core-*' -- "$schema_generation" \
     "$schema_root/manager" "$schema_root/routines" "$schema_root/templates" \
     "$schema_root/reviewer" "$schema_root/config" "$schema_root/scripts" \
     "$schema_root/README.md" "$schema_root/QUICKSTART.md" "$schema_root/RESTORE.md" \
@@ -474,16 +529,42 @@ else
   schema_guard_passed=$((schema_guard_passed + 1))
 fi
 schema_non_test_loaders="$schema_test_tmp/non-test-loaders"
-if grep -RIl --exclude='portable-core-schema*' -- 'import "schema" as schema' \
-    "$schema_root" > "$schema_non_test_loaders" 2>/dev/null; then
-  fail_case "non-test code loads the incomplete schema generation"
-else
+grep -RIl -- 'import "schema" as schema' "$schema_root" \
+  > "$schema_non_test_loaders" 2>/dev/null || true
+schema_loaders_ok=true
+while IFS= read -r schema_loader; do
+  schema_loader="${schema_loader#"$schema_root/"}"
+  case "$schema_loader" in
+    "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
+    "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
+    "core/v1/generations/$schema_generation/modules/result_facts.jq"|\
+    "core/v1/generations/$schema_generation/modules/result_truth.jq"|\
+    scripts/test/portable-core-*) ;;
+    *) schema_loaders_ok=false ;;
+  esac
+done < "$schema_non_test_loaders"
+if [ "$schema_loaders_ok" = true ]; then
   schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "a public, unknown, or non-test caller loads the incomplete schema"
 fi
 if guard_paths_ok "$schema_generation_files"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
   fail_case "private guard rejected the real generation layout"
+fi
+cp "$schema_generation_files" "$schema_test_tmp/growing-generation-files"
+printf '%s\n' \
+  "core/v1/generations/$schema_generation/core-ingress.sh" \
+  "core/v1/generations/$schema_generation/modules/profile_graph.jq" \
+  "core/v1/generations/$schema_generation/modules/stage_request.jq" \
+  "core/v1/generations/$schema_generation/modules/result_facts.jq" \
+  "core/v1/generations/$schema_generation/modules/result_truth.jq" >> \
+  "$schema_test_tmp/growing-generation-files"
+if guard_paths_ok "$schema_test_tmp/growing-generation-files"; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "private guard rejected accepted growing private members"
 fi
 cp "$schema_generation_files" "$schema_test_tmp/invalid-generation-files"
 printf '%s\n' "core/v1/generations/$schema_generation/contracts.jq" >> \
@@ -492,6 +573,14 @@ if ! guard_paths_ok "$schema_test_tmp/invalid-generation-files"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
   fail_case "private guard accepted a synthetic public root"
+fi
+cp "$schema_generation_files" "$schema_test_tmp/unknown-generation-files"
+printf '%s\n' "core/v1/generations/$schema_generation/modules/unknown.jq" >> \
+  "$schema_test_tmp/unknown-generation-files"
+if ! guard_paths_ok "$schema_test_tmp/unknown-generation-files"; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "private guard accepted a synthetic unknown member"
 fi
 mark_rule portable-core-schema.private-activation-guard
 
@@ -508,10 +597,18 @@ while IFS= read -r schema_required_path; do
   fi
 done <<< "$schema_manifest_paths"
 
-if [ "$(awk -F '\t' 'NR > 1 && $1 == "review" {count++} END {print count + 0}' "$schema_ledger")" -ne 8 ]; then
+schema_mapping_digest="$("$schema_jq" -r '.metadata.schema_mapping_sha256' "$schema_fixture")"
+if [ "$(sha256_path "$schema_ledger")" != "$schema_mapping_digest" ]; then
+  fail_case "schema ledger mapping digest"
+fi
+schema_review_total="$(awk -F '\t' 'NR > 1 && $1 == "review" {count++} END {print count + 0}' "$schema_ledger")"
+schema_legacy_total="$(awk -F '\t' 'NR > 1 && $1 == "legacy" {count++} END {print count + 0}' "$schema_ledger")"
+schema_expected_review="$("$schema_jq" -r '.metadata.review_rows' "$schema_fixture")"
+schema_expected_legacy="$("$schema_jq" -r '.metadata.legacy_rows' "$schema_fixture")"
+if [ "$schema_review_total" -ne "$schema_expected_review" ]; then
   fail_case "review ledger row count"
 fi
-if [ "$(awk -F '\t' 'NR > 1 && $1 == "legacy" {count++} END {print count + 0}' "$schema_ledger")" -ne 44 ]; then
+if [ "$schema_legacy_total" -ne "$schema_expected_legacy" ]; then
   fail_case "legacy ledger row count"
 fi
 if [ "$(tail -n +2 "$schema_ledger" | cut -f2 | sort -u | wc -l | tr -d ' ')" -ne 52 ]; then
@@ -523,15 +620,38 @@ LC_ALL=C sort "$schema_seen_rules" > "$schema_test_tmp/seen-rules.sorted"
 if ! cmp -s "$schema_expected_rules" "$schema_test_tmp/seen-rules.sorted"; then
   fail_case "owned-rule inventory does not match executed rule proof"
 fi
+schema_expected_tests="$schema_test_tmp/expected-tests"
+tail -n +2 "$schema_ledger" | cut -f5 | LC_ALL=C sort -u > "$schema_expected_tests"
+LC_ALL=C sort "$schema_seen_tests" > "$schema_test_tmp/seen-tests.sorted"
+if ! cmp -s "$schema_expected_tests" "$schema_test_tmp/seen-tests.sorted"; then
+  fail_case "ledger test IDs do not match the executed stable-ID inventory"
+fi
 while IFS=$'\t' read -r schema_source schema_row schema_disposition schema_rule schema_test_id; do
   [ "$schema_source" != "source" ] || continue
   if ! grep -Fqx "$schema_rule" "$schema_expected_rules" ||
-     [[ ! "$schema_test_id" =~ ^portable-core-schema\.test\. ]] ||
+     ! grep -Fqx "$schema_test_id" "$schema_test_tmp/seen-tests.sorted" ||
      [[ ! "$schema_row" =~ ^(review-r[0-3]-f[0-9]{2}|legacy-test-[0-9]{3})$ ]] ||
      [[ ! "$schema_disposition" =~ ^(ported|replaced-by)$ ]]; then
     fail_case "invalid ledger mapping row: $schema_row"
   fi
 done < "$schema_ledger"
+
+schema_review_accounted="$(awk -F '\t' '
+  NR == FNR {executed[$1] = 1; next}
+  FNR > 1 && $1 == "review" && ($5 in executed) {count++}
+  END {print count + 0}
+' "$schema_test_tmp/seen-tests.sorted" "$schema_ledger")"
+schema_legacy_accounted="$(awk -F '\t' '
+  NR == FNR {executed[$1] = 1; next}
+  FNR > 1 && $1 == "legacy" && ($5 in executed) {count++}
+  END {print count + 0}
+' "$schema_test_tmp/seen-tests.sorted" "$schema_ledger")"
+if [ "$schema_review_accounted" -ne "$schema_review_total" ]; then
+  fail_case "unexecuted review-ledger test mapping"
+fi
+if [ "$schema_legacy_accounted" -ne "$schema_legacy_total" ]; then
+  fail_case "unexecuted legacy-ledger test mapping"
+fi
 
 schema_owned_total="$(wc -l < "$schema_expected_rules" | tr -d ' ')"
 schema_owned_passed="$schema_owned_total"
@@ -544,8 +664,8 @@ printf 'direct cases: %s/%s\n' "$schema_direct_passed" "$schema_direct_total"
 printf 'private route probes: %s/%s\n' "$schema_route_passed" "$schema_route_total"
 printf 'registry cases: %s/%s\n' "$schema_registry_passed" "$schema_registry_total"
 printf 'activation guard cases: %s/%s\n' "$schema_guard_passed" "$schema_guard_total"
-printf 'review findings accounted for: 8/8\n'
-printf 'legacy assertions accounted for: 44/44\n'
+printf 'review findings accounted for: %s/%s\n' "$schema_review_accounted" "$schema_review_total"
+printf 'legacy assertions accounted for: %s/%s\n' "$schema_legacy_accounted" "$schema_legacy_total"
 printf 'failures: %s\n' "$schema_failures"
 
 [ "$schema_failures" -eq 0 ]

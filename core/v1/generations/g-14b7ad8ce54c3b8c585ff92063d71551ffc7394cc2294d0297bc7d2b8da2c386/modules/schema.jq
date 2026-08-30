@@ -270,6 +270,8 @@ def git_object_ref_ok:
 def content_ref_ok:
   exact_fields(["content_id","media_type","sha256"];[]) and
   (.content_id | id_ok) and
+  (.content_id | contains(":") | not) and
+  (.content_id | contains("/") | not) and
   (.media_type | media_type_ok) and
   (.sha256 | sha256_ok);
 
