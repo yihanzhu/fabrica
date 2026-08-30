@@ -2,6 +2,8 @@
 #define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
+/* Private exception boundary and removal condition: work/portable-profile-resolution/spec.md. */
+
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
