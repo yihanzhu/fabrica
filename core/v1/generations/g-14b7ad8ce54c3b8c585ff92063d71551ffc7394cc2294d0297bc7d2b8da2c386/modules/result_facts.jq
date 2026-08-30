@@ -37,20 +37,22 @@ def observed_capability_shape_ok:
    end);
 
 def fact_shape_ok(value_ok):
-  if .state == "recorded" or .state == "computed" then
-    schema::exact_fields(["state","value","source_ref"];[]) and
-    (.value | value_ok) and
-    (.source_ref | schema::content_ref_ok)
-  elif .state == "unavailable" then
-    schema::exact_fields(["state","reason_id"];[]) and
-    (.reason_id | schema::id_ok)
-  elif .state == "not-applicable" then
-    schema::exact_fields(["state"];[])
-  else false
-  end;
+  type == "object" and
+  (if .state == "recorded" or .state == "computed" then
+     schema::exact_fields(["state","value","source_ref"];[]) and
+     (.value | value_ok) and
+     (.source_ref | schema::content_ref_ok)
+   elif .state == "unavailable" then
+     schema::exact_fields(["state","reason_id"];[]) and
+     (.reason_id | schema::id_ok)
+   elif .state == "not-applicable" then
+     schema::exact_fields(["state"];[])
+   else false
+   end);
 
 def factual_or_unavailable:
-  .state == "recorded" or .state == "computed" or .state == "unavailable";
+  type == "object" and
+  (.state == "recorded" or .state == "computed" or .state == "unavailable");
 
 def execution_metadata_shape_ok:
   schema::exact_fields(

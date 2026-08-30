@@ -19,10 +19,10 @@ def metadata:
     review_rows:2,
     legacy_rows:14,
     owned_rules:23,
-    direct_cases:69,
+    direct_cases:73,
     command_to_rule_cells:2,
     forced_routes:2,
-    guard_cases:14
+    guard_cases:15
   };
 
 def sha($character): $character * 64;

@@ -284,6 +284,15 @@ expect_false fact-unavailable-extra producer \
    result_facts::fact_shape_ok(schema::id_ok)'
 expect_false fact-unknown-state producer \
   '{state:"assumed"} | result_facts::fact_shape_ok(schema::id_ok)'
+expect_false fact-scalar producer \
+  '0 | result_facts::fact_shape_ok(schema::id_ok)'
+expect_false fact-array producer \
+  '[] | result_facts::fact_shape_ok(schema::id_ok)'
+expect_false factual-state-scalar producer \
+  '0 | result_facts::factual_or_unavailable'
+expect_false metadata-scalar-fact producer \
+  '$result_doc.body.execution.metadata | .provider=0 |
+   result_facts::execution_metadata_shape_ok'
 mark_rule portable-core-result-facts.fact-state-shape
 
 expect_true deterministic-metadata-valid verifier \
@@ -600,11 +609,26 @@ else guard_fail "restore manifest coverage"
 fi
 mark_rule portable-core-result-facts.restore-manifest
 
-manifest_count="$(wc -l < "$facts_manifest" | tr -d ' ')"
-if [ "$manifest_count" -ge 4 ] &&
-   [ "$(tail -n 4 "$facts_manifest")" = "$required_paths" ]; then
+manifest_block_ok() {
+  local manifest="$1"
+  local prefix="$facts_tmp/required-files-prefix"
+  head -n 112 "$manifest" > "$prefix"
+  [ "$(sha256_path "$prefix")" = \
+    "9f452902a785f3e7bb932cfeb36c453a4f72786a18447e6e7ebc6b67da85cd59" ] &&
+    [ "$(sed -n '113,116p' "$manifest")" = "$required_paths" ]
+}
+
+if manifest_block_ok "$facts_manifest"; then
   guard_pass
 else guard_fail "restore manifest exact append"
+fi
+
+future_manifest="$facts_tmp/future-required-files.txt"
+cp "$facts_manifest" "$future_manifest"
+printf '%s\n' "$facts_generation_root/modules/result_truth.jq" >> "$future_manifest"
+if manifest_block_ok "$future_manifest"; then
+  guard_pass
+else guard_fail "restore manifest permits downstream append"
 fi
 
 generation_members_ok=true
