@@ -139,6 +139,32 @@ expect_failure() {
   pass_case "$resolver_name"
 }
 
+expect_launcher_failure() {
+  resolver_name=$1
+  resolver_mode=$2
+  resolver_expected=$3
+  resolver_limit_sandbox="$resolver_tmp/limit.$resolver_mode"
+  resolver_limit_stdout="$resolver_tmp/limit.$resolver_mode.stdout"
+  resolver_limit_stderr="$resolver_tmp/limit.$resolver_mode.stderr"
+  /bin/mkdir -m 700 "$resolver_limit_sandbox"
+  if "$resolver_bin/launcher" limit-control "$resolver_mode" "$resolver_limit_sandbox" \
+      > "$resolver_limit_stdout" 2> "$resolver_limit_stderr"; then
+    fail_case "$resolver_name"
+  fi
+  [ ! -s "$resolver_limit_stdout" ] || fail_case "$resolver_name emitted partial stdout"
+  [ "$(/usr/bin/sed -n '1p' "$resolver_limit_stderr")" = "$resolver_expected" ] || {
+    /bin/cat "$resolver_limit_stderr" >&2
+    fail_case "$resolver_name token"
+  }
+  pass_case "$resolver_name"
+}
+
+expect_launcher_failure 'launcher sanitizes silent child failure' silent 'E_RUNTIME unexpected'
+expect_launcher_failure 'launcher converts file limit to a token' file 'E_LIMIT resource-limit'
+if [ "$resolver_platform" = Linux:x86_64 ]; then
+  expect_launcher_failure 'launcher bounds its Linux process group' process 'E_LIMIT process-limit'
+fi
+
 resolver_output="$resolver_tmp/resolved.json"
 run_resolver "$resolver_tmp/sandbox.success" "$resolver_fixture/request.json" "$resolver_fixture/map.json" \
   > "$resolver_output" 2> "$resolver_tmp/success.stderr" || {
