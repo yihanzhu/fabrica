@@ -186,6 +186,7 @@ mark_rule portable-core-schema.present-union
 expect_true id-boundary '(("a" * 128) | schema::id_ok) and ("a" | schema::id_ok)'
 expect_false id-one-over '("a" * 129) | schema::id_ok'
 expect_false id-uppercase '"Bad" | schema::id_ok'
+expect_false id-trailing-newline '"id.example\n" | schema::id_ok'
 mark_rule portable-core-schema.id
 
 expect_true int-boundaries '(0 | schema::int_ok) and (2147483647 | schema::int_ok)'
@@ -210,6 +211,7 @@ mark_test portable-core-schema.test.legacy-079-integer-over-2147483647
 
 expect_true sha-valid '$f.valid.sha256 | schema::sha256_ok'
 expect_false sha-invalid '"Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" | schema::sha256_ok'
+expect_false sha-trailing-newline '($f.valid.sha256 + "\n") | schema::sha256_ok'
 mark_rule portable-core-schema.sha256
 
 expect_true short-text-boundary '(("a" * 1024) | schema::short_text_ok) and ("é" | schema::short_text_ok)'
@@ -223,6 +225,7 @@ expect_false time-malformed '"2024-2-29T00:00:00Z" | schema::time_ok'
 expect_false time-fields '"2024-13-01T24:60:60Z" | schema::time_ok'
 expect_false time-calendar '"2024-04-31T00:00:00Z" | schema::time_ok'
 expect_false time-non-leap '"2025-02-29T00:00:00Z" | schema::time_ok'
+expect_false time-trailing-newline '"2024-02-29T23:59:59Z\n" | schema::time_ok'
 mark_rule portable-core-schema.utc-timestamp-valid-instant
 mark_rule portable-core-schema.time
 mark_test portable-core-schema.test.utc-timestamp-field-range-rejected
@@ -236,6 +239,7 @@ mark_test portable-core-schema.test.legacy-167-requested-at-names-feb-29-in-a-re
 expect_true media-boundary '("a/" + ("b" * 125)) | schema::media_type_ok'
 expect_false media-one-over '("a/" + ("b" * 126)) | schema::media_type_ok'
 expect_false media-uppercase '"Application/json" | schema::media_type_ok'
+expect_false media-trailing-newline '"application/json\n" | schema::media_type_ok'
 mark_rule portable-core-schema.media-type
 
 expect_true patch-media-valid '"text/x-diff" | schema::patch_media_type_ok'
@@ -244,11 +248,14 @@ mark_rule portable-core-schema.patch-media-type
 
 expect_true git-oid-boundaries '("a" * 40 | schema::git_oid_ok) and ("b" * 64 | schema::git_oid_ok)'
 expect_false git-oid-invalid '("a" * 41) | schema::git_oid_ok'
+expect_false git-oid-trailing-newline '(("a" * 40) + "\n") | schema::git_oid_ok'
 mark_rule portable-core-schema.git-oid
 
 expect_true reverse-dns-boundaries '("a.b" | schema::reverse_dns_ok) and (("a" * 63) + ".b" | schema::reverse_dns_ok)'
 expect_false reverse-dns-label-over '(("a" * 64) + ".b") | schema::reverse_dns_ok'
 expect_false reverse-dns-edge-hyphen '"-a.example" | schema::reverse_dns_ok'
+expect_false reverse-dns-trailing-newline '"example.test\n" | schema::reverse_dns_ok'
+expect_false reverse-dns-label-newline '"example\n.test" | schema::reverse_dns_ok'
 mark_rule portable-core-schema.reverse-dns
 
 expect_true repo-path-unicode '"src/合法.json" | schema::repo_path_ok'
@@ -317,6 +324,7 @@ mark_rule portable-core-schema.document-kind
 
 expect_true envelope-five-kinds 'all($f.valid.envelopes[]; . as $doc | $doc | schema::envelope_ok($doc.kind))'
 expect_false envelope-unknown '$f.valid.envelopes[0] + {kind:"unknown"} | schema::document_envelope_ok'
+expect_false envelope-kind-trailing-newline '$f.valid.envelopes[0] + {kind:"adapter_manifest\n"} | schema::document_envelope_ok'
 mark_rule portable-core-schema.envelope-kind
 mark_test portable-core-schema.test.legacy-093-unknown-document-kind
 expect_false envelope-version '$f.valid.envelopes[0] + {schema_version:2} | schema::document_envelope_ok'
@@ -324,58 +332,79 @@ mark_rule portable-core-schema.envelope-version
 mark_test portable-core-schema.test.legacy-095-wrong-schema-version
 expect_false envelope-extra '$f.valid.envelopes[0] + {extra:true} | schema::document_envelope_ok'
 expect_false envelope-body-type '$f.valid.envelopes[0] + {body:[]} | schema::document_envelope_ok'
+expect_false envelope-id-trailing-newline '$f.valid.envelopes[0] + {id:"manifest.example\n"} | schema::document_envelope_ok'
 mark_rule portable-core-schema.envelope-exact-fields
 
 expect_true document-ref-valid '$f.valid.document_ref | schema::document_ref_kind_ok("stage_result")'
 expect_false document-ref-kind '$f.valid.document_ref + {kind:"unknown"} | schema::document_ref_ok'
+expect_false document-ref-kind-trailing-newline '$f.valid.document_ref + {kind:"stage_result\n"} | schema::document_ref_ok'
+expect_false document-ref-id-trailing-newline '$f.valid.document_ref + {id:"result.example\n"} | schema::document_ref_ok'
+expect_false document-ref-sha-trailing-newline '$f.valid.document_ref + {sha256:($f.valid.document_ref.sha256 + "\n")} | schema::document_ref_ok'
 mark_rule portable-core-schema.document-ref-kind
 mark_test portable-core-schema.test.legacy-161-named-input-document-ref-with-an-unknown-document-kind
 
 expect_true git-revision-valid '$f.valid.git_revision_sha1 | schema::git_revision_ref_ok'
 expect_false git-revision-algorithm '$f.valid.git_revision_sha1 + {hash_algorithm:"sha256"} | schema::git_revision_ref_ok'
+expect_false git-revision-repository-newline '$f.valid.git_revision_sha1 + {repository_id:"repo.example\n"} | schema::git_revision_ref_ok'
+expect_false git-revision-algorithm-newline '$f.valid.git_revision_sha1 + {hash_algorithm:"sha1\n"} | schema::git_revision_ref_ok'
+expect_false git-revision-commit-newline '$f.valid.git_revision_sha1 + {commit_id:($f.valid.git_revision_sha1.commit_id + "\n")} | schema::git_revision_ref_ok'
 mark_rule portable-core-schema.git-revision-ref
 
 expect_true git-location-variants '({kind:"root"} | schema::git_location_ok) and ({kind:"path",value:"src/main"} | schema::git_location_ok)'
 expect_false git-location-invalid '{kind:"path",value:"../main"} | schema::git_location_ok'
+expect_false git-location-newline '{kind:"path",value:"src/main\n"} | schema::git_location_ok'
 mark_rule portable-core-schema.git-location
 
 expect_true git-object-variants '($f.valid.git_blob | schema::git_object_ref_ok) and ($f.valid.git_tree | schema::git_object_ref_ok)'
 expect_false git-object-mode '$f.valid.git_blob + {mode:"120000"} | schema::git_object_ref_ok'
 expect_false git-object-root-blob '$f.valid.git_blob + {location:{kind:"root"}} | schema::git_object_ref_ok'
+expect_false git-object-id-newline '$f.valid.git_blob + {object_id:($f.valid.git_blob.object_id + "\n")} | schema::git_object_ref_ok'
+expect_false git-object-mode-newline '$f.valid.git_blob + {mode:"100644\n"} | schema::git_object_ref_ok'
 mark_rule portable-core-schema.git-object-ref
 
 expect_true content-ref-valid '$f.valid.content_ref | schema::content_ref_ok'
 expect_false content-ref-invalid '$f.valid.content_ref + {media_type:"Application/json"} | schema::content_ref_ok'
 expect_false content-ref-url-id '$f.valid.content_ref + {content_id:"https:payload"} | schema::content_ref_ok'
 expect_false content-ref-path-id '$f.valid.content_ref + {content_id:"path/value"} | schema::content_ref_ok'
+expect_false content-ref-id-newline '$f.valid.content_ref + {content_id:"content.example\n"} | schema::content_ref_ok'
+expect_false content-ref-media-newline '$f.valid.content_ref + {media_type:"application/json\n"} | schema::content_ref_ok'
+expect_false content-ref-sha-newline '$f.valid.content_ref + {sha256:($f.valid.content_ref.sha256 + "\n")} | schema::content_ref_ok'
 mark_rule portable-core-schema.content-ref
 
 expect_true artifact-ref-variants '({type:"git-object",value:$f.valid.git_blob} | schema::artifact_ref_ok) and ({type:"content",value:$f.valid.content_ref} | schema::artifact_ref_ok)'
 expect_false artifact-ref-invalid '{type:"url",value:$f.valid.content_ref} | schema::artifact_ref_ok'
+expect_false artifact-ref-nested-newline '{type:"content",value:($f.valid.content_ref + {content_id:"content.example\n"})} | schema::artifact_ref_ok'
 mark_rule portable-core-schema.artifact-ref
 
 expect_true input-ref-variants '({type:"artifact",value:{type:"content",value:$f.valid.content_ref}} | schema::input_ref_ok) and ({type:"document",value:$f.valid.document_ref} | schema::input_ref_ok)'
 expect_false input-ref-invalid '{type:"document",value:$f.valid.content_ref} | schema::input_ref_ok'
+expect_false input-ref-nested-newline '{type:"document",value:($f.valid.document_ref + {id:"result.example\n"})} | schema::input_ref_ok'
 mark_rule portable-core-schema.input-ref
 
 expect_true evidence-ref-valid '{stage_result_ref:$f.valid.document_ref,evidence_id:"evidence.example"} | schema::evidence_ref_ok'
 expect_false evidence-ref-kind '{stage_result_ref:($f.valid.document_ref + {kind:"profile"}),evidence_id:"evidence.example"} | schema::evidence_ref_ok'
+expect_false evidence-ref-id-newline '{stage_result_ref:$f.valid.document_ref,evidence_id:"evidence.example\n"} | schema::evidence_ref_ok'
 mark_rule portable-core-schema.evidence-ref
 
 expect_true scope-ref-valid '$f.valid.scope_ref | schema::scope_ref_purpose_ok("policy")'
 expect_false scope-ref-invalid '$f.valid.scope_ref + {purpose:"trust"} | schema::scope_ref_ok'
+expect_false scope-ref-purpose-newline '$f.valid.scope_ref + {purpose:"policy\n"} | schema::scope_ref_ok'
+expect_false scope-ref-sha-newline '$f.valid.scope_ref + {scope_sha256:($f.valid.scope_ref.scope_sha256 + "\n")} | schema::scope_ref_ok'
 mark_rule portable-core-schema.scope-ref
 
 expect_true actor-ref-valid '{role:"producer",implementation_id:"implementation.example",implementation_version:"v1",adapter_instance_id:"instance.example",principal_id:"principal.example",execution_boundary_id:"boundary.example",authority_ref:$f.valid.authority_ref} | schema::actor_ref_ok'
 expect_false actor-ref-invalid '{role:"human",implementation_id:"implementation.example",implementation_version:"v1",adapter_instance_id:"instance.example",principal_id:"principal.example",execution_boundary_id:"boundary.example"} | schema::actor_ref_ok'
+expect_false actor-ref-id-newline '{role:"producer",implementation_id:"implementation.example\n",implementation_version:"v1",adapter_instance_id:"instance.example",principal_id:"principal.example",execution_boundary_id:"boundary.example"} | schema::actor_ref_ok'
 mark_rule portable-core-schema.actor-ref
 
 expect_true environment-ref-valid '{environment_id:"environment.example",fingerprint_sha256:$f.valid.sha256} | schema::environment_ref_ok'
 expect_false environment-ref-invalid '{environment_id:"environment.example",fingerprint_sha256:"bad"} | schema::environment_ref_ok'
+expect_false environment-ref-newline '{environment_id:"environment.example\n",fingerprint_sha256:$f.valid.sha256} | schema::environment_ref_ok'
 mark_rule portable-core-schema.environment-ref
 
 expect_true tool-ref-valid '$f.valid.tool_ref | schema::tool_ref_ok'
 expect_false tool-ref-invalid '$f.valid.tool_ref + {config_ref:{state:"present",value:$f.valid.content_ref}} | schema::tool_ref_ok'
+expect_false tool-ref-version-newline '$f.valid.tool_ref + {tool_version:"v1\n"} | schema::tool_ref_ok'
 mark_rule portable-core-schema.tool-ref
 
 expect_true git-patch-valid '$f.valid.patch_ref | schema::git_patch_ref_ok'
@@ -384,19 +413,23 @@ mark_rule portable-core-schema.git-patch-ref
 
 expect_true change-ref-valid '{repository_id:"repo.example",base:{state:"absent"},head:$f.valid.git_revision_sha1,delta_ref:$f.valid.patch_ref} | schema::change_ref_ok'
 expect_false change-ref-repository '{repository_id:"other.example",base:{state:"absent"},head:$f.valid.git_revision_sha1,delta_ref:$f.valid.patch_ref} | schema::change_ref_ok'
+expect_false change-ref-repository-newline '{repository_id:"repo.example\n",base:{state:"absent"},head:$f.valid.git_revision_sha1,delta_ref:$f.valid.patch_ref} | schema::change_ref_ok'
 mark_rule portable-core-schema.change-ref
 
 expect_true source-value-valid '{source:$f.valid.git_blob,value_format:"canonical-json",value_sha256:$f.valid.sha256} | schema::source_value_ref_ok'
 expect_false source-value-tree '{source:$f.valid.git_tree,value_format:"canonical-json",value_sha256:$f.valid.sha256} | schema::source_value_ref_ok'
+expect_false source-value-sha-newline '{source:$f.valid.git_blob,value_format:"canonical-json",value_sha256:($f.valid.sha256 + "\n")} | schema::source_value_ref_ok'
 mark_rule portable-core-schema.source-value-ref
 mark_test portable-core-schema.test.legacy-127-canonical-json-source-pointing-at-a-tree-not-a-blob
 
 expect_true delivered-scope-valid '{ref:{purpose:"output-contract",decision_record_ref:$f.valid.content_ref,subject_ref:{type:"artifact",value:{type:"content",value:$f.valid.content_ref}},scope_sha256:$f.valid.sha256},input_id:"input.example"} | schema::delivered_scope_ok("output-contract")'
 expect_false delivered-scope-document '{ref:{purpose:"output-contract",decision_record_ref:$f.valid.content_ref,subject_ref:{type:"document",value:$f.valid.document_ref},scope_sha256:$f.valid.sha256},input_id:"input.example"} | schema::delivered_scope_ok("output-contract")'
+expect_false delivered-scope-input-newline '{ref:{purpose:"output-contract",decision_record_ref:$f.valid.content_ref,subject_ref:{type:"artifact",value:{type:"content",value:$f.valid.content_ref}},scope_sha256:$f.valid.sha256},input_id:"input.example\n"} | schema::delivered_scope_ok("output-contract")'
 mark_rule portable-core-schema.delivered-scope
 
 expect_true fact-variants '({state:"recorded",value:"value.example",source_ref:$f.valid.content_ref} | schema::fact_ok(schema::id_ok)) and ({state:"computed",value:"value.example",source_ref:$f.valid.content_ref} | schema::fact_ok(schema::id_ok)) and ({state:"unavailable",reason_id:"reason.example"} | schema::fact_ok(schema::id_ok)) and ({state:"not-applicable"} | schema::fact_ok(schema::id_ok))'
 expect_false fact-invalid '{state:"recorded",value:"value.example"} | schema::fact_ok(schema::id_ok)'
+expect_false fact-reason-newline '{state:"unavailable",reason_id:"reason.example\n"} | schema::fact_ok(schema::id_ok)'
 mark_rule portable-core-schema.fact-union
 
 schema_route_total=13
@@ -420,7 +453,7 @@ else
 fi
 mark_rule portable-core-schema.schema-route-all-docs
 
-schema_registry_total=7
+schema_registry_total=8
 schema_canonical_registry="$schema_test_tmp/registry.canonical.json"
 "$schema_jq" -S -c . "$schema_registry" > "$schema_canonical_registry"
 if cmp -s "$schema_registry" "$schema_canonical_registry"; then
@@ -439,14 +472,28 @@ else
 fi
 if "$schema_jq" -e '
     all(.[]; (keys | sort) == ["generation_id","parent_plan_merge_commit","parent_spec_blob"] and
-      (.generation_id | test("^g-[0-9a-f]{64}$")) and
-      (.parent_spec_blob | test("^[0-9a-f]{40}$|^[0-9a-f]{64}$")) and
-      (.parent_plan_merge_commit | test("^[0-9a-f]{40}$|^[0-9a-f]{64}$"))) and
+      (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+      (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+      (.parent_plan_merge_commit | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"))) and
     (map(.generation_id) | length) == (map(.generation_id) | unique | length)
   ' "$schema_registry" >/dev/null; then
   schema_registry_passed=$((schema_registry_passed + 1))
 else
   fail_case "registry entry shape and uniqueness"
+fi
+if "$schema_jq" -e '
+    def entry_ok:
+      (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+      (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+      (.parent_plan_merge_commit | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"));
+    (.[0] | entry_ok) and
+    ((.[0] | .generation_id += "\n") | entry_ok | not) and
+    ((.[0] | .parent_spec_blob += "\n") | entry_ok | not) and
+    ((.[0] | .parent_plan_merge_commit += "\n") | entry_ok | not)
+  ' "$schema_registry" >/dev/null; then
+  schema_registry_passed=$((schema_registry_passed + 1))
+else
+  fail_case "registry absolute-anchor trailing-newline rejection"
 fi
 if "$schema_jq" -e --arg base "$schema_base" \
     '.metadata.construction_base == $base and .metadata.prior_registry_entries == 0' \
@@ -514,7 +561,7 @@ guard_paths_ok() {
   done < "$paths_file"
 }
 
-schema_guard_total=25
+schema_guard_total=35
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -535,7 +582,9 @@ if [ -d "$schema_module_dir" ] && [ ! -L "$schema_module_dir" ] &&
 else
   fail_case "private generation path must be real directories and regular files"
 fi
-if ! grep -Eq '^[[:space:]]*(import|include|module)[[:space:](]' "$schema_module"; then
+schema_module_directive_pattern='(?:^|[;\r\n])[[:space:]]*(?:import|include)[[:space:]]*("(?:[^"\\]|\\.)*")'
+if ! "$schema_jq" -Rse --arg pattern "$schema_module_directive_pattern" \
+    'test($pattern)' < "$schema_module" >/dev/null; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
   fail_case "schema module must remain import-free"
@@ -579,14 +628,16 @@ schema_live_hits="$schema_test_tmp/live-hits"
 schema_import_hits="$schema_test_tmp/import-hits"
 : > "$schema_live_hits"
 : > "$schema_import_hits"
-schema_import_pattern='(^|[^A-Za-z0-9_])(import|include)[[:space:]]*"schema"'
 while IFS= read -r -d '' schema_tracked_path; do
   if ! schema_scan_result="$(
     git -C "$schema_root" show ":$schema_tracked_path" 2>/dev/null |
       "$schema_jq" -Rsr \
         --arg generation "$schema_generation" \
-        --arg import_pattern "$schema_import_pattern" \
-        '[contains($generation),test($import_pattern)] | @tsv'
+        --arg module_pattern "$schema_module_directive_pattern" \
+        '[contains($generation),
+          ([scan($module_pattern)] |
+           any(.[]; ((.[0] | try fromjson catch "") == "schema")))] |
+         @tsv'
   )"; then
     fail_case "unable to scan tracked path: $schema_tracked_path"
     continue
@@ -631,8 +682,10 @@ schema_load_case() {
   local source_file="$schema_test_tmp/$case_id.jq"
   local actual=false
   printf '%s' "$source_text" > "$source_file"
-  if "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
-      'test($pattern)' < "$source_file" >/dev/null; then
+  if "$schema_jq" -Rse --arg pattern "$schema_module_directive_pattern" \
+      '[scan($pattern)] |
+       any(.[]; ((.[0] | try fromjson catch "") == "schema"))' \
+      < "$source_file" >/dev/null; then
     actual=true
   fi
   if [ "$actual" = "$expected" ]; then
@@ -647,12 +700,50 @@ schema_load_case import-compact true $'import"schema"as s;\n'
 schema_load_case import-arbitrary-alias true $'import "schema" as any_alias_42;\n'
 schema_load_case import-newlines true $'import\n  "schema"\n as\n another_alias;\n'
 schema_load_case import-metadata true $'import"schema"as s {search:"."};\n'
+schema_load_case import-escaped-module true $'import"sch\\u0065ma"as escaped;\n'
 schema_load_case include-spaced true $'include "schema";\n'
 schema_load_case include-compact true $'include"schema";\n'
 schema_load_case include-newlines true $'include\n  "schema"  ;\n'
 schema_load_case other-module false $'import "profile_graph" as schema;\n'
 schema_load_case longer-module false $'include "schema-extra";\n'
 schema_load_case keyword-substring false $'myimport"schema"as s;\n'
+
+schema_directive_case() {
+  local case_id="$1"
+  local expected="$2"
+  local source_text="$3"
+  local source_file="$schema_test_tmp/$case_id.jq"
+  local actual=false
+  printf '%s' "$source_text" > "$source_file"
+  if "$schema_jq" -Rse --arg pattern "$schema_module_directive_pattern" \
+      'test($pattern)' < "$source_file" >/dev/null; then
+    actual=true
+  fi
+  if [ "$actual" = "$expected" ]; then
+    schema_guard_passed=$((schema_guard_passed + 1))
+  else
+    fail_case "$case_id expected module-directive=$expected, got module-directive=$actual"
+  fi
+}
+
+schema_directive_case foreign-import-compact true \
+  $'import"profile_graph"as profile_graph;\n'
+schema_directive_case foreign-import-spaced true \
+  $'import "stage_request" as stage_request;\n'
+schema_directive_case foreign-import-multiline true \
+  $'import\n "result_facts"\n as result_facts;\n'
+schema_directive_case foreign-import-metadata true \
+  $'import"result_truth"as result_truth {search:"."};\n'
+schema_directive_case foreign-include-compact true \
+  $'include"profile_graph";\n'
+schema_directive_case foreign-include-multiline true \
+  $'include\n "stage_request";\n'
+schema_directive_case prose-import false \
+  $'This prose says import "profile_graph" as profile_graph.\n'
+schema_directive_case string-import false \
+  $'"import\\"profile_graph\\"as profile_graph;"\n'
+schema_directive_case comment-include false \
+  $'# include "profile_graph";\n'
 if guard_paths_ok "$schema_generation_files"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else

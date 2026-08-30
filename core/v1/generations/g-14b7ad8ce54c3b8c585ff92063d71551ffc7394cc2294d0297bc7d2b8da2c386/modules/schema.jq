@@ -140,7 +140,7 @@ def present_ok(value_ok):
    .state == "present" and
    (.value | value_ok));
 
-def id_ok: type == "string" and test("^[a-z0-9][a-z0-9._:-]{0,127}$");
+def id_ok: type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
 # Schema receives only values accepted by the raw canonical-byte gate; jq 1.6 preserves -0 here.
 def int_ok:
   type == "number" and
@@ -148,25 +148,27 @@ def int_ok:
   . >= 0 and
   . <= 2147483647 and
   tostring != "-0";
-def sha256_ok: type == "string" and test("^[0-9a-f]{64}$");
+def sha256_ok: type == "string" and test("\\A[0-9a-f]{64}\\z");
 def version_ok: id_ok;
 def short_text_ok: type == "string" and utf8bytelength >= 1 and utf8bytelength <= 1024;
 def media_type_ok:
   type == "string" and
   length <= 127 and
-  test("^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$");
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
 def patch_media_type_ok: . == "text/x-diff";
-def git_oid_ok: type == "string" and (test("^[0-9a-f]{40}$") or test("^[0-9a-f]{64}$"));
+def git_oid_ok:
+  type == "string" and
+  (test("\\A[0-9a-f]{40}\\z") or test("\\A[0-9a-f]{64}\\z"));
 def reverse_dns_ok:
   type == "string" and
   (split(".") as $labels |
    ($labels | length) >= 2 and
-   all($labels[]; test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")));
+   all($labels[]; test("\\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\z")));
 
 def time_ok:
   type == "string" and
-  test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") and
-  (capture("^(?<year>[0-9]{4})-(?<month>[0-9]{2})-(?<day>[0-9]{2})T(?<hour>[0-9]{2}):(?<minute>[0-9]{2}):(?<second>[0-9]{2})Z$") as $parts |
+  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
+  (capture("\\A(?<year>[0-9]{4})-(?<month>[0-9]{2})-(?<day>[0-9]{2})T(?<hour>[0-9]{2}):(?<minute>[0-9]{2}):(?<second>[0-9]{2})Z\\z") as $parts |
    ($parts.year | tonumber) as $year |
    ($parts.month | tonumber) as $month |
    ($parts.day | tonumber) as $day |
@@ -248,8 +250,8 @@ def git_revision_ref_ok:
   (.repository_id | id_ok) and
   (.hash_algorithm == "sha1" or .hash_algorithm == "sha256") and
   (if .hash_algorithm == "sha1"
-   then (.commit_id | type == "string" and test("^[0-9a-f]{40}$"))
-   else (.commit_id | type == "string" and test("^[0-9a-f]{64}$"))
+   then (.commit_id | type == "string" and test("\\A[0-9a-f]{40}\\z"))
+   else (.commit_id | type == "string" and test("\\A[0-9a-f]{64}\\z"))
    end);
 
 def git_location_ok:
@@ -264,8 +266,8 @@ def git_object_ref_ok:
   (.location | git_location_ok) and
   (.object_type == "blob" or .object_type == "tree") and
   (if .revision.hash_algorithm == "sha1"
-   then (.object_id | type == "string" and test("^[0-9a-f]{40}$"))
-   else (.object_id | type == "string" and test("^[0-9a-f]{64}$"))
+   then (.object_id | type == "string" and test("\\A[0-9a-f]{40}\\z"))
+   else (.object_id | type == "string" and test("\\A[0-9a-f]{64}\\z"))
    end) and
   (if .location.kind == "root" then .object_type == "tree" else true end) and
   (if .object_type == "tree"
