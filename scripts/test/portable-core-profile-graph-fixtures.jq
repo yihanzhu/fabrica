@@ -19,7 +19,7 @@ def metadata:
     command_to_rule_cells:8,
     forced_routes:8,
     error_layer_cases:5,
-    guard_cases:15
+    guard_cases:16
   };
 
 def sha($character): $character * 64;

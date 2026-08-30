@@ -10,11 +10,11 @@ profile_schema_merge="d48ecdb908a395c5205260a662db7d9d3f4c1eb4"
 profile_schema_oid="fd3924d414a7d620c2bf5de919a45c2599d572ec"
 profile_ingress_oid="e882b38b0106aac9142c667771f02e3107f8c52f"
 profile_registry_oid="5e113105777694a280166e71d31efd19752e9562"
+profile_schema_path="core/v1/generations/$profile_generation/modules/schema.jq"
+profile_ingress_path="core/v1/generations/$profile_generation/core-ingress.sh"
+profile_registry_path="core/v1/generation-registry.json"
 profile_module_dir="$profile_root/core/v1/generations/$profile_generation/modules"
 profile_module="$profile_module_dir/profile_graph.jq"
-profile_schema="$profile_module_dir/schema.jq"
-profile_ingress="$profile_root/core/v1/generations/$profile_generation/core-ingress.sh"
-profile_registry="$profile_root/core/v1/generation-registry.json"
 profile_fixture_dir="$profile_root/scripts/test"
 profile_ledger="$profile_fixture_dir/portable-core-profile-graph-ledger.tsv"
 profile_manifest="$profile_root/ci/required-files.txt"
@@ -816,10 +816,16 @@ for directive_case in compact-import multiline-import compact-include metadata-i
 done
 mark_rule portable-core-profile-graph.fixed-schema-import
 
+current_blob_ok() {
+  local repo="$1" path="$2" expected_oid="$3" mode type oid actual_path
+  IFS=$' \t' read -r mode type oid actual_path < <(git -C "$repo" ls-tree HEAD -- "$path") || return 1
+  [ "$mode" = 100644 ] && [ "$type" = blob ] &&
+    [ "$oid" = "$expected_oid" ] && [ "$actual_path" = "$path" ]
+}
+
 profile_guard_total=$((profile_guard_total + 1))
-if [ "$(git -C "$profile_root" hash-object "$profile_schema")" = "$profile_schema_oid" ] &&
-   git -C "$profile_root" merge-base --is-ancestor "$profile_schema_merge" HEAD &&
-   [ "$(git -C "$profile_root" hash-object "$profile_registry")" = "$profile_registry_oid" ]; then
+if current_blob_ok "$profile_root" "$profile_schema_path" "$profile_schema_oid" &&
+   current_blob_ok "$profile_root" "$profile_registry_path" "$profile_registry_oid"; then
   profile_guard_passed=$((profile_guard_passed + 1))
 else
   fail_case "schema G3 dependency pin"
@@ -827,8 +833,7 @@ fi
 mark_rule portable-core-profile-graph.schema-dependency-pin
 
 profile_guard_total=$((profile_guard_total + 1))
-if [ "$(git -C "$profile_root" hash-object "$profile_ingress")" = "$profile_ingress_oid" ] &&
-   git -C "$profile_root" merge-base --is-ancestor "$profile_base" HEAD; then
+if current_blob_ok "$profile_root" "$profile_ingress_path" "$profile_ingress_oid"; then
   profile_guard_passed=$((profile_guard_passed + 1))
 else
   fail_case "ingress serial predecessor receipt"
@@ -840,11 +845,34 @@ if [ "$("${profile_jq_command[@]}" -r '.construction_base' <<< "$fixture_metadat
    [ "$("${profile_jq_command[@]}" -r '.generation_id' <<< "$fixture_metadata")" = "$profile_generation" ] &&
    [ "$("${profile_jq_command[@]}" -r '.parent_spec_blob' <<< "$fixture_metadata")" = "$profile_parent_spec" ] &&
    [ "$("${profile_jq_command[@]}" -r '.schema_export_oid' <<< "$fixture_metadata")" = "$profile_schema_oid" ] &&
+   [ "$("${profile_jq_command[@]}" -r '.schema_g3_comment' <<< "$fixture_metadata")" -eq 5466181650 ] &&
+   [ "$("${profile_jq_command[@]}" -r '.schema_merge_commit' <<< "$fixture_metadata")" = "$profile_schema_merge" ] &&
    [ "$("${profile_jq_command[@]}" -r '.ingress_export_oid' <<< "$fixture_metadata")" = "$profile_ingress_oid" ] &&
+   [ "$("${profile_jq_command[@]}" -r '.ingress_g3_comment' <<< "$fixture_metadata")" -eq 5468279667 ] &&
    [ "$("${profile_jq_command[@]}" -r '.registry_oid' <<< "$fixture_metadata")" = "$profile_registry_oid" ]; then
   profile_guard_passed=$((profile_guard_passed + 1))
 else
   fail_case "fixture identity and predecessor record"
+fi
+
+shallow_repo="$profile_tmp/shallow-checkout"
+git -c init.defaultObjectFormat=sha1 init -q --object-format=sha1 --template= -b main "$shallow_repo"
+mkdir -p "$shallow_repo/$(dirname "$profile_schema_path")"
+cp "$profile_root/$profile_schema_path" "$shallow_repo/$profile_schema_path"
+cp "$profile_root/$profile_ingress_path" "$shallow_repo/$profile_ingress_path"
+cp "$profile_root/$profile_registry_path" "$shallow_repo/$profile_registry_path"
+GIT_ATTR_NOSYSTEM=1 git -C "$shallow_repo" -c core.attributesFile=/dev/null -c core.autocrlf=false add .
+git -C "$shallow_repo" -c core.hooksPath=/dev/null -c user.name=proof -c user.email=proof@example.invalid -c commit.gpgSign=false commit -qm tip
+printf '%s\n' "$(git -C "$shallow_repo" rev-parse HEAD)" > "$shallow_repo/.git/shallow"
+profile_guard_total=$((profile_guard_total + 1))
+if [ "$(git -C "$shallow_repo" rev-parse --is-shallow-repository)" = true ] &&
+   ! git -C "$shallow_repo" cat-file -e "$profile_schema_merge^{commit}" 2>/dev/null &&
+   current_blob_ok "$shallow_repo" "$profile_schema_path" "$profile_schema_oid" &&
+   current_blob_ok "$shallow_repo" "$profile_ingress_path" "$profile_ingress_oid" &&
+   current_blob_ok "$shallow_repo" "$profile_registry_path" "$profile_registry_oid"; then
+  profile_guard_passed=$((profile_guard_passed + 1))
+else
+  fail_case "history-absent dependency proof"
 fi
 
 generation_files="$profile_tmp/generation-files"
