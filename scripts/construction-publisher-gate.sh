@@ -404,7 +404,17 @@ cpg_validate_changed_paths() {
 cpg_validate_manifest() {
   local manifest="$1"
   local mode="$2"
+  local base_manifest="$3"
   local entry
+  awk '
+    /^[[:space:]]*$/ || /^[[:space:]]*#/ { next }
+    seen[$0]++ { exit 1 }
+  ' "$manifest" || cpg_die 'candidate restore manifest contains a duplicate active entry'
+  while IFS= read -r entry || [ -n "$entry" ]; do
+    case "$entry" in ''|'#'*) continue ;; esac
+    [ "$(grep -Fxc -- "$entry" "$manifest" || true)" -eq 1 ] ||
+      cpg_die 'candidate removed or duplicated an entry from the reviewed-base manifest'
+  done < "$base_manifest"
   while IFS= read -r entry; do
     [ "$(grep -Fxc -- "$entry" "$manifest" || true)" -eq 1 ] ||
       cpg_die 'candidate removed or duplicated a required restore-manifest entry'
@@ -540,9 +550,11 @@ cpg_preflight() {
     "$CPG_TMP/files.json" "$request_json" "$CPG_TMP/mode.json" \
     "$CPG_TMP/changed-paths.json" "$CPG_TMP/allowed-paths.json"
 
+  cpg_get "repos/$repository/contents/ci/required-files.txt?ref=$base" "$CPG_TMP/base-manifest-response.json"
+  cpg_decode_content "$CPG_TMP/base-manifest-response.json" "$CPG_TMP/base-manifest.txt"
   cpg_get "repos/$repository/contents/ci/required-files.txt?ref=$head" "$CPG_TMP/manifest-response.json"
   cpg_decode_content "$CPG_TMP/manifest-response.json" "$CPG_TMP/manifest.txt"
-  cpg_validate_manifest "$CPG_TMP/manifest.txt" "$CPG_TMP/mode.json"
+  cpg_validate_manifest "$CPG_TMP/manifest.txt" "$CPG_TMP/mode.json" "$CPG_TMP/base-manifest.txt"
 
   cpg_get "repos/$repository/compare/$base...$head" "$CPG_TMP/compare.json"
   cpg_validate_ancestry "$CPG_TMP/compare.json" "$base"

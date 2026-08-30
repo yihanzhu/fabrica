@@ -260,11 +260,17 @@ case "$endpoint" in
     esac
     ;;
   'repos/yihanzhu/ystack/contents/ci/required-files.txt?ref='*)
-    manifest="$CPG_TEST_FIXTURES/manifest.txt"
-    case "$scenario" in
-      manifest-entry-missing) manifest="$CPG_TEST_FIXTURES/manifest-missing.txt" ;;
-      publisher-manifest-missing) manifest="$CPG_TEST_FIXTURES/manifest-publisher-missing.txt" ;;
-    esac
+    if [ "$endpoint" = "repos/yihanzhu/ystack/contents/ci/required-files.txt?ref=$CPG_TEST_BASE" ]; then
+      manifest="$CPG_TEST_FIXTURES/manifest-base.txt"
+    else
+      manifest="$CPG_TEST_FIXTURES/manifest.txt"
+      case "$scenario" in
+        manifest-entry-missing) manifest="$CPG_TEST_FIXTURES/manifest-missing.txt" ;;
+        manifest-later-entry-missing) manifest="$CPG_TEST_FIXTURES/manifest-later-missing.txt" ;;
+        manifest-entry-duplicate) manifest="$CPG_TEST_FIXTURES/manifest-duplicate.txt" ;;
+        publisher-manifest-missing) manifest="$CPG_TEST_FIXTURES/manifest-publisher-missing.txt" ;;
+      esac
+    fi
     jq -Rs -c --arg sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
       '{type:"file",encoding:"base64",sha:$sha,content:(@base64)}' "$manifest"
     ;;
@@ -330,7 +336,12 @@ chmod +x "$fake_bin/gh"
 
 cp "$test_root/config/construction-mode.json" "$fixtures/mode.json"
 cp "$test_root/ci/required-files.txt" "$fixtures/manifest.txt"
+cp "$fixtures/manifest.txt" "$fixtures/manifest-base.txt"
 grep -Fvx 'AGENTS.md' "$fixtures/manifest.txt" > "$fixtures/manifest-missing.txt"
+grep -Fvx 'scripts/test/portable-core-ingress.test.sh' "$fixtures/manifest.txt" \
+  > "$fixtures/manifest-later-missing.txt"
+cp "$fixtures/manifest.txt" "$fixtures/manifest-duplicate.txt"
+printf '%s\n' 'scripts/test/portable-core-ingress.test.sh' >> "$fixtures/manifest-duplicate.txt"
 grep -Fvx 'scripts/construction-publisher-gate.sh' "$fixtures/manifest.txt" \
   > "$fixtures/manifest-publisher-missing.txt"
 
@@ -475,6 +486,7 @@ export CPG_TEST_LOG="$log"
 export CPG_TEST_PR="$pr"
 export CPG_TEST_HEAD="$head"
 export CPG_TEST_MERGE="$merge"
+export CPG_TEST_BASE="$base"
 export CPG_TEST_GATE_BLOB="$gate_blob"
 export CPG_TEST_TEST_BLOB="$test_blob"
 export GH_TOKEN='SECRET_CANARY_MUST_NOT_LEAK'
@@ -617,6 +629,10 @@ expect_preflight_failure forbidden-path 'preflight rejects a forbidden path on a
 expect_preflight_failure publisher-path 'preflight rejects changes to its installed gate' \
   "$fixtures/request-publisher.json"
 expect_preflight_failure manifest-entry-missing 'preflight rejects a removed required manifest entry'
+expect_preflight_failure manifest-later-entry-missing \
+  'preflight preserves every restore entry added after mode activation'
+expect_preflight_failure manifest-entry-duplicate \
+  'preflight rejects a duplicate active restore-manifest entry'
 expect_preflight_failure publisher-manifest-missing 'preflight preserves its own restore-manifest entry'
 expect_preflight_failure bad-ancestry 'preflight rejects a head that is behind its reviewed base'
 expect_preflight_failure ci-wrong-app 'preflight rejects a successful check from the wrong app'
