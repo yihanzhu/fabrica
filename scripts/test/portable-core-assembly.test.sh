@@ -270,6 +270,60 @@ proof portable-core-assembly.test.fixed-imports \
 proof no-forbidden-loader-form \
   sh -c '! grep -E "(^|[^[:alnum:]_])(include|import[[:space:]].*search|fromjson|input_filename)([^[:alnum:]_]|$)" "$1" >/dev/null' sh "$assembly_program"
 
+activation_pair_ok() {
+  local root_program="$1"
+  local wrapper="$2"
+  local root_exists=false
+  local wrapper_exists=false
+  { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
+  { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
+  if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
+    return 0
+  fi
+  [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
+    [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
+    [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
+    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$assembly_generation'" "$wrapper")" -eq 1 ]
+}
+
+activation_pair_rejected() {
+  ! activation_pair_ok "$1" "$2"
+}
+
+pair_dir="$assembly_tmp/activation-pair"
+pair_root="$pair_dir/contracts.jq"
+pair_wrapper="$pair_dir/core-contract.sh"
+mkdir -p "$pair_dir"
+proof activation-pre-switch activation_pair_ok "$pair_root" "$pair_wrapper"
+cp "$assembly_program" "$pair_root"
+cp "$assembly_wrapper" "$pair_wrapper"
+chmod 0755 "$pair_wrapper"
+proof activation-post-switch activation_pair_ok "$pair_root" "$pair_wrapper"
+rm "$pair_wrapper"
+proof activation-root-only activation_pair_rejected "$pair_root" "$pair_wrapper"
+rm "$pair_root"
+cp "$assembly_wrapper" "$pair_wrapper"
+chmod 0755 "$pair_wrapper"
+proof activation-wrapper-only activation_pair_rejected "$pair_root" "$pair_wrapper"
+rm "$pair_wrapper"
+ln -s "$assembly_program" "$pair_root"
+cp "$assembly_wrapper" "$pair_wrapper"
+chmod 0755 "$pair_wrapper"
+proof activation-root-symlink activation_pair_rejected "$pair_root" "$pair_wrapper"
+rm "$pair_root" "$pair_wrapper"
+cp "$assembly_program" "$pair_root"
+ln -s "$assembly_wrapper" "$pair_wrapper"
+proof activation-wrapper-symlink activation_pair_rejected "$pair_root" "$pair_wrapper"
+rm "$pair_wrapper"
+sed "s/$assembly_generation/g-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/" \
+  "$assembly_wrapper" > "$pair_wrapper"
+chmod 0755 "$pair_wrapper"
+proof activation-wrong-generation activation_pair_rejected "$pair_root" "$pair_wrapper"
+proof no-live-caller \
+  sh -c '! git -C "$1" grep -q -E "$2" -- manager reviewer routines templates config scripts/install.sh scripts/setup-target-repo.sh scripts/doctor.sh' \
+  sh "$assembly_root" "scripts/core-contract\\.sh|$assembly_generation"
+
 metadata="$(fixture_value 'fixture::metadata')"
 expected_oids=(
   fd3924d414a7d620c2bf5de919a45c2599d572ec

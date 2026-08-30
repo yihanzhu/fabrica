@@ -544,6 +544,7 @@ mark_rule portable-core-schema.generation-registry-prefix
 private_generation_path_ok() {
   case "$1" in
     "core/v1/generations/$schema_generation/core-ingress.sh"|\
+    "core/v1/generations/$schema_generation/contracts.jq"|\
     "core/v1/generations/$schema_generation/modules/schema.jq"|\
     "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
     "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
@@ -561,6 +562,23 @@ guard_paths_ok() {
   done < "$paths_file"
 }
 
+schema_activation_state_ok() {
+  local root_program="$1"
+  local wrapper="$2"
+  local root_exists=false
+  local wrapper_exists=false
+  { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
+  { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
+  if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
+    return 0
+  fi
+  [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
+    [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
+    [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
+    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$schema_generation'" "$wrapper")" -eq 1 ]
+}
+
 schema_guard_total=35
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
@@ -568,8 +586,9 @@ find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
 if guard_paths_ok "$schema_generation_files" &&
    grep -Fqx "core/v1/generations/$schema_generation/modules/schema.jq" \
      "$schema_generation_files" &&
-   [ ! -e "$schema_root/scripts/core-contract.sh" ] &&
-   [ ! -e "$schema_root/core/v1/generations/$schema_generation/contracts.jq" ] &&
+   schema_activation_state_ok \
+     "$schema_root/core/v1/generations/$schema_generation/contracts.jq" \
+     "$schema_root/scripts/core-contract.sh" &&
    [ -z "$(find "$schema_root/core/v1/generations/$schema_generation" -type l -print -quit)" ]; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
@@ -614,7 +633,7 @@ tracked_activation_paths_ok() {
   local test_path
   while IFS= read -r activation_path; do
     case "$activation_path" in
-      ci/required-files.txt|core/v1/generation-registry.json) ;;
+      ci/required-files.txt|core/v1/generation-registry.json|scripts/core-contract.sh) ;;
       scripts/test/portable-core-*)
         test_path="${activation_path#scripts/test/}"
         case "$test_path" in */*) return 1 ;; esac
@@ -763,12 +782,12 @@ else
   fail_case "private guard rejected accepted growing private members"
 fi
 cp "$schema_generation_files" "$schema_test_tmp/invalid-generation-files"
-printf '%s\n' "core/v1/generations/$schema_generation/contracts.jq" >> \
+printf '%s\n' "core/v1/generations/$schema_generation/unknown-root.jq" >> \
   "$schema_test_tmp/invalid-generation-files"
 if ! guard_paths_ok "$schema_test_tmp/invalid-generation-files"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "private guard accepted a synthetic public root"
+  fail_case "private guard accepted a synthetic unknown root"
 fi
 cp "$schema_generation_files" "$schema_test_tmp/unknown-generation-files"
 printf '%s\n' "core/v1/generations/$schema_generation/modules/unknown.jq" >> \

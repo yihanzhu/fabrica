@@ -1139,6 +1139,7 @@ find "$ingress_repo/core/v1/generations/$ingress_generation" -type f -print |
 ingress_private_generation_path_ok() {
   case "$1" in
     "core/v1/generations/$ingress_generation/core-ingress.sh"|\
+    "core/v1/generations/$ingress_generation/contracts.jq"|\
     "core/v1/generations/$ingress_generation/modules/schema.jq"|\
     "core/v1/generations/$ingress_generation/modules/profile_graph.jq"|\
     "core/v1/generations/$ingress_generation/modules/stage_request.jq"|\
@@ -1156,11 +1157,29 @@ ingress_guard_paths_ok() {
   done < "$paths_file"
 }
 
+ingress_activation_state_ok() {
+  local root_program="$1"
+  local wrapper="$2"
+  local root_exists=false
+  local wrapper_exists=false
+  { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
+  { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
+  if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
+    return 0
+  fi
+  [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
+    [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
+    [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
+    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$ingress_generation'" "$wrapper")" -eq 1 ]
+}
+
 if ingress_guard_paths_ok "$guard_paths" &&
    grep -Fqx "core/v1/generations/$ingress_generation/core-ingress.sh" "$guard_paths" &&
    grep -Fqx "core/v1/generations/$ingress_generation/modules/schema.jq" "$guard_paths" &&
-   [ ! -e "$ingress_repo/scripts/core-contract.sh" ] &&
-   [ ! -e "$ingress_repo/core/v1/generations/$ingress_generation/contracts.jq" ] &&
+   ingress_activation_state_ok \
+     "$ingress_repo/core/v1/generations/$ingress_generation/contracts.jq" \
+     "$ingress_repo/scripts/core-contract.sh" &&
    [ -z "$(find "$ingress_repo/core/v1/generations/$ingress_generation" -type l -print -quit)" ]; then
   ingress_guard_total=$((ingress_guard_total + 1))
   ingress_guard_passed=$((ingress_guard_passed + 1))
