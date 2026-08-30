@@ -142,6 +142,20 @@ emit() {
   jq -c "$filter" "$CPG_TEST_FIXTURES/$file"
 }
 
+emit_content() {
+  local sha="$1"
+  local file="$2"
+  local content_filter='@base64'
+  if [ "$scenario" = wrapped-content ]; then
+    content_filter='@base64 | . as $content |
+      [range(0; $content | length; 60) as $offset |
+       $content[$offset:$offset + 60]] | join("\n")'
+  fi
+  jq -Rs -c --arg sha "$sha" \
+    "{type:\"file\",encoding:\"base64\",sha:\$sha,content:($content_filter)}" \
+    "$CPG_TEST_FIXTURES/$file"
+}
+
 case "$endpoint" in
   user)
     if [ "$scenario" = wrong-user ]; then
@@ -162,14 +176,13 @@ case "$endpoint" in
       jq -c '.status="inactive"' "$CPG_TEST_FIXTURES/mode.json" |
         jq -Rs -c --arg sha 4f35b0ec232e584973071a8d2e90ee5971af6e79 \
           '{type:"file",encoding:"base64",sha:$sha,content:(@base64)}'
+    elif [ "$scenario" = invalid-base64 ]; then
+      jq -n -c --arg sha 4f35b0ec232e584973071a8d2e90ee5971af6e79 \
+        '{type:"file",encoding:"base64",sha:$sha,content:"!!!!"}'
     elif [ "$scenario" = wrong-mode-blob ]; then
-      jq -Rs -c --arg sha 0000000000000000000000000000000000000000 \
-        '{type:"file",encoding:"base64",sha:$sha,content:(@base64)}' \
-        "$CPG_TEST_FIXTURES/mode.json"
+      emit_content 0000000000000000000000000000000000000000 mode.json
     else
-      jq -Rs -c --arg sha 4f35b0ec232e584973071a8d2e90ee5971af6e79 \
-        '{type:"file",encoding:"base64",sha:$sha,content:(@base64)}' \
-        "$CPG_TEST_FIXTURES/mode.json"
+      emit_content 4f35b0ec232e584973071a8d2e90ee5971af6e79 mode.json
     fi
     ;;
   'repos/yihanzhu/ystack/contents/scripts/construction-publisher-gate.sh?ref='*)
@@ -271,8 +284,8 @@ case "$endpoint" in
         publisher-manifest-missing) manifest="$CPG_TEST_FIXTURES/manifest-publisher-missing.txt" ;;
       esac
     fi
-    jq -Rs -c --arg sha bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-      '{type:"file",encoding:"base64",sha:$sha,content:(@base64)}' "$manifest"
+    emit_content bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+      "${manifest#"$CPG_TEST_FIXTURES/"}"
     ;;
   'repos/yihanzhu/ystack/compare/'*)
     if [ "$scenario" = bad-ancestry ]; then
@@ -614,6 +627,14 @@ if run_preflight success && cmp -s "$test_tmp/preflight.first" "$test_tmp/prefli
 else
   fail 'preflight is deterministic for one exact GitHub snapshot'
 fi
+
+if run_preflight wrapped-content; then
+  pass 'preflight accepts line-wrapped GitHub content'
+else
+  fail 'preflight accepts line-wrapped GitHub content'
+fi
+assert_no_write 'line-wrapped GitHub content performs no GitHub write'
+expect_preflight_failure invalid-base64 'preflight rejects invalid base64 content'
 
 cp "$gate" "$test_tmp/gate.backup"
 printf '\n' >> "$gate"

@@ -151,7 +151,7 @@ cpg_decode_content() {
   jq -e '.type == "file" and .encoding == "base64" and
          (.sha | type == "string") and (.content | type == "string")' \
     "$response" >/dev/null 2>&1 || cpg_die 'GitHub content response is malformed'
-  jq -j '.content | @base64d' "$response" > "$output" ||
+  jq -j '.content | gsub("[\\t\\n\\r ]"; "") | @base64d' "$response" > "$output" ||
     cpg_die 'GitHub content is not valid base64'
 }
 
