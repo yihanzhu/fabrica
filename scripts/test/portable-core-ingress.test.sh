@@ -9,6 +9,7 @@ ingress_schema="$ingress_repo/core/v1/generations/$ingress_generation/modules/sc
 ingress_fixture="$ingress_repo/scripts/test/portable-core-ingress-fixtures.json"
 ingress_ledger="$ingress_repo/scripts/test/portable-core-ingress-ledger.tsv"
 ingress_manifest="$ingress_repo/ci/required-files.txt"
+ingress_registry="$ingress_repo/core/v1/generation-registry.json"
 ingress_host_path="$PATH"
 ingress_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ystack-portable-ingress-test.XXXXXX")"
 ingress_download=''
@@ -1162,16 +1163,61 @@ else
   ingress_direct_total=$((ingress_direct_total + 1))
   fail_case 'private generation guard rejected a planned module'
 fi
+
+ingress_registry_ok() {
+  local candidate_registry="$1"
+  local canonical_registry="$ingress_tmp/registry-check.canonical"
+  "$ingress_jq" -s -S -c \
+    'if length == 1 then .[0] else error("root-count") end' \
+    "$candidate_registry" > "$canonical_registry" 2>/dev/null &&
+    cmp -s "$candidate_registry" "$canonical_registry" &&
+    "$ingress_jq" -e \
+      --arg generation "$ingress_generation" \
+      --arg spec c6511d96c1a5e6aed27ba2075b5add65c121f782 \
+      --arg authorization 38a26f5f046897c0455fef24874c5dbb40c20926 '
+      length >= 1 and
+      .[0] == {generation_id:$generation,
+        parent_spec_blob:$spec,
+        parent_plan_merge_commit:$authorization} and
+      all(.[];
+        (keys | sort) ==
+          ["generation_id","parent_plan_merge_commit","parent_spec_blob"] and
+        (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+        (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+        (.parent_plan_merge_commit |
+          test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"))) and
+      (map(.generation_id) | length) ==
+        (map(.generation_id) | unique | length)
+    ' "$candidate_registry" >/dev/null
+}
+
 if [ "$(git -C "$ingress_repo" ls-tree HEAD \
        "core/v1/generations/$ingress_generation/modules/schema.jq" | awk '{print $3}')" = \
        fd3924d414a7d620c2bf5de919a45c2599d572ec ] &&
-   [ "$(git -C "$ingress_repo" ls-tree HEAD core/v1/generation-registry.json | awk '{print $3}')" = \
-       5e113105777694a280166e71d31efd19752e9562 ]; then
+   ingress_registry_ok "$ingress_registry"; then
   ingress_guard_total=$((ingress_guard_total + 1))
   ingress_guard_passed=$((ingress_guard_passed + 1))
 else
   ingress_guard_total=$((ingress_guard_total + 1))
-  fail_case 'schema G3 export or registry OID moved'
+  fail_case 'schema G3 export or registry prefix moved'
+fi
+future_registry="$ingress_tmp/future-generation-registry.json"
+reordered_registry="$ingress_tmp/reordered-generation-registry.json"
+multi_root_registry="$ingress_tmp/multi-root-generation-registry.json"
+"$ingress_jq" -S -c '. + [{
+    generation_id:("g-" + ("f" * 64)),
+    parent_plan_merge_commit:("e" * 40),
+    parent_spec_blob:("d" * 40)}]' "$ingress_registry" > "$future_registry"
+"$ingress_jq" -S -c 'reverse' "$future_registry" > "$reordered_registry"
+"$ingress_jq" -c '.,.' "$ingress_registry" > "$multi_root_registry"
+if ingress_registry_ok "$future_registry" &&
+   ! ingress_registry_ok "$reordered_registry" &&
+   ! ingress_registry_ok "$multi_root_registry"; then
+  ingress_direct_total=$((ingress_direct_total + 1))
+  ingress_direct_passed=$((ingress_direct_passed + 1))
+else
+  ingress_direct_total=$((ingress_direct_total + 1))
+  fail_case 'registry ordered-prefix growth proof'
 fi
 mark_rule portable-core-ingress.private-activation-guard
 
