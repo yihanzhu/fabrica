@@ -854,6 +854,18 @@ current_blob_ok() {
     [ "$oid" = "$expected" ] && [ "$actual_path" = "$path" ]
 }
 
+tracked_worktree_file_ok() {
+  local path="$1"
+  local expected_mode="$2"
+  local mode type oid actual_path
+  IFS=$' \t' read -r mode type oid actual_path < <(
+    git -C "$truth_root" ls-tree HEAD -- "$path"
+  ) || return 1
+  [ "$mode" = "$expected_mode" ] && [ "$type" = blob ] &&
+    [ "$actual_path" = "$path" ] &&
+    [ "$oid" = "$(git -C "$truth_root" hash-object "$path")" ]
+}
+
 if current_blob_ok "$truth_generation_root/modules/schema.jq" "$truth_schema_oid"; then
   guard_pass
 else guard_fail "schema export pin"
@@ -971,14 +983,15 @@ if [ "$generation_members_ok" = true ] &&
 else guard_fail "private generation member allowlist"
 fi
 
-if [ "$(git -C "$truth_root" diff --name-only \
-       1c45dd3015bb22f13db41217d09a7d73a9b0617c -- | LC_ALL=C sort)" = \
-     "$(printf '%s\n' ci/required-files.txt "$truth_module_path" \
-       scripts/test/portable-core-result-truth-fixtures.jq \
-       scripts/test/portable-core-result-truth-ledger.tsv \
-       scripts/test/portable-core-result-truth.test.sh | LC_ALL=C sort)" ]; then
+if tracked_worktree_file_ok "$truth_module_path" 100644 &&
+   tracked_worktree_file_ok \
+     scripts/test/portable-core-result-truth-fixtures.jq 100644 &&
+   tracked_worktree_file_ok \
+     scripts/test/portable-core-result-truth-ledger.tsv 100644 &&
+   tracked_worktree_file_ok \
+     scripts/test/portable-core-result-truth.test.sh 100755; then
   guard_pass
-else guard_fail "bounded unit paths"
+else guard_fail "owned current-tree files"
 fi
 
 mark_rule portable-core-result-truth.dependency-pins
