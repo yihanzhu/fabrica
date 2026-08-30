@@ -95,6 +95,7 @@ fixture_init_repo "$fixture_assets" sha256
 /usr/bin/printf '%s\n' 'Bounded fixture skill.' > "$fixture_assets/skills/producer.md"
 /usr/bin/printf '%s\n' tool-package > "$fixture_assets/tools/producer.bin"
 /usr/bin/printf '%s\n' '{"tool":true}' > "$fixture_assets/tools/producer.json"
+/bin/dd if=/dev/zero of="$fixture_assets/packages/producer-large.bin" bs=1048576 count=17 2>/dev/null
 fixture_assets_commit=$(fixture_commit "$fixture_assets")
 fixture_producer_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/producer.bin)
 fixture_publisher_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/publisher.bin)
@@ -106,6 +107,7 @@ fixture_reviewer_prompt=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "
 fixture_producer_skill=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" skills/producer.md)
 fixture_tool_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" tools/producer.bin)
 fixture_tool_config=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" tools/producer.json)
+fixture_large_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/producer-large.bin)
 
 fixture_config_scope=$(fixture_scope config-contract producer-config c)
 fixture_tool=$("$fixture_jq" -S -c -n --argjson package "$fixture_tool_package" --argjson config "$fixture_tool_config" \
@@ -154,6 +156,10 @@ for fixture_role in producer publisher reviewer verifier; do
     fixture_canonical "$fixture_manifests/manifests/$fixture_role.json"
   /bin/bash "$fixture_core" validate-document "$fixture_manifests/manifests/$fixture_role.json"
 done
+"$fixture_jq" -S -c --argjson package "$fixture_large_package" \
+  '.id = "manifest.producer-large" | .body.package_ref = $package' \
+  "$fixture_manifests/manifests/producer.json" > "$fixture_manifests/manifests/producer-large.json"
+/bin/bash "$fixture_core" validate-document "$fixture_manifests/manifests/producer-large.json"
 fixture_manifests_commit=$(fixture_commit "$fixture_manifests")
 
 fixture_manifest_refs='{}'
@@ -167,6 +173,13 @@ for fixture_role in producer publisher reviewer verifier; do
     '. + {($role):{schema_version:1,kind:"adapter_manifest",id:("manifest."+$role),sha256:$digest}}' <<< "$fixture_manifest_refs")
   fixture_manifest_locators=$("$fixture_jq" -S -c --argjson locator "$fixture_manifest_locator" '. + [$locator]' <<< "$fixture_manifest_locators")
 done
+fixture_large_manifest_file="$fixture_manifests/manifests/producer-large.json"
+fixture_large_manifest_digest=$(fixture_digest "$fixture_large_manifest_file")
+fixture_large_manifest_source=$(fixture_git_ref repo.manifests "$fixture_manifests" sha1 \
+  "$fixture_manifests_commit" manifests/producer-large.json)
+fixture_large_manifest_locator=$(fixture_locator "$fixture_large_manifest_source")
+fixture_large_manifest_ref=$("$fixture_jq" -S -c -n --arg digest "$fixture_large_manifest_digest" \
+  '{schema_version:1,kind:"adapter_manifest",id:"manifest.producer-large",sha256:$digest}')
 
 fixture_init_repo "$fixture_profile" sha1
 /bin/mkdir -p "$fixture_profile/profiles"
@@ -227,15 +240,37 @@ done
   > "$fixture_profile/profiles/default.json"
 /bin/bash "$fixture_core" validate-document "$fixture_profile/profiles/default.json"
 /bin/cp "$fixture_profile/profiles/default.json" "$fixture_profile/default.json"
+fixture_quoted_profile='profiles/"quoted".json'
+fixture_newline_profile=$'profiles/new\nline.json'
+/bin/cp "$fixture_profile/profiles/default.json" "$fixture_profile/$fixture_quoted_profile"
+/bin/cp "$fixture_profile/profiles/default.json" "$fixture_profile/$fixture_newline_profile"
+fixture_large_bindings=$("$fixture_jq" -S -c --argjson package "$fixture_large_package" \
+  --argjson manifest "$fixture_large_manifest_ref" \
+  'map(if .role == "producer" then .package_ref = $package | .manifest_ref = $manifest else . end)' \
+  <<< "$fixture_bindings")
+"$fixture_jq" -S -c -n --argjson bindings "$fixture_large_bindings" \
+  '{schema_version:1,kind:"profile",id:"profile.large",body:{profile_version:"v1",bindings:$bindings}}' \
+  > "$fixture_profile/profiles/large.json"
+/bin/bash "$fixture_core" validate-document "$fixture_profile/profiles/large.json"
 fixture_profile_commit=$(fixture_commit "$fixture_profile")
 fixture_profile_source=$(fixture_git_ref repo.profile "$fixture_profile" sha1 "$fixture_profile_commit" profiles/default.json)
 fixture_profile_locator=$(fixture_locator "$fixture_profile_source")
+fixture_large_profile_source=$(fixture_git_ref repo.profile "$fixture_profile" sha1 \
+  "$fixture_profile_commit" profiles/large.json)
+fixture_large_profile_locator=$(fixture_locator "$fixture_large_profile_source")
 fixture_selection=$(fixture_scope selection selection 8)
 fixture_context=$(fixture_scope repository-context repository-context 9)
 "$fixture_jq" -S -c -n --argjson profile "$fixture_profile_locator" --argjson manifests "$fixture_manifest_locators" \
   --argjson selection "$fixture_selection" --argjson context "$fixture_context" \
   '{version:1,profile_source:$profile,manifest_sources:$manifests,
     selection_ref:$selection,repository_context_ref:$context}' > "$fixture_root/request.json"
+fixture_large_manifest_locators=$("$fixture_jq" -S -c --argjson large "$fixture_large_manifest_locator" \
+  'map(if .path == "manifests/producer.json" then $large else . end)' <<< "$fixture_manifest_locators")
+"$fixture_jq" -S -c -n --argjson profile "$fixture_large_profile_locator" \
+  --argjson manifests "$fixture_large_manifest_locators" --argjson selection "$fixture_selection" \
+  --argjson context "$fixture_context" \
+  '{version:1,profile_source:$profile,manifest_sources:$manifests,
+    selection_ref:$selection,repository_context_ref:$context}' > "$fixture_root/request-value-limit.json"
 "$fixture_jq" -S -c -n --arg assets "$fixture_assets" --arg manifests "$fixture_manifests" --arg profile "$fixture_profile" \
   '{version:1,repositories:[
     {repository_id:"repo.assets",root:$assets},

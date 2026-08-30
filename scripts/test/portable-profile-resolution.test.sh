@@ -184,6 +184,12 @@ resolver_linked_map="$resolver_tmp/map.linked.json"
 resolver_one_segment_request="$resolver_tmp/request.one-segment.json"
 "$resolver_bound_jq" -S -c '.profile_source.path = "default.json"' \
   "$resolver_fixture/request.json" > "$resolver_one_segment_request"
+resolver_quoted_request="$resolver_tmp/request.quoted.json"
+resolver_newline_request="$resolver_tmp/request.newline.json"
+"$resolver_bound_jq" -S -c --arg path 'profiles/"quoted".json' \
+  '.profile_source.path = $path' "$resolver_fixture/request.json" > "$resolver_quoted_request"
+"$resolver_bound_jq" -S -c --arg path $'profiles/new\nline.json' \
+  '.profile_source.path = $path' "$resolver_fixture/request.json" > "$resolver_newline_request"
 
 resolver_mapped_roots=(
   "$resolver_fixture/assets" "$resolver_fixture/manifests" "$resolver_fixture/profile"
@@ -290,6 +296,48 @@ expect_missing_dependency() {
   pass_case 'missing required dependency is sanitized'
 }
 
+expect_internal_budget_failure() {
+  resolver_name=$1
+  resolver_budget_id=$2
+  resolver_budget_gitdir=$3
+  resolver_budget_algorithm=$4
+  resolver_budget_oid=$5
+  resolver_budget_value=$6
+  resolver_budget_global=$7
+  resolver_budget_reason=$8
+  resolver_budget_scratch="$resolver_tmp/budget.$resolver_total"
+  resolver_budget_result="$resolver_tmp/budget.$resolver_total.result"
+  resolver_budget_error="$resolver_tmp/budget.$resolver_total.error"
+  /bin/mkdir -m 700 "$resolver_budget_scratch" "$resolver_budget_scratch/object-cache"
+  (
+    set +e
+    # shellcheck source=/dev/null
+    source "$resolver_root/scripts/lib/profile-resolution.sh"
+    exec 3> "$resolver_budget_error"
+    # shellcheck disable=SC2034
+    profile_resolution_scratch=$resolver_budget_scratch
+    profile_resolution_snapshots="$resolver_budget_scratch/snapshots.tsv"
+    /usr/bin/printf '%s\t%s\tidentity\t%s\n' "$resolver_budget_id" \
+      "$resolver_budget_gitdir" "$resolver_budget_algorithm" > "$profile_resolution_snapshots"
+    # shellcheck disable=SC2034
+    profile_resolution_value_remaining=$resolver_budget_value
+    # shellcheck disable=SC2034
+    profile_resolution_global_remaining=$resolver_budget_global
+    profile_resolution_limit_reason=''
+    profile_resolution_verify_object_payload "$resolver_budget_id" "$resolver_budget_algorithm" \
+      "$resolver_budget_oid" blob "$resolver_budget_scratch/value"
+    resolver_budget_status=$?
+    /usr/bin/printf '%s\t%s\n' "$resolver_budget_status" "$profile_resolution_limit_reason"
+    profile_resolution_report_object_failure "$resolver_budget_status" >/dev/null
+  ) > "$resolver_budget_result" || :
+  resolver_budget_expected=$(/usr/bin/printf '50\t%s' "$resolver_budget_reason")
+  [ "$(/usr/bin/sed -n '1p' "$resolver_budget_result")" = "$resolver_budget_expected" ] ||
+    fail_case "$resolver_name internal status"
+  [ "$(/usr/bin/sed -n '1p' "$resolver_budget_error")" = "E_LIMIT $resolver_budget_reason" ] ||
+    fail_case "$resolver_name public token"
+  pass_case "$resolver_name"
+}
+
 resolver_ambient_bin="$resolver_tmp/ambient-bin"
 resolver_ambient_request="$resolver_tmp/ambient-awk-request.json"
 /bin/mkdir -m 700 "$resolver_ambient_bin"
@@ -302,6 +350,18 @@ expect_missing_dependency
 expect_launcher_failure 'launcher sanitizes silent child failure' silent 'E_RUNTIME unexpected'
 expect_launcher_failure 'launcher converts file limit to a token' file 'E_LIMIT resource-limit'
 expect_launcher_failure 'launcher bounds its process group' process 'E_LIMIT process-limit'
+
+resolver_large_package_oid=$("$resolver_bound_jq" -r \
+  '.body.bindings[] | select(.role == "producer") | .package_ref.object_id' \
+  "$resolver_fixture/profile/profiles/large.json")
+resolver_small_profile_oid=$("$resolver_bound_jq" -r '.profile_source.object_id' \
+  "$resolver_fixture/request.json")
+expect_internal_budget_failure 'per-value budget keeps E_LIMIT' repo.assets \
+  "$resolver_fixture/assets/.git" sha256 "$resolver_large_package_oid" 67108864 536870912 value-size
+expect_internal_budget_failure 'aggregate value budget keeps E_LIMIT' repo.profile \
+  "$resolver_fixture/profile/.git" sha1 "$resolver_small_profile_oid" 1 536870912 value-size
+expect_internal_budget_failure 'global scratch budget keeps E_LIMIT' repo.profile \
+  "$resolver_fixture/profile/.git" sha1 "$resolver_small_profile_oid" 67108864 1 scratch-size
 
 resolver_output="$resolver_tmp/resolved.json"
 run_resolver "$resolver_tmp/sandbox.success" "$resolver_fixture/request.json" "$resolver_fixture/map.json" \
@@ -339,6 +399,15 @@ run_resolver "$resolver_tmp/sandbox.one-segment" "$resolver_one_segment_request"
   fail_case 'one-segment profile resolution'
 pass_case 'one-segment path verifies its root tree before enumeration'
 
+resolver_quoted_output="$resolver_tmp/resolved.quoted.json"
+run_resolver "$resolver_tmp/sandbox.quoted" "$resolver_quoted_request" \
+  "$resolver_fixture/map.json" > "$resolver_quoted_output"
+[ "$("$resolver_bound_jq" -r '.kind' "$resolver_quoted_output")" = resolved_profile ] ||
+  fail_case 'quoted path resolution'
+pass_case 'NUL tree parsing matches a quoted path as raw bytes'
+expect_failure 'newline path is rejected without confusing tree parsing' 'E_INPUT locator-shape' \
+  "$resolver_newline_request" "$resolver_fixture/map.json"
+
 resolver_bare_config="$resolver_bare/profile.git/config"
 /bin/cp "$resolver_bare_config" "$resolver_tmp/bare.config.saved"
 /usr/bin/printf '%s\n' '[include]' 'path = /private/tmp/ystack-profile-resolver-bare-canary' >> "$resolver_bare_config"
@@ -369,6 +438,23 @@ expect_failure 'corrupt root tree fails before one-segment walk' 'E_OBJECT objec
   "$resolver_one_segment_request" "$resolver_fixture/map.json"
 /bin/cp "$resolver_tmp/profile-root-tree.saved" "$resolver_profile_root_object"
 /bin/chmod "$resolver_profile_root_mode" "$resolver_profile_root_object"
+
+resolver_inline_config="$resolver_fixture/profile/.git/config"
+/bin/cp "$resolver_inline_config" "$resolver_tmp/inline.config.saved"
+/usr/bin/sed 's/repositoryformatversion = 0/repositoryformatversion = 0 # accepted inline comment/' \
+  "$resolver_tmp/inline.config.saved" > "$resolver_inline_config"
+/usr/bin/printf '%s\n' '[fixture]' 'value = "literal # and ; characters"' >> "$resolver_inline_config"
+resolver_inline_output="$resolver_tmp/resolved.inline-comment.json"
+run_resolver "$resolver_tmp/sandbox.inline-comment" "$resolver_fixture/request.json" \
+  "$resolver_fixture/map.json" > "$resolver_inline_output"
+/usr/bin/cmp -s "$resolver_output" "$resolver_inline_output" || fail_case 'inline comment output drift'
+pass_case 'unquoted inline comment is accepted and quoted comment characters stay literal'
+
+/usr/bin/sed 's/repositoryformatversion = 0/repositoryformatversion = "0 # quoted literal"/' \
+  "$resolver_tmp/inline.config.saved" > "$resolver_inline_config"
+expect_failure 'quoted comment text is not stripped from storage format' 'E_REPOSITORY storage-format' \
+  "$resolver_fixture/request.json" "$resolver_fixture/map.json"
+/bin/cp "$resolver_tmp/inline.config.saved" "$resolver_inline_config"
 
 resolver_second="$resolver_tmp/resolved.second.json"
 resolver_permuted_map="$resolver_tmp/map.permuted.json"
@@ -449,6 +535,9 @@ resolver_oversize="$resolver_tmp/request.oversize.json"
 /usr/bin/printf x >> "$resolver_oversize"
 expect_failure 'request one byte over transport limit' E_LIMIT \
   "$resolver_oversize" "$resolver_tmp/no-map.oversize"
+
+expect_failure 'selected value over per-value limit stays E_LIMIT' 'E_LIMIT value-size' \
+  "$resolver_fixture/request-value-limit.json" "$resolver_fixture/map.json"
 
 resolver_missing_manifest="$resolver_tmp/request.manifest-missing.json"
 "$resolver_bound_jq" -S -c '.manifest_sources = .manifest_sources[0:3]' \

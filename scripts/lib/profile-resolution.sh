@@ -218,7 +218,10 @@ profile_resolution_verify_object_payload() {
   profile_resolution_cached="$profile_resolution_scratch/object-cache/$profile_resolution_cache_key"
   if [ -f "$profile_resolution_cached" ] && [ ! -L "$profile_resolution_cached" ]; then
     profile_resolution_size=$(/usr/bin/wc -c < "$profile_resolution_cached" | /usr/bin/tr -d ' ') || return 2
-    [ "$profile_resolution_size" -le "$profile_resolution_global_remaining" ] || return 5
+    if [ "$profile_resolution_size" -gt "$profile_resolution_global_remaining" ]; then
+      profile_resolution_limit_reason=scratch-size
+      return 50
+    fi
     profile_resolution_global_remaining=$((profile_resolution_global_remaining - profile_resolution_size))
     /bin/cp "$profile_resolution_cached" "$profile_resolution_output" || return 2
     return 0
@@ -230,9 +233,15 @@ profile_resolution_verify_object_payload() {
   [ "$profile_resolution_type" = "$profile_resolution_expected_type" ] || return 4
   profile_resolution_size=$(profile_resolution_git "$profile_resolution_gitdir" cat-file -s "$profile_resolution_oid") || return 2
   case "$profile_resolution_size" in ''|*[!0-9]*) return 2 ;; esac
-  [ "$profile_resolution_size" -le 16777216 ] || return 5
-  [ "$profile_resolution_size" -le "$profile_resolution_value_remaining" ] &&
-    [ "$profile_resolution_size" -le "$profile_resolution_global_remaining" ] || return 5
+  if [ "$profile_resolution_size" -gt 16777216 ] ||
+     [ "$profile_resolution_size" -gt "$profile_resolution_value_remaining" ]; then
+    profile_resolution_limit_reason=value-size
+    return 50
+  fi
+  if [ "$profile_resolution_size" -gt "$profile_resolution_global_remaining" ]; then
+    profile_resolution_limit_reason=scratch-size
+    return 50
+  fi
   profile_resolution_value_remaining=$((profile_resolution_value_remaining - profile_resolution_size))
   profile_resolution_global_remaining=$((profile_resolution_global_remaining - profile_resolution_size))
   profile_resolution_git "$profile_resolution_gitdir" cat-file "$profile_resolution_expected_type" \
@@ -241,7 +250,10 @@ profile_resolution_verify_object_payload() {
   profile_resolution_recomputed=$(profile_resolution_git "$profile_resolution_gitdir" hash-object \
     --stdin --no-filters -t "$profile_resolution_expected_type" < "$profile_resolution_output") || return 2
   [ "$profile_resolution_recomputed" = "$profile_resolution_oid" ] || return 6
-  [ "$profile_resolution_size" -le "$profile_resolution_global_remaining" ] || return 5
+  if [ "$profile_resolution_size" -gt "$profile_resolution_global_remaining" ]; then
+    profile_resolution_limit_reason=scratch-size
+    return 50
+  fi
   profile_resolution_global_remaining=$((profile_resolution_global_remaining - profile_resolution_size))
   /bin/cp "$profile_resolution_output" "$profile_resolution_cached" || return 2
 }
@@ -252,7 +264,9 @@ profile_resolution_commit_tree() {
   profile_resolution_commit=$3
   profile_resolution_commit_file="$profile_resolution_scratch/value.commit"
   profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-    "$profile_resolution_commit" commit "$profile_resolution_commit_file" || return $?
+    "$profile_resolution_commit" commit "$profile_resolution_commit_file"
+  profile_resolution_status=$?
+  [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
   IFS=' ' read -r profile_resolution_word profile_resolution_resolved_tree _ < "$profile_resolution_commit_file" || return 2
   [ "$profile_resolution_word" = tree ] || return 2
   case "$profile_resolution_algorithm:$profile_resolution_resolved_tree" in
@@ -262,7 +276,9 @@ profile_resolution_commit_tree() {
   case "$profile_resolution_resolved_tree" in *[!0-9a-f]*) return 2 ;; esac
   profile_resolution_root_tree_payload="$profile_resolution_scratch/value.root-tree"
   profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-    "$profile_resolution_resolved_tree" tree "$profile_resolution_root_tree_payload" || return 2
+    "$profile_resolution_resolved_tree" tree "$profile_resolution_root_tree_payload"
+  profile_resolution_status=$?
+  [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
 }
 
 profile_resolution_walk_path() {
@@ -271,7 +287,9 @@ profile_resolution_walk_path() {
   profile_resolution_commit=$3
   profile_resolution_path=$4
   profile_resolution_commit_tree "$profile_resolution_repository_id" \
-    "$profile_resolution_algorithm" "$profile_resolution_commit" || return 2
+    "$profile_resolution_algorithm" "$profile_resolution_commit"
+  profile_resolution_status=$?
+  [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
   profile_resolution_tree=$profile_resolution_resolved_tree
   profile_resolution_old_ifs=$IFS
   IFS='/'
@@ -282,10 +300,16 @@ profile_resolution_walk_path() {
   for profile_resolution_segment in "${profile_resolution_segments[@]}"; do
     profile_resolution_gitdir=$(profile_resolution_snapshot_gitdir "$profile_resolution_repository_id") || return 2
     profile_resolution_listing="$profile_resolution_scratch/tree.list"
-    profile_resolution_git "$profile_resolution_gitdir" -c core.quotePath=false ls-tree "$profile_resolution_tree" \
+    profile_resolution_git "$profile_resolution_gitdir" ls-tree -z "$profile_resolution_tree" \
       > "$profile_resolution_listing" || return 2
     profile_resolution_found=0
-    while IFS=$'\t' read -r profile_resolution_meta profile_resolution_name; do
+    while IFS= read -r -d '' profile_resolution_entry; do
+      case "$profile_resolution_entry" in
+        *$'\t'*) ;;
+        *) return 2 ;;
+      esac
+      profile_resolution_meta=${profile_resolution_entry%%$'\t'*}
+      profile_resolution_name=${profile_resolution_entry#*$'\t'}
       [ "$profile_resolution_name" = "$profile_resolution_segment" ] || continue
       profile_resolution_found=$((profile_resolution_found + 1))
       IFS=' ' read -r profile_resolution_mode profile_resolution_type profile_resolution_oid <<< "$profile_resolution_meta"
@@ -295,7 +319,9 @@ profile_resolution_walk_path() {
       [ "$profile_resolution_type" = tree ] && [ "$profile_resolution_mode" = 040000 ] || return 4
       profile_resolution_tree_payload="$profile_resolution_scratch/value.tree"
       profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-        "$profile_resolution_oid" tree "$profile_resolution_tree_payload" || return 5
+        "$profile_resolution_oid" tree "$profile_resolution_tree_payload"
+      profile_resolution_status=$?
+      [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
       profile_resolution_tree=$profile_resolution_oid
     fi
     profile_resolution_index=$((profile_resolution_index + 1))
@@ -314,7 +340,9 @@ profile_resolution_verify_locator() {
   profile_resolution_path=$("$YSTACK_RESOLVER_JQ" -r '.path' <<< "$profile_resolution_locator") || return 1
   profile_resolution_claimed_oid=$("$YSTACK_RESOLVER_JQ" -r '.object_id' <<< "$profile_resolution_locator") || return 1
   profile_resolution_walk_path "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-    "$profile_resolution_commit" "$profile_resolution_path" || return 2
+    "$profile_resolution_commit" "$profile_resolution_path"
+  profile_resolution_status=$?
+  [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
   profile_resolution_mode=$profile_resolution_resolved_mode
   profile_resolution_type=$profile_resolution_resolved_type
   profile_resolution_oid=$profile_resolution_resolved_oid
@@ -323,7 +351,9 @@ profile_resolution_verify_locator() {
   case "$profile_resolution_mode" in 100644|100755) ;; *) return 5 ;; esac
   profile_resolution_payload="$profile_resolution_scratch/$profile_resolution_label.payload"
   profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-    "$profile_resolution_oid" blob "$profile_resolution_payload" || return 6
+    "$profile_resolution_oid" blob "$profile_resolution_payload"
+  profile_resolution_status=$?
+  [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
   profile_resolution_ref="$profile_resolution_scratch/$profile_resolution_label.ref"
   "$YSTACK_RESOLVER_JQ" -S -c -n --arg repository_id "$profile_resolution_repository_id" \
     --arg hash_algorithm "$profile_resolution_algorithm" --arg commit_id "$profile_resolution_commit" \
@@ -349,14 +379,18 @@ profile_resolution_verify_ref() {
   profile_resolution_claim_mode=$("$YSTACK_RESOLVER_JQ" -r '.mode' <<< "$profile_resolution_ref_json") || return 1
   if [ "$profile_resolution_claim_location_kind" = root ]; then
     profile_resolution_commit_tree "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-      "$profile_resolution_commit" || return 2
+      "$profile_resolution_commit"
+    profile_resolution_status=$?
+    [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
     profile_resolution_resolved_oid=$profile_resolution_resolved_tree
     profile_resolution_resolved_type=tree
     profile_resolution_resolved_mode=040000
   else
     profile_resolution_path=$("$YSTACK_RESOLVER_JQ" -r '.location.value' <<< "$profile_resolution_ref_json") || return 1
     profile_resolution_walk_path "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-      "$profile_resolution_commit" "$profile_resolution_path" || return 2
+      "$profile_resolution_commit" "$profile_resolution_path"
+    profile_resolution_status=$?
+    [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
   fi
   profile_resolution_oid=$profile_resolution_resolved_oid
   profile_resolution_type=$profile_resolution_resolved_type
@@ -366,13 +400,23 @@ profile_resolution_verify_ref() {
   [ "$profile_resolution_mode" = "$profile_resolution_claim_mode" ] || return 5
   profile_resolution_payload="$profile_resolution_scratch/value.$profile_resolution_key"
   profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-    "$profile_resolution_oid" "$profile_resolution_type" "$profile_resolution_payload" || return 6
+    "$profile_resolution_oid" "$profile_resolution_type" "$profile_resolution_payload"
+  profile_resolution_status=$?
+  [ "$profile_resolution_status" -eq 0 ] || return "$profile_resolution_status"
   profile_resolution_digest=$(profile_resolution_sha256 "$profile_resolution_payload") || return 1
   profile_resolution_next="$profile_resolution_scratch/values.next"
   "$YSTACK_RESOLVER_JQ" -S -c --argjson ref "$profile_resolution_ref_json" --arg digest "$profile_resolution_digest" \
     '. + [{ref:$ref,value_sha256:$digest}] | unique_by(.ref)' "$profile_resolution_values" \
     > "$profile_resolution_next" || return 1
   /bin/mv "$profile_resolution_next" "$profile_resolution_values"
+}
+
+profile_resolution_report_object_failure() {
+  if [ "$1" -eq 50 ]; then
+    profile_resolution_error E_LIMIT "${profile_resolution_limit_reason:-scratch-size}"
+  else
+    profile_resolution_error E_OBJECT object-path
+  fi
 }
 
 profile_resolution_main() {
@@ -481,9 +525,12 @@ profile_resolution_main() {
     profile_resolution_snapshot_repository "$profile_resolution_id" || return 1
   done < "$profile_resolution_locator_ids"
   profile_resolution_profile_locator=$("$YSTACK_RESOLVER_JQ" -c '.profile_source' "$profile_resolution_request_snapshot")
-  profile_resolution_verify_locator "$profile_resolution_profile_locator" profile || {
-    profile_resolution_error E_OBJECT object-path; return 1
-  }
+  profile_resolution_verify_locator "$profile_resolution_profile_locator" profile
+  profile_resolution_status=$?
+  if [ "$profile_resolution_status" -ne 0 ]; then
+    profile_resolution_report_object_failure "$profile_resolution_status"
+    return 1
+  fi
   profile_resolution_canonicalize "$profile_resolution_scratch/profile.payload" "$profile_resolution_canonical"
   case $? in 0) ;; 1) profile_resolution_error E_PARSE; return 1 ;; *) profile_resolution_error E_CANONICAL; return 1 ;; esac
   profile_resolution_core_validate "$profile_resolution_scratch/core.stderr" validate-document \
@@ -499,9 +546,12 @@ profile_resolution_main() {
   while [ "$profile_resolution_manifest_index" -lt "$profile_resolution_manifest_count" ]; do
     profile_resolution_locator=$("$YSTACK_RESOLVER_JQ" -c --argjson i "$profile_resolution_manifest_index" '.manifest_sources[$i]' "$profile_resolution_request_snapshot")
     profile_resolution_label="manifest.$profile_resolution_manifest_index"
-    profile_resolution_verify_locator "$profile_resolution_locator" "$profile_resolution_label" || {
-      profile_resolution_error E_OBJECT object-path; return 1
-    }
+    profile_resolution_verify_locator "$profile_resolution_locator" "$profile_resolution_label"
+    profile_resolution_status=$?
+    if [ "$profile_resolution_status" -ne 0 ]; then
+      profile_resolution_report_object_failure "$profile_resolution_status"
+      return 1
+    fi
     profile_resolution_canonicalize "$profile_resolution_scratch/$profile_resolution_label.payload" "$profile_resolution_canonical"
     case $? in 0) ;; 1) profile_resolution_error E_PARSE; return 1 ;; *) profile_resolution_error E_CANONICAL; return 1 ;; esac
     profile_resolution_core_validate "$profile_resolution_scratch/core.stderr" validate-document \
@@ -564,9 +614,12 @@ profile_resolution_main() {
   profile_resolution_ref_index=0
   while [ "$profile_resolution_ref_index" -lt "$profile_resolution_ref_count" ]; do
     profile_resolution_ref_json=$("$YSTACK_RESOLVER_JQ" -c --argjson i "$profile_resolution_ref_index" '.[$i]' "$profile_resolution_selected_refs")
-    profile_resolution_verify_ref "$profile_resolution_ref_json" || {
-      profile_resolution_error E_OBJECT object-path; return 1
-    }
+    profile_resolution_verify_ref "$profile_resolution_ref_json"
+    profile_resolution_status=$?
+    if [ "$profile_resolution_status" -ne 0 ]; then
+      profile_resolution_report_object_failure "$profile_resolution_status"
+      return 1
+    fi
     profile_resolution_ref_index=$((profile_resolution_ref_index + 1))
   done
   profile_resolution_state="$profile_resolution_scratch/state.json"

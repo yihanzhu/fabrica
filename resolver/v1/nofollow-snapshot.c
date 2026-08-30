@@ -941,10 +941,52 @@ static bool parse_boolean(const char *value, bool *result)
     return false;
 }
 
+static size_t config_value_end(const char *text, bool *quote_closed)
+{
+    bool quoted = false;
+    bool escaped = false;
+    size_t index = 0U;
+    for (; text[index] != '\0'; index++) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (text[index] == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (text[index] == '"') {
+            quoted = !quoted;
+            continue;
+        }
+        if (!quoted && (text[index] == '#' || text[index] == ';')) {
+            break;
+        }
+    }
+    *quote_closed = !quoted;
+    return index;
+}
+
+static bool strip_inline_comment(char *value)
+{
+    bool quote_closed;
+    size_t end = config_value_end(value, &quote_closed);
+    if (!quote_closed) {
+        return false;
+    }
+    value[end] = '\0';
+    return true;
+}
+
 static bool line_continues(const char *line)
 {
-    size_t length = strlen(line);
+    bool quote_closed;
+    size_t length = config_value_end(line, &quote_closed);
     size_t backslashes = 0U;
+    (void)quote_closed;
+    while (length > 0U && (line[length - 1U] == ' ' || line[length - 1U] == '\t')) {
+        length--;
+    }
     while (length > 0U && line[length - 1U] == '\\') {
         backslashes++;
         length--;
@@ -1077,6 +1119,11 @@ static bool parse_config(const struct bytes *input, bool common,
             if (*value == '=') {
                 value++;
             } else if (*value != '\0') {
+                set_repository_error(error, "config-format");
+                free(copy);
+                return false;
+            }
+            if (!strip_inline_comment(value)) {
                 set_repository_error(error, "config-format");
                 free(copy);
                 return false;
