@@ -246,8 +246,11 @@ pass_case 'selected content remains inert and private'
   fail_case 'caller scopes changed'
 pass_case 'caller-owned scope refs are copied unchanged'
 
-[ "$(/usr/bin/stat -f '%Lp' "$resolver_runtime" 2>/dev/null || /usr/bin/stat -c '%a' "$resolver_runtime")" = 644 ] ||
-  fail_case 'inactive runtime mode'
+case "$resolver_platform" in
+  Linux:x86_64) resolver_runtime_mode=$(/usr/bin/stat -c '%a' "$resolver_runtime") ;;
+  Darwin:*) resolver_runtime_mode=$(/usr/bin/stat -f '%Lp' "$resolver_runtime") ;;
+esac
+[ "$resolver_runtime_mode" = 644 ] || fail_case 'inactive runtime mode'
 pass_case 'runtime payload is inactive mode 0644'
 
 resolver_bad="$resolver_tmp/request.parse.json"
