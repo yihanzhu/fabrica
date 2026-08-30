@@ -28,7 +28,7 @@ cpg_usage() {
   cat >&2 <<'EOF'
 usage:
   construction-publisher-gate.sh preflight <request.json>
-  construction-publisher-gate.sh postflight <preflight.json> <merge-result.json>
+  construction-publisher-gate.sh postflight <request.json> <preflight.json> <merge-result.json>
 
 preflight is read-only. It validates one active yihanzhu/ystack construction
 candidate and prints the exact, single GitHub connector call that is eligible.
@@ -425,6 +425,17 @@ cpg_validate_manifest() {
   done
 }
 
+cpg_validate_frozen_pr() {
+  local frozen_pr="$1"
+  local mode="$2"
+  jq -e --slurpfile mode "$mode" '
+    .number == 183 and .state == ($mode[0].frozen_pr_183_state | ascii_downcase) and
+    .head.sha == $mode[0].frozen_pr_183_head and
+    .base.sha == $mode[0].frozen_pr_183_base and
+    ([.labels[].name] | sort) == ($mode[0].frozen_pr_183_labels | sort)
+  ' "$frozen_pr" >/dev/null 2>&1 || cpg_die 'frozen PR #183 moved'
+}
+
 cpg_validate_ancestry() {
   local compare="$1"
   local base="$2"
@@ -569,12 +580,7 @@ cpg_preflight() {
   check_details_url="$(jq -r '.check_runs[0].details_url // empty' "$CPG_TMP/checks.json")"
 
   cpg_get "repos/$repository/pulls/183" "$CPG_TMP/frozen-pr.json"
-  jq -e --slurpfile mode "$CPG_TMP/mode.json" '
-    .number == 183 and .state == ($mode[0].frozen_pr_183_state | ascii_downcase) and
-    .head.sha == $mode[0].frozen_pr_183_head and
-    .base.sha == $mode[0].frozen_pr_183_base and
-    ([.labels[].name] | sort) == ($mode[0].frozen_pr_183_labels | sort)
-  ' "$CPG_TMP/frozen-pr.json" >/dev/null 2>&1 || cpg_die 'frozen PR #183 moved'
+  cpg_validate_frozen_pr "$CPG_TMP/frozen-pr.json" "$CPG_TMP/mode.json"
 
   cpg_get "repos/$repository/rulesets/$CPG_RULESET_ID" "$CPG_TMP/ruleset-late.json"
   cpg_validate_ruleset "$CPG_TMP/ruleset-late.json"
@@ -770,6 +776,155 @@ cpg_try_get() {
   cpg_api "$endpoint" > "$output" 2>/dev/null && jq -e . "$output" >/dev/null 2>&1
 }
 
+cpg_try_get_pages() {
+  local endpoint="$1"
+  local output="$2"
+  cpg_api_pages "$endpoint" > "$output" 2>/dev/null && jq -e . "$output" >/dev/null 2>&1
+}
+
+cpg_postflight_revalidate() {
+  local request="$1"
+  local preflight="$2"
+  local repository
+  local pr_number
+  local head
+  local base
+  local attested_by
+  local review_comment_id
+  local review_body_digest
+  local operator
+
+  cpg_validate_request "$request"
+  [ "$(cpg_sha256_file "$request")" = \
+    "$(jq -r '.authorization.request_sha256' "$preflight")" ] ||
+    cpg_die 'postflight request digest does not match preflight'
+  jq -e --slurpfile preflight "$preflight" '
+    . as $request | $preflight[0] as $proof |
+    $request.repository == $proof.repository and
+    $request.repository_id == $proof.repository_id and
+    $request.pull_request == $proof.pull_request and
+    $request.expected_head == $proof.exact.head and
+    $request.expected_base == $proof.exact.base and
+    ($request.allowed_paths | sort) == ($proof.exact.allowed_paths | sort) and
+    $request.connector.id == $proof.connector.id and
+    $request.connector.login == $proof.connector.login and
+    $request.connector.tool == $proof.connector.tool and
+    $request.connector.identity_observed == $proof.connector.identity_observed and
+    $request.connector.identity_observation_tool ==
+      $proof.connector.identity_observation_tool and
+    $request.connector.identity_attested_by ==
+      $proof.connector.identity_attested_by and
+    $request.review.comment_id == $proof.authorization.review.comment_id and
+    $request.review.body_sha256 == $proof.authorization.review.body_sha256 and
+    $request.review.independent_review_run ==
+      $proof.authorization.review.independent_review_run and
+    $request.review.complete_review_read ==
+      $proof.authorization.review.complete_review_read and
+    $request.review.machine_verdict_available ==
+      $proof.authorization.review.machine_verdict_available and
+    $request.review.semantic_decision ==
+      $proof.authorization.review.semantic_decision and
+    $request.review.semantic_decision_source ==
+      $proof.authorization.review.semantic_decision_source and
+    $request.review.unresolved_important_findings ==
+      $proof.authorization.review.unresolved_important_findings and
+    $request.review.attested_by == $proof.authorization.review.attested_by
+  ' "$request" >/dev/null 2>&1 || cpg_die 'postflight request tuple does not match preflight'
+
+  repository="$(jq -r '.repository' "$request")"
+  pr_number="$(jq -r '.pull_request' "$request")"
+  head="$(jq -r '.expected_head' "$request")"
+  base="$(jq -r '.expected_base' "$request")"
+  attested_by="$(jq -r '.review.attested_by' "$request")"
+  review_comment_id="$(jq -r '.review.comment_id' "$request")"
+  review_body_digest="$(jq -r '.review.body_sha256' "$request")"
+
+  cpg_get user "$CPG_TMP/post-user.json"
+  operator="$(jq -r '.login // empty' "$CPG_TMP/post-user.json")"
+  [ "$operator" = "$CPG_CONNECTOR_LOGIN" ] &&
+    [ "$(jq -r '.id // empty' "$CPG_TMP/post-user.json")" = "$CPG_CONNECTOR_ID" ] ||
+    cpg_die 'postflight operator identity mismatch'
+  cpg_get "repos/$repository" "$CPG_TMP/post-repo.json"
+  cpg_validate_repo "$CPG_TMP/post-repo.json"
+
+  cpg_get "repos/$repository/contents/config/construction-mode.json?ref=$base" \
+    "$CPG_TMP/post-mode-response.json"
+  [ "$(jq -r '.sha // empty' "$CPG_TMP/post-mode-response.json")" = \
+    "$(jq -r '.authorization.mode_record_blob' "$preflight")" ] ||
+    cpg_die 'postflight mode identity mismatch'
+  cpg_decode_content "$CPG_TMP/post-mode-response.json" "$CPG_TMP/post-mode.json"
+  cpg_validate_mode "$CPG_TMP/post-mode.json" "$attested_by"
+
+  cpg_get "repos/$repository/contents/ROADMAP.md?ref=$base" "$CPG_TMP/post-roadmap.json"
+  cpg_get "repos/$repository/contents/NORTH_STAR.md?ref=$base" "$CPG_TMP/post-north-star.json"
+  [ "$(jq -r '.sha // empty' "$CPG_TMP/post-roadmap.json")" = \
+    "$(jq -r '.authorization.roadmap_blob' "$preflight")" ] ||
+    cpg_die 'postflight Roadmap identity mismatch'
+  [ "$(jq -r '.sha // empty' "$CPG_TMP/post-north-star.json")" = \
+    "$(jq -r '.authorization.north_star_blob' "$preflight")" ] ||
+    cpg_die 'postflight north-star identity mismatch'
+
+  cpg_get "repos/$repository/contents/$CPG_PROTECTED_GATE?ref=$base" \
+    "$CPG_TMP/post-gate.json"
+  cpg_get "repos/$repository/contents/$CPG_PROTECTED_TEST?ref=$base" \
+    "$CPG_TMP/post-test.json"
+  [ "$(jq -r '.sha // empty' "$CPG_TMP/post-gate.json")" = \
+    "$(jq -r '.authorization.publisher_gate_blob' "$preflight")" ] ||
+    cpg_die 'postflight publisher gate identity mismatch'
+  [ "$(jq -r '.sha // empty' "$CPG_TMP/post-test.json")" = \
+    "$(jq -r '.authorization.publisher_test_blob' "$preflight")" ] ||
+    cpg_die 'postflight publisher test identity mismatch'
+
+  cpg_get "repos/$repository/rulesets/$CPG_RULESET_ID" "$CPG_TMP/post-ruleset.json"
+  cpg_validate_ruleset "$CPG_TMP/post-ruleset.json"
+  [ "$(jq -r '.updated_at // empty' "$CPG_TMP/post-ruleset.json")" = \
+    "$(jq -r '.authorization.ruleset_updated_at' "$preflight")" ] ||
+    cpg_die 'postflight ruleset identity mismatch'
+
+  cpg_get_pages "repos/$repository/issues/$pr_number/comments?per_page=100" \
+    "$CPG_TMP/post-comments.json"
+  cpg_validate_review \
+    "$CPG_TMP/post-comments.json" "$CPG_TMP/post-review.json" "$operator" \
+    "$review_comment_id" "$head" "$base" "$review_body_digest" \
+    "$CPG_TMP/post-review-body"
+  [ "$(jq -r '.created_at // empty' "$CPG_TMP/post-review.json")" = \
+    "$(jq -r '.authorization.review.created_at' "$preflight")" ] &&
+    [ "$(jq -r '.updated_at // empty' "$CPG_TMP/post-review.json")" = \
+    "$(jq -r '.authorization.review.updated_at' "$preflight")" ] ||
+    cpg_die 'postflight review identity mismatch'
+
+  cpg_get_pages "repos/$repository/pulls/$pr_number/files?per_page=100" \
+    "$CPG_TMP/post-files.json"
+  cpg_validate_changed_paths \
+    "$CPG_TMP/post-files.json" "$request" "$CPG_TMP/post-mode.json" \
+    "$CPG_TMP/post-changed-paths.json" "$CPG_TMP/post-allowed-paths.json"
+
+  cpg_get "repos/$repository/contents/ci/required-files.txt?ref=$base" \
+    "$CPG_TMP/post-base-manifest-response.json"
+  cpg_decode_content "$CPG_TMP/post-base-manifest-response.json" \
+    "$CPG_TMP/post-base-manifest.txt"
+  cpg_get "repos/$repository/contents/ci/required-files.txt?ref=$head" \
+    "$CPG_TMP/post-manifest-response.json"
+  cpg_decode_content "$CPG_TMP/post-manifest-response.json" "$CPG_TMP/post-manifest.txt"
+  cpg_validate_manifest "$CPG_TMP/post-manifest.txt" "$CPG_TMP/post-mode.json" \
+    "$CPG_TMP/post-base-manifest.txt"
+
+  cpg_get "repos/$repository/compare/$base...$head" "$CPG_TMP/post-compare.json"
+  cpg_validate_ancestry "$CPG_TMP/post-compare.json" "$base"
+
+  cpg_get "repos/$repository/pulls/183" "$CPG_TMP/post-frozen-pr.json"
+  cpg_validate_frozen_pr "$CPG_TMP/post-frozen-pr.json" "$CPG_TMP/post-mode.json"
+
+  cpg_get "repos/$repository/commits/$head/check-runs?check_name=$CPG_CI_NAME&app_id=$CPG_CI_APP_ID&filter=latest&per_page=100" \
+    "$CPG_TMP/post-checks.json"
+  cpg_validate_ci "$CPG_TMP/post-checks.json" "$head"
+  [ "$(jq -r '.check_runs[0].id' "$CPG_TMP/post-checks.json")" = \
+    "$(jq -r '.authorization.ci.check_run_id' "$preflight")" ] &&
+    [ "$(jq -r '.check_runs[0].details_url // empty' "$CPG_TMP/post-checks.json")" = \
+    "$(jq -r '.authorization.ci.details_url' "$preflight")" ] ||
+    cpg_die 'postflight CI evidence mismatch'
+}
+
 cpg_emit_reconciliation() {
   local preflight="$1"
   local status="$2"
@@ -815,8 +970,10 @@ cpg_emit_reconciliation() {
 }
 
 cpg_postflight() {
-  local preflight_path="$1"
-  local merge_result_path="$2"
+  local request_path="$1"
+  local preflight_path="$2"
+  local merge_result_path="$3"
+  local request="$CPG_TMP/postflight-request.json"
   local preflight="$CPG_TMP/preflight.json"
   local merge_result="$CPG_TMP/merge-result.json"
   local receipt="$CPG_TMP/receipt.json"
@@ -835,8 +992,11 @@ cpg_postflight() {
   local merged_by
   local connector_outcome
 
+  [ -f "$request_path" ] && [ ! -L "$request_path" ] || cpg_die 'request must be a regular non-symlink file'
   [ -f "$preflight_path" ] && [ ! -L "$preflight_path" ] || cpg_die 'preflight must be a regular non-symlink file'
   [ -f "$merge_result_path" ] && [ ! -L "$merge_result_path" ] || cpg_die 'merge result must be a regular non-symlink file'
+  jq -S -c . "$request_path" > "$request" 2>/dev/null || cpg_die 'postflight request is not valid JSON'
+  cpg_validate_request "$request"
   jq -S -c . "$preflight_path" > "$preflight" 2>/dev/null || cpg_die 'preflight is not valid JSON'
   cpg_validate_preflight "$preflight"
 
@@ -907,6 +1067,12 @@ cpg_postflight() {
   case "$connector_outcome" in
     uncertain) connector_outcome='reconciled_after_uncertain' ;;
   esac
+
+  if ! (cpg_postflight_revalidate "$request" "$preflight") >/dev/null 2>&1; then
+    cpg_emit_reconciliation "$preflight" merged_unverified inconclusive \
+      authorization_revalidation_failed "$merge_sha" ''
+    return 1
+  fi
 
   if ! cpg_try_get "repos/$repository/git/commits/$head" "$CPG_TMP/head-post.json" ||
      ! jq -e --arg head "$head" --arg tree "$head_tree" '
@@ -999,11 +1165,11 @@ main() {
       cpg_preflight "$2"
       ;;
     postflight)
-      [ "$#" -eq 3 ] || {
+      [ "$#" -eq 4 ] || {
         cpg_usage
         exit 1
       }
-      cpg_postflight "$2" "$3"
+      cpg_postflight "$2" "$3" "$4"
       ;;
     *)
       cpg_usage

@@ -520,7 +520,7 @@ expect_tampered_preflight_failure() {
   : > "$log"
   : > "$fixtures/mutations"
   if CPG_TEST_PHASE=post CPG_TEST_SCENARIO=success \
-      "$gate" postflight "$test_tmp/preflight-tampered.json" \
+      "$gate" postflight "$fixtures/request.json" "$test_tmp/preflight-tampered.json" \
         "$fixtures/merge-result.json" > "$test_tmp/postflight.out" 2> "$test_tmp/postflight.err"; then
     fail "$label"
   else
@@ -529,13 +529,42 @@ expect_tampered_preflight_failure() {
   assert_no_write "$label performs no GitHub write"
 }
 
+expect_fabricated_authorization_failure() {
+  local request_filter="$1"
+  local preflight_filter="$2"
+  local label="$3"
+  local fabricated_digest
+  jq -S -c "$request_filter" "$fixtures/request.json" > "$test_tmp/request-fabricated.json"
+  fabricated_digest="$(sha256_file "$test_tmp/request-fabricated.json")"
+  jq -S -c --arg digest "$fabricated_digest" \
+    "$preflight_filter | .authorization.request_sha256=\$digest" \
+    "$test_tmp/preflight.json" > "$test_tmp/preflight-fabricated.json"
+  : > "$log"
+  : > "$fixtures/mutations"
+  if CPG_TEST_PHASE=post CPG_TEST_SCENARIO=success \
+      "$gate" postflight "$test_tmp/request-fabricated.json" \
+        "$test_tmp/preflight-fabricated.json" "$fixtures/merge-result.json" \
+        > "$test_tmp/postflight.out" 2> "$test_tmp/postflight.err"; then
+    fail "$label"
+  else
+    pass "$label"
+  fi
+  assert_jq "$label records no completed receipt" '
+    .receipt.status == "merged_unverified" and
+    .receipt.reason == "authorization_revalidation_failed" and
+    .receipt.retry_allowed == false
+  ' "$test_tmp/postflight.out"
+  assert_no_write "$label performs no GitHub write"
+}
+
 run_postflight() {
   local scenario="$1"
   local result="${2:-$fixtures/merge-result.json}"
+  local request="${3:-$fixtures/request.json}"
   : > "$log"
   : > "$fixtures/mutations"
   CPG_TEST_PHASE=post CPG_TEST_SCENARIO="$scenario" \
-    "$gate" postflight "$test_tmp/preflight.json" "$result" \
+    "$gate" postflight "$request" "$test_tmp/preflight.json" "$result" \
       > "$test_tmp/postflight.out" 2> "$test_tmp/postflight.err"
 }
 
@@ -668,10 +697,20 @@ expect_tampered_preflight_failure '.authorization.mode_record_blob=null' \
   'postflight rejects a preflight with a missing mode identity'
 expect_tampered_preflight_failure '.authorization.ci.check_run_id=null' \
   'postflight rejects a preflight with missing CI evidence'
+expect_tampered_preflight_failure '.authorization.ci.check_run_id=9999' \
+  'postflight revalidates a well-formed CI run ID against GitHub'
 expect_tampered_preflight_failure '.authorization.review.body_sha256=null' \
   'postflight rejects a preflight with missing review evidence'
 expect_tampered_preflight_failure '.exact.allowed_paths=[]' \
   'postflight rejects a preflight with missing scope evidence'
+expect_fabricated_authorization_failure \
+  '.review.body_sha256=("0" * 64)' \
+  '.authorization.review.body_sha256=("0" * 64)' \
+  'postflight rejects matching fabricated request and review evidence'
+expect_fabricated_authorization_failure \
+  '.allowed_paths[1]="scripts/test/fabricated.test.sh"' \
+  '.exact.allowed_paths[1]="scripts/test/fabricated.test.sh"' \
+  'postflight rejects matching fabricated request and path evidence'
 
 cp "$gate" "$test_tmp/gate.backup"
 printf '\n' >> "$gate"
@@ -739,6 +778,8 @@ assert_jq 'refused-but-merged is recorded as unverified, never completed' '
 ' "$test_tmp/postflight.out"
 expect_postflight_failure post-pr-read-failed 'postflight records an unavailable PR reconciliation read'
 expect_postflight_failure post-pr-mismatch 'postflight rejects a mismatched PR merge record'
+expect_postflight_failure bad-ancestry 'postflight revalidates reviewed-base ancestry'
+expect_postflight_failure frozen-pr-moved 'postflight revalidates frozen PR #183'
 expect_postflight_failure post-head-tree-mismatch 'postflight re-reads and rejects a moved head tree'
 expect_postflight_failure post-wrong-parent 'postflight rejects the wrong squash parent'
 expect_postflight_failure post-two-parents 'postflight rejects a non-squash two-parent commit'
