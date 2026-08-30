@@ -314,7 +314,16 @@ python3 - "$ingress_tmp/depth-32.json" "$ingress_tmp/depth-33.json" \
   "$ingress_tmp/depth-257.json" "$ingress_tmp/depth-string.json" \
   "$ingress_tmp/depth-33-malformed.json" \
   "$ingress_tmp/depth-33-noncanonical.json" \
-  "$ingress_tmp/depth-257-noncanonical.json" <<'PY'
+  "$ingress_tmp/depth-257-noncanonical.json" \
+  "$ingress_tmp/depth-256.json" \
+  "$ingress_tmp/depth-100000.json" \
+  "$ingress_tmp/depth-100000-malformed.json" \
+  "$ingress_tmp/dense-near-limit.json" \
+  "$ingress_tmp/number-near-limit.json" \
+  "$ingress_tmp/object-depth-128.json" \
+  "$ingress_tmp/object-depth-129.json" \
+  "$ingress_tmp/mixed-depth-128.json" \
+  "$ingress_tmp/mixed-depth-129.json" <<'PY'
 import json
 import sys
 
@@ -326,6 +335,28 @@ open(sys.argv[4], "wb").write(encoded.encode())
 open(sys.argv[5], "wb").write(("[" * 33 + "0" + "]" * 32 + "\n").encode())
 open(sys.argv[6], "wb").write(("[" * 33 + " 0" + "]" * 33 + "\n").encode())
 open(sys.argv[7], "wb").write(("[" * 257 + " 0" + "]" * 257 + "\n").encode())
+open(sys.argv[8], "wb").write(("[" * 256 + "0" + "]" * 256 + "\n").encode())
+open(sys.argv[9], "wb").write(("[" * 100000 + "0" + "]" * 100000 + "\n").encode())
+open(sys.argv[10], "wb").write(("[" * 100000 + "0" + "]" * 99999 + "\n").encode())
+open(sys.argv[11], "wb").write(b"[" + b",".join([b"0"] * 524286) + b"]\n")
+open(sys.argv[12], "wb").write(b"1" + b"1" * 1048573 + b"\n")
+open(sys.argv[13], "wb").write(("{\"a\":" * 128 + "0" + "}" * 128 + "\n").encode())
+open(sys.argv[14], "wb").write(("{\"a\":" * 129 + "0" + "}" * 129 + "\n").encode())
+
+def mixed(depth):
+    opens = []
+    closes = []
+    for index in range(depth):
+        if index % 2 == 0:
+            opens.append("[")
+            closes.append("]")
+        else:
+            opens.append("{\"a\":")
+            closes.append("}")
+    return "".join(opens) + "0" + "".join(reversed(closes)) + "\n"
+
+open(sys.argv[15], "wb").write(mixed(128).encode())
+open(sys.argv[16], "wb").write(mixed(129).encode())
 PY
 
 start_ingress document
@@ -340,6 +371,24 @@ start_ingress document
 portable_core_ingress_snapshot "$ingress_tmp/depth-257.json"
 expect_failure depth-257-limit E_LIMIT portable_core_ingress_finish_driver
 stop_ingress
+start_ingress document
+portable_core_ingress_snapshot "$ingress_tmp/depth-256.json"
+expect_failure depth-256-limit E_LIMIT portable_core_ingress_finish_driver
+stop_ingress
+start_ingress document
+portable_core_ingress_snapshot "$ingress_tmp/depth-100000.json"
+expect_failure depth-100000-limit E_LIMIT portable_core_ingress_finish_driver
+stop_ingress
+document_finish_failure depth-100000-malformed E_PARSE \
+  "$ingress_tmp/depth-100000-malformed.json"
+document_finish_failure object-depth-128-limit E_LIMIT \
+  "$ingress_tmp/object-depth-128.json"
+document_finish_failure object-depth-129-limit E_LIMIT \
+  "$ingress_tmp/object-depth-129.json"
+document_finish_failure mixed-depth-128-limit E_LIMIT \
+  "$ingress_tmp/mixed-depth-128.json"
+document_finish_failure mixed-depth-129-limit E_LIMIT \
+  "$ingress_tmp/mixed-depth-129.json"
 document_finish_failure depth-33-malformed E_PARSE \
   "$ingress_tmp/depth-33-malformed.json"
 document_finish_failure depth-33-noncanonical E_CANONICAL \
@@ -351,6 +400,16 @@ expect_success depth-string-snapshot portable_core_ingress_snapshot "$ingress_tm
 expect_success depth-string-driver portable_core_ingress_finish_driver
 stop_ingress
 mark_rule portable-core-ingress.raw-depth-limit
+
+[ "$(wc -c < "$ingress_tmp/dense-near-limit.json" | tr -d ' ')" -eq 1048574 ]
+start_ingress document
+expect_success dense-near-limit-snapshot portable_core_ingress_snapshot \
+  "$ingress_tmp/dense-near-limit.json"
+expect_success dense-near-limit-driver portable_core_ingress_finish_driver
+stop_ingress
+[ "$(wc -c < "$ingress_tmp/number-near-limit.json" | tr -d ' ')" -eq 1048575 ]
+document_finish_failure number-near-limit E_CANONICAL \
+  "$ingress_tmp/number-near-limit.json"
 
 start_ingress document
 expect_success at-limit-snapshot portable_core_ingress_snapshot "$ingress_tmp/at-limit.json"
@@ -689,17 +748,20 @@ portable_core_ingress_snapshot "$canonical_file"
 runtime_failure parser-probe-runtime-failure E_RUNTIME portable_core_ingress_finish_driver
 stop_ingress
 
-start_ingress document
-real_ingress_jq="$PORTABLE_CORE_INGRESS_JQ"
-lexer_probe_fail="$ingress_tmp/lexer-probe-fail"
-printf '%s\n' '#!/bin/sh' \
-  'case " $* " in *" -Rse "*) printf "%s\\n" "lexer SECRET path" >&2; exit 2 ;; esac' \
-  "exec \"$real_ingress_jq\" \"\$@\"" > "$lexer_probe_fail"
-chmod +x "$lexer_probe_fail"
-PORTABLE_CORE_INGRESS_JQ="$lexer_probe_fail"
-portable_core_ingress_snapshot "$canonical_file"
-runtime_failure lexer-probe-runtime-failure E_RUNTIME portable_core_ingress_finish_driver
-stop_ingress
+for stream_runtime_status in 5 41; do
+  start_ingress document
+  real_ingress_jq="$PORTABLE_CORE_INGRESS_JQ"
+  stream_runtime_fail="$ingress_tmp/stream-exit-$stream_runtime_status"
+  printf '%s\n' '#!/bin/sh' \
+    "case \" \$* \" in *\" --stream --stream-errors \"*) exit $stream_runtime_status ;; esac" \
+    "exec \"$real_ingress_jq\" \"\$@\"" > "$stream_runtime_fail"
+  chmod +x "$stream_runtime_fail"
+  PORTABLE_CORE_INGRESS_JQ="$stream_runtime_fail"
+  portable_core_ingress_snapshot "$ingress_tmp/depth-257.json"
+  runtime_failure "streaming-canonicalizer-exit-$stream_runtime_status" E_RUNTIME \
+    portable_core_ingress_finish_driver
+  stop_ingress
+done
 
 start_ingress document
 jq_canonical_fail="$ingress_tmp/jq-canonical-fail"
@@ -888,9 +950,30 @@ source "$ingress_product"
 guard_paths="$ingress_tmp/generation-files"
 find "$ingress_repo/core/v1/generations/$ingress_generation" -type f -print |
   sed "s#^$ingress_repo/##" | LC_ALL=C sort > "$guard_paths"
-expected_generation_files="core/v1/generations/$ingress_generation/core-ingress.sh
-core/v1/generations/$ingress_generation/modules/schema.jq"
-if [ "$(cat "$guard_paths")" = "$expected_generation_files" ] &&
+
+ingress_private_generation_path_ok() {
+  case "$1" in
+    "core/v1/generations/$ingress_generation/core-ingress.sh"|\
+    "core/v1/generations/$ingress_generation/modules/schema.jq"|\
+    "core/v1/generations/$ingress_generation/modules/profile_graph.jq"|\
+    "core/v1/generations/$ingress_generation/modules/stage_request.jq"|\
+    "core/v1/generations/$ingress_generation/modules/result_facts.jq"|\
+    "core/v1/generations/$ingress_generation/modules/result_truth.jq") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ingress_guard_paths_ok() {
+  local paths_file="$1"
+  local candidate_path
+  while IFS= read -r candidate_path; do
+    ingress_private_generation_path_ok "$candidate_path" || return 1
+  done < "$paths_file"
+}
+
+if ingress_guard_paths_ok "$guard_paths" &&
+   grep -Fqx "core/v1/generations/$ingress_generation/core-ingress.sh" "$guard_paths" &&
+   grep -Fqx "core/v1/generations/$ingress_generation/modules/schema.jq" "$guard_paths" &&
    [ ! -e "$ingress_repo/scripts/core-contract.sh" ] &&
    [ ! -e "$ingress_repo/core/v1/generations/$ingress_generation/contracts.jq" ] &&
    [ -z "$(find "$ingress_repo/core/v1/generations/$ingress_generation" -type l -print -quit)" ]; then
@@ -899,6 +982,21 @@ if [ "$(cat "$guard_paths")" = "$expected_generation_files" ] &&
 else
   ingress_guard_total=$((ingress_guard_total + 1))
   fail_case 'private generation guard'
+fi
+planned_guard_paths="$ingress_tmp/planned-generation-files"
+cp "$guard_paths" "$planned_guard_paths"
+printf '%s\n' \
+  "core/v1/generations/$ingress_generation/modules/profile_graph.jq" \
+  "core/v1/generations/$ingress_generation/modules/stage_request.jq" \
+  "core/v1/generations/$ingress_generation/modules/result_facts.jq" \
+  "core/v1/generations/$ingress_generation/modules/result_truth.jq" >> \
+  "$planned_guard_paths"
+if ingress_guard_paths_ok "$planned_guard_paths"; then
+  ingress_direct_total=$((ingress_direct_total + 1))
+  ingress_direct_passed=$((ingress_direct_passed + 1))
+else
+  ingress_direct_total=$((ingress_direct_total + 1))
+  fail_case 'private generation guard rejected a planned module'
 fi
 if [ "$(git -C "$ingress_repo" ls-tree HEAD \
        "core/v1/generations/$ingress_generation/modules/schema.jq" | awk '{print $3}')" = \
