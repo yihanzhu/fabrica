@@ -987,10 +987,10 @@ else
 fi
 
 manifest_prefix="$stage_tmp/manifest-prefix"
-head -n 104 "$stage_manifest" > "$manifest_prefix"
+head -n 108 "$stage_manifest" > "$manifest_prefix"
 if [ "$(sha256_path "$manifest_prefix")" = \
-     "a3b3b998216d5d323ec1a51b0761192e2986ebfdb743eeab4e38444d9e9d902f" ] &&
-   [ "$(sed -n '105,108p' "$stage_manifest")" = "$required_paths" ]; then
+     "f07a3325080bf7c3ad98a2aaaa70f6d89f781d110f7f400be3729c0ddb0c25c6" ] &&
+   [ "$(sed -n '109,112p' "$stage_manifest")" = "$required_paths" ]; then
   guard_pass
 else
   guard_fail "restore manifest exact append"
