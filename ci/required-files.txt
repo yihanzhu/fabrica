@@ -123,3 +123,13 @@ scripts/test/portable-core-assembly-fixtures.jq
 scripts/test/portable-core-assembly-ledger.tsv
 scripts/test/portable-core-assembly.test.sh
 scripts/core-contract.sh
+
+# Inactive portable profile resolver v1
+resolver/v1/profile-resolve-runtime.sh
+resolver/v1/profile-resolution.jq
+resolver/v1/nofollow-snapshot.c
+scripts/lib/profile-resolution.sh
+scripts/test/portable-profile-resolution-launcher.c
+scripts/test/portable-profile-resolution-loader-trap.c
+scripts/test/portable-profile-resolution-fixtures.sh
+scripts/test/portable-profile-resolution.test.sh
