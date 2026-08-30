@@ -118,3 +118,7 @@ core/v1/generations/g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8d
 scripts/test/portable-core-result-truth-fixtures.jq
 scripts/test/portable-core-result-truth-ledger.tsv
 scripts/test/portable-core-result-truth.test.sh
+core/v1/generations/g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386/contracts.jq
+scripts/test/portable-core-assembly-fixtures.jq
+scripts/test/portable-core-assembly-ledger.tsv
+scripts/test/portable-core-assembly.test.sh

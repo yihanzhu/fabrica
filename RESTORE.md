@@ -247,6 +247,25 @@ a fork).
 
 ---
 
+## 4a. Restore the portable contract validator
+
+The stable manual command is [`scripts/core-contract.sh`](scripts/core-contract.sh).
+Its selected root, ingress boundary, five private modules, fixtures, ledgers, and tests
+are all listed in [`ci/required-files.txt`](ci/required-files.txt). Restore those files
+from the same commit; do not mix generations or edit a published generation in place.
+
+Install jq 1.6 on `PATH`, confirm `jq --version` prints `jq-1.6`, then run:
+
+```sh
+bash scripts/test/portable-core-assembly.test.sh
+```
+
+The proof checks the fixed package, public error boundary, and the complete 34-row and
+279-row migration ledgers. It does not install or activate a profile, contact a target,
+or grant authority. The existing `/yshifu` restore path remains separate.
+
+---
+
 ## 5. Smoke test — prove the rebuilt team is alive
 
 **Pre-flight first.** Before running the full live loop, run the read-only self-check

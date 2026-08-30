@@ -241,6 +241,23 @@ so yshifu's decisions rest on evidence. This is a **prompt-level** wiring: it ta
 effect once `scripts/install.sh` regenerates the live `/yshifu` command, not merely by
 merging the doc change — `doctor.sh`'s static validation is unaffected.
 
+## Portable contract validator
+
+`scripts/core-contract.sh` is the stable, manual front door for the portable v1
+contract package. It accepts canonical JSON through three fixed forms:
+
+```text
+scripts/core-contract.sh validate-document DOCUMENT
+scripts/core-contract.sh validate-profile-set PROFILE RESOLVED_PROFILE MANIFEST...
+scripts/core-contract.sh validate-stage-run REQUEST RESOLVED_PROFILE RESULT
+```
+
+It requires jq 1.6. Success is silent. Failure prints one `E_*` class without
+printing document bytes or paths. Validation proves only that supplied records match
+the portable structure and relationships. It does not prove provenance, trust, a
+permission grant, or policy approval. No manager, profile, target template, installer,
+or live `/yshifu` path calls this command yet.
+
 ## Layout
 
 ```
@@ -258,6 +275,7 @@ scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a
 scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed issue vs. the north star, post the verdict to the issue verbatim
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
+scripts/core-contract.sh    Manual public front door for the portable v1 contracts
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
