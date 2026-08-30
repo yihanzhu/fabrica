@@ -86,6 +86,8 @@ schema_registry_total=0
 schema_registry_passed=0
 schema_guard_total=0
 schema_guard_passed=0
+schema_numeric_total=0
+schema_numeric_passed=0
 schema_seen_rules="$schema_test_tmp/seen-rules"
 schema_seen_tests="$schema_test_tmp/seen-tests"
 : > "$schema_seen_rules"
@@ -121,6 +123,30 @@ expect_true() {
 
 expect_false() {
   expect_jq "$1" false "$2"
+}
+
+expect_canonical_raw() {
+  local case_id="$1"
+  local expected="$2"
+  local raw_bytes="$3"
+  local raw_input
+  local canonical_output
+  local actual=false
+  schema_numeric_total=$((schema_numeric_total + 1))
+  raw_input="$schema_test_tmp/numeric-$schema_numeric_total.input"
+  canonical_output="$schema_test_tmp/numeric-$schema_numeric_total.canonical"
+  printf '%s' "$raw_bytes" > "$raw_input"
+  if "$schema_jq" -s -S -c \
+      'if length == 1 then .[0] else error("root-count") end' \
+      < "$raw_input" > "$canonical_output" 2>/dev/null &&
+     cmp -s "$raw_input" "$canonical_output"; then
+    actual=true
+  fi
+  if [ "$actual" = "$expected" ]; then
+    schema_numeric_passed=$((schema_numeric_passed + 1))
+  else
+    fail_case "$case_id expected canonical=$expected, got canonical=$actual"
+  fi
 }
 
 mark_rule() {
@@ -166,6 +192,17 @@ expect_true int-boundaries '(0 | schema::int_ok) and (2147483647 | schema::int_o
 expect_false int-negative '-1 | schema::int_ok'
 expect_false int-one-over '2147483648 | schema::int_ok'
 expect_false int-float '1.5 | schema::int_ok'
+expect_false int-negative-zero '-0 | schema::int_ok'
+expect_canonical_raw raw-integer true $'1\n'
+expect_canonical_raw raw-integral-float false $'1.0\n'
+expect_canonical_raw raw-integral-exponent false $'1e0\n'
+expect_canonical_raw raw-fraction true $'1.5\n'
+expect_canonical_raw raw-negative-zero true $'-0\n'
+expect_canonical_raw raw-integer-field-float false $'{"attempt":1.0}\n'
+expect_canonical_raw raw-schema-version-float false \
+  $'{"body":{},"id":"doc.example","kind":"profile","schema_version":1.0}\n'
+expect_canonical_raw raw-schema-version-integer true \
+  $'{"body":{},"id":"doc.example","kind":"profile","schema_version":1}\n'
 mark_rule portable-core-schema.integer-domain
 mark_test portable-core-schema.test.legacy-075-float-value
 mark_test portable-core-schema.test.legacy-077-negative-integer
@@ -477,7 +514,7 @@ guard_paths_ok() {
   done < "$paths_file"
 }
 
-schema_guard_total=17
+schema_guard_total=25
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -542,7 +579,7 @@ schema_live_hits="$schema_test_tmp/live-hits"
 schema_import_hits="$schema_test_tmp/import-hits"
 : > "$schema_live_hits"
 : > "$schema_import_hits"
-schema_import_pattern='import[[:space:]]+"schema"[[:space:]]+as[[:space:]]+'
+schema_import_pattern='(^|[^A-Za-z0-9_])(import|include)[[:space:]]*"schema"'
 while IFS= read -r -d '' schema_tracked_path; do
   if ! schema_scan_result="$(
     git -C "$schema_root" show ":$schema_tracked_path" 2>/dev/null |
@@ -587,30 +624,35 @@ for schema_invalid_path in \
   fi
 done
 
-schema_alias_import="$schema_test_tmp/alias-import.jq"
-schema_whitespace_import="$schema_test_tmp/whitespace-import.jq"
-schema_other_import="$schema_test_tmp/other-import.jq"
-printf '%s\n' 'import "schema" as s;' > "$schema_alias_import"
-printf 'import\t"schema"\n  as\tother ;\n' > "$schema_whitespace_import"
-printf '%s\n' 'import "profile_graph" as schema;' > "$schema_other_import"
-if "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
-    'test($pattern)' < "$schema_alias_import" >/dev/null; then
-  schema_guard_passed=$((schema_guard_passed + 1))
-else
-  fail_case "alternate schema import alias was not detected"
-fi
-if "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
-    'test($pattern)' < "$schema_whitespace_import" >/dev/null; then
-  schema_guard_passed=$((schema_guard_passed + 1))
-else
-  fail_case "legal-whitespace schema import was not detected"
-fi
-if ! "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
-    'test($pattern)' < "$schema_other_import" >/dev/null; then
-  schema_guard_passed=$((schema_guard_passed + 1))
-else
-  fail_case "non-schema import was classified as schema import"
-fi
+schema_load_case() {
+  local case_id="$1"
+  local expected="$2"
+  local source_text="$3"
+  local source_file="$schema_test_tmp/$case_id.jq"
+  local actual=false
+  printf '%s' "$source_text" > "$source_file"
+  if "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
+      'test($pattern)' < "$source_file" >/dev/null; then
+    actual=true
+  fi
+  if [ "$actual" = "$expected" ]; then
+    schema_guard_passed=$((schema_guard_passed + 1))
+  else
+    fail_case "$case_id expected schema-load=$expected, got schema-load=$actual"
+  fi
+}
+
+schema_load_case import-spaced true $'import "schema" as s;\n'
+schema_load_case import-compact true $'import"schema"as s;\n'
+schema_load_case import-arbitrary-alias true $'import "schema" as any_alias_42;\n'
+schema_load_case import-newlines true $'import\n  "schema"\n as\n another_alias;\n'
+schema_load_case import-metadata true $'import"schema"as s {search:"."};\n'
+schema_load_case include-spaced true $'include "schema";\n'
+schema_load_case include-compact true $'include"schema";\n'
+schema_load_case include-newlines true $'include\n  "schema"  ;\n'
+schema_load_case other-module false $'import "profile_graph" as schema;\n'
+schema_load_case longer-module false $'include "schema-extra";\n'
+schema_load_case keyword-substring false $'myimport"schema"as s;\n'
 if guard_paths_ok "$schema_generation_files"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
@@ -727,6 +769,7 @@ printf 'direct cases: %s/%s\n' "$schema_direct_passed" "$schema_direct_total"
 printf 'private route probes: %s/%s\n' "$schema_route_passed" "$schema_route_total"
 printf 'registry cases: %s/%s\n' "$schema_registry_passed" "$schema_registry_total"
 printf 'activation guard cases: %s/%s\n' "$schema_guard_passed" "$schema_guard_total"
+printf 'numeric boundary cases: %s/%s\n' "$schema_numeric_passed" "$schema_numeric_total"
 printf 'review findings accounted for: %s/%s\n' "$schema_review_accounted" "$schema_review_total"
 printf 'legacy assertions accounted for: %s/%s\n' "$schema_legacy_accounted" "$schema_legacy_total"
 printf 'failures: %s\n' "$schema_failures"

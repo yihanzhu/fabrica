@@ -141,7 +141,13 @@ def present_ok(value_ok):
    (.value | value_ok));
 
 def id_ok: type == "string" and test("^[a-z0-9][a-z0-9._:-]{0,127}$");
-def int_ok: type == "number" and . == floor and . >= 0 and . <= 2147483647;
+# Schema receives only values accepted by the raw canonical-byte gate; jq 1.6 preserves -0 here.
+def int_ok:
+  type == "number" and
+  . == floor and
+  . >= 0 and
+  . <= 2147483647 and
+  tostring != "-0";
 def sha256_ok: type == "string" and test("^[0-9a-f]{64}$");
 def version_ok: id_ok;
 def short_text_ok: type == "string" and utf8bytelength >= 1 and utf8bytelength <= 1024;
