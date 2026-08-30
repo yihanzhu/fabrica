@@ -10,7 +10,12 @@ __attribute__((constructor)) static void profile_resolution_loader_marker(void) 
         int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
         if (descriptor >= 0) {
             static const char marker[] = "loaded\n";
-            (void)write(descriptor, marker, sizeof(marker) - 1U);
+            if (write(descriptor, marker, sizeof(marker) - 1U) !=
+                (ssize_t)(sizeof(marker) - 1U)) {
+                (void)close(descriptor);
+                (void)unlink(path);
+                return;
+            }
             (void)close(descriptor);
         }
     }
