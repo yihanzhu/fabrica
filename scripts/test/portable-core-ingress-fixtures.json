@@ -64,6 +64,7 @@
   "owned_rules": [
     "portable-core-ingress.bounded-snapshot",
     "portable-core-ingress.canonical-bytes",
+    "portable-core-ingress.command-routes",
     "portable-core-ingress.driver-snapshot",
     "portable-core-ingress.fixed-generation",
     "portable-core-ingress.fixed-schema-loading",

@@ -202,6 +202,13 @@ escape_file="$ingress_tmp/escape.json"
 no_lf_file="$ingress_tmp/no-lf.json"
 extra_lf_file="$ingress_tmp/extra-lf.json"
 unsorted_file="$ingress_tmp/unsorted.json"
+nan_file="$ingress_tmp/nan.json"
+infinity_file="$ingress_tmp/infinity.json"
+negative_infinity_file="$ingress_tmp/negative-infinity.json"
+leading_plus_file="$ingress_tmp/leading-plus.json"
+leading_zero_file="$ingress_tmp/leading-zero.json"
+trailing_dot_file="$ingress_tmp/trailing-dot.json"
+leading_dot_file="$ingress_tmp/leading-dot.json"
 : > "$empty_file"
 printf '{}\n{}\n' > "$multi_file"
 printf '\357\273\277{}\n' > "$bom_file"
@@ -212,11 +219,17 @@ printf '{"x":"\\u0061"}\n' > "$escape_file"
 printf '{}' > "$no_lf_file"
 printf '{}\n\n' > "$extra_lf_file"
 printf '{"b":1,"a":2}\n' > "$unsorted_file"
+printf 'NaN\n' > "$nan_file"
+printf 'Infinity\n' > "$infinity_file"
+printf '%s\n' -Infinity > "$negative_infinity_file"
+printf '+1\n' > "$leading_plus_file"
+printf '01\n' > "$leading_zero_file"
+printf '1.\n' > "$trailing_dot_file"
+printf '.1\n' > "$leading_dot_file"
 
 start_ingress document
 expect_failure unreadable-input E_RUNTIME portable_core_ingress_snapshot \
   "$ingress_tmp/distinctive-missing-input-SECRET.json"
-mark_test portable-core-ingress.test.legacy-039-validate-profile-set-unreadable-input
 stop_ingress
 
 document_finish_failure() {
@@ -249,6 +262,13 @@ document_finish_failure extra-final-lf E_CANONICAL "$extra_lf_file"
 mark_test portable-core-ingress.test.legacy-057-extra-final-lf-non-canonical
 document_finish_failure unsorted-keys E_CANONICAL "$unsorted_file"
 mark_test portable-core-ingress.test.legacy-059-unsorted-keys-non-canonical
+document_finish_failure non-json-nan E_PARSE "$nan_file"
+document_finish_failure non-json-infinity E_PARSE "$infinity_file"
+document_finish_failure non-json-negative-infinity E_PARSE "$negative_infinity_file"
+document_finish_failure non-json-leading-plus E_PARSE "$leading_plus_file"
+document_finish_failure non-json-leading-zero E_PARSE "$leading_zero_file"
+document_finish_failure non-json-trailing-dot E_PARSE "$trailing_dot_file"
+document_finish_failure non-json-leading-dot E_PARSE "$leading_dot_file"
 mark_rule portable-core-ingress.snapshot-readable
 mark_rule portable-core-ingress.single-root-json
 mark_rule portable-core-ingress.utf8-json
@@ -311,6 +331,69 @@ else
   fail_case 'driver reread mutable caller input'
 fi
 stop_ingress
+
+route_one="$ingress_tmp/route-1.json"
+route_two="$ingress_tmp/route-2.json"
+route_three="$ingress_tmp/route-3.json"
+route_four="$ingress_tmp/route-4.json"
+printf '{"index":1}\n' > "$route_one"
+printf '{"index":2}\n' > "$route_two"
+printf '{"index":3}\n' > "$route_three"
+printf '{"index":4}\n' > "$route_four"
+
+route_driver_case() {
+  local mode="$1"
+  local expected_count="$2"
+  shift 2
+  local route_input
+  start_ingress "$mode"
+  for route_input in "$@"; do
+    portable_core_ingress_snapshot "$route_input"
+  done
+  portable_core_ingress_finish_driver
+  if "$ingress_jq" -e --arg mode "$mode" --argjson count "$expected_count" \
+      '.mode == $mode and (.docs|length) == $count and
+       [.docs[].content.index] == [range(1;($count+1))]' \
+      "$PORTABLE_CORE_INGRESS_DRIVER" >/dev/null; then
+    ingress_direct_total=$((ingress_direct_total + 1))
+    ingress_direct_passed=$((ingress_direct_passed + 1))
+  else
+    ingress_direct_total=$((ingress_direct_total + 1))
+    fail_case "$mode route did not preserve mode, count, and input order"
+  fi
+  stop_ingress
+}
+
+route_driver_case document 1 "$route_one"
+route_driver_case profile-set 4 "$route_one" "$route_two" "$route_three" "$route_four"
+route_driver_case stage-run 3 "$route_one" "$route_two" "$route_three"
+
+route_failure_case() {
+  local mode="$1"
+  local missing_position="$2"
+  local supplied_count="$3"
+  local route_index
+  start_ingress "$mode"
+  for ((route_index = 1; route_index <= supplied_count; route_index++)); do
+    if [ "$route_index" -eq "$missing_position" ]; then
+      expect_failure "route-$mode-missing-$route_index" E_RUNTIME \
+        portable_core_ingress_snapshot "$ingress_tmp/route-missing-$route_index-SECRET.json"
+      break
+    fi
+    portable_core_ingress_snapshot "$ingress_tmp/route-$route_index.json"
+  done
+  stop_ingress
+}
+
+route_failure_case document 1 1
+for route_position in 1 2 3 4; do
+  route_failure_case profile-set "$route_position" 4
+done
+for route_position in 1 2 3; do
+  route_failure_case stage-run "$route_position" 3
+done
+mark_rule portable-core-ingress.command-routes
+mark_test portable-core-ingress.test.legacy-039-validate-profile-set-unreadable-input
 
 runtime_failure() {
   local case_id="$1"
@@ -486,7 +569,7 @@ stop_ingress
 start_ingress document
 jq_canonical_fail="$ingress_tmp/jq-canonical-fail"
 printf '%s\n' '#!/bin/sh' \
-  'case " $* " in *" -s -e "*) exit 0 ;; esac' \
+  'case " $* " in *" -s -e "*|*" -Rse "*) exit 0 ;; esac' \
   'printf "%s\\n" "jq SECRET path" >&2' \
   'exit 1' > "$jq_canonical_fail"
 chmod +x "$jq_canonical_fail"
@@ -714,14 +797,33 @@ fi
 manifest_prefix="$ingress_tmp/current-manifest-prefix"
 manifest_base_lines="$("$ingress_jq" -r '.metadata.prior_manifest_lines' "$ingress_fixture")"
 manifest_base_digest="$("$ingress_jq" -r '.metadata.prior_manifest_sha256' "$ingress_fixture")"
-head -n "$manifest_base_lines" "$ingress_manifest" > "$manifest_prefix"
-if [ "$(sha256_path "$manifest_prefix")" = "$manifest_base_digest" ] &&
-   [ "$(tail -n 4 "$ingress_manifest")" = "$required_paths" ]; then
+manifest_block_start=$((manifest_base_lines + 1))
+manifest_block_end=$((manifest_base_lines + 4))
+
+ingress_manifest_block_ok() {
+  local candidate_manifest="$1"
+  head -n "$manifest_base_lines" "$candidate_manifest" > "$manifest_prefix"
+  [ "$(sha256_path "$manifest_prefix")" = "$manifest_base_digest" ] &&
+    [ "$(sed -n "${manifest_block_start},${manifest_block_end}p" "$candidate_manifest")" = \
+      "$required_paths" ]
+}
+
+if ingress_manifest_block_ok "$ingress_manifest"; then
   ingress_guard_total=$((ingress_guard_total + 1))
   ingress_guard_passed=$((ingress_guard_passed + 1))
 else
   ingress_guard_total=$((ingress_guard_total + 1))
   fail_case 'restore manifest is not an exact append'
+fi
+growing_manifest="$ingress_tmp/growing-manifest"
+cp "$ingress_manifest" "$growing_manifest"
+printf '%s\n' 'scripts/test/future-portable-core-unit.test.sh' >> "$growing_manifest"
+if ingress_manifest_block_ok "$growing_manifest"; then
+  ingress_guard_total=$((ingress_guard_total + 1))
+  ingress_guard_passed=$((ingress_guard_passed + 1))
+else
+  ingress_guard_total=$((ingress_guard_total + 1))
+  fail_case 'restore manifest proof rejected a later append'
 fi
 mark_rule portable-core-ingress.restore-manifest
 
