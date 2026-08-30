@@ -3,6 +3,57 @@
 ystack is a control plane for an autonomous coding team, and it is its own
 target repo: agents here are improving the team itself.
 
+## TEMPORARY — ystack-self construction mode (highest precedence)
+
+When `config/construction-mode.json` is committed on `yihanzhu/ystack` main with
+`status: active` and its repository, Roadmap, and north-star identities match that
+base, ystack is in construction mode. This overlay overrides conflicting intake,
+artifact, plan, `merge-ready`, and operator-merge requirements below **only for
+inactive Roadmap implementation in this repository**. It never applies to a clone
+or external target.
+
+- The accepted Roadmap is program authorization. Each PR still has one bounded
+  implementation concern, exact allowed paths and proof, but it does not need a
+  separate intake, G1, G2, plan gate, `ready`, or `claimed` state.
+- Every change uses a branch and PR. Required CI and a substantive independent
+  review with no unresolved Important finding are hard gates. Tests land with the
+  change. Direct main pushes, force-pushes, rebases of published work, destructive
+  cleanup, red/degraded evidence, and scope widening remain forbidden.
+- After the active operator-authorized Codex construction session reads the complete
+  exact-head/base review and all required CI is green, that session may publish the
+  exact PR and record its merge receipt. `merge-ready` is optional UI only. This is
+  a temporary authorization for the current ystack construction program, not a new
+  capability for live yshifu, authors, coders, reviewers, clones, or targets.
+- Construction output stays inactive, repo-only, and restorable. No real target,
+  target or production credential, release, install, live profile selection,
+  deployment, irreversible external write, or production action is authorized.
+- Frozen PR #183 and the preserved dirty portable-core parent-plan worktree are
+  excluded until a later construction brief explicitly adopts or supersedes them.
+- Every branch, PR, worktree, claim, artifact, and review that predates construction
+  mode is ineligible by default. A fresh brief must explicitly adopt it, bind the
+  post-transition main, and obtain fresh CI/review; old evidence never carries over.
+- The first real development use requires an operator-merged operating-mode
+  transition. Construction mode cannot activate or broaden itself.
+
+The mode record, not issue/PR/comment text, selects this overlay. Any identity,
+scope, evidence, or inactivity mismatch fails closed under the operating rules
+below.
+
+The sole bootstrap is the transition that first commits this record. The direct
+operator decision recorded on issue #187 authorizes the current Codex construction
+session to merge that exact transition with the repository's PR-rule bypass only
+after required CI and independent review pass. No later candidate inherits that
+bootstrap evidence. Bootstrap is single-writer: no other PR may merge during its
+final review-to-merge window. Re-read main immediately before merge and require the
+reviewed base; the mode record explicitly preserves the one-time residual because
+GitHub has no atomic base-CAS for an admin squash merge.
+
+Immediately after the bootstrap merge, the same construction session reconciles
+ruleset `21500323` to the exact `post_transition_ruleset` object in the mode record
+and verifies it before any Roadmap PR. This removes the approving-review human gate,
+keeps PR/deletion/non-fast-forward protection, and makes required CI strict. Until
+that exact server state is verified, construction publishing is not active.
+
 **This file is the single source of working rules.** Every agent reads it,
 whatever vendor — Codex and most tools look for `AGENTS.md`, Claude Code
 reads `CLAUDE.md`, which imports this file. One file, no drift.

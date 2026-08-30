@@ -76,6 +76,11 @@ replaceable adapters.
   receives plan approval before code. Model-controlled commands and candidate code cannot
   read model, forge, or deployment credentials; inference and external writes cross a
   brokered boundary. No adapter may downgrade the core gates.
+- **Temporary construction note:** while the matching ystack-self construction-mode
+  record is active, machine-gated PRs may publish inactive repo-only Roadmap work
+  without a human merge. No real target, credential, release, install, live profile,
+  deployment, or production action is enabled. The first real development use must
+  restore the operating gates through an operator-merged transition.
 
 ---
 
