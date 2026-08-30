@@ -87,3 +87,10 @@ scripts/test/north-star-gate.test.sh
 scripts/test/models-conf-parser.test.sh
 scripts/test/codex-degraded-gate.test.sh
 scripts/test/run-all.sh
+
+# Inactive portable core generation under construction
+core/v1/generation-registry.json
+core/v1/generations/g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386/modules/schema.jq
+scripts/test/portable-core-schema-fixtures.json
+scripts/test/portable-core-schema-ledger.tsv
+scripts/test/portable-core-schema.test.sh
