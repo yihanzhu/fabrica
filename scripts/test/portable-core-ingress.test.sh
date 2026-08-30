@@ -361,7 +361,9 @@ python3 - "$ingress_tmp/depth-32.json" "$ingress_tmp/depth-33.json" \
   "$ingress_tmp/deep-object-duplicate.json" \
   "$ingress_tmp/deep-object-unsorted.json" \
   "$ingress_tmp/deep-high-surrogate.json" \
-  "$ingress_tmp/deep-low-surrogate.json" <<'PY'
+  "$ingress_tmp/deep-low-surrogate.json" \
+  "$ingress_tmp/depth-empty-32.json" \
+  "$ingress_tmp/depth-empty-33.json" <<'PY'
 import json
 import sys
 
@@ -408,6 +410,8 @@ open(sys.argv[21], "wb").write(object_prefix + b'{"a":0,"a":1}' + object_suffix 
 open(sys.argv[22], "wb").write(object_prefix + b'{"b":0,"a":1}' + object_suffix + b"\n")
 open(sys.argv[23], "wb").write(b"[" * 129 + b'"\\uD800"' + b"]" * 129 + b"\n")
 open(sys.argv[24], "wb").write(b"[" * 129 + b'"\\uDC00"' + b"]" * 129 + b"\n")
+open(sys.argv[25], "wb").write(b"[" * 32 + b"[]" + b"]" * 32 + b"\n")
+open(sys.argv[26], "wb").write(b"[" * 33 + b"[]" + b"]" * 33 + b"\n")
 PY
 [ "$(wc -c < "$ingress_tmp/deep-wide.json" | tr -d ' ')" -eq 1000000 ]
 [ "$(wc -c < "$ingress_tmp/deep-wide-malformed.json" | tr -d ' ')" -eq 999999 ]
@@ -421,6 +425,13 @@ start_ingress document
 portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
 expect_failure depth-33-limit E_LIMIT portable_core_ingress_finish_driver
 stop_ingress
+start_ingress document
+expect_success depth-empty-32-snapshot portable_core_ingress_snapshot \
+  "$ingress_tmp/depth-empty-32.json"
+expect_success depth-empty-32-driver portable_core_ingress_finish_driver
+stop_ingress
+document_finish_failure depth-empty-33-limit E_LIMIT \
+  "$ingress_tmp/depth-empty-33.json"
 start_ingress document
 portable_core_ingress_snapshot "$ingress_tmp/depth-257.json"
 expect_failure depth-257-limit E_LIMIT portable_core_ingress_finish_driver

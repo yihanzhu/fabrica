@@ -402,6 +402,9 @@ portable_core_ingress_analyze() {
         function key_expected() {
           return depth > 0 && (frame[depth] == 4 || frame[depth] == 5)
         }
+        function record_value_depth() {
+          if (depth > max_depth) max_depth = depth
+        }
         function complete_value() {
           if (depth == 0) {
             if (root_state != 1) { fail_parse(); return }
@@ -478,6 +481,7 @@ portable_core_ingress_analyze() {
         }
         function start_atom(byte) {
           if (!value_expected()) { fail_parse(); return }
+          record_value_depth()
           begin_token("value", byte)
           if (byte == 116) {
             token_state = "literal"; literal_kind = 1; literal_pos = 1;
@@ -547,8 +551,8 @@ portable_core_ingress_analyze() {
         }
         function push_container(byte) {
           if (!value_expected()) { fail_parse(); return }
+          record_value_depth()
           depth++
-          if (depth > max_depth) max_depth = depth
           if (byte == 91) frame[depth] = 1
           else {
             frame[depth] = 4
@@ -582,7 +586,10 @@ portable_core_ingress_analyze() {
           if (depth == 0 && root_state == 2) { fail_parse(); return }
           if (byte == 34) {
             if (key_expected()) begin_token("key", byte)
-            else if (value_expected()) begin_token("value", byte)
+            else if (value_expected()) {
+              record_value_depth()
+              begin_token("value", byte)
+            }
             else { fail_parse(); return }
             in_string = 1
             escape_state = 0
