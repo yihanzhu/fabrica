@@ -4,6 +4,18 @@ This document records the direction between the north star and individual
 `work/<slug>/` initiatives. It preserves the architecture decisions that future
 specs and plans must follow. It is not an implementation plan by itself.
 
+While the ystack-self `config/construction-mode.json` record is active and matches
+this file's Git blob, the numbered rollout is also the bounded program authorization
+for inactive repository construction. Each change remains one reviewable Roadmap
+unit with required CI and independent review, but it does not repeat the operating
+artifact or human gates. This temporary exception never applies to an external
+target and ends before the first real development use.
+
+Construction reaches `implementation-complete`: code, contracts, adapters,
+orchestration, publisher, deploy/rollback surfaces, and hermetic tests may be built,
+but real-target qualification, live credentials, profile/install activation,
+deployment, and production feedback remain unclaimed until operating mode.
+
 The reference model is Anthropic's
 [AI-Native SDLC Playbook](https://claude.com/blog/the-ai-native-sdlc-playbook),
 supplemented by its
@@ -209,6 +221,11 @@ scope to its named shadow or eval gate before authority resumes.
 
 ## Risk-tiered gates
 
+The operating gates in this section are deliberately dormant during matching
+ystack-self construction mode. Construction keeps CI, independent review,
+inactivity, repository scope, and reversible ancestry as hard machine gates. An
+operator-merged operating-mode transition restores the gates before real use.
+
 The target policy is:
 
 - **High risk** — constitution paths, workflows, identity/auth, security
@@ -280,7 +297,9 @@ The operating dashboard should pair flow and quality:
 ## Rollout sequence
 
 The roadmap is intentionally ordered by dependency, not by playbook stage name.
-Each numbered item becomes its own intent/spec/plan chain and small PRs.
+In operating mode, each numbered item becomes its own intent/spec/plan chain and
+small PRs. In matching ystack-self construction mode, the sequence is implemented
+directly as bounded, dependency-ordered implementation units.
 
 1. **Portable control-plane core** — canonical contracts, typed stage results,
    evidence and references to qualification records, capability manifests, profile

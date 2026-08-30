@@ -23,6 +23,7 @@ manager/CLAUDE.md
 # Model tiering config (shipped defaults; per-target override convention documented
 # in README.md's "Model policy" section)
 config/models.conf
+config/construction-mode.json
 
 # Routines (paste-ready Claude instructions)
 routines/coder.md
@@ -85,3 +86,4 @@ scripts/test/north-star-resolver.test.sh
 scripts/test/north-star-gate.test.sh
 scripts/test/models-conf-parser.test.sh
 scripts/test/codex-degraded-gate.test.sh
+scripts/test/run-all.sh

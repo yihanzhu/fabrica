@@ -4,6 +4,44 @@ The review policy for every PR in this repo — applied by any reviewer, human o
 agent, in either lane (in-session Codex review today, the review workflow in the
 autonomous lane).
 
+## Construction-mode review overlay
+
+For an exact PR whose reviewed base contains an active, matching
+`config/construction-mode.json`, review against that committed mode and the pinned
+Roadmap instead of requiring the normal artifact chain. This overlay is ystack-self
+only.
+
+No pre-mode branch, PR, worktree, claim, artifact, or review is eligible merely
+because its base later contains the mode. Require a fresh post-activation construction
+brief, explicit adoption, a base on post-transition main, and fresh CI/review. Old
+evidence is always stale.
+
+Mark the candidate not-pass for any Important finding, including: more than one
+Roadmap concern; an unbriefed path or operation; missing tests; red, missing, stale,
+or degraded proof; a mode/Roadmap/north-star mismatch; changes to frozen PR #183 or
+the preserved portable-core plan; real-target or credential access; release,
+install, profile activation, deployment, irreversible external writes; direct main
+write or history rewrite; or a repository state that would not remain CI-green,
+restorable, coherent, and inactive after merge.
+
+The mode record's required restore-manifest entries are immutable. New
+restore-critical files may append their exact entries; removing or changing a
+required entry is Important.
+
+The reviewer stays read-only. The active operator-authorized Codex construction
+session reads the complete review. Only a clean exact head/base may be published.
+`merge-ready` is not evidence or authority in this mode. That construction session
+rechecks mode, head, base, CI, review identity, and the resulting merge receipt. No
+shipped or capability-separated publisher is claimed by this temporary overlay.
+
+For the bootstrap transition only, verify the recorded single-writer invariant and
+the reviewed base immediately before its one-time admin merge, and disclose the
+recorded non-atomic base-check residual. After bootstrap, require the exact strict
+post-transition ruleset before calling any candidate exact-base reviewed.
+
+All other repositories and any inactive/mismatched mode use the operating review
+rules below.
+
 ## Passes
 
 Before every review attempt, the active manager removes `merge-ready` if present and
