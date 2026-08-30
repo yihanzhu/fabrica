@@ -457,23 +457,27 @@ fi
 mark_rule portable-core-schema.generation-registry-entry
 mark_rule portable-core-schema.generation-registry-prefix
 
+private_generation_path_ok() {
+  case "$1" in
+    "core/v1/generations/$schema_generation/core-ingress.sh"|\
+    "core/v1/generations/$schema_generation/modules/schema.jq"|\
+    "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
+    "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
+    "core/v1/generations/$schema_generation/modules/result_facts.jq"|\
+    "core/v1/generations/$schema_generation/modules/result_truth.jq") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 guard_paths_ok() {
   local paths_file="$1"
   local generation_path
   while IFS= read -r generation_path; do
-    case "$generation_path" in
-      "core/v1/generations/$schema_generation/core-ingress.sh"|\
-      "core/v1/generations/$schema_generation/modules/schema.jq"|\
-      "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
-      "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
-      "core/v1/generations/$schema_generation/modules/result_facts.jq"|\
-      "core/v1/generations/$schema_generation/modules/result_truth.jq") ;;
-      *) return 1 ;;
-    esac
+    private_generation_path_ok "$generation_path" || return 1
   done < "$paths_file"
 }
 
-schema_guard_total=11
+schema_guard_total=17
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -518,56 +522,94 @@ if [ "$schema_loaded_identity" = "core.contracts.v1" ]; then
 else
   fail_case "ambient module path changed the fixed schema import"
 fi
-schema_live_hits="$schema_test_tmp/live-hits"
-private_mentions_ok() {
-  local mentions_file="$1"
-  local mention_path
-  while IFS= read -r mention_path; do
-    mention_path="${mention_path#"$schema_root/"}"
-    case "$mention_path" in
-      scripts/test/portable-core-*) ;;
-      *) return 1 ;;
+tracked_activation_paths_ok() {
+  local paths_file="$1"
+  local activation_path
+  local test_path
+  while IFS= read -r activation_path; do
+    case "$activation_path" in
+      ci/required-files.txt|core/v1/generation-registry.json) ;;
+      scripts/test/portable-core-*)
+        test_path="${activation_path#scripts/test/}"
+        case "$test_path" in */*) return 1 ;; esac
+        ;;
+      *) private_generation_path_ok "$activation_path" || return 1 ;;
     esac
-  done < "$mentions_file"
+  done < "$paths_file"
 }
 
-grep -RIl -- "$schema_generation" \
-  "$schema_root/manager" "$schema_root/routines" "$schema_root/templates" \
-  "$schema_root/reviewer" "$schema_root/config" "$schema_root/scripts" \
-  "$schema_root/README.md" "$schema_root/QUICKSTART.md" "$schema_root/RESTORE.md" \
-  > "$schema_live_hits" 2>/dev/null || true
-if private_mentions_ok "$schema_live_hits"; then
+schema_live_hits="$schema_test_tmp/live-hits"
+schema_import_hits="$schema_test_tmp/import-hits"
+: > "$schema_live_hits"
+: > "$schema_import_hits"
+schema_import_pattern='import[[:space:]]+"schema"[[:space:]]+as[[:space:]]+'
+while IFS= read -r -d '' schema_tracked_path; do
+  if ! schema_scan_result="$(
+    git -C "$schema_root" show ":$schema_tracked_path" 2>/dev/null |
+      "$schema_jq" -Rsr \
+        --arg generation "$schema_generation" \
+        --arg import_pattern "$schema_import_pattern" \
+        '[contains($generation),test($import_pattern)] | @tsv'
+  )"; then
+    fail_case "unable to scan tracked path: $schema_tracked_path"
+    continue
+  fi
+  IFS=$'\t' read -r schema_has_generation schema_has_import <<< "$schema_scan_result"
+  if [ "$schema_has_generation" = true ]; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_live_hits"
+  fi
+  if [ "$schema_has_import" = true ]; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_import_hits"
+  fi
+done < <(git -C "$schema_root" ls-files -z)
+
+if tracked_activation_paths_ok "$schema_live_hits"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "generation ID appears in a live, public, or non-private-test file"
+  fail_case "generation ID appears outside the closed tracked-path allowlist"
 fi
-cp "$schema_live_hits" "$schema_test_tmp/invalid-live-hits"
-printf '%s\n' "$schema_root/scripts/portable-core-loader.sh" >> \
-  "$schema_test_tmp/invalid-live-hits"
-if ! private_mentions_ok "$schema_test_tmp/invalid-live-hits"; then
+if tracked_activation_paths_ok "$schema_import_hits"; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "private mention guard accepted a synthetic live prefixed caller"
+  fail_case "schema import appears outside the closed tracked-path allowlist"
 fi
-schema_non_test_loaders="$schema_test_tmp/non-test-loaders"
-grep -RIl -- 'import "schema" as schema' "$schema_root" \
-  > "$schema_non_test_loaders" 2>/dev/null || true
-schema_loaders_ok=true
-while IFS= read -r schema_loader; do
-  schema_loader="${schema_loader#"$schema_root/"}"
-  case "$schema_loader" in
-    "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
-    "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
-    "core/v1/generations/$schema_generation/modules/result_facts.jq"|\
-    "core/v1/generations/$schema_generation/modules/result_truth.jq"|\
-    scripts/test/portable-core-*) ;;
-    *) schema_loaders_ok=false ;;
-  esac
-done < "$schema_non_test_loaders"
-if [ "$schema_loaders_ok" = true ]; then
+
+for schema_invalid_path in \
+  .claude/hooks/portable-core-loader.sh \
+  core/other/loader.jq \
+  docs/portable-core.md \
+  scripts/portable-core-loader.sh; do
+  printf '%s\n' "$schema_invalid_path" > "$schema_test_tmp/invalid-tracked-path"
+  if ! tracked_activation_paths_ok "$schema_test_tmp/invalid-tracked-path"; then
+    schema_guard_passed=$((schema_guard_passed + 1))
+  else
+    fail_case "tracked-path guard accepted: $schema_invalid_path"
+  fi
+done
+
+schema_alias_import="$schema_test_tmp/alias-import.jq"
+schema_whitespace_import="$schema_test_tmp/whitespace-import.jq"
+schema_other_import="$schema_test_tmp/other-import.jq"
+printf '%s\n' 'import "schema" as s;' > "$schema_alias_import"
+printf 'import\t"schema"\n  as\tother ;\n' > "$schema_whitespace_import"
+printf '%s\n' 'import "profile_graph" as schema;' > "$schema_other_import"
+if "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
+    'test($pattern)' < "$schema_alias_import" >/dev/null; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "a public, unknown, or non-test caller loads the incomplete schema"
+  fail_case "alternate schema import alias was not detected"
+fi
+if "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
+    'test($pattern)' < "$schema_whitespace_import" >/dev/null; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "legal-whitespace schema import was not detected"
+fi
+if ! "$schema_jq" -Rse --arg pattern "$schema_import_pattern" \
+    'test($pattern)' < "$schema_other_import" >/dev/null; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "non-schema import was classified as schema import"
 fi
 if guard_paths_ok "$schema_generation_files"; then
   schema_guard_passed=$((schema_guard_passed + 1))
