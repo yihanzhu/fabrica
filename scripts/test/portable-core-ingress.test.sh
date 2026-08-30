@@ -258,10 +258,9 @@ mark_test portable-core-ingress.test.legacy-081-sanitized-input-diagnostics
 
 python3 - "$ingress_tmp/at-limit.json" "$ingress_tmp/over-limit.json" <<'PY'
 import sys
-prefix = b'{"x":"'
-suffix = b'"}\n'
-limit = 1048576
-payload = prefix + (b'a' * (limit - len(prefix) - len(suffix))) + suffix
+items = ([b'a' * 8192] * 127) + [b'b' * 7806]
+payload = b'["' + b'","'.join(items) + b'"]\n'
+assert len(payload) == 1048576
 open(sys.argv[1], 'wb').write(payload)
 open(sys.argv[2], 'wb').write(payload + b'x')
 PY
@@ -571,7 +570,9 @@ package_product="$package_generation_dir/core-ingress.sh"
 package_root="$package_generation_dir/contracts.jq"
 
 printf '%s\n' 'import "schema" as schema;' \
-  'if schema::semantic_identity == "core.contracts.v1" then "E_SHAPE" else error("identity") end' \
+  'if (.docs[0].content | schema::parsed_limits_ok | not) then "E_LIMIT"' \
+  'elif (.docs[0].content | schema::document_envelope_ok | not) then "E_SHAPE"' \
+  'else empty end' \
   > "$package_root"
 # shellcheck source=/dev/null
 source "$package_product"
@@ -710,12 +711,11 @@ else
   ingress_guard_total=$((ingress_guard_total + 1))
   fail_case 'restore manifest coverage'
 fi
-manifest_base="$ingress_tmp/base-manifest"
 manifest_prefix="$ingress_tmp/current-manifest-prefix"
-git -C "$ingress_repo" show d48ecdb908a395c5205260a662db7d9d3f4c1eb4:ci/required-files.txt \
-  > "$manifest_base"
-head -n "$(wc -l < "$manifest_base" | tr -d ' ')" "$ingress_manifest" > "$manifest_prefix"
-if cmp -s "$manifest_base" "$manifest_prefix" &&
+manifest_base_lines="$("$ingress_jq" -r '.metadata.prior_manifest_lines' "$ingress_fixture")"
+manifest_base_digest="$("$ingress_jq" -r '.metadata.prior_manifest_sha256' "$ingress_fixture")"
+head -n "$manifest_base_lines" "$ingress_manifest" > "$manifest_prefix"
+if [ "$(sha256_path "$manifest_prefix")" = "$manifest_base_digest" ] &&
    [ "$(tail -n 4 "$ingress_manifest")" = "$required_paths" ]; then
   ingress_guard_total=$((ingress_guard_total + 1))
   ingress_guard_passed=$((ingress_guard_passed + 1))

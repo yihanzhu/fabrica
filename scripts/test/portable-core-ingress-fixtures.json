@@ -8,6 +8,8 @@
     "review_source_sha256": "31793a3ad42acf4df117ea158a78738e056bae550269483870487c3e146b27f9",
     "legacy_source_sha256": "3d5a6fb192f9bcaba5c4b89314d30f88a03b9d8a1e1e634297c267b14f096092",
     "ingress_mapping_sha256": "cadaa1c5752e3cd13ee556bbae5aa7bf95130cceb044a6ef4bf569e70434e361",
+    "prior_manifest_lines": 96,
+    "prior_manifest_sha256": "1dd31b6a65e37e5d441400002ee97ec1a3cd9fc76d8d95b577f3af596903c752",
     "review_rows": 2,
     "legacy_rows": 38,
     "review_row_ids": [
