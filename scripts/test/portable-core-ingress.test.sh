@@ -311,7 +311,10 @@ PY
 [ "$(wc -c < "$ingress_tmp/over-limit.json" | tr -d ' ')" -eq 1048577 ]
 
 python3 - "$ingress_tmp/depth-32.json" "$ingress_tmp/depth-33.json" \
-  "$ingress_tmp/depth-257.json" "$ingress_tmp/depth-string.json" <<'PY'
+  "$ingress_tmp/depth-257.json" "$ingress_tmp/depth-string.json" \
+  "$ingress_tmp/depth-33-malformed.json" \
+  "$ingress_tmp/depth-33-noncanonical.json" \
+  "$ingress_tmp/depth-257-noncanonical.json" <<'PY'
 import json
 import sys
 
@@ -320,6 +323,9 @@ for path, depth in zip(sys.argv[1:4], (32, 33, 257)):
 value = ("[{" * 40) + '"quoted"' + "\\" + ("]}" * 40)
 encoded = json.dumps({"x": value}, ensure_ascii=False, separators=(",", ":")) + "\n"
 open(sys.argv[4], "wb").write(encoded.encode())
+open(sys.argv[5], "wb").write(("[" * 33 + "0" + "]" * 32 + "\n").encode())
+open(sys.argv[6], "wb").write(("[" * 33 + " 0" + "]" * 33 + "\n").encode())
+open(sys.argv[7], "wb").write(("[" * 257 + " 0" + "]" * 257 + "\n").encode())
 PY
 
 start_ingress document
@@ -334,6 +340,12 @@ start_ingress document
 portable_core_ingress_snapshot "$ingress_tmp/depth-257.json"
 expect_failure depth-257-limit E_LIMIT portable_core_ingress_finish_driver
 stop_ingress
+document_finish_failure depth-33-malformed E_PARSE \
+  "$ingress_tmp/depth-33-malformed.json"
+document_finish_failure depth-33-noncanonical E_CANONICAL \
+  "$ingress_tmp/depth-33-noncanonical.json"
+document_finish_failure depth-257-noncanonical E_CANONICAL \
+  "$ingress_tmp/depth-257-noncanonical.json"
 start_ingress document
 expect_success depth-string-snapshot portable_core_ingress_snapshot "$ingress_tmp/depth-string.json"
 expect_success depth-string-driver portable_core_ingress_finish_driver
@@ -380,7 +392,18 @@ stop_ingress
 start_ingress profile-set
 portable_core_ingress_snapshot "$ingress_tmp/unclosed-within-depth.json"
 portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
-expect_failure multi-depth-precheck-before-jq-parse E_LIMIT portable_core_ingress_finish_driver
+expect_failure multi-parse-before-depth E_PARSE portable_core_ingress_finish_driver
+stop_ingress
+start_ingress profile-set
+portable_core_ingress_snapshot "$ingress_tmp/depth-33-noncanonical.json"
+portable_core_ingress_snapshot "$ingress_tmp/unclosed-within-depth.json"
+expect_failure multi-deep-parse-before-canonical E_PARSE portable_core_ingress_finish_driver
+stop_ingress
+start_ingress profile-set
+portable_core_ingress_snapshot "$ingress_tmp/depth-33.json"
+portable_core_ingress_snapshot "$ingress_tmp/depth-257-noncanonical.json"
+expect_failure multi-deep-canonical-before-limit E_CANONICAL \
+  portable_core_ingress_finish_driver
 stop_ingress
 document_finish_failure unclosed-within-depth E_PARSE "$ingress_tmp/unclosed-within-depth.json"
 

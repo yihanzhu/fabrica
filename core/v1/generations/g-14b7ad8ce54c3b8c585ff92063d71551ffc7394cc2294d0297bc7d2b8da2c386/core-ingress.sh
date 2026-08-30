@@ -385,6 +385,119 @@ portable_core_ingress_snapshot() {
   PORTABLE_CORE_INGRESS_COUNT="$snapshot_number"
 }
 
+portable_core_ingress_stream_canonical() {
+  local raw_path="$1"
+  local canonical_path="$2"
+  local stream_status
+
+  if "$PORTABLE_CORE_INGRESS_JQ" -n --stream -r '
+      def value_kind($value):
+        if ($value | type) == "number" then "array"
+        elif ($value | type) == "string" then "object"
+        else null
+        end;
+      def opener($kind): if $kind == "array" then "[" else "{" end;
+      def closer($kind): if $kind == "array" then "]" else "}" end;
+      def select_child($value):
+        ((.stack | length) - 1) as $top |
+        .stack[$top] as $parent |
+        if $parent.kind == "array" then
+          if (($value | type) != "number") or ($value != $parent.count) then
+            .runtime = false
+          else
+            .out += (if $parent.count > 0 then "," else "" end) |
+            .stack[$top].count += 1 |
+            .stack[$top].last = $value
+          end
+        elif ($value | type) != "string" then
+          .runtime = false
+        else
+          .out += (if $parent.count > 0 then "," else "" end) +
+            ($value | tojson) + ":" |
+          if ($parent.count > 0) and (($parent.last < $value) | not) then
+            .ordered = false
+          else . end |
+          .stack[$top].count += 1 |
+          .stack[$top].last = $value
+        end;
+      def descend($path; $value; $index):
+        if (.runtime | not) then .
+        else
+          select_child($path[$index]) |
+          if (.runtime | not) then .
+          elif ($index + 1) < ($path | length) then
+            value_kind($path[$index + 1]) as $kind |
+            if $kind == null then .runtime = false
+            else
+              .out += opener($kind) |
+              .open_path += [$path[$index]] |
+              .stack += [{kind: $kind, count: 0, last: null}] |
+              descend($path; $value; $index + 1)
+            end
+          else .out += ($value | tojson)
+          end
+        end;
+      reduce inputs as $event
+        ({out: "", stack: [], open_path: [], started: false, done: false,
+          parse: true, runtime: true, ordered: true};
+         ($event[0]) as $path |
+         if ($event | length) == 2 then
+           ($event[1]) as $value |
+           if .done then .parse = false
+           elif (.stack | length) == 0 then
+             if .started then .parse = false
+             elif ($path | length) == 0 then
+               .out = ($value | tojson) | .started = true | .done = true
+             else
+               value_kind($path[0]) as $kind |
+               if $kind == null then .runtime = false
+               else
+                 .out = opener($kind) |
+                 .stack = [{kind: $kind, count: 0, last: null}] |
+                 .started = true |
+                 descend($path; $value; 0)
+               end
+             end
+           else
+             (.stack | length) as $depth |
+             if (($path | length) < $depth) or
+                ($path[0:($depth - 1)] != .open_path) then
+               .runtime = false
+             else descend($path; $value; $depth - 1)
+             end
+           end
+         elif ($event | length) == 1 then
+           (.stack | length) as $depth |
+           if ($depth == 0) or (($path | length) != $depth) or
+              ($path[0:($depth - 1)] != .open_path) or
+              ($path[-1] != .stack[-1].last) then
+             .runtime = false
+           else
+             .out += closer(.stack[-1].kind) |
+             .stack = .stack[0:-1] |
+             .open_path = .open_path[0:-1] |
+             if (.stack | length) == 0 then .done = true else . end
+           end
+         else .runtime = false
+         end)
+      | if (.runtime | not) then halt_error(42)
+        elif (.parse | not) or (.started | not) or (.done | not) or
+             ((.stack | length) != 0) then halt_error(41)
+        elif .ordered then .out
+        else ""
+        end
+    ' "$raw_path" 2>/dev/null > "$canonical_path"; then
+    return 0
+  else
+    stream_status=$?
+  fi
+  case "$stream_status" in
+    5|41) portable_core_ingress_error E_PARSE ;;
+    *) portable_core_ingress_error E_RUNTIME ;;
+  esac
+  return 1
+}
+
 portable_core_ingress_finish_driver() {
   local input_index
   local raw_path
@@ -409,26 +522,9 @@ portable_core_ingress_finish_driver() {
     portable_core_ingress_scan_raw "$raw_path" || return 1
     PORTABLE_CORE_INGRESS_DEPTH_OVER[input_index]="$PORTABLE_CORE_INGRESS_SCAN_DEPTH_OVER"
   done
-  for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
-    if [ "${PORTABLE_CORE_INGRESS_DEPTH_OVER[$input_index]}" = true ]; then
-      portable_core_ingress_error E_LIMIT
-      return 1
-    fi
-  done
   json_token_pattern='(?:[ \t\r\n]+|[\[\]{}:,]|"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*"|(?<![A-Za-z0-9_.+-])-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(?![A-Za-z0-9_.+-])|(?<![A-Za-z0-9_])(?:true|false|null)(?![A-Za-z0-9_]))'
   for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
     raw_path="${PORTABLE_CORE_INGRESS_RAW_PATHS[$input_index]}"
-    if "$PORTABLE_CORE_INGRESS_JQ" -s -e 'length == 1' "$raw_path" \
-        >/dev/null 2>/dev/null; then
-      :
-    else
-      probe_status=$?
-      case "$probe_status" in
-        1|4) portable_core_ingress_error E_PARSE ;;
-        *) portable_core_ingress_error E_RUNTIME ;;
-      esac
-      return 1
-    fi
     if "$PORTABLE_CORE_INGRESS_JQ" -Rse --arg token "$json_token_pattern" \
         '(if startswith("\ufeff") then .[1:] else . end) |
          gsub($token;"") == ""' "$raw_path" >/dev/null 2>/dev/null; then
@@ -443,12 +539,7 @@ portable_core_ingress_finish_driver() {
       return 1
     fi
     canonical_path="$PORTABLE_CORE_INGRESS_TEMP/canonical.$((input_index + 1))"
-    if ! "$PORTABLE_CORE_INGRESS_JQ" -s -S -c \
-        'if length == 1 then .[0] else error("root-count") end' "$raw_path" \
-        2>/dev/null > "$canonical_path"; then
-      portable_core_ingress_error E_RUNTIME
-      return 1
-    fi
+    portable_core_ingress_stream_canonical "$raw_path" "$canonical_path" || return 1
     PORTABLE_CORE_INGRESS_CANONICAL_PATHS[input_index]="$canonical_path"
   done
   for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
@@ -463,6 +554,12 @@ portable_core_ingress_finish_driver() {
       else
         portable_core_ingress_error E_RUNTIME
       fi
+      return 1
+    fi
+  done
+  for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
+    if [ "${PORTABLE_CORE_INGRESS_DEPTH_OVER[$input_index]}" = true ]; then
+      portable_core_ingress_error E_LIMIT
       return 1
     fi
   done
