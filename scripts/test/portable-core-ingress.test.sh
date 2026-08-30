@@ -33,14 +33,20 @@ sha256_path() {
 }
 
 ingress_platform="$(uname -s):$(uname -m)"
+ingress_platform_runtime='native'
 case "$ingress_platform" in
   Linux:x86_64)
     ingress_asset='jq-linux64'
     ingress_asset_sha256='af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44'
     ;;
-  Darwin:x86_64|Darwin:arm64)
+  Darwin:x86_64)
     ingress_asset='jq-osx-amd64'
     ingress_asset_sha256='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
+    ;;
+  Darwin:arm64)
+    ingress_asset='jq-osx-amd64'
+    ingress_asset_sha256='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
+    ingress_platform_runtime='Rosetta 2'
     ;;
   *)
     echo "FAIL: unsupported jq 1.6 proof platform: $ingress_platform" >&2
@@ -65,8 +71,19 @@ if [ ! -f "$ingress_jq" ] ||
   mv "$ingress_download" "$ingress_jq"
   ingress_download=''
 fi
-[ "$(sha256_path "$ingress_jq")" = "$ingress_asset_sha256" ] &&
-  [ "$("$ingress_jq" --version)" = jq-1.6 ] || {
+if [ "$(sha256_path "$ingress_jq")" != "$ingress_asset_sha256" ]; then
+  echo 'FAIL: jq 1.6 release asset digest mismatch' >&2
+  exit 1
+fi
+if ! ingress_jq_version="$("$ingress_jq" --version 2>/dev/null)"; then
+  if [ "$ingress_platform_runtime" = 'Rosetta 2' ]; then
+    echo 'FAIL: unsupported jq 1.6 proof platform: Darwin:arm64 without Rosetta 2' >&2
+  else
+    echo 'FAIL: pinned jq 1.6 executable could not run' >&2
+  fi
+  exit 1
+fi
+[ "$ingress_jq_version" = jq-1.6 ] || {
     echo 'FAIL: pinned jq 1.6 identity check failed' >&2
     exit 1
   }
