@@ -98,3 +98,7 @@ core/v1/generations/g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8d
 scripts/test/portable-core-ingress-fixtures.json
 scripts/test/portable-core-ingress-ledger.tsv
 scripts/test/portable-core-ingress.test.sh
+
+# Construction-only GitHub connector publisher gate
+scripts/construction-publisher-gate.sh
+scripts/test/construction-publisher-gate.test.sh
