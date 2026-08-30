@@ -16,6 +16,7 @@ resolver_tmp=$(CDPATH='' cd -P -- "$resolver_tmp" && pwd -P)
 resolver_download=''
 resolver_passed=0
 resolver_total=0
+resolver_fingerprint_counter=0
 /bin/rm -f /tmp/ystack-profile-resolver-must-not-run
 
 cleanup() {
@@ -33,6 +34,57 @@ sha256_file() {
   else
     shasum -a 256 "$1" | awk '{print $1}'
   fi
+}
+
+fingerprint_entry() {
+  resolver_fingerprint_path=$1
+  if [ -L "$resolver_fingerprint_path" ]; then
+    /usr/bin/printf 'L\t%s\t%s\n' "$resolver_fingerprint_path" \
+      "$(/usr/bin/readlink "$resolver_fingerprint_path")"
+  elif [ -d "$resolver_fingerprint_path" ]; then
+    /usr/bin/printf 'D\t%s\n' "$resolver_fingerprint_path"
+  elif [ -f "$resolver_fingerprint_path" ]; then
+    case "$resolver_platform" in
+      Linux:x86_64) resolver_fingerprint_stat=$(/usr/bin/stat -c '%a:%s' "$resolver_fingerprint_path") ;;
+      Darwin:*) resolver_fingerprint_stat=$(/usr/bin/stat -f '%Lp:%z' "$resolver_fingerprint_path") ;;
+    esac
+    /usr/bin/printf 'F\t%s\t%s\t%s\n' "$resolver_fingerprint_path" \
+      "$resolver_fingerprint_stat" "$(sha256_file "$resolver_fingerprint_path")"
+  else
+    /usr/bin/printf 'O\t%s\n' "$resolver_fingerprint_path"
+  fi
+}
+
+repository_fingerprint() {
+  resolver_fingerprint_root=$1
+  resolver_fingerprint_active=$(/usr/bin/git -C "$resolver_fingerprint_root" rev-parse --absolute-git-dir)
+  resolver_fingerprint_common=$(/usr/bin/git --git-dir="$resolver_fingerprint_active" \
+    rev-parse --path-format=absolute --git-common-dir)
+  resolver_fingerprint_counter=$((resolver_fingerprint_counter + 1))
+  resolver_fingerprint_inventory="$resolver_tmp/fingerprint.$resolver_fingerprint_counter"
+  {
+    /usr/bin/printf 'ROOT\t%s\nACTIVE\t%s\nCOMMON\t%s\n' "$resolver_fingerprint_root" \
+      "$resolver_fingerprint_active" "$resolver_fingerprint_common"
+    for resolver_fingerprint_fixed in \
+      "$resolver_fingerprint_root/.git" "$resolver_fingerprint_active/HEAD" \
+      "$resolver_fingerprint_active/config.worktree" "$resolver_fingerprint_active/commondir" \
+      "$resolver_fingerprint_active/gitdir" "$resolver_fingerprint_common/HEAD" \
+      "$resolver_fingerprint_common/config" "$resolver_fingerprint_common/packed-refs" \
+      "$resolver_fingerprint_common/info/grafts"; do
+      if [ -e "$resolver_fingerprint_fixed" ] || [ -L "$resolver_fingerprint_fixed" ]; then
+        fingerprint_entry "$resolver_fingerprint_fixed"
+      fi
+    done
+    for resolver_fingerprint_tree in "$resolver_fingerprint_common/refs" \
+      "$resolver_fingerprint_common/objects"; do
+      if [ -d "$resolver_fingerprint_tree" ] && [ ! -L "$resolver_fingerprint_tree" ]; then
+        while IFS= read -r -d '' resolver_fingerprint_path; do
+          fingerprint_entry "$resolver_fingerprint_path"
+        done < <(/usr/bin/find "$resolver_fingerprint_tree" -mindepth 1 -print0 | /usr/bin/sort -z)
+      fi
+    done
+  } > "$resolver_fingerprint_inventory"
+  sha256_file "$resolver_fingerprint_inventory"
 }
 
 resolver_platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
@@ -99,7 +151,52 @@ esac
   "${resolver_loader_flags[@]}" "$resolver_loader_source" -o "$resolver_bin/loader-trap.dylib"
 
 resolver_fixture="$resolver_tmp/fixture"
-PATH="$resolver_bin:/usr/bin:/bin" "$resolver_fixture_builder" "$resolver_fixture" >/dev/null
+PATH="$resolver_bin:/usr/bin:/bin" "$resolver_fixture_builder" "$resolver_fixture" \
+  "$resolver_bound_jq" >/dev/null
+
+resolver_variants="$resolver_tmp/repository-variants"
+resolver_bare="$resolver_variants/bare"
+resolver_linked="$resolver_variants/linked"
+/bin/mkdir -p "$resolver_bare" "$resolver_linked"
+for resolver_repository_name in assets manifests profile; do
+  /usr/bin/git clone -q --bare --no-hardlinks "$resolver_fixture/$resolver_repository_name" \
+    "$resolver_bare/$resolver_repository_name.git"
+  /usr/bin/git -C "$resolver_fixture/$resolver_repository_name" worktree add -q --detach \
+    "$resolver_linked/$resolver_repository_name" HEAD
+done
+resolver_corrupt_profile="$resolver_variants/corrupt-profile"
+/usr/bin/git clone -q --no-hardlinks "$resolver_fixture/profile" "$resolver_corrupt_profile"
+
+resolver_bare_map="$resolver_tmp/map.bare.json"
+resolver_linked_map="$resolver_tmp/map.linked.json"
+"$resolver_bound_jq" -S -c --arg assets "$resolver_bare/assets.git" \
+  --arg manifests "$resolver_bare/manifests.git" --arg profile "$resolver_bare/profile.git" \
+  '(.repositories[] | select(.repository_id == "repo.assets").root) = $assets |
+   (.repositories[] | select(.repository_id == "repo.manifests").root) = $manifests |
+   (.repositories[] | select(.repository_id == "repo.profile").root) = $profile' \
+  "$resolver_fixture/map.json" > "$resolver_bare_map"
+"$resolver_bound_jq" -S -c --arg assets "$resolver_linked/assets" \
+  --arg manifests "$resolver_linked/manifests" --arg profile "$resolver_linked/profile" \
+  '(.repositories[] | select(.repository_id == "repo.assets").root) = $assets |
+   (.repositories[] | select(.repository_id == "repo.manifests").root) = $manifests |
+   (.repositories[] | select(.repository_id == "repo.profile").root) = $profile' \
+  "$resolver_fixture/map.json" > "$resolver_linked_map"
+resolver_one_segment_request="$resolver_tmp/request.one-segment.json"
+"$resolver_bound_jq" -S -c '.profile_source.path = "default.json"' \
+  "$resolver_fixture/request.json" > "$resolver_one_segment_request"
+
+resolver_mapped_roots=(
+  "$resolver_fixture/assets" "$resolver_fixture/manifests" "$resolver_fixture/profile"
+  "$resolver_bare/assets.git" "$resolver_bare/manifests.git" "$resolver_bare/profile.git"
+  "$resolver_linked/assets" "$resolver_linked/manifests" "$resolver_linked/profile"
+  "$resolver_corrupt_profile"
+)
+resolver_fingerprints_before="$resolver_tmp/repository-fingerprints.before"
+: > "$resolver_fingerprints_before"
+for resolver_mapped_root in "${resolver_mapped_roots[@]}"; do
+  /usr/bin/printf '%s\t%s\n' "$resolver_mapped_root" \
+    "$(repository_fingerprint "$resolver_mapped_root")" >> "$resolver_fingerprints_before"
+done
 
 resolver_loader_marker="$resolver_tmp/loader.marker"
 "$resolver_bin/launcher" loader-control "$resolver_bin/loader-trap.dylib" "$resolver_loader_marker"
@@ -204,9 +301,7 @@ expect_missing_dependency
 
 expect_launcher_failure 'launcher sanitizes silent child failure' silent 'E_RUNTIME unexpected'
 expect_launcher_failure 'launcher converts file limit to a token' file 'E_LIMIT resource-limit'
-if [ "$resolver_platform" = Linux:x86_64 ]; then
-  expect_launcher_failure 'launcher bounds its Linux process group' process 'E_LIMIT process-limit'
-fi
+expect_launcher_failure 'launcher bounds its process group' process 'E_LIMIT process-limit'
 
 resolver_output="$resolver_tmp/resolved.json"
 run_resolver "$resolver_tmp/sandbox.success" "$resolver_fixture/request.json" "$resolver_fixture/map.json" \
@@ -224,6 +319,56 @@ PATH="$resolver_bin:/usr/bin:/bin" /bin/bash "$resolver_core" validate-profile-s
   "$resolver_fixture/manifests/manifests/reviewer.json" \
   "$resolver_fixture/manifests/manifests/verifier.json"
 pass_case 'cross-hash multi-repository resolution and real core validation'
+
+resolver_bare_output="$resolver_tmp/resolved.bare.json"
+run_resolver "$resolver_tmp/sandbox.bare" "$resolver_fixture/request.json" "$resolver_bare_map" \
+  > "$resolver_bare_output"
+/usr/bin/cmp -s "$resolver_output" "$resolver_bare_output" || fail_case 'bare repository determinism'
+pass_case 'bare repositories resolve the same exact graph'
+
+resolver_linked_output="$resolver_tmp/resolved.linked.json"
+run_resolver "$resolver_tmp/sandbox.linked" "$resolver_fixture/request.json" "$resolver_linked_map" \
+  > "$resolver_linked_output"
+/usr/bin/cmp -s "$resolver_output" "$resolver_linked_output" || fail_case 'linked worktree determinism'
+pass_case 'linked worktrees resolve the same exact graph'
+
+resolver_one_segment_output="$resolver_tmp/resolved.one-segment.json"
+run_resolver "$resolver_tmp/sandbox.one-segment" "$resolver_one_segment_request" \
+  "$resolver_fixture/map.json" > "$resolver_one_segment_output"
+[ "$("$resolver_bound_jq" -r '.kind' "$resolver_one_segment_output")" = resolved_profile ] ||
+  fail_case 'one-segment profile resolution'
+pass_case 'one-segment path verifies its root tree before enumeration'
+
+resolver_bare_config="$resolver_bare/profile.git/config"
+/bin/cp "$resolver_bare_config" "$resolver_tmp/bare.config.saved"
+/usr/bin/printf '%s\n' '[include]' 'path = /private/tmp/ystack-profile-resolver-bare-canary' >> "$resolver_bare_config"
+expect_failure 'bare repository rejects config include' 'E_REPOSITORY config-include' \
+  "$resolver_fixture/request.json" "$resolver_bare_map"
+/bin/cp "$resolver_tmp/bare.config.saved" "$resolver_bare_config"
+
+resolver_linked_gitfile="$resolver_linked/profile/.git"
+/bin/cp "$resolver_linked_gitfile" "$resolver_tmp/linked.gitfile.saved"
+/usr/bin/printf '%s\n' 'gitdir: /does/not/exist' > "$resolver_linked_gitfile"
+expect_failure 'linked worktree rejects a broken gitfile' 'E_REPOSITORY gitfile' \
+  "$resolver_fixture/request.json" "$resolver_linked_map"
+/bin/cp "$resolver_tmp/linked.gitfile.saved" "$resolver_linked_gitfile"
+
+resolver_profile_commit=$("$resolver_bound_jq" -r '.profile_source.commit_id' "$resolver_fixture/request.json")
+resolver_profile_root_tree=$(/usr/bin/git -C "$resolver_fixture/profile" show -s --format=%T "$resolver_profile_commit")
+resolver_profile_root_object="$resolver_fixture/profile/.git/objects/${resolver_profile_root_tree:0:2}/${resolver_profile_root_tree:2}"
+[ -f "$resolver_profile_root_object" ] && [ ! -L "$resolver_profile_root_object" ] ||
+  fail_case 'root tree loose-object fixture'
+case "$resolver_platform" in
+  Linux:x86_64) resolver_profile_root_mode=$(/usr/bin/stat -c '%a' "$resolver_profile_root_object") ;;
+  Darwin:*) resolver_profile_root_mode=$(/usr/bin/stat -f '%Lp' "$resolver_profile_root_object") ;;
+esac
+/bin/cp "$resolver_profile_root_object" "$resolver_tmp/profile-root-tree.saved"
+/bin/chmod 0600 "$resolver_profile_root_object"
+/usr/bin/printf '%s\n' corrupt > "$resolver_profile_root_object"
+expect_failure 'corrupt root tree fails before one-segment walk' 'E_OBJECT object-path' \
+  "$resolver_one_segment_request" "$resolver_fixture/map.json"
+/bin/cp "$resolver_tmp/profile-root-tree.saved" "$resolver_profile_root_object"
+/bin/chmod "$resolver_profile_root_mode" "$resolver_profile_root_object"
 
 resolver_second="$resolver_tmp/resolved.second.json"
 resolver_permuted_map="$resolver_tmp/map.permuted.json"
@@ -348,6 +493,7 @@ resolver_replace_target=$(/usr/bin/git -C "$resolver_fixture/profile" rev-parse 
 expect_failure 'replacement refs fail before private Git' 'E_REPOSITORY replacement-state' \
   "$resolver_fixture/request.json" "$resolver_fixture/map.json"
 /usr/bin/git -C "$resolver_fixture/profile" update-ref -d "refs/replace/$resolver_replace_source"
+/bin/rmdir "$resolver_fixture/profile/.git/refs/replace" 2>/dev/null || :
 
 resolver_helper_out="$resolver_tmp/helper-limit.stdout"
 resolver_helper_err="$resolver_tmp/helper-limit.stderr"
@@ -362,10 +508,17 @@ if [ -s "$resolver_helper_out" ] || [ -e "$resolver_tmp/helper-limit-output" ] |
 fi
 pass_case 'native helper enforces budgets before publish'
 
-resolver_before=$(/usr/bin/git -C "$resolver_fixture/assets" status --porcelain=v1; /usr/bin/git -C "$resolver_fixture/manifests" status --porcelain=v1; /usr/bin/git -C "$resolver_fixture/profile" status --porcelain=v1)
-resolver_after=$(/usr/bin/git -C "$resolver_fixture/assets" status --porcelain=v1; /usr/bin/git -C "$resolver_fixture/manifests" status --porcelain=v1; /usr/bin/git -C "$resolver_fixture/profile" status --porcelain=v1)
-[ "$resolver_before" = "$resolver_after" ] || fail_case 'mapped repositories mutated'
-pass_case 'resolution leaves mapped repositories unchanged'
+resolver_fingerprints_after="$resolver_tmp/repository-fingerprints.after"
+: > "$resolver_fingerprints_after"
+for resolver_mapped_root in "${resolver_mapped_roots[@]}"; do
+  /usr/bin/printf '%s\t%s\n' "$resolver_mapped_root" \
+    "$(repository_fingerprint "$resolver_mapped_root")" >> "$resolver_fingerprints_after"
+done
+/usr/bin/cmp -s "$resolver_fingerprints_before" "$resolver_fingerprints_after" || {
+  /usr/bin/diff -u "$resolver_fingerprints_before" "$resolver_fingerprints_after" >&2 || :
+  fail_case 'mapped repository fingerprint changed'
+}
+pass_case 'refs, config, and object stores remain byte-identical'
 
 [ "$resolver_passed" -eq "$resolver_total" ] || exit 1
 printf 'portable profile resolution: %d/%d targeted cases passed\n' "$resolver_passed" "$resolver_total"

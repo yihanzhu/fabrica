@@ -253,14 +253,16 @@ profile_resolution_commit_tree() {
   profile_resolution_commit_file="$profile_resolution_scratch/value.commit"
   profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
     "$profile_resolution_commit" commit "$profile_resolution_commit_file" || return $?
-  IFS=' ' read -r profile_resolution_word profile_resolution_tree _ < "$profile_resolution_commit_file" || return 2
+  IFS=' ' read -r profile_resolution_word profile_resolution_resolved_tree _ < "$profile_resolution_commit_file" || return 2
   [ "$profile_resolution_word" = tree ] || return 2
-  case "$profile_resolution_algorithm:$profile_resolution_tree" in
+  case "$profile_resolution_algorithm:$profile_resolution_resolved_tree" in
     sha1:????????????????????????????????????????|sha256:????????????????????????????????????????????????????????????????) ;;
     *) return 2 ;;
   esac
-  case "$profile_resolution_tree" in *[!0-9a-f]*) return 2 ;; esac
-  printf '%s\n' "$profile_resolution_tree"
+  case "$profile_resolution_resolved_tree" in *[!0-9a-f]*) return 2 ;; esac
+  profile_resolution_root_tree_payload="$profile_resolution_scratch/value.root-tree"
+  profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
+    "$profile_resolution_resolved_tree" tree "$profile_resolution_root_tree_payload" || return 2
 }
 
 profile_resolution_walk_path() {
@@ -268,8 +270,9 @@ profile_resolution_walk_path() {
   profile_resolution_algorithm=$2
   profile_resolution_commit=$3
   profile_resolution_path=$4
-  profile_resolution_tree=$(profile_resolution_commit_tree "$profile_resolution_repository_id" \
-    "$profile_resolution_algorithm" "$profile_resolution_commit") || return 2
+  profile_resolution_commit_tree "$profile_resolution_repository_id" \
+    "$profile_resolution_algorithm" "$profile_resolution_commit" || return 2
+  profile_resolution_tree=$profile_resolution_resolved_tree
   profile_resolution_old_ifs=$IFS
   IFS='/'
   read -r -a profile_resolution_segments <<< "$profile_resolution_path"
@@ -297,7 +300,9 @@ profile_resolution_walk_path() {
     fi
     profile_resolution_index=$((profile_resolution_index + 1))
   done
-  /usr/bin/printf '%s\t%s\t%s\n' "$profile_resolution_mode" "$profile_resolution_type" "$profile_resolution_oid"
+  profile_resolution_resolved_mode=$profile_resolution_mode
+  profile_resolution_resolved_type=$profile_resolution_type
+  profile_resolution_resolved_oid=$profile_resolution_oid
 }
 
 profile_resolution_verify_locator() {
@@ -308,9 +313,11 @@ profile_resolution_verify_locator() {
   profile_resolution_commit=$("$YSTACK_RESOLVER_JQ" -r '.commit_id' <<< "$profile_resolution_locator") || return 1
   profile_resolution_path=$("$YSTACK_RESOLVER_JQ" -r '.path' <<< "$profile_resolution_locator") || return 1
   profile_resolution_claimed_oid=$("$YSTACK_RESOLVER_JQ" -r '.object_id' <<< "$profile_resolution_locator") || return 1
-  profile_resolution_walk=$(profile_resolution_walk_path "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-    "$profile_resolution_commit" "$profile_resolution_path") || return 2
-  IFS=$'\t' read -r profile_resolution_mode profile_resolution_type profile_resolution_oid <<< "$profile_resolution_walk"
+  profile_resolution_walk_path "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
+    "$profile_resolution_commit" "$profile_resolution_path" || return 2
+  profile_resolution_mode=$profile_resolution_resolved_mode
+  profile_resolution_type=$profile_resolution_resolved_type
+  profile_resolution_oid=$profile_resolution_resolved_oid
   [ "$profile_resolution_oid" = "$profile_resolution_claimed_oid" ] || return 3
   [ "$profile_resolution_type" = blob ] || return 4
   case "$profile_resolution_mode" in 100644|100755) ;; *) return 5 ;; esac
@@ -336,24 +343,27 @@ profile_resolution_verify_ref() {
   profile_resolution_repository_id=$("$YSTACK_RESOLVER_JQ" -r '.revision.repository_id' <<< "$profile_resolution_ref_json") || return 1
   profile_resolution_algorithm=$("$YSTACK_RESOLVER_JQ" -r '.revision.hash_algorithm' <<< "$profile_resolution_ref_json") || return 1
   profile_resolution_commit=$("$YSTACK_RESOLVER_JQ" -r '.revision.commit_id' <<< "$profile_resolution_ref_json") || return 1
-  profile_resolution_location_kind=$("$YSTACK_RESOLVER_JQ" -r '.location.kind' <<< "$profile_resolution_ref_json") || return 1
-  profile_resolution_expected_type=$("$YSTACK_RESOLVER_JQ" -r '.object_type' <<< "$profile_resolution_ref_json") || return 1
-  profile_resolution_expected_oid=$("$YSTACK_RESOLVER_JQ" -r '.object_id' <<< "$profile_resolution_ref_json") || return 1
-  profile_resolution_expected_mode=$("$YSTACK_RESOLVER_JQ" -r '.mode' <<< "$profile_resolution_ref_json") || return 1
-  if [ "$profile_resolution_location_kind" = root ]; then
-    profile_resolution_oid=$(profile_resolution_commit_tree "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-      "$profile_resolution_commit") || return 2
-    profile_resolution_type=tree
-    profile_resolution_mode=040000
+  profile_resolution_claim_location_kind=$("$YSTACK_RESOLVER_JQ" -r '.location.kind' <<< "$profile_resolution_ref_json") || return 1
+  profile_resolution_claim_type=$("$YSTACK_RESOLVER_JQ" -r '.object_type' <<< "$profile_resolution_ref_json") || return 1
+  profile_resolution_claim_oid=$("$YSTACK_RESOLVER_JQ" -r '.object_id' <<< "$profile_resolution_ref_json") || return 1
+  profile_resolution_claim_mode=$("$YSTACK_RESOLVER_JQ" -r '.mode' <<< "$profile_resolution_ref_json") || return 1
+  if [ "$profile_resolution_claim_location_kind" = root ]; then
+    profile_resolution_commit_tree "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
+      "$profile_resolution_commit" || return 2
+    profile_resolution_resolved_oid=$profile_resolution_resolved_tree
+    profile_resolution_resolved_type=tree
+    profile_resolution_resolved_mode=040000
   else
     profile_resolution_path=$("$YSTACK_RESOLVER_JQ" -r '.location.value' <<< "$profile_resolution_ref_json") || return 1
-    profile_resolution_walk=$(profile_resolution_walk_path "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
-      "$profile_resolution_commit" "$profile_resolution_path") || return 2
-    IFS=$'\t' read -r profile_resolution_mode profile_resolution_type profile_resolution_oid <<< "$profile_resolution_walk"
+    profile_resolution_walk_path "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
+      "$profile_resolution_commit" "$profile_resolution_path" || return 2
   fi
-  [ "$profile_resolution_oid" = "$profile_resolution_expected_oid" ] || return 3
-  [ "$profile_resolution_type" = "$profile_resolution_expected_type" ] || return 4
-  [ "$profile_resolution_mode" = "$profile_resolution_expected_mode" ] || return 5
+  profile_resolution_oid=$profile_resolution_resolved_oid
+  profile_resolution_type=$profile_resolution_resolved_type
+  profile_resolution_mode=$profile_resolution_resolved_mode
+  [ "$profile_resolution_oid" = "$profile_resolution_claim_oid" ] || return 3
+  [ "$profile_resolution_type" = "$profile_resolution_claim_type" ] || return 4
+  [ "$profile_resolution_mode" = "$profile_resolution_claim_mode" ] || return 5
   profile_resolution_payload="$profile_resolution_scratch/value.$profile_resolution_key"
   profile_resolution_verify_object_payload "$profile_resolution_repository_id" "$profile_resolution_algorithm" \
     "$profile_resolution_oid" "$profile_resolution_type" "$profile_resolution_payload" || return 6

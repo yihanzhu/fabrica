@@ -1,3 +1,4 @@
+#define _DARWIN_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -16,6 +17,8 @@
 
 #if defined(__linux__)
 #include <dirent.h>
+#elif defined(__APPLE__)
+#include <libproc.h>
 #endif
 
 #ifndef O_CLOEXEC
@@ -222,12 +225,44 @@ static unsigned process_group_count(pid_t group) {
     (void)closedir(directory);
     return count;
 }
+#elif defined(__APPLE__)
+static unsigned process_group_count(pid_t group) {
+    for (unsigned attempt = 0U; attempt < 3U; attempt++) {
+        int estimated = proc_listallpids(NULL, 0);
+        pid_t *processes;
+        int observed;
+        unsigned count = 0U;
+        if (estimated <= 0 || estimated > 1048576) {
+            return PROCESS_LIMIT + 1U;
+        }
+        estimated += 64;
+        processes = calloc((size_t)estimated, sizeof(*processes));
+        if (processes == NULL) {
+            return PROCESS_LIMIT + 1U;
+        }
+        observed = proc_listallpids(processes,
+                                   estimated * (int)sizeof(*processes));
+        if (observed < 0) {
+            free(processes);
+            return PROCESS_LIMIT + 1U;
+        }
+        if (observed < estimated) {
+            for (int index = 0; index < observed; index++) {
+                if (processes[index] > 0 && getpgid(processes[index]) == group) {
+                    count++;
+                }
+            }
+            free(processes);
+            return count;
+        }
+        free(processes);
+    }
+    return PROCESS_LIMIT + 1U;
+}
 #else
 static unsigned process_group_count(pid_t group) {
-    if (kill(-group, 0) == 0 || errno == EPERM) {
-        return 1U;
-    }
-    return 0U;
+    (void)group;
+    return PROCESS_LIMIT + 1U;
 }
 #endif
 

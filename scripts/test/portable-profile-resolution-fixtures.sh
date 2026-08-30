@@ -9,7 +9,7 @@ fixture_repo=$(CDPATH='' cd -P -- "$fixture_script_dir/../.." && pwd -P)
 fixture_core="$fixture_repo/scripts/core-contract.sh"
 
 fixture_canonical() {
-  /usr/bin/jq -S -c . > "$1"
+  "$fixture_jq" -S -c . > "$1"
 }
 
 fixture_init_repo() {
@@ -38,7 +38,7 @@ fixture_git_ref() {
   fixture_line=$(/usr/bin/git -C "$fixture_path" ls-tree "$fixture_commit_id" -- "$fixture_file")
   fixture_meta=${fixture_line%%$'\t'*}
   IFS=' ' read -r fixture_mode fixture_type fixture_oid <<< "$fixture_meta"
-  /usr/bin/jq -S -c -n --arg id "$fixture_id" --arg algorithm "$fixture_algorithm" \
+  "$fixture_jq" -S -c -n --arg id "$fixture_id" --arg algorithm "$fixture_algorithm" \
     --arg commit "$fixture_commit_id" --arg path "$fixture_file" --arg type "$fixture_type" \
     --arg oid "$fixture_oid" --arg mode "$fixture_mode" \
     '{revision:{repository_id:$id,hash_algorithm:$algorithm,commit_id:$commit},
@@ -46,7 +46,7 @@ fixture_git_ref() {
 }
 
 fixture_locator() {
-  /usr/bin/jq -S -c '{repository_id:.revision.repository_id,
+  "$fixture_jq" -S -c '{repository_id:.revision.repository_id,
     hash_algorithm:.revision.hash_algorithm,commit_id:.revision.commit_id,
     path:.location.value,object_id:.object_id}' <<< "$1"
 }
@@ -60,18 +60,22 @@ fixture_scope() {
   fixture_name=$2
   fixture_character=$3
   fixture_hash=$(/usr/bin/printf '%064d' 0 | /usr/bin/tr 0 "$fixture_character")
-  /usr/bin/jq -S -c -n --arg purpose "$fixture_purpose" --arg name "$fixture_name" --arg hash "$fixture_hash" \
+  "$fixture_jq" -S -c -n --arg purpose "$fixture_purpose" --arg name "$fixture_name" --arg hash "$fixture_hash" \
     '{purpose:$purpose,
       decision_record_ref:{content_id:("decision-"+$name),media_type:"application/json",sha256:$hash},
       subject_ref:{type:"artifact",value:{type:"content",value:{content_id:$name,media_type:"application/json",sha256:$hash}}},
       scope_sha256:$hash}'
 }
 
-if [ "$#" -ne 1 ]; then
-  printf '%s\n' 'usage: portable-profile-resolution-fixtures.sh OUTPUT_ROOT' >&2
+if [ "$#" -ne 2 ]; then
+  printf '%s\n' 'usage: portable-profile-resolution-fixtures.sh OUTPUT_ROOT JQ_1_6' >&2
   exit 64
 fi
 fixture_root=$1
+fixture_jq=$2
+case "$fixture_jq" in /*) ;; *) exit 1 ;; esac
+[ -x "$fixture_jq" ] && [ -f "$fixture_jq" ] && [ ! -L "$fixture_jq" ] &&
+  [ "$("$fixture_jq" --version)" = jq-1.6 ] || exit 1
 [ ! -e "$fixture_root" ] || exit 1
 /bin/mkdir -m 700 "$fixture_root"
 
@@ -104,7 +108,7 @@ fixture_tool_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fi
 fixture_tool_config=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" tools/producer.json)
 
 fixture_config_scope=$(fixture_scope config-contract producer-config c)
-fixture_tool=$(/usr/bin/jq -S -c -n --argjson package "$fixture_tool_package" --argjson config "$fixture_tool_config" \
+fixture_tool=$("$fixture_jq" -S -c -n --argjson package "$fixture_tool_package" --argjson config "$fixture_tool_config" \
   '{tool_id:"tool.producer",tool_version:"v1",package_ref:$package,
     config_ref:{state:"present",value:$config}}')
 
@@ -159,9 +163,9 @@ for fixture_role in producer publisher reviewer verifier; do
   fixture_manifest_digest=$(fixture_digest "$fixture_manifest_file")
   fixture_manifest_source=$(fixture_git_ref repo.manifests "$fixture_manifests" sha1 "$fixture_manifests_commit" "manifests/$fixture_role.json")
   fixture_manifest_locator=$(fixture_locator "$fixture_manifest_source")
-  fixture_manifest_refs=$(/usr/bin/jq -S -c --arg role "$fixture_role" --arg digest "$fixture_manifest_digest" \
+  fixture_manifest_refs=$("$fixture_jq" -S -c --arg role "$fixture_role" --arg digest "$fixture_manifest_digest" \
     '. + {($role):{schema_version:1,kind:"adapter_manifest",id:("manifest."+$role),sha256:$digest}}' <<< "$fixture_manifest_refs")
-  fixture_manifest_locators=$(/usr/bin/jq -S -c --argjson locator "$fixture_manifest_locator" '. + [$locator]' <<< "$fixture_manifest_locators")
+  fixture_manifest_locators=$("$fixture_jq" -S -c --argjson locator "$fixture_manifest_locator" '. + [$locator]' <<< "$fixture_manifest_locators")
 done
 
 fixture_init_repo "$fixture_profile" sha1
@@ -175,7 +179,7 @@ for fixture_role in producer publisher reviewer verifier; do
       fixture_capabilities='["core.harness.produce.v1"]'
       fixture_permissions='["core.perm.evidence.write.v1","core.perm.model.invoke.v1","core.perm.scratch.write.v1","core.perm.target.read.v1"]'
       fixture_tools="[$fixture_tool]"
-      fixture_optional=$(/usr/bin/jq -S -c -n --argjson config "$fixture_producer_config" \
+      fixture_optional=$("$fixture_jq" -S -c -n --argjson config "$fixture_producer_config" \
         --argjson prompt "$fixture_producer_prompt" --argjson skill "$fixture_producer_skill" \
         '{config_ref:$config,prompt_ref:$prompt,skill_refs:[$skill],
           model_request:{provider_id:"provider.example",model_id:"model.example",effort_id:"high"}}')
@@ -189,7 +193,7 @@ for fixture_role in producer publisher reviewer verifier; do
       fixture_capabilities='["core.review.change.v1"]'
       fixture_permissions='["core.perm.evidence.write.v1","core.perm.model.invoke.v1","core.perm.target.read.v1"]'
       fixture_tools='[]'
-      fixture_optional=$(/usr/bin/jq -S -c -n --argjson prompt "$fixture_reviewer_prompt" \
+      fixture_optional=$("$fixture_jq" -S -c -n --argjson prompt "$fixture_reviewer_prompt" \
         '{prompt_ref:$prompt,skill_refs:[],model_request:{provider_id:"provider.example",model_id:"review.example",effort_id:"high"}}')
       ;;
     verifier)
@@ -206,8 +210,8 @@ for fixture_role in producer publisher reviewer verifier; do
     verifier) fixture_authority_character=4 ;;
   esac
   fixture_authority=$(fixture_scope authority "authority-$fixture_role" "$fixture_authority_character")
-  fixture_manifest_ref=$(/usr/bin/jq -c --arg role "$fixture_role" '.[$role]' <<< "$fixture_manifest_refs")
-  fixture_binding=$(/usr/bin/jq -S -c -n --arg role "$fixture_role" --arg execution "$fixture_execution" \
+  fixture_manifest_ref=$("$fixture_jq" -c --arg role "$fixture_role" '.[$role]' <<< "$fixture_manifest_refs")
+  fixture_binding=$("$fixture_jq" -S -c -n --arg role "$fixture_role" --arg execution "$fixture_execution" \
     --argjson manifest "$fixture_manifest_ref" --argjson package "$fixture_package" \
     --argjson tools "$fixture_tools" --argjson capabilities "$fixture_capabilities" \
     --argjson permissions "$fixture_permissions" --argjson authority "$fixture_authority" \
@@ -216,22 +220,23 @@ for fixture_role in producer publisher reviewer verifier; do
       adapter_instance_id:("instance."+$role),principal_id:("principal."+$role),
       execution_boundary_id:("boundary."+$role),authority_ref:$authority,package_ref:$package,
       requested_tools:$tools,requested_capabilities:$capabilities,requested_permissions:$permissions} + $optional')
-  fixture_bindings=$(/usr/bin/jq -S -c --argjson binding "$fixture_binding" '. + [$binding] | sort_by(.binding_id)' <<< "$fixture_bindings")
+  fixture_bindings=$("$fixture_jq" -S -c --argjson binding "$fixture_binding" '. + [$binding] | sort_by(.binding_id)' <<< "$fixture_bindings")
 done
-/usr/bin/jq -S -c -n --argjson bindings "$fixture_bindings" \
+"$fixture_jq" -S -c -n --argjson bindings "$fixture_bindings" \
   '{schema_version:1,kind:"profile",id:"profile.example",body:{profile_version:"v1",bindings:$bindings}}' \
   > "$fixture_profile/profiles/default.json"
 /bin/bash "$fixture_core" validate-document "$fixture_profile/profiles/default.json"
+/bin/cp "$fixture_profile/profiles/default.json" "$fixture_profile/default.json"
 fixture_profile_commit=$(fixture_commit "$fixture_profile")
 fixture_profile_source=$(fixture_git_ref repo.profile "$fixture_profile" sha1 "$fixture_profile_commit" profiles/default.json)
 fixture_profile_locator=$(fixture_locator "$fixture_profile_source")
 fixture_selection=$(fixture_scope selection selection 8)
 fixture_context=$(fixture_scope repository-context repository-context 9)
-/usr/bin/jq -S -c -n --argjson profile "$fixture_profile_locator" --argjson manifests "$fixture_manifest_locators" \
+"$fixture_jq" -S -c -n --argjson profile "$fixture_profile_locator" --argjson manifests "$fixture_manifest_locators" \
   --argjson selection "$fixture_selection" --argjson context "$fixture_context" \
   '{version:1,profile_source:$profile,manifest_sources:$manifests,
     selection_ref:$selection,repository_context_ref:$context}' > "$fixture_root/request.json"
-/usr/bin/jq -S -c -n --arg assets "$fixture_assets" --arg manifests "$fixture_manifests" --arg profile "$fixture_profile" \
+"$fixture_jq" -S -c -n --arg assets "$fixture_assets" --arg manifests "$fixture_manifests" --arg profile "$fixture_profile" \
   '{version:1,repositories:[
     {repository_id:"repo.assets",root:$assets},
     {repository_id:"repo.manifests",root:$manifests},
