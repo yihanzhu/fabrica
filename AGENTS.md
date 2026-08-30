@@ -320,7 +320,9 @@ Two goals drive the backlog:
   accepted scope and proof rules. If their implementation also adds exceptional
   product code, that code still follows this rule.
 - An exception never waives CI, independent review, authorization boundaries,
-  constitution rules, or human merge.
+  constitution rules, or human merge. Only the active, identity-matching
+  ystack-self construction overlay may separately replace the human-merge gate
+  for its named publisher and exact scope.
 - Mechanically reliable checks belong in the target's CI. Every exception's
   regression test runs there; add a lint, type, or invariant check when the rule
   can be expressed without guesswork. Root-cause and tradeoff judgment stays in
@@ -350,9 +352,12 @@ must remain in source or move to an accepted sidecar/metadata mechanism.
   Merging a prompt change does NOT change live behavior until synced — call this out in the
   PR description when a prompt changes.
 - **Never weaken the safety rails without explicit human sign-off:** reviewer stays
-  read-only / comments-only; **merging is the operator's, always** — the in-session
-  auto-merge v1 allowed was retired when the branch ruleset landed, and no agent has a
-  merge path any more; the rounds cap and `needs-human` escalation stay
+  read-only / comments-only. Outside the active, identity-matching ystack-self
+  construction overlay, **merging is the operator's, always** — the in-session
+  auto-merge v1 was retired when the branch ruleset landed, and no agent has a
+  merge path. The overlay above is the sole narrow exception and authorizes only
+  the publisher named by the matching mode record after the exact gates above
+  pass. The rounds cap and `needs-human` escalation stay
   intact. yshifu never writes code/opens PRs and **never self-approves acting alone** — a
   user-directed issue is gated by the user's approval of the drafted intake (the one-liner is the
   request, not the go), a proactive issue by the passed yshifu⇄Codex manager-debate consensus
@@ -397,8 +402,11 @@ must remain in source or move to an accepted sidecar/metadata mechanism.
 
 ## The rules that bite
 
-- **Never merge.** Opening a PR ends an agent's authority; the operator
-  merges. Pushing to `main` is refused server-side anyway.
+- Outside the active, identity-matching ystack-self construction overlay,
+  **never merge.** Opening a PR ends an agent's authority; the operator merges.
+  The overlay above is the sole narrow exception and authorizes only the publisher
+  named by the matching mode record after the exact gates above pass. Pushing to
+  `main` is refused server-side anyway.
 - **Prove it.** Run the checks the plan names, paste the output, and say
   which commit you ran them on. Old proof on a new commit is stale.
 - **Old names are gone.** The project and its manager were renamed;
