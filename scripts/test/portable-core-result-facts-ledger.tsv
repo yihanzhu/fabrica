@@ -1,0 +1,17 @@
+source	row_id	disposition	rule_id	test_id
+review	review-r0-f08	ported	portable-core-result-facts.conclusive-projection	portable-core-result-facts.test.conclusive-full-projection
+review	review-r1-f03	ported	portable-core-result-facts.incident-mismatch	portable-core-result-facts.test.completed-inconclusive-mismatch
+legacy	legacy-test-175	ported	portable-core-result-facts.actual-binding-shape	portable-core-result-facts.test.legacy-175-actual-binding-shape
+legacy	legacy-test-176	ported	portable-core-result-facts.actual-binding-shape	portable-core-result-facts.test.legacy-175-actual-binding-shape
+legacy	legacy-test-177	ported	portable-core-result-facts.execution-shape	portable-core-result-facts.test.legacy-177-execution-shape
+legacy	legacy-test-178	ported	portable-core-result-facts.execution-shape	portable-core-result-facts.test.legacy-177-execution-shape
+legacy	legacy-test-181	ported	portable-core-result-facts.metadata-kind-binding	portable-core-result-facts.test.legacy-181-metadata-kind-binding
+legacy	legacy-test-182	ported	portable-core-result-facts.metadata-kind-binding	portable-core-result-facts.test.legacy-181-metadata-kind-binding
+legacy	legacy-test-211	ported	portable-core-result-facts.performer-role-binding	portable-core-result-facts.test.legacy-211-performer-role-binding
+legacy	legacy-test-212	ported	portable-core-result-facts.performer-role-binding	portable-core-result-facts.test.legacy-211-performer-role-binding
+legacy	legacy-test-243	ported	portable-core-result-facts.model-fact-values	portable-core-result-facts.test.legacy-243-model-fact-mismatch
+legacy	legacy-test-244	ported	portable-core-result-facts.model-fact-values	portable-core-result-facts.test.legacy-243-model-fact-mismatch
+legacy	legacy-test-245	ported	portable-core-result-facts.tool-fact-values	portable-core-result-facts.test.legacy-245-tool-fact-mismatch
+legacy	legacy-test-246	ported	portable-core-result-facts.tool-fact-values	portable-core-result-facts.test.legacy-245-tool-fact-mismatch
+legacy	legacy-test-247	ported	portable-core-result-facts.incident-mismatch	portable-core-result-facts.test.legacy-247-incident-unclassified-capability
+legacy	legacy-test-248	ported	portable-core-result-facts.incident-mismatch	portable-core-result-facts.test.legacy-247-incident-unclassified-capability
