@@ -12,6 +12,7 @@ ingress_manifest="$ingress_repo/ci/required-files.txt"
 ingress_registry="$ingress_repo/core/v1/generation-registry.json"
 ingress_host_path="$PATH"
 ingress_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ystack-portable-ingress-test.XXXXXX")"
+ingress_tmp="$(cd "$ingress_tmp" && pwd -P)"
 ingress_download=''
 
 cleanup() {
@@ -995,6 +996,14 @@ cp "$ingress_product" "$package_generation_dir/core-ingress.sh"
 cp "$ingress_schema" "$package_generation_dir/modules/schema.jq"
 package_product="$package_generation_dir/core-ingress.sh"
 package_root="$package_generation_dir/contracts.jq"
+package_alias="$ingress_tmp/package-alias"
+mkdir "$package_alias"
+ln -s "$package_copy/core" "$package_alias/core"
+symlink_ancestor_product="$package_alias/core/v1/generations/$ingress_generation/core-ingress.sh"
+runtime_failure source-ancestor-symlink E_RUNTIME \
+  env PATH="$ingress_proof_bin:$ingress_host_path" \
+  /bin/bash -c 'source "$1"; portable_core_ingress_open' _ \
+  "$symlink_ancestor_product"
 
 printf '%s\n' 'import "schema" as schema;' \
   'if (.docs[0].content | schema::parsed_limits_ok | not) then "E_LIMIT"' \

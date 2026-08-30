@@ -21,7 +21,34 @@ portable_core_ingress_real_directory() {
   [ -d "$1" ] && [ ! -L "$1" ]
 }
 
+portable_core_ingress_physical_file_path() {
+  local candidate_path="$1"
+  local current_path=''
+  local component
+  local component_index
+  local -a path_components
+
+  case "$candidate_path" in /*) ;; *) return 1 ;; esac
+  IFS='/' read -r -a path_components <<< "$candidate_path"
+  [ "${#path_components[@]}" -gt 1 ] || return 1
+  for ((component_index = 1;
+       component_index < ${#path_components[@]};
+       component_index++)); do
+    component="${path_components[$component_index]}"
+    case "$component" in ''|.|..) return 1 ;; esac
+    current_path="$current_path/$component"
+    [ ! -L "$current_path" ] || return 1
+    if [ "$component_index" -eq $((${#path_components[@]} - 1)) ]; then
+      [ -f "$current_path" ] || return 1
+    else
+      [ -d "$current_path" ] || return 1
+    fi
+  done
+}
+
 portable_core_ingress_open() {
+  local source_path
+  local source_cwd
   local source_dir
   local source_parent
   local repo_root
@@ -39,9 +66,23 @@ portable_core_ingress_open() {
   }
 
   PORTABLE_CORE_INGRESS_GENERATION='g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386'
+  case "${BASH_SOURCE[0]}" in
+    /*) source_path="${BASH_SOURCE[0]}" ;;
+    *)
+      source_cwd="$(pwd -L 2>/dev/null)" || {
+        portable_core_ingress_error E_RUNTIME
+        return 1
+      }
+      source_path="$source_cwd/${BASH_SOURCE[0]}"
+      ;;
+  esac
+  portable_core_ingress_physical_file_path "$source_path" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
   source_dir="$(
     {
-      source_parent="$(dirname -- "${BASH_SOURCE[0]}")" &&
+      source_parent="$(dirname -- "$source_path")" &&
         CDPATH='' cd -P -- "$source_parent" && pwd -P
     } 2>/dev/null
   )" || {
@@ -57,7 +98,8 @@ portable_core_ingress_open() {
     return 1
   }
   expected_dir="$repo_root/core/v1/generations/$PORTABLE_CORE_INGRESS_GENERATION"
-  [ "$source_dir" = "$expected_dir" ] || {
+  [ "$source_dir" = "$expected_dir" ] &&
+    [ "$source_path" = "$expected_dir/core-ingress.sh" ] || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
