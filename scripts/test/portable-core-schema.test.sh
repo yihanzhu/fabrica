@@ -473,7 +473,7 @@ guard_paths_ok() {
   done < "$paths_file"
 }
 
-schema_guard_total=10
+schema_guard_total=11
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -519,14 +519,35 @@ else
   fail_case "ambient module path changed the fixed schema import"
 fi
 schema_live_hits="$schema_test_tmp/live-hits"
-if grep -RIl --exclude='portable-core-*' -- "$schema_generation" \
-    "$schema_root/manager" "$schema_root/routines" "$schema_root/templates" \
-    "$schema_root/reviewer" "$schema_root/config" "$schema_root/scripts" \
-    "$schema_root/README.md" "$schema_root/QUICKSTART.md" "$schema_root/RESTORE.md" \
-    > "$schema_live_hits" 2>/dev/null; then
-  fail_case "generation ID appears in a live or public caller"
-else
+private_mentions_ok() {
+  local mentions_file="$1"
+  local mention_path
+  while IFS= read -r mention_path; do
+    mention_path="${mention_path#"$schema_root/"}"
+    case "$mention_path" in
+      scripts/test/portable-core-*) ;;
+      *) return 1 ;;
+    esac
+  done < "$mentions_file"
+}
+
+grep -RIl -- "$schema_generation" \
+  "$schema_root/manager" "$schema_root/routines" "$schema_root/templates" \
+  "$schema_root/reviewer" "$schema_root/config" "$schema_root/scripts" \
+  "$schema_root/README.md" "$schema_root/QUICKSTART.md" "$schema_root/RESTORE.md" \
+  > "$schema_live_hits" 2>/dev/null || true
+if private_mentions_ok "$schema_live_hits"; then
   schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "generation ID appears in a live, public, or non-private-test file"
+fi
+cp "$schema_live_hits" "$schema_test_tmp/invalid-live-hits"
+printf '%s\n' "$schema_root/scripts/portable-core-loader.sh" >> \
+  "$schema_test_tmp/invalid-live-hits"
+if ! private_mentions_ok "$schema_test_tmp/invalid-live-hits"; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "private mention guard accepted a synthetic live prefixed caller"
 fi
 schema_non_test_loaders="$schema_test_tmp/non-test-loaders"
 grep -RIl -- 'import "schema" as schema' "$schema_root" \
