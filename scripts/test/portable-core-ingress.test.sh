@@ -225,6 +225,8 @@ escape_file="$ingress_tmp/escape.json"
 no_lf_file="$ingress_tmp/no-lf.json"
 extra_lf_file="$ingress_tmp/extra-lf.json"
 unsorted_file="$ingress_tmp/unsorted.json"
+unicode_sorted_file="$ingress_tmp/unicode-sorted.json"
+unicode_unsorted_file="$ingress_tmp/unicode-unsorted.json"
 nan_file="$ingress_tmp/nan.json"
 infinity_file="$ingress_tmp/infinity.json"
 negative_infinity_file="$ingress_tmp/negative-infinity.json"
@@ -249,6 +251,8 @@ printf '{"x":"\\u0061"}\n' > "$escape_file"
 printf '{}' > "$no_lf_file"
 printf '{}\n\n' > "$extra_lf_file"
 printf '{"b":1,"a":2}\n' > "$unsorted_file"
+printf '{"z":1,"é":2,"😀":3}\n' > "$unicode_sorted_file"
+printf '{"é":2,"z":1,"😀":3}\n' > "$unicode_unsorted_file"
 printf 'NaN\n' > "$nan_file"
 printf 'Infinity\n' > "$infinity_file"
 printf '%s\n' -Infinity > "$negative_infinity_file"
@@ -301,6 +305,13 @@ mark_test portable-core-ingress.test.legacy-055-missing-final-lf-non-canonical
 document_finish_failure extra-final-lf E_CANONICAL "$extra_lf_file"
 mark_test portable-core-ingress.test.legacy-057-extra-final-lf-non-canonical
 document_finish_failure unsorted-keys E_CANONICAL "$unsorted_file"
+start_ingress document
+expect_success unicode-key-order-snapshot portable_core_ingress_snapshot \
+  "$unicode_sorted_file"
+expect_success unicode-key-order-driver portable_core_ingress_finish_driver
+stop_ingress
+document_finish_failure unicode-key-order-unsorted E_CANONICAL \
+  "$unicode_unsorted_file"
 mark_test portable-core-ingress.test.legacy-059-unsorted-keys-non-canonical
 document_finish_failure non-json-nan E_PARSE "$nan_file"
 document_finish_failure non-json-infinity E_PARSE "$infinity_file"
@@ -340,7 +351,15 @@ python3 - "$ingress_tmp/depth-32.json" "$ingress_tmp/depth-33.json" \
   "$ingress_tmp/object-depth-128.json" \
   "$ingress_tmp/object-depth-129.json" \
   "$ingress_tmp/mixed-depth-128.json" \
-  "$ingress_tmp/mixed-depth-129.json" <<'PY'
+  "$ingress_tmp/mixed-depth-129.json" \
+  "$ingress_tmp/deep-wide.json" \
+  "$ingress_tmp/deep-wide-malformed.json" \
+  "$ingress_tmp/deep-wide-noncanonical.json" \
+  "$ingress_tmp/deep-object-sorted.json" \
+  "$ingress_tmp/deep-object-duplicate.json" \
+  "$ingress_tmp/deep-object-unsorted.json" \
+  "$ingress_tmp/deep-high-surrogate.json" \
+  "$ingress_tmp/deep-low-surrogate.json" <<'PY'
 import json
 import sys
 
@@ -374,7 +393,23 @@ def mixed(depth):
 
 open(sys.argv[15], "wb").write(mixed(128).encode())
 open(sys.argv[16], "wb").write(mixed(129).encode())
+deep_prefix = b"[" * 250000
+deep_values = b",".join([b"0"] * 250000)
+deep_suffix = b"]" * 250000
+open(sys.argv[17], "wb").write(deep_prefix + deep_values + deep_suffix + b"\n")
+open(sys.argv[18], "wb").write(deep_prefix + deep_values + deep_suffix[:-1] + b"\n")
+open(sys.argv[19], "wb").write(deep_prefix + b" " + deep_values + deep_suffix + b"\n")
+object_prefix = b'{"a":' * 129
+object_suffix = b'}' * 129
+open(sys.argv[20], "wb").write(object_prefix + b'{"a":0,"b":1}' + object_suffix + b"\n")
+open(sys.argv[21], "wb").write(object_prefix + b'{"a":0,"a":1}' + object_suffix + b"\n")
+open(sys.argv[22], "wb").write(object_prefix + b'{"b":0,"a":1}' + object_suffix + b"\n")
+open(sys.argv[23], "wb").write(b"[" * 129 + b'"\\uD800"' + b"]" * 129 + b"\n")
+open(sys.argv[24], "wb").write(b"[" * 129 + b'"\\uDC00"' + b"]" * 129 + b"\n")
 PY
+[ "$(wc -c < "$ingress_tmp/deep-wide.json" | tr -d ' ')" -eq 1000000 ]
+[ "$(wc -c < "$ingress_tmp/deep-wide-malformed.json" | tr -d ' ')" -eq 999999 ]
+[ "$(wc -c < "$ingress_tmp/deep-wide-noncanonical.json" | tr -d ' ')" -eq 1000001 ]
 
 start_ingress document
 expect_success depth-32-snapshot portable_core_ingress_snapshot "$ingress_tmp/depth-32.json"
@@ -398,6 +433,21 @@ expect_failure depth-100000-limit E_LIMIT portable_core_ingress_finish_driver
 stop_ingress
 document_finish_failure depth-100000-malformed E_PARSE \
   "$ingress_tmp/depth-100000-malformed.json"
+document_finish_failure deep-wide-limit E_LIMIT "$ingress_tmp/deep-wide.json"
+document_finish_failure deep-wide-malformed E_PARSE \
+  "$ingress_tmp/deep-wide-malformed.json"
+document_finish_failure deep-wide-noncanonical E_CANONICAL \
+  "$ingress_tmp/deep-wide-noncanonical.json"
+document_finish_failure deep-object-sorted E_LIMIT \
+  "$ingress_tmp/deep-object-sorted.json"
+document_finish_failure deep-object-duplicate E_CANONICAL \
+  "$ingress_tmp/deep-object-duplicate.json"
+document_finish_failure deep-object-unsorted E_CANONICAL \
+  "$ingress_tmp/deep-object-unsorted.json"
+document_finish_failure deep-high-surrogate E_PARSE \
+  "$ingress_tmp/deep-high-surrogate.json"
+document_finish_failure deep-low-surrogate E_CANONICAL \
+  "$ingress_tmp/deep-low-surrogate.json"
 document_finish_failure object-depth-128-limit E_LIMIT \
   "$ingress_tmp/object-depth-128.json"
 document_finish_failure object-depth-129-limit E_LIMIT \
@@ -632,6 +682,29 @@ portable_core_ingress_snapshot "$canonical_file"
 runtime_failure byte-scanner-logic-failure E_RUNTIME portable_core_ingress_finish_driver
 stop_ingress
 
+start_ingress document
+awk_exit_forty="$ingress_tmp/awk-exit-forty"
+printf '%s\n' '#!/bin/sh' 'exit 40' > "$awk_exit_forty"
+chmod +x "$awk_exit_forty"
+PORTABLE_CORE_INGRESS_AWK="$awk_exit_forty"
+portable_core_ingress_snapshot "$canonical_file"
+runtime_failure analyzer-awk-exit-forty E_RUNTIME portable_core_ingress_finish_driver
+stop_ingress
+
+start_ingress document
+real_ingress_awk="$PORTABLE_CORE_INGRESS_AWK"
+marker_awk_exit_forty_one="$ingress_tmp/marker-awk-exit-forty-one"
+printf '%s\n' '#!/bin/sh' \
+  'case " $* " in *" -v scalar_file="*) exec "$REAL_AWK" "$@" ;; esac' \
+  'exit 41' > "$marker_awk_exit_forty_one"
+chmod +x "$marker_awk_exit_forty_one"
+PORTABLE_CORE_INGRESS_AWK="$marker_awk_exit_forty_one"
+export REAL_AWK="$real_ingress_awk"
+portable_core_ingress_snapshot "$canonical_file"
+runtime_failure marker-awk-exit-forty-one E_RUNTIME portable_core_ingress_finish_driver
+unset REAL_AWK
+stop_ingress
+
 fake_jq_bin="$ingress_tmp/fake-jq-bin"
 mkdir -p "$fake_jq_bin"
 printf '%s\n' '#!/bin/sh' \
@@ -802,6 +875,26 @@ for stream_runtime_status in 5 41; do
   stop_ingress
 done
 
+for key_order_mode in nonzero malformed; do
+  start_ingress document
+  real_ingress_jq="$PORTABLE_CORE_INGRESS_JQ"
+  key_order_fail="$ingress_tmp/key-order-$key_order_mode"
+  if [ "$key_order_mode" = nonzero ]; then
+    key_order_action='exit 7'
+  else
+    key_order_action='printf "%s" malformed; exit 0'
+  fi
+  printf '%s\n' '#!/bin/sh' \
+    "case \" \$* \" in *\" --slurpfile keys \"*) $key_order_action ;; esac" \
+    "exec \"$real_ingress_jq\" \"\$@\"" > "$key_order_fail"
+  chmod +x "$key_order_fail"
+  PORTABLE_CORE_INGRESS_JQ="$key_order_fail"
+  portable_core_ingress_snapshot "$ingress_tmp/deep-object-sorted.json"
+  runtime_failure "key-order-$key_order_mode" E_RUNTIME \
+    portable_core_ingress_finish_driver
+  stop_ingress
+done
+
 start_ingress document
 jq_canonical_fail="$ingress_tmp/jq-canonical-fail"
 printf '%s\n' '#!/bin/sh' \
@@ -823,6 +916,18 @@ portable_core_ingress_snapshot "$canonical_file"
 runtime_failure cmp-operational-failure E_RUNTIME portable_core_ingress_finish_driver
 stop_ingress
 
+start_ingress document
+portable_core_ingress_snapshot "$canonical_file"
+analysis_wc_malformed="$ingress_tmp/analysis-wc-malformed"
+printf '%s\n' '#!/bin/sh' \
+  'printf "%s\n" "SECRET /private/meta/path"' \
+  'exit 0' > "$analysis_wc_malformed"
+chmod +x "$analysis_wc_malformed"
+PORTABLE_CORE_INGRESS_WC="$analysis_wc_malformed"
+runtime_failure analysis-wc-malformed-output E_RUNTIME \
+  portable_core_ingress_finish_driver
+stop_ingress
+
 write_failure_case() {
   local case_id="$1"
   local target_kind="$2"
@@ -830,6 +935,7 @@ write_failure_case() {
   case "$target_kind" in
     raw) mkdir "$PORTABLE_CORE_INGRESS_TEMP/raw.1" ;;
     canonical) mkdir "$PORTABLE_CORE_INGRESS_TEMP/canonical.1" ;;
+    analysis) mkdir "$PORTABLE_CORE_INGRESS_TEMP/deep-scalars.ndjson" ;;
     contents)
       rm "$PORTABLE_CORE_INGRESS_CONTENTS"
       mkdir "$PORTABLE_CORE_INGRESS_CONTENTS"
@@ -858,6 +964,7 @@ runtime_failure hashes-truncate-failure E_RUNTIME portable_core_ingress_begin do
 stop_ingress
 write_failure_case raw-write-failure raw
 write_failure_case canonical-write-failure canonical
+write_failure_case analysis-sidecar-write-failure analysis
 write_failure_case contents-append-failure contents
 write_failure_case hashes-append-failure hashes
 
