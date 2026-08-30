@@ -882,6 +882,7 @@ find "$profile_root/core/v1/generations/$profile_generation" -type f -print |
 private_generation_path_ok() {
   case "$1" in
     "core/v1/generations/$profile_generation/core-ingress.sh"|\
+    "core/v1/generations/$profile_generation/contracts.jq"|\
     "core/v1/generations/$profile_generation/modules/schema.jq"|\
     "core/v1/generations/$profile_generation/modules/profile_graph.jq"|\
     "core/v1/generations/$profile_generation/modules/stage_request.jq"|\
@@ -900,11 +901,29 @@ private_generation_paths_ok() {
   done < "$candidate_file"
 }
 
+profile_activation_state_ok() {
+  local root_program="$1"
+  local wrapper="$2"
+  local root_exists=false
+  local wrapper_exists=false
+  { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
+  { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
+  if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
+    return 0
+  fi
+  [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
+    [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
+    [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
+    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$profile_generation'" "$wrapper")" -eq 1 ]
+}
+
 profile_guard_total=$((profile_guard_total + 1))
 if [ "$(grep -Fxc "core/v1/generations/$profile_generation/modules/profile_graph.jq" "$generation_files")" -eq 1 ] &&
    private_generation_paths_ok "$generation_files" &&
-   [ ! -e "$profile_root/core/v1/generations/$profile_generation/contracts.jq" ] &&
-   [ ! -e "$profile_root/scripts/core-contract.sh" ] &&
+   profile_activation_state_ok \
+     "$profile_root/core/v1/generations/$profile_generation/contracts.jq" \
+     "$profile_root/scripts/core-contract.sh" &&
    [ -z "$(find "$profile_root/core/v1/generations/$profile_generation" -type l -print -quit)" ]; then
   profile_guard_passed=$((profile_guard_passed + 1))
 else

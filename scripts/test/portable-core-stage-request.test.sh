@@ -1004,6 +1004,7 @@ generation_members_ok=true
 while IFS= read -r generation_file; do
   case "$generation_file" in
     "core/v1/generations/$stage_generation/core-ingress.sh"|\
+    "core/v1/generations/$stage_generation/contracts.jq"|\
     "core/v1/generations/$stage_generation/modules/schema.jq"|\
     "core/v1/generations/$stage_generation/modules/profile_graph.jq"|\
     "core/v1/generations/$stage_generation/modules/stage_request.jq"|\
@@ -1019,11 +1020,29 @@ else
   guard_fail "private generation member allowlist"
 fi
 
-if [ ! -e "$stage_root/core/v1/generations/$stage_generation/contracts.jq" ] &&
-   [ ! -e "$stage_root/scripts/core-contract.sh" ]; then
+stage_activation_state_ok() {
+  local root_program="$1"
+  local wrapper="$2"
+  local root_exists=false
+  local wrapper_exists=false
+  { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
+  { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
+  if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
+    return 0
+  fi
+  [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
+    [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
+    [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
+    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$stage_generation'" "$wrapper")" -eq 1 ]
+}
+
+if stage_activation_state_ok \
+   "$stage_root/core/v1/generations/$stage_generation/contracts.jq" \
+   "$stage_root/scripts/core-contract.sh"; then
   guard_pass
 else
-  guard_fail "private generation activation state"
+  guard_fail "generation activation state"
 fi
 
 if [ -z "$(find "$stage_root/core/v1/generations/$stage_generation" \

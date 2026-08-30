@@ -635,6 +635,7 @@ generation_members_ok=true
 while IFS= read -r generation_file; do
   case "$generation_file" in
     "$facts_generation_root/core-ingress.sh"|\
+    "$facts_generation_root/contracts.jq"|\
     "$facts_generation_root/modules/schema.jq"|\
     "$facts_generation_root/modules/profile_graph.jq"|\
     "$facts_generation_root/modules/stage_request.jq"|\
@@ -644,17 +645,34 @@ while IFS= read -r generation_file; do
   esac
 done < <(find "$facts_root/$facts_generation_root" -type f -print |
   sed "s#^$facts_root/##" | LC_ALL=C sort)
-if [ "$generation_members_ok" = true ] &&
-   [ ! -e "$facts_root/$facts_generation_root/contracts.jq" ]; then
+if [ "$generation_members_ok" = true ]; then
   guard_pass
 else guard_fail "private generation member allowlist"
 fi
 
-if [ ! -e "$facts_root/scripts/core-contract.sh" ] &&
+facts_activation_state_ok() {
+  local root_program="$1"
+  local wrapper="$2"
+  local root_exists=false
+  local wrapper_exists=false
+  { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
+  { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
+  if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
+    return 0
+  fi
+  [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
+    [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
+    [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
+    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$facts_generation'" "$wrapper")" -eq 1 ]
+}
+
+if facts_activation_state_ok "$facts_root/$facts_generation_root/contracts.jq" \
+     "$facts_root/scripts/core-contract.sh" &&
    [ -z "$(find "$facts_root/$facts_generation_root" "$facts_fixture" "$facts_ledger" \
      -type l -print -quit)" ]; then
   guard_pass
-else guard_fail "private inactive regular files"
+else guard_fail "generation activation and regular files"
 fi
 
 if [ -x "$facts_root/scripts/test/portable-core-result-facts.test.sh" ] &&
