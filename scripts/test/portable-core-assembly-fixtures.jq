@@ -41,3 +41,13 @@ def resolved_profile_doc($profile; $profile_sha; $manifest_shas):
 def request_doc($role; $resolved_sha): request::request_doc($role;$resolved_sha);
 def result_doc($request; $request_sha; $resolved; $resolved_sha):
   result::completed_result_doc($request;$request_sha;$resolved;$resolved_sha);
+def skipped_result_doc($request; $request_sha; $resolved; $resolved_sha):
+  result::skipped_result_doc($request;$request_sha;$resolved;$resolved_sha);
+def stale_result_doc($request; $request_sha; $resolved; $resolved_sha):
+  result::stale_result_doc($request;$request_sha;$resolved;$resolved_sha);
+def blocked_result_doc($request; $request_sha; $resolved; $resolved_sha):
+  result::blocked_result_doc($request;$request_sha;$resolved;$resolved_sha);
+def failed_result_doc($request; $request_sha; $resolved; $resolved_sha):
+  result::failed_result_doc($request;$request_sha;$resolved;$resolved_sha);
+def cancelled_result_doc($request; $request_sha; $resolved; $resolved_sha):
+  result::cancelled_result_doc($request;$request_sha;$resolved;$resolved_sha);

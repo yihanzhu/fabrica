@@ -2,19 +2,36 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 
-assembly_phase="${1:-post-switch}"
-case "$assembly_phase" in
-  --pre-switch) assembly_phase=pre-switch ;;
-  post-switch) ;;
-  *) printf 'usage: %s [--pre-switch]\n' "$0" >&2; exit 2 ;;
-esac
-
 assembly_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 assembly_generation="g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386"
 assembly_generation_root="$assembly_root/core/v1/generations/$assembly_generation"
 assembly_module_dir="$assembly_generation_root/modules"
 assembly_program="$assembly_generation_root/contracts.jq"
 assembly_wrapper="$assembly_root/scripts/core-contract.sh"
+
+detect_phase() {
+  local wrapper="$1"
+  local requested="$2"
+  case "$requested" in
+    auto)
+      if [ -e "$wrapper" ] || [ -L "$wrapper" ]; then
+        printf '%s\n' post-switch
+      else
+        printf '%s\n' pre-switch
+      fi
+      ;;
+    --pre-switch|pre-switch) printf '%s\n' pre-switch ;;
+    --post-switch|post-switch) printf '%s\n' post-switch ;;
+    *) return 1 ;;
+  esac
+}
+
+if [ "$#" -gt 1 ] ||
+   ! assembly_phase="$(detect_phase "$assembly_wrapper" "${1:-auto}")"; then
+  printf 'usage: %s [--pre-switch|--post-switch]\n' "$0" >&2
+  exit 2
+fi
+
 assembly_fixture_dir="$assembly_root/scripts/test"
 assembly_ledger="$assembly_fixture_dir/portable-core-assembly-ledger.tsv"
 assembly_manifest="$assembly_root/ci/required-files.txt"
@@ -93,10 +110,46 @@ assembly_public_total=0
 assembly_public_passed=0
 assembly_proof_total=0
 assembly_proof_passed=0
+assembly_seen_rules="$assembly_tmp/seen-assembly-rules"
+assembly_seen_tests="$assembly_tmp/seen-assembly-tests"
+: > "$assembly_seen_rules"
+: > "$assembly_seen_tests"
 
 fail_case() {
   printf 'FAIL: %s\n' "$1" >&2
   assembly_failures=$((assembly_failures + 1))
+}
+
+record_assembly_proof() {
+  local test_id="$1"
+  local rule_id=''
+  case "$test_id" in
+    portable-core-assembly.test.usage-before-runtime)
+      rule_id=portable-core-assembly.usage-before-runtime ;;
+    portable-core-assembly.test.document-route)
+      rule_id=portable-core-assembly.document-route ;;
+    portable-core-assembly.test.profile-set-route)
+      rule_id=portable-core-assembly.profile-set-route ;;
+    portable-core-assembly.test.stage-run-route)
+      rule_id=portable-core-assembly.stage-run-route ;;
+    portable-core-assembly.test.empty-success-output)
+      rule_id=portable-core-assembly.empty-success-output ;;
+    portable-core-assembly.test.sanitized-errors)
+      rule_id=portable-core-assembly.sanitized-errors ;;
+    portable-core-assembly.test.fixed-imports)
+      rule_id=portable-core-assembly.fixed-imports ;;
+    portable-core-assembly.test.fixed-generation)
+      rule_id=portable-core-assembly.fixed-generation ;;
+    portable-core-assembly.test.aggregate-ledgers)
+      rule_id=portable-core-assembly.aggregate-ledgers ;;
+    portable-core-assembly.test.restore-view)
+      rule_id=portable-core-assembly.restore-view ;;
+    portable-core-assembly.test.profile-set-arity)
+      rule_id=portable-core-assembly.profile-set-arity ;;
+    *) return 0 ;;
+  esac
+  printf '%s\n' "$test_id" >> "$assembly_seen_tests"
+  printf '%s\n' "$rule_id" >> "$assembly_seen_rules"
 }
 
 proof() {
@@ -105,10 +158,22 @@ proof() {
   assembly_proof_total=$((assembly_proof_total + 1))
   if "$@"; then
     assembly_proof_passed=$((assembly_proof_passed + 1))
+    record_assembly_proof "$case_id"
   else
     fail_case "$case_id"
   fi
 }
+
+phase_probe="$assembly_tmp/phase-probe"
+proof phase-auto-pre-switch test \
+  "$(detect_phase "$phase_probe" auto)" = pre-switch
+: > "$phase_probe"
+proof phase-auto-post-switch test \
+  "$(detect_phase "$phase_probe" auto)" = post-switch
+proof phase-explicit-pre-switch test \
+  "$(detect_phase "$phase_probe" --pre-switch)" = pre-switch
+proof phase-explicit-post-switch test \
+  "$(detect_phase "$assembly_tmp/absent-phase-probe" --post-switch)" = post-switch
 
 fixture_value() {
   local expression="$1"
@@ -161,6 +226,65 @@ result_file="$assembly_tmp/result.json"
   'import "portable-core-assembly-fixtures" as fixture;
    fixture::result_doc($request[0];$request_sha;$resolved[0];$resolved_sha)' > \
   "$result_file"
+
+build_request() {
+  local role="$1"
+  local output="$2"
+  fixture_value "fixture::request_doc(\"$role\";\"$resolved_sha\")" > "$output"
+}
+
+build_fixture_result() {
+  local request="$1"
+  local builder="$2"
+  local output="$3"
+  local resolved="${4:-$resolved_file}"
+  local request_digest resolved_digest
+  request_digest="$(sha256_path "$request")"
+  resolved_digest="$(sha256_path "$resolved")"
+  "${assembly_jq_command[@]}" -L "$assembly_fixture_dir" -S -c -n \
+    --slurpfile request "$request" --slurpfile resolved "$resolved" \
+    --arg request_sha "$request_digest" --arg resolved_sha "$resolved_digest" \
+    "import \"portable-core-assembly-fixtures\" as fixture;
+     fixture::$builder(\$request[0];\$request_sha;\$resolved[0];\$resolved_sha)" > \
+    "$output"
+}
+
+verifier_request_file="$assembly_tmp/request-verifier.json"
+reviewer_request_file="$assembly_tmp/request-reviewer.json"
+verifier_result_file="$assembly_tmp/result-verifier.json"
+reviewer_result_file="$assembly_tmp/result-reviewer.json"
+build_request verifier "$verifier_request_file"
+build_request reviewer "$reviewer_request_file"
+build_fixture_result "$verifier_request_file" result_doc "$verifier_result_file"
+build_fixture_result "$reviewer_request_file" result_doc "$reviewer_result_file"
+
+for status in skipped stale blocked failed cancelled; do
+  build_fixture_result "$request_file" "${status}_result_doc" \
+    "$assembly_tmp/result-$status.json"
+done
+
+producer_changed_file="$assembly_tmp/result-producer-changed.json"
+producer_inconclusive_file="$assembly_tmp/result-producer-inconclusive.json"
+verifier_failed_file="$assembly_tmp/result-verifier-failed.json"
+verifier_inconclusive_file="$assembly_tmp/result-verifier-inconclusive.json"
+"${assembly_jq_command[@]}" -S -c \
+  '.body.outcome={family:"change",value:"changed"} |
+   .body.outputs=[{output_id:"output.changed",ref:.body.evidence[0].proof_ref}]' \
+  "$result_file" > "$producer_changed_file"
+"${assembly_jq_command[@]}" -S -c \
+  '.body.evidence[0].verdict="inconclusive" |
+   .body.outcome={family:"change",value:"inconclusive"} |
+   .body.reason={reason_id:"proof.inconclusive"}' \
+  "$result_file" > "$producer_inconclusive_file"
+"${assembly_jq_command[@]}" -S -c \
+  '.body.evidence[0].verdict="failed" |
+   .body.outcome={family:"check",value:"failed"}' \
+  "$verifier_result_file" > "$verifier_failed_file"
+"${assembly_jq_command[@]}" -S -c \
+  '.body.evidence[0].verdict="inconclusive" |
+   .body.outcome={family:"check",value:"inconclusive"} |
+   .body.reason={reason_id:"proof.inconclusive"}' \
+  "$verifier_result_file" > "$verifier_inconclusive_file"
 
 driver_number=0
 build_driver() {
@@ -291,37 +415,43 @@ activation_pair_rejected() {
   ! activation_pair_ok "$1" "$2"
 }
 
+write_synthetic_wrapper() {
+  local output="$1"
+  local generation="$2"
+  printf '#!/usr/bin/env bash\nPORTABLE_CORE_GENERATION='"'"'%s'"'"'\n' \
+    "$generation" > "$output"
+  chmod 0755 "$output"
+}
+
 pair_dir="$assembly_tmp/activation-pair"
 pair_root="$pair_dir/contracts.jq"
 pair_wrapper="$pair_dir/core-contract.sh"
 mkdir -p "$pair_dir"
 proof activation-pre-switch activation_pair_ok "$pair_root" "$pair_wrapper"
 cp "$assembly_program" "$pair_root"
-cp "$assembly_wrapper" "$pair_wrapper"
-chmod 0755 "$pair_wrapper"
+write_synthetic_wrapper "$pair_wrapper" "$assembly_generation"
 proof activation-post-switch activation_pair_ok "$pair_root" "$pair_wrapper"
 rm "$pair_wrapper"
 proof activation-root-only activation_pair_rejected "$pair_root" "$pair_wrapper"
 rm "$pair_root"
-cp "$assembly_wrapper" "$pair_wrapper"
-chmod 0755 "$pair_wrapper"
+write_synthetic_wrapper "$pair_wrapper" "$assembly_generation"
 proof activation-wrapper-only activation_pair_rejected "$pair_root" "$pair_wrapper"
 rm "$pair_wrapper"
 ln -s "$assembly_program" "$pair_root"
-cp "$assembly_wrapper" "$pair_wrapper"
-chmod 0755 "$pair_wrapper"
+write_synthetic_wrapper "$pair_wrapper" "$assembly_generation"
 proof activation-root-symlink activation_pair_rejected "$pair_root" "$pair_wrapper"
 rm "$pair_root" "$pair_wrapper"
 cp "$assembly_program" "$pair_root"
-ln -s "$assembly_wrapper" "$pair_wrapper"
+valid_wrapper="$pair_dir/valid-wrapper.sh"
+write_synthetic_wrapper "$valid_wrapper" "$assembly_generation"
+ln -s "$valid_wrapper" "$pair_wrapper"
 proof activation-wrapper-symlink activation_pair_rejected "$pair_root" "$pair_wrapper"
 rm "$pair_wrapper"
-sed "s/$assembly_generation/g-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/" \
-  "$assembly_wrapper" > "$pair_wrapper"
-chmod 0755 "$pair_wrapper"
+write_synthetic_wrapper "$pair_wrapper" \
+  g-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 proof activation-wrong-generation activation_pair_rejected "$pair_root" "$pair_wrapper"
 proof no-live-caller \
-  sh -c '! git -C "$1" grep -q -E "$2" -- manager reviewer routines templates config scripts/install.sh scripts/setup-target-repo.sh scripts/doctor.sh' \
+  sh -c 'git -C "$1" rev-parse --git-dir >/dev/null 2>&1 && ! git -C "$1" grep -q -E "$2" -- manager reviewer routines templates config scripts/install.sh scripts/setup-target-repo.sh scripts/doctor.sh' \
   sh "$assembly_root" "scripts/core-contract\\.sh|$assembly_generation"
 
 metadata="$(fixture_value 'fixture::metadata')"
@@ -364,31 +494,101 @@ ledger_files=(
   "$assembly_fixture_dir/portable-core-result-truth-ledger.tsv"
   "$assembly_ledger"
 )
-ledger_report="$assembly_tmp/ledger-report"
-if awk -F '\t' '
-  FNR == 1 { next }
-  $1 == "review" { review++; review_id[$2]++ }
-  $1 == "legacy" { legacy++; legacy_id[$2]++ }
-  $1 != "review" && $1 != "legacy" { bad=1 }
-  END {
-    for (i=1;i<=16;i++) expected_review[sprintf("review-r0-f%02d",i)]=1
-    for (i=1;i<=9;i++) expected_review[sprintf("review-r1-f%02d",i)]=1
-    for (i=1;i<=5;i++) expected_review[sprintf("review-r2-f%02d",i)]=1
-    for (i=1;i<=4;i++) expected_review[sprintf("review-r3-f%02d",i)]=1
-    for (id in expected_review) if (review_id[id] != 1) bad=1
-    for (id in review_id) if (!expected_review[id] || review_id[id] != 1) bad=1
-    for (i=1;i<=279;i++) expected_legacy[sprintf("legacy-test-%03d",i)]=1
-    for (id in expected_legacy) if (legacy_id[id] != 1) bad=1
-    for (id in legacy_id) if (!expected_legacy[id] || legacy_id[id] != 1) bad=1
-    printf "review=%d legacy=%d\n",review,legacy
-    exit bad || review != 34 || legacy != 279
-  }' "${ledger_files[@]}" > "$ledger_report"; then
-  assembly_proof_total=$((assembly_proof_total + 1))
-  assembly_proof_passed=$((assembly_proof_passed + 1))
-else
-  assembly_proof_total=$((assembly_proof_total + 1))
-  fail_case portable-core-assembly.test.aggregate-ledgers
-fi
+ledger_owners=(
+  portable-core-schema
+  portable-core-ingress
+  portable-core-profile-graph
+  portable-core-stage-request
+  portable-core-result-facts
+  portable-core-result-truth
+  portable-core-assembly
+)
+ledger_review_counts=(8 2 7 6 2 8 1)
+ledger_legacy_counts=(44 38 92 22 14 48 21)
+ledger_test_scripts=(
+  "$assembly_fixture_dir/portable-core-schema.test.sh"
+  "$assembly_fixture_dir/portable-core-ingress.test.sh"
+  "$assembly_fixture_dir/portable-core-profile-graph.test.sh"
+  "$assembly_fixture_dir/portable-core-stage-request.test.sh"
+  "$assembly_fixture_dir/portable-core-result-facts.test.sh"
+  "$assembly_fixture_dir/portable-core-result-truth.test.sh"
+  "$assembly_fixture_dir/portable-core-assembly.test.sh"
+)
+
+ledger_set_ok() {
+  local assembly_candidate="$1"
+  local combined="$assembly_tmp/combined-ledger"
+  local index owner ledger test_script rule_inventory test_inventory
+  local -a candidates
+  candidates=("${ledger_files[@]:0:6}" "$assembly_candidate")
+  : > "$combined"
+  for index in 0 1 2 3 4 5 6; do
+    owner="${ledger_owners[$index]}"
+    ledger="${candidates[$index]}"
+    test_script="${ledger_test_scripts[$index]}"
+    [ -f "$ledger" ] && [ -f "$test_script" ] || return 1
+    awk -F '\t' -v owner="$owner" \
+      -v expected_review="${ledger_review_counts[$index]}" \
+      -v expected_legacy="${ledger_legacy_counts[$index]}" '
+      NR == 1 {
+        if ($0 != "source\trow_id\tdisposition\trule_id\ttest_id") bad=1
+        next
+      }
+      NF != 5 { bad=1; next }
+      $1 == "review" { review++ }
+      $1 == "legacy" { legacy++ }
+      $1 != "review" && $1 != "legacy" { bad=1 }
+      $3 != "ported" && $3 != "replaced-by" { bad=1 }
+      index($4,owner ".") != 1 || $4 !~ /^[a-z0-9][a-z0-9._-]+$/ { bad=1 }
+      index($5,owner ".test.") != 1 || $5 !~ /^[a-z0-9][a-z0-9._-]+$/ { bad=1 }
+      $2 == "" || $4 == "" || $5 == "" { bad=1 }
+      END { exit bad || review != expected_review || legacy != expected_legacy }
+    ' "$ledger" || return 1
+    tail -n +2 "$ledger" >> "$combined"
+
+    rule_inventory="$assembly_tmp/$index.rules"
+    test_inventory="$assembly_tmp/$index.tests"
+    if [ "$owner" = portable-core-assembly ]; then
+      LC_ALL=C sort -u "$assembly_seen_rules" > "$rule_inventory"
+      LC_ALL=C sort -u "$assembly_seen_tests" > "$test_inventory"
+    else
+      grep -Fq 'seen-rules.sorted' "$test_script" &&
+        grep -Fq 'seen-tests.sorted' "$test_script" || return 1
+      grep -Eo "$owner\\.(test\\.)?[a-z0-9][a-z0-9._-]*" "$test_script" |
+        grep -Fv "$owner.test." | LC_ALL=C sort -u > "$rule_inventory"
+      grep -Eo "$owner\\.test\\.[a-z0-9][a-z0-9._-]*" "$test_script" |
+        LC_ALL=C sort -u > "$test_inventory"
+    fi
+    while IFS=$'\t' read -r _ _ _ rule_id test_id; do
+      grep -Fqx "$rule_id" "$rule_inventory" &&
+        grep -Fqx "$test_id" "$test_inventory" || return 1
+    done < <(tail -n +2 "$ledger")
+  done
+
+  awk -F '\t' '
+    { row[$2]++; full[$0]++ }
+    $1 == "review" { review++; review_id[$2]++ }
+    $1 == "legacy" { legacy++; legacy_id[$2]++ }
+    END {
+      for (i=1;i<=16;i++) expected_review[sprintf("review-r0-f%02d",i)]=1
+      for (i=1;i<=9;i++) expected_review[sprintf("review-r1-f%02d",i)]=1
+      for (i=1;i<=5;i++) expected_review[sprintf("review-r2-f%02d",i)]=1
+      for (i=1;i<=4;i++) expected_review[sprintf("review-r3-f%02d",i)]=1
+      for (id in expected_review) if (review_id[id] != 1) bad=1
+      for (id in review_id) if (!expected_review[id] || review_id[id] != 1) bad=1
+      for (i=1;i<=279;i++) expected_legacy[sprintf("legacy-test-%03d",i)]=1
+      for (id in expected_legacy) if (legacy_id[id] != 1) bad=1
+      for (id in legacy_id) if (!expected_legacy[id] || legacy_id[id] != 1) bad=1
+      for (id in row) if (row[id] != 1) bad=1
+      for (line in full) if (full[line] != 1) bad=1
+      exit bad || review != 34 || legacy != 279
+    }' "$combined"
+}
+
+ledger_set_rejected() {
+  ! ledger_set_ok "$1"
+}
+
 proof stage-owns-legacy-229-230 \
   sh -c 'grep -q "legacy-test-229" "$1" && grep -q "legacy-test-230" "$1" && ! grep -Eq "legacy-test-(229|230)" "$2"' sh \
   "$assembly_fixture_dir/portable-core-stage-request-ledger.tsv" \
@@ -425,6 +625,34 @@ relation_file="$assembly_tmp/relation.json"
 "${assembly_jq_command[@]}" -S -c \
   'del(.body.bindings[] | select(.role=="publisher") | .authority_ref)' \
   "$profile_file" > "$relation_file"
+request_relation_file="$assembly_tmp/request-relation.json"
+"${assembly_jq_command[@]}" -S -c \
+  '.body.required_evidence_kinds=["independent-review"]' "$request_file" > \
+  "$request_relation_file"
+facts_shape_file="$assembly_tmp/result-facts-shape.json"
+"${assembly_jq_command[@]}" -S -c \
+  'del(.body.execution.actual_binding.package_ref)' "$result_file" > \
+  "$facts_shape_file"
+truth_relation_file="$assembly_tmp/result-truth-relation.json"
+"${assembly_jq_command[@]}" -S -c 'del(.body.finished_at)' "$result_file" > \
+  "$truth_relation_file"
+request_relation_result_file="$assembly_tmp/result-request-relation.json"
+build_fixture_result "$request_relation_file" result_doc \
+  "$request_relation_result_file"
+resolved_relation_file="$assembly_tmp/resolved-relation.json"
+"${assembly_jq_command[@]}" -S -c \
+  '.body.bindings |= map(
+    if .binding.role=="producer" then
+      .binding.requested_capabilities=[] | .binding.requested_permissions=[]
+    else . end)' "$resolved_file" > "$resolved_relation_file"
+resolved_relation_sha="$(sha256_path "$resolved_relation_file")"
+profile_forced_request_file="$assembly_tmp/request-profile-relation.json"
+fixture_value \
+  "fixture::request_doc(\"producer\";\"$resolved_relation_sha\")" > \
+  "$profile_forced_request_file"
+profile_forced_result_file="$assembly_tmp/result-profile-relation.json"
+build_fixture_result "$profile_forced_request_file" result_doc \
+  "$profile_forced_result_file" "$resolved_relation_file"
 expect_root layer parsed-limit E_LIMIT document "$limit_file"
 expect_root layer shape-before-relation E_SHAPE document "$shape_file"
 expect_root layer ref-before-relation E_REF stage-run "$ref_file" \
@@ -447,6 +675,31 @@ else
     "$resolved_file" "${manifest_files[@]}"
   expect_public_success stage-run-success validate-stage-run "$request_file" \
     "$resolved_file" "$result_file"
+  expect_public_success stage-run-verifier validate-stage-run \
+    "$verifier_request_file" "$resolved_file" "$verifier_result_file"
+  expect_public_success stage-run-reviewer validate-stage-run \
+    "$reviewer_request_file" "$resolved_file" "$reviewer_result_file"
+  for status in skipped stale blocked failed cancelled; do
+    expect_public_success "terminal-$status" validate-stage-run "$request_file" \
+      "$resolved_file" "$assembly_tmp/result-$status.json"
+  done
+  expect_public_success outcome-producer-changed validate-stage-run "$request_file" \
+    "$resolved_file" "$producer_changed_file"
+  expect_public_success outcome-producer-inconclusive validate-stage-run \
+    "$request_file" "$resolved_file" "$producer_inconclusive_file"
+  expect_public_success outcome-verifier-failed validate-stage-run \
+    "$verifier_request_file" "$resolved_file" "$verifier_failed_file"
+  expect_public_success outcome-verifier-inconclusive validate-stage-run \
+    "$verifier_request_file" "$resolved_file" "$verifier_inconclusive_file"
+  expect_public_failure forced-profile-owner E_RELATION validate-stage-run \
+    "$profile_forced_request_file" "$resolved_relation_file" \
+    "$profile_forced_result_file"
+  expect_public_failure forced-request-owner E_RELATION validate-stage-run \
+    "$request_relation_file" "$resolved_file" "$request_relation_result_file"
+  expect_public_failure forced-facts-owner E_SHAPE validate-stage-run \
+    "$request_file" "$resolved_file" "$facts_shape_file"
+  expect_public_failure forced-truth-owner E_RELATION validate-stage-run \
+    "$request_file" "$resolved_file" "$truth_relation_file"
 
   usage_stdout="$assembly_tmp/usage.stdout"
   usage_stderr="$assembly_tmp/usage.stderr"
@@ -457,6 +710,7 @@ else
   if [ "$usage_status" -ne 0 ] && [ ! -s "$usage_stdout" ] &&
      [ "$(cat "$usage_stderr")" = E_USAGE ]; then
     assembly_public_passed=$((assembly_public_passed + 1))
+    record_assembly_proof portable-core-assembly.test.usage-before-runtime
   else
     fail_case portable-core-assembly.test.usage-before-runtime
   fi
@@ -483,6 +737,7 @@ else
   done
   if [ "$arity_ok" = true ]; then
     assembly_public_passed=$((assembly_public_passed + 2))
+    record_assembly_proof portable-core-assembly.test.profile-set-arity
   else
     fail_case portable-core-assembly.test.profile-set-arity
   fi
@@ -550,6 +805,39 @@ proof portable-core-assembly.test.document-route grep -q 'document-manifest' "$0
 proof portable-core-assembly.test.profile-set-route grep -q 'profile-set-success' "$0"
 proof portable-core-assembly.test.stage-run-route grep -q 'stage-run-success' "$0"
 
+ledger_closure_ok=false
+if [ "$assembly_phase" = post-switch ]; then
+  record_assembly_proof portable-core-assembly.test.aggregate-ledgers
+  assembly_proof_total=$((assembly_proof_total + 1))
+  if ledger_set_ok "$assembly_ledger"; then
+    assembly_proof_passed=$((assembly_proof_passed + 1))
+    ledger_closure_ok=true
+  else
+    fail_case portable-core-assembly.test.aggregate-ledgers
+  fi
+
+  corrupt_disposition="$assembly_tmp/ledger-corrupt-disposition.tsv"
+  corrupt_rule="$assembly_tmp/ledger-corrupt-rule.tsv"
+  corrupt_test="$assembly_tmp/ledger-corrupt-test.tsv"
+  corrupt_column="$assembly_tmp/ledger-corrupt-column.tsv"
+  corrupt_header="$assembly_tmp/ledger-corrupt-header.tsv"
+  awk -F '\t' 'BEGIN{OFS=FS} NR==2{$3="unknown"} {print}' \
+    "$assembly_ledger" > "$corrupt_disposition"
+  awk -F '\t' 'BEGIN{OFS=FS} NR==2{$4="portable-core-assembly.missing-rule"} {print}' \
+    "$assembly_ledger" > "$corrupt_rule"
+  awk -F '\t' 'BEGIN{OFS=FS} NR==2{$5="portable-core-assembly.test.missing-test"} {print}' \
+    "$assembly_ledger" > "$corrupt_test"
+  awk -F '\t' 'BEGIN{OFS=FS} NR==2{$6="extra"} {print}' \
+    "$assembly_ledger" > "$corrupt_column"
+  awk -F '\t' 'BEGIN{OFS=FS} NR==1{$1="sources"} {print}' \
+    "$assembly_ledger" > "$corrupt_header"
+  proof corrupt-ledger-disposition ledger_set_rejected "$corrupt_disposition"
+  proof corrupt-ledger-rule ledger_set_rejected "$corrupt_rule"
+  proof corrupt-ledger-test ledger_set_rejected "$corrupt_test"
+  proof corrupt-ledger-column ledger_set_rejected "$corrupt_column"
+  proof corrupt-ledger-header ledger_set_rejected "$corrupt_header"
+fi
+
 if [ "$assembly_failures" -ne 0 ]; then
   printf 'portable core assembly failed: %s failure(s)\n' "$assembly_failures" >&2
   exit 1
@@ -560,5 +848,7 @@ printf 'command routes: %s/%s\n' "$assembly_route_passed" "$assembly_route_total
 printf 'error layers: %s/%s\n' "$assembly_layer_passed" "$assembly_layer_total"
 printf 'public boundary: %s/%s\n' "$assembly_public_passed" "$assembly_public_total"
 printf 'assembly proof: %s/%s\n' "$assembly_proof_passed" "$assembly_proof_total"
-printf 'review findings accounted for: 34/34\n'
-printf 'legacy assertions accounted for: 279/279\n'
+if [ "$ledger_closure_ok" = true ]; then
+  printf 'review findings accounted for: 34/34\n'
+  printf 'legacy assertions accounted for: 279/279\n'
+fi
