@@ -283,6 +283,7 @@ portable_core_ingress_finish_driver() {
   local raw_path
   local canonical_path
   local compare_status
+  local probe_status
   local json_token_pattern
 
   [ "$#" -eq 0 ] && [ "${PORTABLE_CORE_INGRESS_COUNT:-0}" -gt 0 ] || {
@@ -299,15 +300,28 @@ portable_core_ingress_finish_driver() {
   json_token_pattern='(?:[ \t\r\n]+|[\[\]{}:,]|"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*"|(?<![A-Za-z0-9_.+-])-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(?![A-Za-z0-9_.+-])|(?<![A-Za-z0-9_])(?:true|false|null)(?![A-Za-z0-9_]))'
   for ((input_index = 0; input_index < PORTABLE_CORE_INGRESS_COUNT; input_index++)); do
     raw_path="${PORTABLE_CORE_INGRESS_RAW_PATHS[$input_index]}"
-    if ! "$PORTABLE_CORE_INGRESS_JQ" -s -e 'length == 1' "$raw_path" \
+    if "$PORTABLE_CORE_INGRESS_JQ" -s -e 'length == 1' "$raw_path" \
         >/dev/null 2>/dev/null; then
-      portable_core_ingress_error E_PARSE
+      :
+    else
+      probe_status=$?
+      case "$probe_status" in
+        1|4) portable_core_ingress_error E_PARSE ;;
+        *) portable_core_ingress_error E_RUNTIME ;;
+      esac
       return 1
     fi
-    if ! "$PORTABLE_CORE_INGRESS_JQ" -Rse --arg token "$json_token_pattern" \
+    if "$PORTABLE_CORE_INGRESS_JQ" -Rse --arg token "$json_token_pattern" \
         '(if startswith("\ufeff") then .[1:] else . end) |
          gsub($token;"") == ""' "$raw_path" >/dev/null 2>/dev/null; then
-      portable_core_ingress_error E_PARSE
+      :
+    else
+      probe_status=$?
+      if [ "$probe_status" -eq 1 ]; then
+        portable_core_ingress_error E_PARSE
+      else
+        portable_core_ingress_error E_RUNTIME
+      fi
       return 1
     fi
     canonical_path="$PORTABLE_CORE_INGRESS_TEMP/canonical.$((input_index + 1))"

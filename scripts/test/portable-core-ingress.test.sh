@@ -567,6 +567,27 @@ runtime_failure sha-multiline-digest E_RUNTIME portable_core_ingress_finish_driv
 stop_ingress
 
 start_ingress document
+parser_probe_fail="$ingress_tmp/parser-probe-fail"
+printf '%s\n' '#!/bin/sh' 'printf "%s\\n" "parser SECRET path" >&2' 'exit 2' > "$parser_probe_fail"
+chmod +x "$parser_probe_fail"
+PORTABLE_CORE_INGRESS_JQ="$parser_probe_fail"
+portable_core_ingress_snapshot "$canonical_file"
+runtime_failure parser-probe-runtime-failure E_RUNTIME portable_core_ingress_finish_driver
+stop_ingress
+
+start_ingress document
+real_ingress_jq="$PORTABLE_CORE_INGRESS_JQ"
+lexer_probe_fail="$ingress_tmp/lexer-probe-fail"
+printf '%s\n' '#!/bin/sh' \
+  'case " $* " in *" -Rse "*) printf "%s\\n" "lexer SECRET path" >&2; exit 2 ;; esac' \
+  "exec \"$real_ingress_jq\" \"\$@\"" > "$lexer_probe_fail"
+chmod +x "$lexer_probe_fail"
+PORTABLE_CORE_INGRESS_JQ="$lexer_probe_fail"
+portable_core_ingress_snapshot "$canonical_file"
+runtime_failure lexer-probe-runtime-failure E_RUNTIME portable_core_ingress_finish_driver
+stop_ingress
+
+start_ingress document
 jq_canonical_fail="$ingress_tmp/jq-canonical-fail"
 printf '%s\n' '#!/bin/sh' \
   'case " $* " in *" -s -e "*|*" -Rse "*) exit 0 ;; esac' \
