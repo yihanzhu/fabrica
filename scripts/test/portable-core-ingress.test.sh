@@ -655,6 +655,28 @@ make_isolated_bin() {
   done
 }
 
+dirname_fail_bin="$ingress_tmp/dirname-fail-bin"
+make_isolated_bin "$dirname_fail_bin"
+rm "$dirname_fail_bin/dirname"
+ingress_product_dir="${ingress_product%/*}"
+printf '%s\n' '#!/bin/sh' \
+  "printf '%s\\n' \"$ingress_product_dir\"" \
+  'printf "%s\n" "dirname SECRET /private/source/path" >&2' \
+  'exit 1' > "$dirname_fail_bin/dirname"
+chmod +x "$dirname_fail_bin/dirname"
+runtime_failure dirname-failure-sanitized E_RUNTIME env PATH="$dirname_fail_bin" \
+  /bin/bash -c 'source "$1"; portable_core_ingress_open' _ "$ingress_product"
+
+jq_version_fail_bin="$ingress_tmp/jq-version-fail-bin"
+make_isolated_bin "$jq_version_fail_bin"
+rm "$jq_version_fail_bin/jq"
+printf '%s\n' '#!/bin/sh' \
+  'if [ "${1:-}" = "--version" ]; then printf "%s\n" jq-1.6; exit 1; fi' \
+  "exec \"$ingress_jq\" \"\$@\"" > "$jq_version_fail_bin/jq"
+chmod +x "$jq_version_fail_bin/jq"
+runtime_failure jq-version-nonzero E_RUNTIME env PATH="$jq_version_fail_bin" \
+  /bin/bash -c 'source "$1"; portable_core_ingress_open' _ "$ingress_product"
+
 no_sha_bin="$ingress_tmp/no-sha-bin"
 make_isolated_bin "$no_sha_bin"
 runtime_failure missing-sha E_RUNTIME env PATH="$no_sha_bin" \
@@ -880,6 +902,18 @@ expect_failure at-limit-reaches-validator E_SHAPE portable_core_ingress_validate
 stop_ingress
 mark_test portable-core-ingress.test.legacy-061-at-exact-1-048-576-byte-boundary-is-still-just-a-shape-failure-not-e-limit
 
+start_ingress document
+portable_core_ingress_snapshot "$canonical_file"
+portable_core_ingress_finish_driver
+validator_wc_malformed="$ingress_tmp/validator-wc-malformed"
+printf '%s\n' '#!/bin/sh' \
+  'printf "%s\n" "SECRET /private/caller/path"' \
+  'exit 0' > "$validator_wc_malformed"
+chmod +x "$validator_wc_malformed"
+PORTABLE_CORE_INGRESS_WC="$validator_wc_malformed"
+runtime_failure validator-wc-malformed-output E_RUNTIME portable_core_ingress_validate
+stop_ingress
+
 printf '%s\n' 'import "schema" as schema;' \
   'if schema::semantic_identity == "core.contracts.v1" then empty else error("identity") end' \
   > "$package_root"
@@ -920,6 +954,12 @@ start_ingress document
 portable_core_ingress_snapshot "$canonical_file"
 portable_core_ingress_finish_driver
 runtime_failure validator-extra-newline E_RUNTIME portable_core_ingress_validate
+stop_ingress
+printf '%s\n' '"E_SHAPE\u0000"' > "$package_root"
+start_ingress document
+portable_core_ingress_snapshot "$canonical_file"
+portable_core_ingress_finish_driver
+runtime_failure validator-null-output E_RUNTIME portable_core_ingress_validate
 stop_ingress
 printf '%s\n' 'empty' > "$package_root"
 start_ingress document

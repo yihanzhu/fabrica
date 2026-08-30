@@ -23,9 +23,11 @@ portable_core_ingress_real_directory() {
 
 portable_core_ingress_open() {
   local source_dir
+  local source_parent
   local repo_root
   local expected_dir
   local jq_path
+  local jq_version
   local schema_identity
   local sha_path
   local temp_path
@@ -38,12 +40,19 @@ portable_core_ingress_open() {
 
   PORTABLE_CORE_INGRESS_GENERATION='g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386'
   source_dir="$(
-    CDPATH='' cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P
+    {
+      source_parent="$(dirname -- "${BASH_SOURCE[0]}")" &&
+        CDPATH='' cd -P -- "$source_parent" && pwd -P
+    } 2>/dev/null
   )" || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
-  repo_root="$(CDPATH='' cd -P -- "$source_dir/../../../.." 2>/dev/null && pwd -P)" || {
+  repo_root="$(
+    {
+      CDPATH='' cd -P -- "$source_dir/../../../.." && pwd -P
+    } 2>/dev/null
+  )" || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
@@ -89,7 +98,11 @@ portable_core_ingress_open() {
       return 1
       ;;
   esac
-  [ "$("$jq_path" --version 2>/dev/null)" = jq-1.6 ] || {
+  jq_version="$("$jq_path" --version 2>/dev/null)" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  [ "$jq_version" = jq-1.6 ] || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
@@ -777,7 +790,11 @@ portable_core_ingress_validate() {
     return 1
   }
   output_size="${output_size//[[:space:]]/}"
-  token="$("$PORTABLE_CORE_INGRESS_CAT" -- "$PORTABLE_CORE_INGRESS_OUTPUT" 2>/dev/null)" || {
+  [[ "$output_size" =~ ^[0-9]+$ ]] || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  IFS= read -r token 2>/dev/null < "$PORTABLE_CORE_INGRESS_OUTPUT" || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
