@@ -44,6 +44,16 @@ profile_resolution_sha256() {
   }
 }
 
+profile_resolution_sha256_text() {
+  profile_resolution_digest_line=$(/usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256) || return 1
+  IFS=' ' read -r profile_resolution_digest _ <<< "$profile_resolution_digest_line" || return 1
+  case "$profile_resolution_digest" in
+    *[!0-9a-f]*|'') return 1 ;;
+  esac
+  [ "${#profile_resolution_digest}" -eq 64 ] || return 1
+  printf '%s\n' "$profile_resolution_digest"
+}
+
 profile_resolution_snapshot_input() {
   profile_resolution_input=$1
   profile_resolution_destination=$2
@@ -100,13 +110,12 @@ profile_resolution_map_root() {
 
 profile_resolution_snapshot_repository() {
   profile_resolution_repository_id=$1
-  if /usr/bin/awk -F '\t' -v id="$profile_resolution_repository_id" '$1 == id {found=1} END {exit !found}' \
-      "$profile_resolution_snapshots"; then
-    return 0
-  fi
+  while IFS=$'\t' read -r profile_resolution_record_id _; do
+    [ "$profile_resolution_record_id" != "$profile_resolution_repository_id" ] || return 0
+  done < "$profile_resolution_snapshots"
   profile_resolution_root=$(profile_resolution_map_root "$profile_resolution_repository_id") || return 1
   [ -n "$profile_resolution_root" ] || return 1
-  profile_resolution_slot=$(/usr/bin/printf '%s' "$profile_resolution_repository_id" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}') || return 1
+  profile_resolution_slot=$(profile_resolution_sha256_text "$profile_resolution_repository_id") || return 1
   profile_resolution_destination="$profile_resolution_scratch/repositories/$profile_resolution_slot"
   profile_resolution_receipt="$profile_resolution_scratch/receipt"
   : > "$profile_resolution_receipt"
@@ -144,22 +153,37 @@ profile_resolution_snapshot_repository() {
   profile_resolution_entry_remaining=$((profile_resolution_entry_remaining - profile_resolution_entries))
   profile_resolution_name_remaining=$((profile_resolution_name_remaining - profile_resolution_name_bytes))
   profile_resolution_global_remaining=$((profile_resolution_global_remaining - profile_resolution_global_bytes))
-  if /usr/bin/awk -F '\t' -v identity="$profile_resolution_identity" \
-       '$3 == identity {found=1} END {exit !found}' "$profile_resolution_snapshots"; then
-    profile_resolution_error E_REPOSITORY repository-duplicate
-    return 2
-  fi
+  while IFS=$'\t' read -r _ _ profile_resolution_record_identity _; do
+    if [ "$profile_resolution_record_identity" = "$profile_resolution_identity" ]; then
+      profile_resolution_error E_REPOSITORY repository-duplicate
+      return 2
+    fi
+  done < "$profile_resolution_snapshots"
   /usr/bin/printf '%s\t%s\t%s\t%s\n' "$profile_resolution_repository_id" \
     "$profile_resolution_destination/repository.git" "$profile_resolution_identity" \
     "$profile_resolution_algorithm" >> "$profile_resolution_snapshots"
 }
 
 profile_resolution_snapshot_gitdir() {
-  /usr/bin/awk -F '\t' -v id="$1" '$1 == id {print $2; exit}' "$profile_resolution_snapshots"
+  profile_resolution_lookup_id=$1
+  while IFS=$'\t' read -r profile_resolution_record_id profile_resolution_record_gitdir _ _; do
+    if [ "$profile_resolution_record_id" = "$profile_resolution_lookup_id" ]; then
+      printf '%s\n' "$profile_resolution_record_gitdir"
+      return 0
+    fi
+  done < "$profile_resolution_snapshots"
+  return 1
 }
 
 profile_resolution_snapshot_algorithm() {
-  /usr/bin/awk -F '\t' -v id="$1" '$1 == id {print $4; exit}' "$profile_resolution_snapshots"
+  profile_resolution_lookup_id=$1
+  while IFS=$'\t' read -r profile_resolution_record_id _ _ profile_resolution_record_algorithm; do
+    if [ "$profile_resolution_record_id" = "$profile_resolution_lookup_id" ]; then
+      printf '%s\n' "$profile_resolution_record_algorithm"
+      return 0
+    fi
+  done < "$profile_resolution_snapshots"
+  return 1
 }
 
 profile_resolution_git() {
@@ -189,8 +213,8 @@ profile_resolution_verify_object_payload() {
   profile_resolution_oid=$3
   profile_resolution_expected_type=$4
   profile_resolution_output=$5
-  profile_resolution_cache_key=$(/usr/bin/printf '%s\n' "$profile_resolution_repository_id:$profile_resolution_algorithm:$profile_resolution_expected_type:$profile_resolution_oid" |
-    /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}') || return 1
+  profile_resolution_cache_key=$(profile_resolution_sha256_text \
+    "$profile_resolution_repository_id:$profile_resolution_algorithm:$profile_resolution_expected_type:$profile_resolution_oid") || return 1
   profile_resolution_cached="$profile_resolution_scratch/object-cache/$profile_resolution_cache_key"
   if [ -f "$profile_resolution_cached" ] && [ ! -L "$profile_resolution_cached" ]; then
     profile_resolution_size=$(/usr/bin/wc -c < "$profile_resolution_cached" | /usr/bin/tr -d ' ') || return 2
@@ -304,7 +328,7 @@ profile_resolution_verify_locator() {
 
 profile_resolution_verify_ref() {
   profile_resolution_ref_json=$1
-  profile_resolution_key=$(/usr/bin/printf '%s' "$profile_resolution_ref_json" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}') || return 1
+  profile_resolution_key=$(profile_resolution_sha256_text "$profile_resolution_ref_json") || return 1
   if "$YSTACK_RESOLVER_JQ" -e --argjson ref "$profile_resolution_ref_json" '.[] | select(.ref == $ref)' \
       "$profile_resolution_values" >/dev/null 2>&1; then
     return 0
@@ -363,9 +387,16 @@ profile_resolution_main() {
       profile_resolution_error E_RUNTIME dependency
       return 1
     }
+  profile_resolution_bound_tool_root=${YSTACK_RESOLVER_JQ%/*}
+  profile_resolution_bound_core_awk="$profile_resolution_bound_tool_root/awk"
+  [ -x "$profile_resolution_bound_core_awk" ] &&
+    [ ! -L "$profile_resolution_bound_core_awk" ] || {
+      profile_resolution_error E_RUNTIME dependency
+      return 1
+    }
   for profile_resolution_dependency in /bin/bash /bin/dd /bin/mkdir /bin/rm /bin/mv /bin/cat /bin/cp \
     /usr/bin/git /usr/bin/shasum /usr/bin/mktemp /usr/bin/cmp /usr/bin/wc \
-    /usr/bin/awk /usr/bin/sed /usr/bin/tr /usr/bin/sort /usr/bin/comm; do
+    /usr/bin/sed /usr/bin/tr /usr/bin/sort /usr/bin/comm; do
     [ -x "$profile_resolution_dependency" ] && [ ! -L "$profile_resolution_dependency" ] || {
       profile_resolution_error E_RUNTIME dependency
       return 1

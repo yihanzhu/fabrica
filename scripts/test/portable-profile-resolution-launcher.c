@@ -372,6 +372,7 @@ int main(int argc, char **argv) {
     char path_value[PATH_MAX + 32];
     char *slash;
     const char *sandbox;
+    int remove_helper = 0;
 
     if (argc == 2 && strcmp(argv[1], "trap-child") == 0) {
         return 0;
@@ -435,7 +436,11 @@ int main(int argc, char **argv) {
         return 70;
     }
 
-    if (argc != 7 || strcmp(argv[1], "resolve") != 0 ||
+    if (argc == 7 && strcmp(argv[1], "resolve-missing-helper") == 0) {
+        remove_helper = 1;
+    }
+    if (argc != 7 ||
+        (strcmp(argv[1], "resolve") != 0 && remove_helper == 0) ||
         !regular_absolute(argv[2], 0) || !regular_absolute(argv[3], 1) ||
         !regular_absolute(argv[4], 1) || argv[5][0] != '/' || argv[6][0] != '/') {
         fputs("E_USAGE\n", stderr);
@@ -489,6 +494,10 @@ int main(int argc, char **argv) {
             fputs("E_RUNTIME unexpected\n", stderr);
             return 70;
         }
+    }
+    if (remove_helper != 0 && unlink(argv[3]) != 0) {
+        fputs("E_RUNTIME unexpected\n", stderr);
+        return 70;
     }
     return supervise("/bin/bash", child_argv, child_env, sandbox);
 }

@@ -80,6 +80,17 @@ resolver_bin="$resolver_tmp/bin"
 /bin/cp "$resolver_jq" "$resolver_bin/jq"
 /bin/chmod 0555 "$resolver_bin/jq"
 resolver_bound_jq="$resolver_bin/jq"
+case "$resolver_platform" in
+  Linux:x86_64) /bin/cp /usr/bin/awk "$resolver_bin/awk" ;;
+  Darwin:*)
+    /usr/bin/printf '%s\n' '#!/bin/bash' 'exec /usr/bin/awk "$@"' > "$resolver_bin/awk"
+    ;;
+esac
+/bin/chmod 0555 "$resolver_bin/awk"
+[ -f "$resolver_bin/awk" ] && [ ! -L "$resolver_bin/awk" ] || {
+  printf '%s\n' 'FAIL: bound core awk must be regular' >&2
+  exit 1
+}
 "$resolver_compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
   "$resolver_helper_source" -o "$resolver_bin/nofollow-snapshot"
 "$resolver_compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
@@ -158,6 +169,38 @@ expect_launcher_failure() {
   }
   pass_case "$resolver_name"
 }
+
+expect_missing_dependency() {
+  resolver_missing_helper="$resolver_tmp/missing-helper"
+  resolver_missing_sandbox="$resolver_tmp/missing-helper-sandbox"
+  resolver_missing_stdout="$resolver_tmp/missing-helper.stdout"
+  resolver_missing_stderr="$resolver_tmp/missing-helper.stderr"
+  /bin/cp "$resolver_bin/nofollow-snapshot" "$resolver_missing_helper"
+  /bin/chmod 0555 "$resolver_missing_helper"
+  /bin/mkdir -m 700 "$resolver_missing_sandbox"
+  if YSTACK_TEST_SANDBOX="$resolver_missing_sandbox" \
+      "$resolver_bin/launcher" resolve-missing-helper "$resolver_runtime" \
+      "$resolver_missing_helper" "$resolver_bound_jq" "$resolver_fixture/request.json" \
+      "$resolver_fixture/map.json" > "$resolver_missing_stdout" 2> "$resolver_missing_stderr"; then
+    fail_case 'missing required dependency'
+  fi
+  [ ! -s "$resolver_missing_stdout" ] && [ ! -e "$resolver_missing_helper" ] ||
+    fail_case 'missing dependency emitted output or survived'
+  [ "$(/usr/bin/sed -n '1p' "$resolver_missing_stderr")" = 'E_RUNTIME dependency' ] || {
+    /bin/cat "$resolver_missing_stderr" >&2
+    fail_case 'missing dependency token'
+  }
+  pass_case 'missing required dependency is sanitized'
+}
+
+resolver_ambient_bin="$resolver_tmp/ambient-bin"
+resolver_ambient_request="$resolver_tmp/ambient-awk-request.json"
+/bin/mkdir -m 700 "$resolver_ambient_bin"
+/bin/ln -s /does/not/exist "$resolver_ambient_bin/awk"
+/usr/bin/printf '%s\n' '{' > "$resolver_ambient_request"
+PATH="$resolver_ambient_bin:/usr/bin:/bin" expect_failure \
+  'symlinked ambient awk is ignored' E_PARSE "$resolver_ambient_request" "$resolver_tmp/no-map.ambient"
+expect_missing_dependency
 
 expect_launcher_failure 'launcher sanitizes silent child failure' silent 'E_RUNTIME unexpected'
 expect_launcher_failure 'launcher converts file limit to a token' file 'E_LIMIT resource-limit'
