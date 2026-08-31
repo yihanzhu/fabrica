@@ -105,6 +105,26 @@ read -r target_mode target_type target_object <<< "$target_meta"
 [ "$target_mode:$target_type:$target_object" = \
   "100644:blob:$(git_safe -C "$fixture_root/target" hash-object source.txt)" ] ||
   runner_error E_GIT
+target_source_snapshot="$run_tmp/target-source.snapshot"
+git_safe -C "$fixture_root/target" cat-file blob "$target_object" > "$target_source_snapshot" ||
+  runner_error E_GIT
+cmp -s "$target_source_snapshot" "$fixture_source" || runner_error E_GIT
+
+verify_target_unchanged() {
+  local current_entry current_meta current_mode current_type current_object current_snapshot
+  verify_repo "$fixture_root/target" &&
+    [ "$(git_safe -C "$fixture_root/target" rev-parse HEAD)" = "$target_commit" ] &&
+    [ "$(git_safe -C "$fixture_root/target" rev-parse 'HEAD^{tree}')" = "$target_tree" ] || return 1
+  current_entry=$(git_safe -C "$fixture_root/target" ls-tree HEAD -- source.txt) || return 1
+  current_meta=${current_entry%%$'\t'*}
+  read -r current_mode current_type current_object <<< "$current_meta"
+  [ "$current_mode:$current_type:$current_object" = \
+    "$target_mode:$target_type:$target_object" ] || return 1
+  [ "$(sha_file "$fixture_source")" = "$fixture_sha" ] || return 1
+  current_snapshot="$run_tmp/target-source.late"
+  git_safe -C "$fixture_root/target" cat-file blob "$current_object" > "$current_snapshot" || return 1
+  cmp -s "$current_snapshot" "$target_source_snapshot" && cmp -s "$current_snapshot" "$fixture_source"
+}
 
 package_digest() {
   case "$1" in
@@ -128,6 +148,15 @@ package_path() {
   esac
 }
 
+mapped_root() {
+  local cell=$1
+  local repository_id=$2
+  "$jq_bin" -r --arg cell "$cell" --arg id "$repository_id" '
+    [.repositories[] | select(.cell_id==$cell and .repository_id==$id)] |
+    if length == 1 then .[0].root else "" end
+  ' "$mapping"
+}
+
 verify_package() {
   local cell=$1
   local package=$2
@@ -147,10 +176,7 @@ verify_package() {
     .mode == "100755" and (.object_id | test("\\A[0-9a-f]{40}([0-9a-f]{24})?\\z"))
   ' <<< "$ref" >/dev/null || return 1
   repository_id=$("$jq_bin" -r '.revision.repository_id' <<< "$ref")
-  root=$("$jq_bin" -r --arg cell "$cell" --arg id "$repository_id" '
-    [.repositories[] | select(.cell_id==$cell and .repository_id==$id)] |
-    if length == 1 then .[0].root else "" end
-  ' "$mapping")
+  root=$(mapped_root "$cell" "$repository_id")
   [ -n "$root" ] && verify_repo "$root" || return 1
   algorithm=$(git_safe -C "$root" rev-parse --show-object-format)
   [ "$algorithm" = "$("$jq_bin" -r '.revision.hash_algorithm' <<< "$ref")" ] || return 1
@@ -166,6 +192,79 @@ verify_package() {
   git_safe -C "$root" cat-file blob "$object" > "$snapshot" || return 1
   [ -f "$root/$relative" ] && [ ! -L "$root/$relative" ] &&
     cmp -s "$snapshot" "$root/$relative" && [ "$(sha_file "$snapshot")" = "$digest" ]
+}
+
+verify_source_claim() {
+  local cell=$1
+  local claim=$2
+  local index=$3
+  local ref repository_id root algorithm commit location path entry meta mode type object actual_path
+  local snapshot format expected_sha
+  "$jq_bin" -e '
+    type == "object" and (keys | sort) == ["source","value_format","value_sha256"] and
+    (.value_format == "canonical-json" or .value_format == "raw-bytes") and
+    (.value_sha256 | test("\\A[0-9a-f]{64}\\z")) and
+    (.source | type == "object" and
+      (keys | sort) == ["location","mode","object_id","object_type","revision"])
+  ' <<< "$claim" >/dev/null || return 1
+  ref=$("$jq_bin" -c '.source' <<< "$claim")
+  repository_id=$("$jq_bin" -r '.revision.repository_id' <<< "$ref")
+  root=$(mapped_root "$cell" "$repository_id")
+  [ -n "$root" ] && verify_repo "$root" || return 1
+  algorithm=$(git_safe -C "$root" rev-parse --show-object-format)
+  [ "$algorithm" = "$("$jq_bin" -r '.revision.hash_algorithm' <<< "$ref")" ] || return 1
+  commit=$("$jq_bin" -r '.revision.commit_id' <<< "$ref")
+  git_safe -C "$root" cat-file -e "$commit^{commit}" >/dev/null 2>&1 || return 1
+  location=$("$jq_bin" -r '.location.kind' <<< "$ref")
+  if [ "$location" = root ]; then
+    mode=040000
+    type=tree
+    object=$(git_safe -C "$root" rev-parse "$commit^{tree}") || return 1
+  elif [ "$location" = path ]; then
+    path=$("$jq_bin" -r '.location.value' <<< "$ref")
+    entry=$(git_safe -C "$root" ls-tree "$commit" -- "$path" 2>/dev/null) || return 1
+    [ -n "$entry" ] || return 1
+    meta=${entry%%$'\t'*}
+    actual_path=${entry#*$'\t'}
+    read -r mode type object <<< "$meta"
+    [ "$actual_path" = "$path" ] || return 1
+  else
+    return 1
+  fi
+  [ "$mode" = "$("$jq_bin" -r '.mode' <<< "$ref")" ] &&
+    [ "$type" = "$("$jq_bin" -r '.object_type' <<< "$ref")" ] &&
+    [ "$object" = "$("$jq_bin" -r '.object_id' <<< "$ref")" ] &&
+    [ "$(git_safe -C "$root" cat-file -t "$object")" = "$type" ] || return 1
+  snapshot="$run_tmp/source.$cell.$index"
+  git_safe -C "$root" cat-file "$type" "$object" > "$snapshot" 2>/dev/null || return 1
+  expected_sha=$("$jq_bin" -r '.value_sha256' <<< "$claim")
+  [ "$(sha_file "$snapshot")" = "$expected_sha" ] || return 1
+  format=$("$jq_bin" -r '.value_format' <<< "$claim")
+  [ "$format" = raw-bytes ] || canonical "$snapshot" "$run_tmp/source-canonical.$cell.$index"
+}
+
+verify_all_sources() {
+  local cell=$1
+  local resolved=$2
+  local claims="$run_tmp/source-claims.$cell"
+  local claim index=0
+  "$jq_bin" -c '[
+    .body.profile_source,
+    (.body.bindings[] |
+      .manifest_source,
+      .package_source,
+      (.config_source | select(.state=="present") | .value),
+      (.prompt_source | select(.state=="present") | .value),
+      .skill_sources[]?,
+      (.tool_sources[]? |
+        .package_source,
+        (.config_source | select(.state=="present") | .value)))
+  ] | .[]' "$resolved" > "$claims" || return 1
+  while IFS= read -r claim; do
+    verify_source_claim "$cell" "$claim" "$index" || return 1
+    index=$((index + 1))
+  done < "$claims"
+  [ "$index" -gt 0 ]
 }
 
 CHILD_STATUS=0
@@ -338,6 +437,7 @@ for cell in aa ab ba bb; do
      ! verify_package "$cell" fake.protocol-fault "$fault_ref"; then
     runner_error E_PACKAGE
   fi
+  verify_all_sources "$cell" "$resolved" || runner_error E_SOURCE
   profile="$profiles/profiles/default.json"
   manifest_args=()
   for role in forge producer publisher reviewer verifier; do
@@ -515,6 +615,7 @@ done
   ([.[].provenance.forge.package_id] | unique | length) == 2 and
   ([.[].provenance.profile_sha256] | unique | length) == 4' "$cells" >/dev/null ||
   runner_error E_EQUIVALENCE
+verify_target_unchanged || runner_error E_TARGET_STALE
 inventory_sha=$(sha_file "$inventory")
 "$jq_bin" -S -c -n --slurpfile cells "$cells" --slurpfile negatives "$negatives" \
   --arg inventory_sha "$inventory_sha" --arg target_commit "$target_commit" \

@@ -199,6 +199,62 @@ for ref_mutation in repository revision hash path type mode; do
     /usr/bin/git -C "$fixture/cells/aa/profile" commit -q -m "restore-$ref_mutation"
 done
 
+source_claim_saved="$tmp/source-claim.saved"
+/bin/cp "$fixture/cells/aa/resolved.json" "$source_claim_saved"
+for source_mutation in manifest-repository config-commit prompt-path skill-oid tool-mode profile-value; do
+  case "$source_mutation" in
+    manifest-repository)
+      source_filter='(.body.bindings[] | select(.binding.role=="forge") |
+        .manifest_source.source.revision.repository_id)="repo.profile"'
+      ;;
+    config-commit)
+      source_filter='(.body.bindings[] | select(.binding.role=="producer") |
+        .config_source.value.source.revision.commit_id)=("0"*64)'
+      ;;
+    prompt-path)
+      source_filter='(.body.bindings[] | select(.binding.role=="producer") |
+        .prompt_source.value.source.location.value)="prompts/reviewer.md"'
+      ;;
+    skill-oid)
+      source_filter='(.body.bindings[] | select(.binding.role=="producer") |
+        .skill_sources[0].source.object_id)=("0"*64)'
+      ;;
+    tool-mode)
+      source_filter='(.body.bindings[] | select(.binding.role=="producer") |
+        .tool_sources[0].package_source.source.mode)="100755"'
+      ;;
+    profile-value) source_filter='.body.profile_source.value_sha256=("0"*64)' ;;
+  esac
+  "$jq_bin" -S -c "$source_filter" "$source_claim_saved" > "$fixture/cells/aa/resolved.json"
+  expect_failure "source-claim-$source_mutation" E_SOURCE
+  /bin/cp "$source_claim_saved" "$fixture/cells/aa/resolved.json"
+done
+
+late_out="$tmp/late-target.out"
+late_err="$tmp/late-target.err"
+PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$late_out" 2> "$late_err" &
+late_pid=$!
+late_marker=''
+for _ in {1..3000}; do
+  late_marker=$(/usr/bin/find "$fixture/scratch" -path '*/aa.producer.home' -type d -print -quit)
+  [ -z "$late_marker" ] || break
+  /bin/kill -0 "$late_pid" 2>/dev/null || break
+  /bin/sleep 0.02
+done
+if [ -z "$late_marker" ]; then
+  /bin/kill "$late_pid" 2>/dev/null || :
+  wait "$late_pid" 2>/dev/null || :
+  fail 'late target marker'
+fi
+GIT_AUTHOR_DATE=2000-01-06T00:00:00Z GIT_COMMITTER_DATE=2000-01-06T00:00:00Z \
+  /usr/bin/git -C "$fixture/target" commit -q --allow-empty -m late-change
+if wait "$late_pid"; then
+  fail 'late target mutation accepted'
+fi
+[ ! -s "$late_out" ] && [ "$(/bin/cat "$late_err")" = E_TARGET_STALE ] ||
+  fail 'late target mutation error'
+pass 'late target commit recheck'
+
 source_saved="$tmp/source.saved"
 /bin/cp "$fixture/target/source.txt" "$source_saved"
 /usr/bin/printf '%s\n' changed > "$fixture/target/source.txt"
