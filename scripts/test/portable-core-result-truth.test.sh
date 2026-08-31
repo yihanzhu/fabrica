@@ -854,6 +854,33 @@ current_blob_ok() {
     [ "$oid" = "$expected" ] && [ "$actual_path" = "$path" ]
 }
 
+truth_registry_prefix_ok() {
+  local registry_path="core/v1/generation-registry.json"
+  local current_oid
+  local canonical="$truth_tmp/registry-current.canonical"
+  local prefix="$truth_tmp/registry-accepted.prefix"
+  current_oid="$(git -C "$truth_root" hash-object "$registry_path")"
+  current_blob_ok "$registry_path" "$current_oid" &&
+    "${truth_jq_command[@]}" -S -c . \
+      "$truth_root/$registry_path" > "$canonical" &&
+    cmp -s "$truth_root/$registry_path" "$canonical" &&
+    "${truth_jq_command[@]}" -S -c '.[0:1]' \
+      "$truth_root/$registry_path" > "$prefix" &&
+    [ "$(git hash-object "$prefix")" = "$truth_registry_oid" ] &&
+    "${truth_jq_command[@]}" -e '
+      length >= 1 and
+      all(.[];
+        (keys | sort) ==
+          ["generation_id","parent_plan_merge_commit","parent_spec_blob"] and
+        (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+        (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+        (.parent_plan_merge_commit |
+          test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"))) and
+      (map(.generation_id) | length) ==
+        (map(.generation_id) | unique | length)
+    ' "$truth_root/$registry_path" >/dev/null
+}
+
 tracked_worktree_file_ok() {
   local path="$1"
   local expected_mode="$2"
@@ -886,7 +913,7 @@ if current_blob_ok "$truth_generation_root/modules/result_facts.jq" "$truth_fact
   guard_pass
 else guard_fail "result-facts serial dependency pin"
 fi
-if current_blob_ok "core/v1/generation-registry.json" "$truth_registry_oid"; then
+if truth_registry_prefix_ok; then
   guard_pass
 else guard_fail "generation registry pin"
 fi

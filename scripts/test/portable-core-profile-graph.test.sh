@@ -823,9 +823,37 @@ current_blob_ok() {
     [ "$oid" = "$expected_oid" ] && [ "$actual_path" = "$path" ]
 }
 
+registry_prefix_ok() {
+  local repo="$1" path="$2" prefix_oid="$3" current_oid="$4" proof_id="$5"
+  local canonical="$profile_tmp/registry-$proof_id.canonical"
+  local prefix="$profile_tmp/registry-$proof_id.prefix"
+  current_blob_ok "$repo" "$path" "$current_oid" &&
+    "${profile_jq_command[@]}" -S -c . "$repo/$path" > "$canonical" &&
+    cmp -s "$repo/$path" "$canonical" &&
+    "${profile_jq_command[@]}" -S -c '.[0:1]' "$repo/$path" > "$prefix" &&
+    [ "$(git hash-object "$prefix")" = "$prefix_oid" ] &&
+    "${profile_jq_command[@]}" -e '
+      length >= 1 and
+      all(.[];
+        (keys | sort) ==
+          ["generation_id","parent_plan_merge_commit","parent_spec_blob"] and
+        (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+        (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+        (.parent_plan_merge_commit |
+          test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"))) and
+      (map(.generation_id) | length) ==
+        (map(.generation_id) | unique | length)
+    ' "$repo/$path" >/dev/null
+}
+
+profile_registry_current_oid="$(
+  git -C "$profile_root" hash-object "$profile_registry_path"
+)"
+
 profile_guard_total=$((profile_guard_total + 1))
 if current_blob_ok "$profile_root" "$profile_schema_path" "$profile_schema_oid" &&
-   current_blob_ok "$profile_root" "$profile_registry_path" "$profile_registry_oid"; then
+   registry_prefix_ok "$profile_root" "$profile_registry_path" \
+     "$profile_registry_oid" "$profile_registry_current_oid" current; then
   profile_guard_passed=$((profile_guard_passed + 1))
 else
   fail_case "schema G3 dependency pin"
@@ -869,7 +897,8 @@ if [ "$(git -C "$shallow_repo" rev-parse --is-shallow-repository)" = true ] &&
    ! git -C "$shallow_repo" cat-file -e "$profile_schema_merge^{commit}" 2>/dev/null &&
    current_blob_ok "$shallow_repo" "$profile_schema_path" "$profile_schema_oid" &&
    current_blob_ok "$shallow_repo" "$profile_ingress_path" "$profile_ingress_oid" &&
-   current_blob_ok "$shallow_repo" "$profile_registry_path" "$profile_registry_oid"; then
+   registry_prefix_ok "$shallow_repo" "$profile_registry_path" \
+     "$profile_registry_oid" "$profile_registry_current_oid" shallow; then
   profile_guard_passed=$((profile_guard_passed + 1))
 else
   fail_case "history-absent dependency proof"

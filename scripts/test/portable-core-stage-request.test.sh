@@ -877,6 +877,32 @@ current_blob_ok() {
     [ "$oid" = "$expected_oid" ] && [ "$actual_path" = "$path" ]
 }
 
+stage_registry_prefix_ok() {
+  local current_oid
+  local canonical="$stage_tmp/registry-current.canonical"
+  local prefix="$stage_tmp/registry-accepted.prefix"
+  current_oid="$(git -C "$stage_root" hash-object "$stage_registry_path")"
+  current_blob_ok "$stage_root" "$stage_registry_path" "$current_oid" &&
+    "${stage_jq_command[@]}" -S -c . \
+      "$stage_root/$stage_registry_path" > "$canonical" &&
+    cmp -s "$stage_root/$stage_registry_path" "$canonical" &&
+    "${stage_jq_command[@]}" -S -c '.[0:1]' \
+      "$stage_root/$stage_registry_path" > "$prefix" &&
+    [ "$(git hash-object "$prefix")" = "$stage_registry_oid" ] &&
+    "${stage_jq_command[@]}" -e '
+      length >= 1 and
+      all(.[];
+        (keys | sort) ==
+          ["generation_id","parent_plan_merge_commit","parent_spec_blob"] and
+        (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+        (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+        (.parent_plan_merge_commit |
+          test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"))) and
+      (map(.generation_id) | length) ==
+        (map(.generation_id) | unique | length)
+    ' "$stage_root/$stage_registry_path" >/dev/null
+}
+
 if current_blob_ok "$stage_root" "$stage_schema_path" "$stage_schema_oid"; then
   guard_pass
 else
@@ -895,7 +921,7 @@ else
   guard_fail "profile-graph G3 export pin"
 fi
 
-if current_blob_ok "$stage_root" "$stage_registry_path" "$stage_registry_oid"; then
+if stage_registry_prefix_ok; then
   guard_pass
 else
   guard_fail "generation registry pin"
