@@ -64,7 +64,6 @@ terminate_active_group() {
 }
 signal_exit() {
   local status=${1:-1}
-  trap '' HUP INT TERM
   trap - EXIT
   exec >/dev/null 2>&1
   terminate_active_group
