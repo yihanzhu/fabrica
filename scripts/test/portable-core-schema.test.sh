@@ -628,7 +628,7 @@ schema_activation_state_ok() {
     [ -z "$(find "$selected_root" -type l -print -quit)" ]
 }
 
-schema_guard_total=37
+schema_guard_total=39
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -734,63 +734,117 @@ if [ "$schema_loaded_identity" = "core.contracts.v1" ]; then
 else
   fail_case "ambient module path changed the fixed schema import"
 fi
-tracked_activation_paths_ok() {
-  local paths_file="$1"
-  local activation_path
+v1_activation_path_ok() {
+  local activation_path="$1"
   local test_path
+  case "$activation_path" in
+    ci/required-files.txt|core/v1/generation-registry.json|\
+    core/v2/generation-registry.json|scripts/core-contract.sh|\
+    scripts/lib/profile-resolution.sh) ;;
+    scripts/test/portable-core-*)
+      test_path="${activation_path#scripts/test/}"
+      case "$test_path" in */*) return 1 ;; esac
+      ;;
+    *) private_generation_path_ok "$activation_path" || return 1 ;;
+  esac
+}
+
+v2_activation_path_ok() {
+  case "$1" in
+    README.md|RESTORE.md|ci/required-files.txt|\
+    core/v2/generation-registry.json|\
+    scripts/test/portable-core-schema.test.sh|\
+    scripts/test/portable-core-v2-fake-forge.test.sh) ;;
+    *) v2_generation_path_ok "$1" || return 1 ;;
+  esac
+}
+
+schema_import_path_ok() {
+  local import_path="$1"
+  local test_path
+  case "$import_path" in
+    scripts/test/portable-core-*)
+      test_path="${import_path#scripts/test/}"
+      case "$test_path" in */*) return 1 ;; esac
+      ;;
+    *)
+      private_generation_path_ok "$import_path" ||
+        v2_generation_path_ok "$import_path" || return 1
+      ;;
+  esac
+}
+
+activation_paths_ok() {
+  local paths_file="$1"
+  local predicate="$2"
+  local activation_path
   while IFS= read -r activation_path; do
-    case "$activation_path" in
-      ci/required-files.txt|core/v1/generation-registry.json|\
-      core/v2/generation-registry.json|scripts/core-contract.sh|\
-      scripts/test/portable-core-v2-fake-forge.test.sh) ;;
-      scripts/test/portable-core-*)
-        test_path="${activation_path#scripts/test/}"
-        case "$test_path" in */*) return 1 ;; esac
-        ;;
-      *)
-        private_generation_path_ok "$activation_path" ||
-          v2_generation_path_ok "$activation_path" || return 1
-        ;;
-    esac
+    "$predicate" "$activation_path" || return 1
   done < "$paths_file"
 }
 
-schema_live_hits="$schema_test_tmp/live-hits"
+schema_v1_live_hits="$schema_test_tmp/v1-live-hits"
+schema_v2_live_hits="$schema_test_tmp/v2-live-hits"
 schema_import_hits="$schema_test_tmp/import-hits"
-: > "$schema_live_hits"
+: > "$schema_v1_live_hits"
+: > "$schema_v2_live_hits"
 : > "$schema_import_hits"
+schema_scan_content() {
+  "$schema_jq" -Rsr \
+    --arg generation "$schema_generation" \
+    --arg selected_generation "$schema_selected_generation" \
+    --arg v2_generation "$schema_v2_generation" \
+    --arg module_pattern "$schema_module_directive_pattern" \
+    '[(contains($generation) or contains($selected_generation)),
+      contains($v2_generation),
+      ([scan($module_pattern)] |
+       any(.[]; ((.[0] | try fromjson catch "") == "schema")))] |
+     @tsv'
+}
 while IFS= read -r -d '' schema_tracked_path; do
   if ! schema_scan_result="$(
     git -C "$schema_root" show ":$schema_tracked_path" 2>/dev/null |
-      "$schema_jq" -Rsr \
-        --arg generation "$schema_generation" \
-        --arg module_pattern "$schema_module_directive_pattern" \
-        '[contains($generation),
-          ([scan($module_pattern)] |
-           any(.[]; ((.[0] | try fromjson catch "") == "schema")))] |
-         @tsv'
+      schema_scan_content
   )"; then
     fail_case "unable to scan tracked path: $schema_tracked_path"
     continue
   fi
-  IFS=$'\t' read -r schema_has_generation schema_has_import <<< "$schema_scan_result"
-  if [ "$schema_has_generation" = true ]; then
-    printf '%s\n' "$schema_tracked_path" >> "$schema_live_hits"
+  IFS=$'\t' read -r schema_has_v1_generation schema_has_v2_generation \
+    schema_has_import <<< "$schema_scan_result"
+  if [ "$schema_has_v1_generation" = true ]; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_v1_live_hits"
+  fi
+  if [ "$schema_has_v2_generation" = true ]; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_v2_live_hits"
   fi
   if [ "$schema_has_import" = true ]; then
     printf '%s\n' "$schema_tracked_path" >> "$schema_import_hits"
   fi
 done < <(git -C "$schema_root" ls-files -z)
 
-if tracked_activation_paths_ok "$schema_live_hits"; then
+if activation_paths_ok "$schema_v1_live_hits" v1_activation_path_ok; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "generation ID appears outside the closed tracked-path allowlist"
+  fail_case "v1 generation ID appears outside its closed tracked-path allowlist"
 fi
-if tracked_activation_paths_ok "$schema_import_hits"; then
+schema_v2_expected_live_hits="$schema_test_tmp/v2-expected-live-hits"
+printf '%s\n' \
+  ci/required-files.txt \
+  core/v2/generation-registry.json \
+  "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-fake-forge.test.sh > \
+  "$schema_v2_expected_live_hits"
+if cmp -s "$schema_v2_live_hits" "$schema_v2_expected_live_hits" &&
+   activation_paths_ok "$schema_v2_live_hits" v2_activation_path_ok; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "schema import appears outside the closed tracked-path allowlist"
+  fail_case "v2 generation ID appears outside its closed tracked-path allowlist"
+fi
+if activation_paths_ok "$schema_import_hits" schema_import_path_ok; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "schema import appears outside its closed tracked-path allowlist"
 fi
 
 for schema_invalid_path in \
@@ -799,12 +853,65 @@ for schema_invalid_path in \
   docs/portable-core.md \
   scripts/portable-core-loader.sh; do
   printf '%s\n' "$schema_invalid_path" > "$schema_test_tmp/invalid-tracked-path"
-  if ! tracked_activation_paths_ok "$schema_test_tmp/invalid-tracked-path"; then
+  if ! activation_paths_ok \
+       "$schema_test_tmp/invalid-tracked-path" v1_activation_path_ok &&
+     ! activation_paths_ok \
+       "$schema_test_tmp/invalid-tracked-path" v2_activation_path_ok &&
+     ! activation_paths_ok \
+       "$schema_test_tmp/invalid-tracked-path" schema_import_path_ok; then
     schema_guard_passed=$((schema_guard_passed + 1))
   else
     fail_case "tracked-path guard accepted: $schema_invalid_path"
   fi
 done
+
+schema_v2_allowed_paths="$schema_test_tmp/v2-allowed-paths"
+printf '%s\n' \
+  README.md \
+  RESTORE.md \
+  ci/required-files.txt \
+  core/v2/generation-registry.json \
+  "core/v2/generations/$schema_v2_generation/contracts.jq" \
+  "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  "core/v2/generations/$schema_v2_generation/modules/profile_graph.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/result_facts.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/result_truth.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/schema.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/stage_request.jq" \
+  scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-fake-forge.test.sh > "$schema_v2_allowed_paths"
+schema_v2_injected_source="$schema_test_tmp/v2-injected-source"
+schema_v2_injected_hits="$schema_test_tmp/v2-injected-hits"
+schema_v1_only_path="$schema_test_tmp/v1-only-path"
+schema_v2_only_path="$schema_test_tmp/v2-only-path"
+schema_v2_injection_ok=true
+printf 'generation=%s\n' "$schema_v2_generation" > "$schema_v2_injected_source"
+printf '%s\n' scripts/lib/profile-resolution.sh > "$schema_v1_only_path"
+printf '%s\n' README.md > "$schema_v2_only_path"
+for schema_v2_invalid_path in \
+  .claude/hooks/portable-core-v2-loader.sh \
+  docs/portable-core-v2.md \
+  scripts/test/unrelated-v2-loader.test.sh; do
+  : > "$schema_v2_injected_hits"
+  schema_scan_result="$(schema_scan_content < "$schema_v2_injected_source")"
+  IFS=$'\t' read -r _ schema_has_v2_generation _ <<< "$schema_scan_result"
+  if [ "$schema_has_v2_generation" = true ]; then
+    printf '%s\n' "$schema_v2_invalid_path" >> "$schema_v2_injected_hits"
+  fi
+  [ "$(cat "$schema_v2_injected_hits")" = "$schema_v2_invalid_path" ] &&
+    ! activation_paths_ok "$schema_v2_injected_hits" v2_activation_path_ok ||
+      schema_v2_injection_ok=false
+done
+if activation_paths_ok "$schema_v2_allowed_paths" v2_activation_path_ok &&
+   activation_paths_ok "$schema_v1_only_path" v1_activation_path_ok &&
+   ! activation_paths_ok "$schema_v1_only_path" v2_activation_path_ok &&
+   activation_paths_ok "$schema_v2_only_path" v2_activation_path_ok &&
+   ! activation_paths_ok "$schema_v2_only_path" v1_activation_path_ok &&
+   [ "$schema_v2_injection_ok" = true ]; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "v2 identity guard accepted an unauthorized loader, doc, or test path"
+fi
 
 schema_load_case() {
   local case_id="$1"
