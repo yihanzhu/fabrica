@@ -21,7 +21,8 @@ def section_shape_ok:
 def core_contract_shape_ok:
   exact(["generation_id","package_ref","semantic_identity"]) and
   (.semantic_identity | id_ok) and
-  (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+  (.generation_id |
+    if type == "string" then test("\\Ag-[0-9a-f]{64}\\z") else false end) and
   (.package_ref | content_ref_ok("application/vnd.ystack.core-contract+json"));
 
 def shape_ok:
