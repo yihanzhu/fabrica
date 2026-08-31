@@ -126,6 +126,7 @@ expect_error package-media E_SHAPE "$(mutate package-media '.body.core_contract.
 expect_error bad-digest E_SHAPE "$(mutate bad-digest '.body.sections[0].policy_ref.sha256="bad"')"
 expect_error bad-id E_SHAPE "$(mutate bad-id '.id="Bad ID"')"
 expect_error policy-id-link E_RELATION "$(mutate policy-id-link '.body.sections[0].policy_ref.content_id="control-policy:other"')"
+expect_error decision-id-link E_RELATION "$(mutate decision-id-link '.body.sections[0].decision_ref.content_id="control-decision:other"')"
 expect_error core-identity E_RELATION "$(mutate core-identity '.body.core_contract.semantic_identity="other.contract"')"
 expect_error core-generation E_SHAPE "$(mutate core-generation '.body.core_contract.generation_id="g-bad"')"
 expect_error active-state E_RELATION "$(mutate active-state '.body.activation_state="active"')"
