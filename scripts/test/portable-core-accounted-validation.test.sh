@@ -96,6 +96,9 @@ for unchanged_export in contracts.jq modules/schema.jq modules/profile_graph.jq 
     "$accounted_generation_root/$unchanged_export" ||
     fail "copied export moved: $unchanged_export"
 done
+if grep -Eq '(^|[^<])<<([^<]|$)' "$accounted_ingress"; then
+  fail 'accounted program body uses a heredoc'
+fi
 
 canonical_registry="$accounted_tmp/registry.canonical"
 "$accounted_jq" -S -c . "$accounted_registry" > "$canonical_registry"
@@ -529,6 +532,80 @@ PATH="$accounted_path" /bin/bash "$package_wrapper" \
   [ -z "$(find "$mkdir_signal_root" -mindepth 1 -print -quit)" ] ||
   fail 'post-signal mkdir retry did not start cleanly'
 
+race_bin="$accounted_tmp/race-bin"
+race_root="$accounted_tmp/race-root"
+race_arrivals="$accounted_tmp/race.arrivals"
+race_winner="$accounted_tmp/race.winner"
+race_loser="$accounted_tmp/race.loser"
+mkdir -p "$race_bin"
+mkdir -m 700 "$race_root"
+: > "$race_arrivals"
+cat > "$race_bin/mkdir" <<'MKDIR_RACE'
+#!/bin/bash
+set -uo pipefail
+printf '%s\n' "$PPID" >> "$ACCOUNTED_RACE_ARRIVALS"
+while [ "$(/usr/bin/wc -l < "$ACCOUNTED_RACE_ARRIVALS" | tr -d ' ')" -lt 2 ]; do
+  /bin/sleep 0.1
+done
+if "$ACCOUNTED_REAL_MKDIR" "$@"; then
+  printf '%s\n' "$PPID" > "$ACCOUNTED_RACE_WINNER"
+  /bin/sleep 3
+  exit 0
+else
+  race_status=$?
+fi
+printf '%s\n' "$PPID" > "$ACCOUNTED_RACE_LOSER"
+exit "$race_status"
+MKDIR_RACE
+chmod 0755 "$race_bin/mkdir"
+race_pids=()
+for race_index in 1 2; do
+  (
+    race_status=0
+    ACCOUNTED_REAL_MKDIR="$(command -v mkdir)" \
+    ACCOUNTED_RACE_ARRIVALS="$race_arrivals" \
+    ACCOUNTED_RACE_WINNER="$race_winner" \
+    ACCOUNTED_RACE_LOSER="$race_loser" \
+      PATH="$race_bin:$accounted_path" /bin/bash "$package_wrapper" \
+        --accounted-validation "$race_root" 536870912 \
+        validate-document "$accounted_registry" \
+        3> "$accounted_tmp/race-$race_index.receipt" \
+        > "$accounted_tmp/race-$race_index.stdout" \
+        2> "$accounted_tmp/race-$race_index.stderr" || race_status=$?
+    printf '%s\n' "$race_status" > "$accounted_tmp/race-$race_index.status"
+  ) &
+  race_pid=$!
+  race_pids+=("$race_pid")
+  accounted_background_pids+=("$race_pid")
+done
+race_loser_done=false
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if [ -s "$race_loser" ] && [ -s "$race_winner" ] &&
+     { [ -s "$accounted_tmp/race-1.status" ] ||
+       [ -s "$accounted_tmp/race-2.status" ]; }; then
+    race_loser_done=true
+    break
+  fi
+  /bin/sleep 0.1
+done
+[ "$race_loser_done" = true ] && [ -s "$race_winner" ] &&
+  [ -d "$race_root/portable-core-accounted-v1" ] ||
+  fail 'mkdir loser removed the winner directory'
+for race_pid in "${race_pids[@]}"; do
+  wait_probe "$race_pid" 'mkdir race invocation'
+done
+race_receipt_one="$(receipt_bytes "$accounted_tmp/race-1.receipt")"
+race_receipt_two="$(receipt_bytes "$accounted_tmp/race-2.receipt")"
+[ "$(cat "$accounted_tmp/race-1.status")" -ne 0 ] &&
+  [ "$(cat "$accounted_tmp/race-2.status")" -ne 0 ] &&
+  { [ "$race_receipt_one" -eq 0 ] && [ "$race_receipt_two" -gt 0 ] ||
+    [ "$race_receipt_two" -eq 0 ] && [ "$race_receipt_one" -gt 0 ]; } &&
+  [ "$(cat "$accounted_tmp/race-1.stderr" \
+             "$accounted_tmp/race-2.stderr" | LC_ALL=C sort)" = \
+    $'E_RUNTIME\nE_SHAPE' ] &&
+  [ -z "$(find "$race_root" -mindepth 1 -print -quit)" ] ||
+  fail 'mkdir race receipts or ownership were invalid'
+
 signal_bin="$accounted_tmp/signal-bin"
 signal_root="$accounted_tmp/signal-root"
 signal_marker="$accounted_tmp/signal.marker"
@@ -632,6 +709,38 @@ finalization_status=0
   [ -z "$(find "$finalization_root" -mindepth 1 -print -quit)" ] ||
   fail 'signal during final receipt duplicated or lost finalization'
 
+close_signal_bin="$accounted_tmp/close-signal-bin"
+close_signal_root="$accounted_tmp/close-signal-root"
+close_signal_marker="$accounted_tmp/close-signal.marker"
+mkdir -p "$close_signal_bin"
+mkdir -m 700 "$close_signal_root"
+cat > "$close_signal_bin/rm" <<'CLOSE_SIGNAL'
+#!/bin/bash
+set -uo pipefail
+status=0
+"$ACCOUNTED_REAL_RM" "$@" || status=$?
+printf '%s\n' "$PPID" > "$ACCOUNTED_CLOSE_SIGNAL_MARKER"
+kill -TERM "$PPID"
+/bin/sleep 1
+exit "$status"
+CLOSE_SIGNAL
+chmod 0755 "$close_signal_bin/rm"
+close_signal_status=0
+ACCOUNTED_REAL_RM="$(command -v rm)" \
+ACCOUNTED_CLOSE_SIGNAL_MARKER="$close_signal_marker" \
+  PATH="$close_signal_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$close_signal_root" 536870912 \
+    validate-document "$valid_profile" \
+    3> "$accounted_tmp/close-signal.receipt" \
+    > "$accounted_tmp/close-signal.stdout" \
+    2> "$accounted_tmp/close-signal.stderr" || close_signal_status=$?
+[ "$close_signal_status" -ne 0 ] && [ -s "$close_signal_marker" ] &&
+  [ ! -s "$accounted_tmp/close-signal.stdout" ] &&
+  [ ! -s "$accounted_tmp/close-signal.stderr" ] &&
+  [ "$(receipt_bytes "$accounted_tmp/close-signal.receipt")" -gt 0 ] &&
+  [ -z "$(find "$close_signal_root" -mindepth 1 -print -quit)" ] ||
+  fail 'signal during close interrupted cleanup or receipt'
+
 for required_path in \
   "core/v1/generations/$accounted_generation/modules/schema.jq" \
   "core/v1/generations/$accounted_generation/core-ingress.sh" \
@@ -645,4 +754,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 29/29 passed\n'
+printf 'portable core accounted validation: 32/32 passed\n'

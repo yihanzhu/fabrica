@@ -194,6 +194,7 @@ portable_core_ingress_open() {
   local temp_path
   local required_dir
   local scratch_mode
+  local mkdir_status=0
 
   case "$#" in
     0) ;;
@@ -370,6 +371,8 @@ portable_core_ingress_open() {
   PORTABLE_CORE_INGRESS_WRITTEN_BYTES=0
   PORTABLE_CORE_INGRESS_RESERVED_BYTES=''
   PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL=''
+  PORTABLE_CORE_INGRESS_CREATING_TEMP=false
+  PORTABLE_CORE_INGRESS_OWNS_TEMP=false
   if [ "$accounted" = true ]; then
     PORTABLE_CORE_INGRESS_STAT="$(command -v stat 2>/dev/null)" || {
       portable_core_ingress_error E_RUNTIME
@@ -412,7 +415,15 @@ portable_core_ingress_open() {
       return 1
     fi
     PORTABLE_CORE_INGRESS_TEMP="$temp_path"
-    if ! "$PORTABLE_CORE_INGRESS_MKDIR" -m 700 -- "$temp_path" 2>/dev/null; then
+    PORTABLE_CORE_INGRESS_CREATING_TEMP=true
+    "$PORTABLE_CORE_INGRESS_MKDIR" -m 700 -- "$temp_path" 2>/dev/null ||
+      mkdir_status=$?
+    if [ "$mkdir_status" -eq 0 ]; then
+      PORTABLE_CORE_INGRESS_OWNS_TEMP=true
+    fi
+    PORTABLE_CORE_INGRESS_CREATING_TEMP=false
+    if [ -n "$PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL" ] ||
+       [ "$mkdir_status" -ne 0 ]; then
       portable_core_ingress_error E_RUNTIME
       return 1
     fi
@@ -651,8 +662,7 @@ portable_core_ingress_analyze() {
     fi
   done
 
-  read -r -d '' scan_program <<'AWK' || :
-        function fail_parse() { parse_bad = 1 }
+  scan_program='        function fail_parse() { parse_bad = 1 }
         function byte_char(byte) { return sprintf("%c", byte) }
         function is_hex(byte) {
           return (byte >= 48 && byte <= 57) ||
@@ -1026,7 +1036,7 @@ portable_core_ingress_analyze() {
             printf "%s", meta_text
           }
         }
-AWK
+'
   if [ "${PORTABLE_CORE_INGRESS_ACCOUNTED:-false}" = true ]; then
     scan_sizes="$(
       "$PORTABLE_CORE_INGRESS_OD" -An -v -t u1 "$raw_path" 2>/dev/null |
@@ -1128,8 +1138,7 @@ AWK
     PORTABLE_CORE_INGRESS_ANALYZE_DEPTH_OVER=false
   fi
 
-  read -r -d '' scalar_program <<'JQ' || :
-      foreach (inputs, {end:true}) as $event
+  scalar_program='      foreach (inputs, {end:true}) as $event
         ({emit:"", parse:true, runtime:true};
          if ($event | type) == "object" then
            if (.runtime | not) then halt_error(42)
@@ -1146,7 +1155,7 @@ AWK
          else .runtime = false | .emit = ""
          end;
          .emit)
-JQ
+'
   if [ "${PORTABLE_CORE_INGRESS_ACCOUNTED:-false}" = true ]; then
     scalar_canonical_size="$(
       "$PORTABLE_CORE_INGRESS_JQ" -n --stream --stream-errors -j \
@@ -1429,11 +1438,10 @@ portable_core_ingress_finish_driver() {
     fi
   done
   PORTABLE_CORE_INGRESS_DRIVER="$PORTABLE_CORE_INGRESS_TEMP/driver.json"
-  read -r -d '' driver_program <<'JQ' || :
-      {mode:$mode,
+  driver_program='      {mode:$mode,
        docs:([range(0;($contents|length))] |
          map({content:$contents[.],sha256:$hashes[.]}))}
-JQ
+'
   if [ "${PORTABLE_CORE_INGRESS_ACCOUNTED:-false}" = true ]; then
     driver_size="$(
       "$PORTABLE_CORE_INGRESS_JQ" -n -S -c \
@@ -1555,13 +1563,20 @@ portable_core_ingress_close() {
   if [ "${PORTABLE_CORE_INGRESS_ACCOUNTED:-false}" = true ]; then
     if [ "$temp_path" = \
          "${PORTABLE_CORE_INGRESS_SCRATCH_ROOT:-}/portable-core-accounted-v1" ]; then
-      if [ -d "$temp_path" ] && [ ! -L "$temp_path" ]; then
-        if ! "$PORTABLE_CORE_INGRESS_RM" -rf -- "$temp_path" \
-            >/dev/null 2>&1; then
+      if [ "${PORTABLE_CORE_INGRESS_OWNS_TEMP:-false}" = true ]; then
+        if [ -d "$temp_path" ] && [ ! -L "$temp_path" ]; then
+          if ! "$PORTABLE_CORE_INGRESS_RM" -rf -- "$temp_path" \
+              >/dev/null 2>&1; then
+            portable_core_ingress_error E_RUNTIME
+            return 1
+          fi
+        elif [ -e "$temp_path" ] || [ -L "$temp_path" ]; then
           portable_core_ingress_error E_RUNTIME
           return 1
         fi
       fi
+      PORTABLE_CORE_INGRESS_CREATING_TEMP=false
+      PORTABLE_CORE_INGRESS_OWNS_TEMP=false
       PORTABLE_CORE_INGRESS_TEMP=''
       return 0
     fi

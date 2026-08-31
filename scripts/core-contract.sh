@@ -17,6 +17,8 @@ assembly_byte_budget=0
 assembly_finalizing=false
 assembly_receipt_emitted=false
 assembly_finalization_signal=''
+assembly_cleaning=false
+assembly_cleanup_signal=''
 
 assembly_emit_receipt() {
   local receipt_status=0
@@ -39,19 +41,27 @@ assembly_cleanup() {
   local receipt_status=0
   trap - EXIT
   if [ "$(type -t portable_core_ingress_close 2>/dev/null)" = function ]; then
+    assembly_cleaning=true
     portable_core_ingress_close >/dev/null 2>&1 || :
+    assembly_cleaning=false
   fi
   assembly_emit_receipt || receipt_status=$?
   [ "$receipt_status" -eq 0 ] || status=1
   [ -z "$assembly_finalization_signal" ] || status=1
+  [ -z "$assembly_cleanup_signal" ] || status=1
   trap - HUP INT TERM
   exit "$status"
 }
 
 assembly_signal() {
-  if [ -n "${PORTABLE_CORE_INGRESS_RESERVED_BYTES:-}" ]; then
+  if [ "${PORTABLE_CORE_INGRESS_CREATING_TEMP:-false}" = true ] ||
+     [ -n "${PORTABLE_CORE_INGRESS_RESERVED_BYTES:-}" ]; then
     # shellcheck disable=SC2034
     PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL="$1"
+    return 0
+  fi
+  if [ "$assembly_cleaning" = true ]; then
+    assembly_cleanup_signal="$1"
     return 0
   fi
   if [ "$assembly_finalizing" = true ]; then
@@ -185,7 +195,9 @@ for assembly_input in "${assembly_inputs[@]}"; do
 done
 portable_core_ingress_finish_driver || exit 1
 portable_core_ingress_validate || exit 1
+assembly_cleaning=true
 portable_core_ingress_close || exit 1
+assembly_cleaning=false
 assembly_receipt_status=0
 assembly_emit_receipt || assembly_receipt_status=$?
 case "$assembly_receipt_status" in
@@ -196,4 +208,5 @@ case "$assembly_receipt_status" in
     ;;
   2) exit 1 ;;
 esac
+[ -z "$assembly_cleanup_signal" ] || exit 1
 trap - EXIT HUP INT TERM
