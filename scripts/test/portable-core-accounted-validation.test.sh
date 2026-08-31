@@ -537,6 +537,7 @@ race_root="$accounted_tmp/race-root"
 race_arrivals="$accounted_tmp/race.arrivals"
 race_winner="$accounted_tmp/race.winner"
 race_loser="$accounted_tmp/race.loser"
+race_release="$accounted_tmp/race.release"
 mkdir -p "$race_bin"
 mkdir -m 700 "$race_root"
 : > "$race_arrivals"
@@ -544,12 +545,22 @@ cat > "$race_bin/mkdir" <<'MKDIR_RACE'
 #!/bin/bash
 set -uo pipefail
 printf '%s\n' "$PPID" >> "$ACCOUNTED_RACE_ARRIVALS"
-while [ "$(/usr/bin/wc -l < "$ACCOUNTED_RACE_ARRIVALS" | tr -d ' ')" -lt 2 ]; do
+race_wait=0
+while [ "$(/usr/bin/wc -l < "$ACCOUNTED_RACE_ARRIVALS" | tr -d ' ')" -lt 2 ] &&
+      [ "$race_wait" -lt 100 ]; do
   /bin/sleep 0.1
+  race_wait=$((race_wait + 1))
 done
+[ "$(/usr/bin/wc -l < "$ACCOUNTED_RACE_ARRIVALS" | tr -d ' ')" -ge 2 ] ||
+  exit 96
 if "$ACCOUNTED_REAL_MKDIR" "$@"; then
   printf '%s\n' "$PPID" > "$ACCOUNTED_RACE_WINNER"
-  /bin/sleep 3
+  race_wait=0
+  while [ ! -e "$ACCOUNTED_RACE_RELEASE" ] && [ "$race_wait" -lt 200 ]; do
+    /bin/sleep 0.1
+    race_wait=$((race_wait + 1))
+  done
+  [ -e "$ACCOUNTED_RACE_RELEASE" ] || exit 97
   exit 0
 else
   race_status=$?
@@ -566,6 +577,7 @@ for race_index in 1 2; do
     ACCOUNTED_RACE_ARRIVALS="$race_arrivals" \
     ACCOUNTED_RACE_WINNER="$race_winner" \
     ACCOUNTED_RACE_LOSER="$race_loser" \
+    ACCOUNTED_RACE_RELEASE="$race_release" \
       PATH="$race_bin:$accounted_path" /bin/bash "$package_wrapper" \
         --accounted-validation "$race_root" 536870912 \
         validate-document "$accounted_registry" \
@@ -578,8 +590,69 @@ for race_index in 1 2; do
   race_pids+=("$race_pid")
   accounted_background_pids+=("$race_pid")
 done
+
+race_status_value() {
+  if [ ! -s "$1" ]; then
+    printf '%s' pending
+  elif grep -Eq '^[0-9]+$' "$1"; then
+    tr -d '\n' < "$1"
+  else
+    printf '%s' invalid
+  fi
+}
+
+race_receipt_value() {
+  if [ ! -s "$1" ]; then
+    printf '%s' pending
+  elif [ "$(wc -l < "$1" | tr -d ' ')" -eq 1 ] &&
+       grep -Eq '^written-bytes:(0|[1-9][0-9]*)$' "$1"; then
+    sed -n 's/^written-bytes://p' "$1"
+  else
+    printf '%s' invalid
+  fi
+}
+
+race_token_value() {
+  local token
+  if [ ! -e "$1" ]; then
+    printf '%s' pending
+    return
+  fi
+  token="$(cat "$1")"
+  case "$token" in
+    '') printf '%s' empty ;;
+    E_RUNTIME|E_SHAPE) printf '%s' "$token" ;;
+    *) printf '%s' invalid ;;
+  esac
+}
+
+race_bool() {
+  if "$@"; then printf '%s' true
+  else printf '%s' false
+  fi
+}
+
+race_diagnostics() {
+  printf 'race status1=%s status2=%s receipt1=%s receipt2=%s token1=%s token2=%s winner=%s loser=%s loser_done=%s directory=%s root_empty=%s status_ok=%s receipt_ok=%s tokens_ok=%s\n' \
+    "$(race_status_value "$accounted_tmp/race-1.status")" \
+    "$(race_status_value "$accounted_tmp/race-2.status")" \
+    "$(race_receipt_value "$accounted_tmp/race-1.receipt")" \
+    "$(race_receipt_value "$accounted_tmp/race-2.receipt")" \
+    "$(race_token_value "$accounted_tmp/race-1.stderr")" \
+    "$(race_token_value "$accounted_tmp/race-2.stderr")" \
+    "$(race_bool test -s "$race_winner")" \
+    "$(race_bool test -s "$race_loser")" \
+    "$(race_bool test -s "$accounted_tmp/race-1.status" -o \
+                       -s "$accounted_tmp/race-2.status")" \
+    "$(race_bool test -d "$race_root/portable-core-accounted-v1")" \
+    "$(race_bool test -z "$(find "$race_root" -mindepth 1 -print -quit)")" \
+    "${race_status_ok:-pending}" "${race_receipt_ok:-pending}" \
+    "${race_tokens_ok:-pending}" >&2
+}
+
 race_loser_done=false
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+race_parent_wait=0
+while [ "$race_parent_wait" -lt 100 ]; do
   if [ -s "$race_loser" ] && [ -s "$race_winner" ] &&
      { [ -s "$accounted_tmp/race-1.status" ] ||
        [ -s "$accounted_tmp/race-2.status" ]; }; then
@@ -587,24 +660,50 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     break
   fi
   /bin/sleep 0.1
+  race_parent_wait=$((race_parent_wait + 1))
 done
-[ "$race_loser_done" = true ] && [ -s "$race_winner" ] &&
-  [ -d "$race_root/portable-core-accounted-v1" ] ||
+if [ "$race_loser_done" != true ] || [ ! -s "$race_winner" ] ||
+   [ ! -d "$race_root/portable-core-accounted-v1" ]; then
+  race_diagnostics
+  : > "$race_release"
   fail 'mkdir loser removed the winner directory'
+fi
+: > "$race_release"
 for race_pid in "${race_pids[@]}"; do
   wait_probe "$race_pid" 'mkdir race invocation'
 done
-race_receipt_one="$(receipt_bytes "$accounted_tmp/race-1.receipt")"
-race_receipt_two="$(receipt_bytes "$accounted_tmp/race-2.receipt")"
-[ "$(cat "$accounted_tmp/race-1.status")" -ne 0 ] &&
-  [ "$(cat "$accounted_tmp/race-2.status")" -ne 0 ] &&
-  { [ "$race_receipt_one" -eq 0 ] && [ "$race_receipt_two" -gt 0 ] ||
-    [ "$race_receipt_two" -eq 0 ] && [ "$race_receipt_one" -gt 0 ]; } &&
-  [ "$(cat "$accounted_tmp/race-1.stderr" \
-             "$accounted_tmp/race-2.stderr" | LC_ALL=C sort)" = \
-    $'E_RUNTIME\nE_SHAPE' ] &&
-  [ -z "$(find "$race_root" -mindepth 1 -print -quit)" ] ||
+race_status_one="$(race_status_value "$accounted_tmp/race-1.status")"
+race_status_two="$(race_status_value "$accounted_tmp/race-2.status")"
+race_receipt_one="$(race_receipt_value "$accounted_tmp/race-1.receipt")"
+race_receipt_two="$(race_receipt_value "$accounted_tmp/race-2.receipt")"
+race_token_one="$(race_token_value "$accounted_tmp/race-1.stderr")"
+race_token_two="$(race_token_value "$accounted_tmp/race-2.stderr")"
+race_token_set="$(printf '%s\n' "$race_token_one" "$race_token_two" |
+  LC_ALL=C sort)"
+race_status_ok=false
+if [[ "$race_status_one" =~ ^[0-9]+$ ]] &&
+   [[ "$race_status_two" =~ ^[0-9]+$ ]] &&
+   [ "$race_status_one" -ne 0 ] && [ "$race_status_two" -ne 0 ]; then
+  race_status_ok=true
+fi
+race_receipt_ok=false
+if [[ "$race_receipt_one" =~ ^[0-9]+$ ]] &&
+   [[ "$race_receipt_two" =~ ^[0-9]+$ ]]; then
+  if [ "$race_receipt_one" -eq 0 ] && [ "$race_receipt_two" -gt 0 ]; then
+    race_receipt_ok=true
+  elif [ "$race_receipt_two" -eq 0 ] && [ "$race_receipt_one" -gt 0 ]; then
+    race_receipt_ok=true
+  fi
+fi
+race_tokens_ok=false
+[ "$race_token_set" = $'E_RUNTIME\nE_SHAPE' ] && race_tokens_ok=true
+race_root_ok=false
+[ -z "$(find "$race_root" -mindepth 1 -print -quit)" ] && race_root_ok=true
+if [ "$race_status_ok" != true ] || [ "$race_receipt_ok" != true ] ||
+   [ "$race_tokens_ok" != true ] || [ "$race_root_ok" != true ]; then
+  race_diagnostics
   fail 'mkdir race receipts or ownership were invalid'
+fi
 
 signal_bin="$accounted_tmp/signal-bin"
 signal_root="$accounted_tmp/signal-root"
