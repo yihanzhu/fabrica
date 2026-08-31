@@ -18,6 +18,7 @@ runner_dir=${runner_source%/*}
 repo_root=$(CDPATH='' cd -P -- "$runner_dir/../.." && pwd -P) || runner_error
 contract="$runner_dir/contract.jq"
 core="$repo_root/scripts/core-contract.sh"
+core_fixture_modules="$repo_root/scripts/test"
 for runner_file in "$runner_source" "$contract" "$inventory" "$core"; do
   [ -f "$runner_file" ] && [ ! -L "$runner_file" ] || runner_error E_BINDING
 done
@@ -49,10 +50,10 @@ fixture_source="$fixture_root/target/source.txt"
 fixture_sha=$(sha_file "$fixture_source")
 [ "$fixture_sha" = ce90e53bb6592130c8d56db2d5cda036c11baba589a5ffb3e2e07e75366c2ef6 ] ||
   runner_error E_FIXTURE
-"$jq_bin" -L "$runner_dir" -e --arg command inventory \
-  --arg fixture_sha256 "$fixture_sha" --arg package_id '' \
-  --arg artifact_sha256 '' --arg target_tree_id '' --arg candidate_tree_id '' \
-  -f "$contract" "$inventory" >/dev/null ||
+"$jq_bin" -c --slurpfile inventory "$inventory" --arg fixture_sha256 "$fixture_sha" -n \
+  '{inventory:$inventory[0],fixture_sha256:$fixture_sha256}' |
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
+    --arg command inventory -f "$contract" >/dev/null ||
   runner_error E_INVENTORY
 
 git_safe() {
@@ -103,11 +104,11 @@ read -r target_mode target_type target_object <<< "$target_meta"
 
 package_digest() {
   case "$1" in
-    fake.producer.a) printf '%s\n' b141abf12545f39573ee9cd956ba8a80fa3d37c2266929a765b302ab2b832971 ;;
-    fake.producer.b) printf '%s\n' 329693fbdea876f595d1deeb4a983a3318ac5938add1206472df18c8d5b57211 ;;
-    fake.forge.a) printf '%s\n' df6891340de99bd82ceb2ff684e1d3b76f87aabf3d401aa15ee7306d932efd1a ;;
-    fake.forge.b) printf '%s\n' 1da390b4e723a1fb1abe4418c9ef02c5c7d8e886fe38143a61e31e81e89e83ea ;;
-    fake.protocol-fault) printf '%s\n' 5a5936a315613960ba5c3760cb851c658c49a0ef030aff744a17da72e81ba199 ;;
+    fake.producer.a) printf '%s\n' 39ee6f968f4b823530e2b36de31faab71c1dc1d675ab9f72c409fd9bcccf3aa4 ;;
+    fake.producer.b) printf '%s\n' 602650c6cf4b161f5b92b273b6944a42fb84eb5946918e9ec13fed9746a20049 ;;
+    fake.forge.a) printf '%s\n' 672636d079df76736b3b9160d7a38f67ff83767d7da455458c418c1cb0b539a6 ;;
+    fake.forge.b) printf '%s\n' a87a8453b2daf7723a9565bb597531f198c7c891d2b47c7dfef80ffd3dc2096b ;;
+    fake.protocol-fault) printf '%s\n' d0410d55da98008834c5f77bea606111e674edefc2df33fd7b08e0189930b353 ;;
     *) return 1 ;;
   esac
 }
@@ -154,7 +155,7 @@ run_child() {
   /bin/mkdir -m 700 "$child_home"
   (
     ulimit -t 2 -f 2048 -n 64
-    child_args=("$request" "$jq_bin")
+    child_args=("$request" "$jq_bin" "$contract" "$core_fixture_modules")
     [ "$mode" = direct ] || child_args=("$mode" "${child_args[@]}")
     exec /usr/bin/env -i HOME="$child_home" TMPDIR="$child_home" PATH=/usr/bin:/bin \
       LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
@@ -184,6 +185,44 @@ run_child() {
     CHILD_ERROR=E_LIMIT
     return 1
   }
+}
+
+extract_payload() {
+  local response=$1
+  local payload_id=$2
+  local output=$3
+  [ "$("$jq_bin" -r --arg id "$payload_id" '[.payloads[] | select(.payload_id==$id)] | length' "$response")" -eq 1 ] ||
+    return 1
+  "$jq_bin" -j --arg id "$payload_id" '.payloads[] | select(.payload_id==$id) | .data' \
+    "$response" > "$output" &&
+    [ "$(sha_file "$output")" = \
+      "$("$jq_bin" -r --arg id "$payload_id" '.payloads[] | select(.payload_id==$id) | .sha256' "$response")" ]
+}
+
+stage_consistent() {
+  local request=$1
+  local resolved=$2
+  local result=$3
+  "$jq_bin" -e --slurpfile request "$request" --slurpfile resolved "$resolved" '
+    .body.reported_by == .body.execution.performer and
+    .body.execution.actual_binding.binding_id == $request[0].body.operation.binding_id and
+    .body.execution.actual_binding.role == $request[0].body.operation.role and
+    (.body.execution.actual_binding as $actual |
+      [$resolved[0].body.bindings[] |
+       select(.binding.binding_id==$actual.binding_id and
+              .binding.package_ref==$actual.package_ref and
+              .binding.principal_id==$actual.principal_id)] | length == 1)
+  ' "$result" >/dev/null
+}
+
+git_write() {
+  /usr/bin/env -i HOME="$run_tmp/home" TMPDIR="$run_tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
+    GIT_AUTHOR_NAME=fake GIT_AUTHOR_EMAIL=fake@example.invalid \
+    GIT_COMMITTER_NAME=fake GIT_COMMITTER_EMAIL=fake@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects "$@"
 }
 
 cells="$run_tmp/cells.ndjson"
@@ -233,55 +272,140 @@ for cell in aa ab ba bb; do
     ([.body.bindings[] | select(.binding.role=="forge") | .adapter_implementation.version] == [$forge])
   ' "$resolved" >/dev/null || runner_error E_PROVENANCE
 
+  resolved_sha=$(sha_file "$resolved")
+  resolved_id=$("$jq_bin" -r '.id' "$resolved")
+  producer_context="$run_tmp/$cell.producer.context"
+  "$jq_bin" -S -c -n --slurpfile resolved_profile "$resolved" \
+    --arg case_id "$cell_id" --arg resolved_sha "$resolved_sha" \
+    --arg resolved_id "$resolved_id" \
+    --arg target_commit "$target_commit" --arg target_tree "$target_tree" \
+    --arg target_object "$target_object" \
+    '{case_id:$case_id,resolved_sha:$resolved_sha,resolved_id:$resolved_id,
+      resolved_profile:$resolved_profile[0],target_commit:$target_commit,
+      target_tree:$target_tree,target_object:$target_object}' > "$producer_context"
+  producer_stage_request="$run_tmp/$cell.producer.stage-request"
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -S -c \
+    --arg command producer-request -f "$contract" "$producer_context" > "$producer_stage_request"
+  "$core" validate-document "$producer_stage_request" >/dev/null 2>&1 || runner_error E_CORE_PRODUCER_REQUEST
   producer_request="$run_tmp/$cell.producer.request"
-  "$jq_bin" -S -c -n --arg case_id "$cell_id" --arg source "$fixture_sha" \
-    '{case_id:$case_id,phase:"producer",protocol:"ystack.fake-adapter.v1",source_sha256:$source}' > "$producer_request"
+  "$jq_bin" -S -c -n --arg case_id "$cell_id" --slurpfile stage "$producer_stage_request" \
+    --rawfile source "$fixture_source" --arg source_sha "$fixture_sha" \
+    --rawfile resolved "$resolved" --arg resolved_sha "$resolved_sha" '
+    {case_id:$case_id,payloads:[
+      {data:$resolved,media_type:"application/json",payload_id:"resolved-profile",sha256:$resolved_sha},
+      {data:$source,media_type:"text/plain",payload_id:"source",sha256:$source_sha}],
+     phase:"producer",protocol_version:1,stage_request:$stage[0]}' > "$producer_request"
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
+    --arg command request-envelope -f "$contract" "$producer_request" >/dev/null || runner_error E_PROTOCOL_PRODUCER_REQUEST
   producer_output="$run_tmp/$cell.producer.output"
   producer_error="$run_tmp/$cell.producer.stderr"
   run_child "$assets/$producer_path" direct "$producer_request" "$producer_output" \
     "$producer_error" "$run_tmp/$cell.producer.home" || runner_error "$CHILD_ERROR"
   if [ -s "$producer_error" ] ||
      ! canonical "$producer_output" "$run_tmp/$cell.producer.canonical"; then
-    runner_error E_PROTOCOL
+    runner_error E_PROTOCOL_PRODUCER_OUTPUT
   fi
-  "$jq_bin" -L "$runner_dir" -e --arg command producer-response \
-    --arg package_id "$producer_package" --arg fixture_sha256 '' \
-    --arg artifact_sha256 '' --arg target_tree_id '' --arg candidate_tree_id '' \
-    -f "$contract" "$producer_output" >/dev/null || runner_error E_PROTOCOL
-  artifact_content=$("$jq_bin" -r '.artifact.content' "$producer_output")
-  artifact_sha=$(sha_text "$artifact_content")
-  [ "$artifact_sha" = "$("$jq_bin" -r '.artifact.sha256' "$producer_output")" ] || runner_error E_OBSERVATION
+  producer_response_context="$run_tmp/$cell.producer.response-context"
+  "$jq_bin" -S -c -n --slurpfile response "$producer_output" --arg case_id "$cell_id" \
+    '{case_id:$case_id,phase:"producer",response:$response[0]}' > "$producer_response_context"
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
+    --arg command response-envelope -f "$contract" "$producer_response_context" >/dev/null || runner_error E_PROTOCOL_PRODUCER_RESPONSE
+  producer_result="$run_tmp/$cell.producer.stage-result"
+  "$jq_bin" -S -c '.stage_result' "$producer_output" > "$producer_result"
+  "$core" validate-stage-run "$producer_stage_request" "$resolved" "$producer_result" \
+    >/dev/null 2>&1 || runner_error E_CORE_PRODUCER_RESULT
+  stage_consistent "$producer_stage_request" "$resolved" "$producer_result" || runner_error E_PROVENANCE
+  producer_patch="$run_tmp/$cell.producer.patch"
+  extract_payload "$producer_output" producer.patch "$producer_patch" || runner_error E_OBSERVATION
+  patch_sha=$(sha_file "$producer_patch")
+  "$jq_bin" -e --arg sha "$patch_sha" '
+    .body.outputs == [{output_id:"producer.patch",ref:.body.delta_ref}] and
+    .body.delta_ref.media_type == "text/x-diff" and .body.delta_ref.sha256 == $sha
+  ' "$producer_result" >/dev/null || runner_error E_OBSERVATION
 
-  candidate_root="$run_tmp/$cell.candidate"
+  forge_context="$run_tmp/$cell.forge.context"
+  "$jq_bin" -S -c -n --slurpfile resolved_profile "$resolved" \
+    --arg case_id "$cell_id" --arg resolved_sha "$resolved_sha" \
+    --arg resolved_id "$resolved_id" \
+    --arg target_commit "$target_commit" --arg target_tree "$target_tree" \
+    --arg target_object "$target_object" --arg patch_sha "$patch_sha" \
+    '{case_id:$case_id,resolved_sha:$resolved_sha,resolved_id:$resolved_id,
+      resolved_profile:$resolved_profile[0],target_commit:$target_commit,
+      target_tree:$target_tree,target_object:$target_object,patch_sha:$patch_sha}' > "$forge_context"
+  forge_stage_request="$run_tmp/$cell.forge.stage-request"
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -S -c \
+    --arg command forge-request -f "$contract" "$forge_context" > "$forge_stage_request"
+  "$core" validate-document "$forge_stage_request" >/dev/null 2>&1 || runner_error E_CORE_FORGE_REQUEST
   forge_request="$run_tmp/$cell.forge.request"
-  "$jq_bin" -S -c -n --arg case_id "$cell_id" --arg root "$candidate_root" \
-    --slurpfile response "$producer_output" \
-    '{artifact:$response[0].artifact,candidate_root:$root,case_id:$case_id,
-      phase:"forge",protocol:"ystack.fake-adapter.v1"}' > "$forge_request"
+  "$jq_bin" -S -c -n --arg case_id "$cell_id" --slurpfile stage "$forge_stage_request" \
+    --rawfile source "$fixture_source" --arg source_sha "$fixture_sha" \
+    --rawfile resolved "$resolved" --arg resolved_sha "$resolved_sha" \
+    --rawfile patch "$producer_patch" --arg patch_sha "$patch_sha" '
+    {case_id:$case_id,payloads:[
+      {data:$resolved,media_type:"application/json",payload_id:"resolved-profile",sha256:$resolved_sha},
+      {data:$source,media_type:"text/plain",payload_id:"source",sha256:$source_sha},
+      {data:$patch,media_type:"text/x-diff",payload_id:"producer.patch",sha256:$patch_sha}],
+     phase:"forge",protocol_version:1,stage_request:$stage[0]}' > "$forge_request"
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
+    --arg command request-envelope -f "$contract" "$forge_request" >/dev/null || runner_error E_PROTOCOL_FORGE_REQUEST
   forge_output="$run_tmp/$cell.forge.output"
   forge_error="$run_tmp/$cell.forge.stderr"
+  forge_home="$run_tmp/$cell.forge.home"
   run_child "$assets/$forge_path" direct "$forge_request" "$forge_output" \
-    "$forge_error" "$run_tmp/$cell.forge.home" || runner_error "$CHILD_ERROR"
+    "$forge_error" "$forge_home" || runner_error "$CHILD_ERROR"
   if [ -s "$forge_error" ] ||
      ! canonical "$forge_output" "$run_tmp/$cell.forge.canonical"; then
-    runner_error E_PROTOCOL
+    runner_error E_PROTOCOL_FORGE_OUTPUT
   fi
-  "$jq_bin" -L "$runner_dir" -e --arg command forge-response \
-    --arg package_id "$forge_package" --arg fixture_sha256 '' \
-    --arg artifact_sha256 '' --arg target_tree_id '' --arg candidate_tree_id '' \
-    -f "$contract" "$forge_output" >/dev/null || runner_error E_PROTOCOL
+  forge_response_context="$run_tmp/$cell.forge.response-context"
+  "$jq_bin" -S -c -n --slurpfile response "$forge_output" --arg case_id "$cell_id" \
+    '{case_id:$case_id,phase:"forge",response:$response[0]}' > "$forge_response_context"
+  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
+    --arg command response-envelope -f "$contract" "$forge_response_context" >/dev/null || runner_error E_PROTOCOL_FORGE_RESPONSE
+  forge_result="$run_tmp/$cell.forge.stage-result"
+  "$jq_bin" -S -c '.stage_result' "$forge_output" > "$forge_result"
+  "$core" validate-stage-run "$forge_stage_request" "$resolved" "$forge_result" \
+    >/dev/null 2>&1 || runner_error E_CORE_FORGE_RESULT
+  stage_consistent "$forge_stage_request" "$resolved" "$forge_result" || runner_error E_PROVENANCE
+  receipt="$run_tmp/$cell.receipt"
+  extract_payload "$forge_output" candidate.repository "$receipt" || runner_error E_OBSERVATION
+  receipt_sha=$(sha_file "$receipt")
+  "$jq_bin" -e --arg sha "$receipt_sha" '
+    (.body | has("delta_ref") | not) and .body.outputs == [{
+      output_id:"candidate.repository",ref:.body.outputs[0].ref}] and
+    .body.outputs[0].ref.media_type == "application/json" and
+    .body.outputs[0].ref.sha256 == $sha
+  ' "$forge_result" >/dev/null || runner_error E_OBSERVATION
+  candidate_root="$forge_home/candidate"
   verify_repo "$candidate_root" || runner_error E_GIT
   candidate_commit=$(git_safe -C "$candidate_root" rev-parse HEAD)
   candidate_tree=$(git_safe -C "$candidate_root" rev-parse 'HEAD^{tree}')
-  candidate_object=$(git_safe -C "$candidate_root" rev-parse HEAD:result.txt)
-  [ "$(/bin/cat "$candidate_root/result.txt")" = "$artifact_content" ] &&
-    [ "$candidate_commit:$candidate_tree:$candidate_object" = \
-      "$("$jq_bin" -r '[.commit_id,.tree_id,.file_object_id]|join(":")' "$forge_output")" ] ||
-    runner_error E_OBSERVATION
-  projection=$("$jq_bin" -L "$runner_dir" -n -c --arg command projection \
-    --arg artifact_sha256 "$artifact_sha" --arg target_tree_id "$target_tree" \
-    --arg candidate_tree_id "$candidate_tree" --arg package_id '' \
-    --arg fixture_sha256 '' -f "$contract")
+  candidate_object=$(git_safe -C "$candidate_root" rev-parse HEAD:source.txt)
+  "$jq_bin" -e --arg source "$target_tree" --arg patch "$patch_sha" \
+    --arg commit "$candidate_commit" --arg tree "$candidate_tree" --arg object "$candidate_object" '
+    . == {candidate_commit_id:$commit,candidate_object_id:$object,candidate_tree_id:$tree,
+          patch_sha256:$patch,source_tree_id:$source}
+  ' "$receipt" >/dev/null || runner_error E_OBSERVATION
+  oracle="$run_tmp/$cell.oracle"
+  /bin/mkdir -m 700 "$oracle"
+  git_write init -q "$oracle"
+  /bin/cp "$fixture_source" "$oracle/source.txt"
+  git_write -C "$oracle" add source.txt
+  git_write -C "$oracle" commit -q -m source
+  git_write -C "$oracle" apply "$producer_patch"
+  git_write -C "$oracle" add source.txt
+  git_write -C "$oracle" commit -q -m candidate
+  [ "$candidate_tree" = "$(git_safe -C "$oracle" rev-parse 'HEAD^{tree}')" ] || runner_error E_OBSERVATION
+  projection_context="$run_tmp/$cell.projection-context"
+  "$jq_bin" -S -c -n --slurpfile producer_request "$producer_stage_request" \
+    --slurpfile producer_result "$producer_result" --slurpfile forge_request "$forge_stage_request" \
+    --slurpfile forge_result "$forge_result" --arg artifact_sha256 "$patch_sha" \
+    --arg target_tree "$target_tree" --arg candidate_tree "$candidate_tree" '
+    {artifact_sha256:$artifact_sha256,producer_request:$producer_request[0],
+     producer_result:$producer_result[0],forge_request:$forge_request[0],
+     forge_result:$forge_result[0],target_tree:$target_tree,candidate_tree:$candidate_tree}' > "$projection_context"
+  projection=$("$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -c \
+    --arg command projection -f "$contract" "$projection_context")
   "$jq_bin" -S -c -n --arg case_id "$cell_id" --argjson projection "$projection" \
     --arg profile_sha256 "$(sha_file "$profile")" \
     --arg producer "$producer_package" --arg producer_digest "$(package_digest "$producer_package")" \

@@ -52,7 +52,8 @@ the resolver, select a live profile, or qualify a real forge.
 `adapter-tests/v1/` runs a fixed 2×2 producer/forge matrix against one unrelated
 local Git fixture. Its accepted inventory and four distinct fake entrypoints are
 digest-pinned. The runner revalidates each resolved profile with portable core v2,
-then checks package, target, artifact, candidate, and Git identities itself.
+validates every producer and forge stage request/result, then checks payload links,
+package, target, candidate, receipt, and Git identities itself.
 
 The result is observation only. It grants no authority, qualification, approval,
 publish, merge, or branch-write capability. The fakes run with a cleared environment,

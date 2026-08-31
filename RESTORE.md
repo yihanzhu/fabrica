@@ -314,9 +314,10 @@ Restore every path in the manifest's inactive fake adapter matrix block, then ru
 bash scripts/test/portable-adapter-contracts.test.sh
 ```
 
-The proof resolves four fake-only profiles and checks the accepted 2×2 matrix plus
-closed negative protocol cases. It uses no real adapter or credential and makes no
-network/host isolation, qualification, activation, or external-target-smoke claim.
+The proof resolves four fake-only profiles, validates both core stage records in
+each cell, and checks the accepted 2×2 matrix plus closed negative protocol cases.
+It uses no real adapter or credential and makes no network/host isolation,
+qualification, activation, or external-target-smoke claim.
 
 ---
 
