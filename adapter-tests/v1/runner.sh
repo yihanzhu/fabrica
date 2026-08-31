@@ -143,7 +143,11 @@ read -r target_mode target_type target_object <<< "$target_meta"
 target_source_snapshot="$run_tmp/target-source.snapshot"
 git_safe -C "$fixture_root/target" cat-file blob "$target_object" > "$target_source_snapshot" ||
   runner_error E_GIT
-cmp -s "$target_source_snapshot" "$fixture_source" || runner_error E_GIT
+/bin/chmod 0400 "$target_source_snapshot" || runner_error E_GIT
+if [ "$(sha_file "$target_source_snapshot")" != "$fixture_sha" ] ||
+   ! cmp -s "$target_source_snapshot" "$fixture_source"; then
+  runner_error E_GIT
+fi
 
 verify_target_unchanged() {
   local current_entry current_meta current_mode current_type current_object current_snapshot
@@ -378,6 +382,28 @@ extract_payload() {
       "$("$jq_bin" -r --arg id "$payload_id" '.payloads[] | select(.payload_id==$id) | .sha256' "$response")" ]
 }
 
+verify_request_payloads() {
+  local request=$1
+  local resolved_snapshot=$2
+  local source_snapshot=$3
+  local patch_snapshot=${4:-}
+  local payload_id payload_file payload_index=0
+  while IFS= read -r payload_id; do
+    payload_file="$run_tmp/request-payload.$payload_index"
+    extract_payload "$request" "$payload_id" "$payload_file" || return 1
+    case "$payload_id" in
+      resolved-profile) cmp -s "$payload_file" "$resolved_snapshot" || return 1 ;;
+      source) cmp -s "$payload_file" "$source_snapshot" || return 1 ;;
+      producer.patch)
+        [ -n "$patch_snapshot" ] && cmp -s "$payload_file" "$patch_snapshot" || return 1
+        ;;
+      *) return 1 ;;
+    esac
+    payload_index=$((payload_index + 1))
+  done < <("$jq_bin" -r '.payloads[].payload_id' "$request")
+  [ "$payload_index" -eq "$("$jq_bin" '.payloads | length' "$request")" ]
+}
+
 stage_consistent() {
   local request=$1
   local resolved=$2
@@ -460,7 +486,12 @@ for cell in aa ab ba bb; do
   assets="$cell_root/assets"
   manifests="$cell_root/manifests"
   profiles="$cell_root/profile"
-  resolved="$cell_root/resolved.json"
+  resolved_input="$cell_root/resolved.json"
+  resolved="$run_tmp/resolved.$cell.snapshot"
+  [ -f "$resolved_input" ] && [ ! -L "$resolved_input" ] || runner_error E_INPUT
+  /bin/cp "$resolved_input" "$resolved" || runner_error E_INPUT
+  /bin/chmod 0400 "$resolved" || runner_error E_INPUT
+  canonical "$resolved" "$run_tmp/resolved.$cell.canonical" || runner_error E_INPUT
   for mapped_repo in "$assets" "$manifests" "$profiles"; do
     verify_repo "$mapped_repo" || runner_error E_GIT
   done
@@ -529,7 +560,7 @@ for cell in aa ab ba bb; do
   "$core" validate-document "$producer_stage_request" >/dev/null 2>&1 || runner_error E_CORE_PRODUCER_REQUEST
   producer_request="$run_tmp/$cell.producer.request"
   "$jq_bin" -S -c -n --arg case_id "$cell_id" --slurpfile stage "$producer_stage_request" \
-    --rawfile source "$fixture_source" --arg source_sha "$fixture_sha" \
+    --rawfile source "$target_source_snapshot" --arg source_sha "$fixture_sha" \
     --rawfile resolved "$resolved" --arg resolved_sha "$resolved_sha" '
     {case_id:$case_id,payloads:[
       {data:$resolved,media_type:"application/json",payload_id:"resolved-profile",sha256:$resolved_sha},
@@ -537,6 +568,8 @@ for cell in aa ab ba bb; do
      phase:"producer",protocol_version:1,stage_request:$stage[0]}' > "$producer_request"
   "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
     --arg command request-envelope -f "$contract" "$producer_request" >/dev/null || runner_error E_PROTOCOL_PRODUCER_REQUEST
+  verify_request_payloads "$producer_request" "$resolved" "$target_source_snapshot" ||
+    runner_error E_REQUEST_PAYLOAD
   producer_output="$run_tmp/$cell.producer.output"
   producer_error="$run_tmp/$cell.producer.stderr"
   run_child "$producer_executable" direct "$producer_request" "$producer_output" \
@@ -568,7 +601,7 @@ for cell in aa ab ba bb; do
   "$core" validate-document "$forge_stage_request" >/dev/null 2>&1 || runner_error E_CORE_FORGE_REQUEST
   forge_request="$run_tmp/$cell.forge.request"
   "$jq_bin" -S -c -n --arg case_id "$cell_id" --slurpfile stage "$forge_stage_request" \
-    --rawfile source "$fixture_source" --arg source_sha "$fixture_sha" \
+    --rawfile source "$target_source_snapshot" --arg source_sha "$fixture_sha" \
     --rawfile resolved "$resolved" --arg resolved_sha "$resolved_sha" \
     --rawfile patch "$producer_patch" --arg patch_sha "$patch_sha" '
     {case_id:$case_id,payloads:[
@@ -578,6 +611,8 @@ for cell in aa ab ba bb; do
      phase:"forge",protocol_version:1,stage_request:$stage[0]}' > "$forge_request"
   "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
     --arg command request-envelope -f "$contract" "$forge_request" >/dev/null || runner_error E_PROTOCOL_FORGE_REQUEST
+  verify_request_payloads "$forge_request" "$resolved" "$target_source_snapshot" "$producer_patch" ||
+    runner_error E_REQUEST_PAYLOAD
   forge_output="$run_tmp/$cell.forge.output"
   forge_error="$run_tmp/$cell.forge.stderr"
   forge_home="$run_tmp/$cell.forge.home"
@@ -609,7 +644,7 @@ for cell in aa ab ba bb; do
   oracle="$run_tmp/$cell.oracle"
   /bin/mkdir -m 700 "$oracle"
   git_write init -q "$oracle"
-  /bin/cp "$fixture_source" "$oracle/source.txt"
+  /bin/cp "$target_source_snapshot" "$oracle/source.txt"
   git_write -C "$oracle" add source.txt
   git_write -C "$oracle" commit -q -m source
   git_write -C "$oracle" apply "$producer_patch"
@@ -643,13 +678,15 @@ done
 [ -n "${fault_producer_executable:-}" ] || runner_error E_PACKAGE
 negative_request="$run_tmp/aa.producer.request"
 negative_stage_request="$run_tmp/aa.producer.stage-request"
-negative_resolved="$fixture_root/cells/aa/resolved.json"
+negative_resolved="$run_tmp/resolved.aa.snapshot"
 for negative in degraded empty malformed partial relabelled timeout transport multiple unlinked duplicate descendant; do
   negative_id="reject-$negative"
   negative_output="$run_tmp/$negative.output"
   negative_stderr="$run_tmp/$negative.stderr"
   negative_result="$run_tmp/$negative.stage-result"
   observed=''
+  verify_request_payloads "$negative_request" "$negative_resolved" "$target_source_snapshot" ||
+    runner_error E_REQUEST_PAYLOAD
   if ! run_child "$fault_executable" "$negative" "$negative_request" "$negative_output" \
       "$negative_stderr" "$run_tmp/$negative.home" "$fault_producer_executable"; then
     observed=$CHILD_ERROR

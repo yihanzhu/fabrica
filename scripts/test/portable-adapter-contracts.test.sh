@@ -137,12 +137,14 @@ race_out="$tmp/package-race.out"
 race_err="$tmp/package-race.err"
 race_forge="$fixture/cells/aa/assets/packages/forge-a.sh"
 race_saved="$tmp/forge-a.saved"
+race_source_saved="$tmp/source-race.saved"
 /bin/cp "$race_forge" "$race_saved"
+/bin/cp "$fixture/target/source.txt" "$race_source_saved"
 PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$race_out" 2> "$race_err" &
 race_pid=$!
 race_marker=''
 for _ in {1..12000}; do
-  race_marker=$(/usr/bin/find "$fixture/scratch" -name 'aa.producer.stage-result' -type f -print -quit)
+  race_marker=$(/usr/bin/find "$fixture/scratch" -name 'package.aa.fake-producer-a' -type f -print -quit)
   [ -z "$race_marker" ] || break
   /bin/kill -0 "$race_pid" 2>/dev/null || break
   /bin/sleep 0.005
@@ -150,22 +152,53 @@ done
 if [ -z "$race_marker" ]; then
   /bin/kill "$race_pid" 2>/dev/null || :
   wait "$race_pid" 2>/dev/null || :
+  fail 'verified snapshot race marker'
+fi
+/usr/bin/printf '%s\n' 'project = mutable-garden' 'feature = wrong bytes' > "$fixture/target/source.txt"
+race_marker=''
+for _ in {1..12000}; do
+  race_marker=$(/usr/bin/find "$fixture/scratch" -name 'aa.producer.home' -type d -print -quit)
+  [ -z "$race_marker" ] || break
+  /bin/kill -0 "$race_pid" 2>/dev/null || break
+  /bin/sleep 0.005
+done
+if [ -z "$race_marker" ]; then
+  /bin/kill "$race_pid" 2>/dev/null || :
+  wait "$race_pid" 2>/dev/null || :
+  /bin/cp "$race_source_saved" "$fixture/target/source.txt"
   fail 'immutable package race marker'
 fi
 /usr/bin/printf '%s\n' '#!/bin/bash' \
   "/usr/bin/printf mutable > '$fixture/scratch/mutable-package-ran'" \
   'exit 99' > "$race_forge"
 /bin/chmod 0755 "$race_forge"
+race_marker=''
+for _ in {1..12000}; do
+  race_marker=$(/usr/bin/find "$fixture/scratch" -name 'aa.forge.stage-result' -type f -print -quit)
+  [ -z "$race_marker" ] || break
+  /bin/kill -0 "$race_pid" 2>/dev/null || break
+  /bin/sleep 0.005
+done
+/bin/cp "$race_source_saved" "$fixture/target/source.txt"
+if [ -z "$race_marker" ]; then
+  /bin/kill "$race_pid" 2>/dev/null || :
+  wait "$race_pid" 2>/dev/null || :
+  fail 'immutable source execution marker'
+fi
 if ! wait "$race_pid"; then
   fail 'immutable package race run'
 fi
 [ ! -s "$race_err" ] && [ ! -e "$fixture/scratch/mutable-package-ran" ] &&
   [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] ||
   fail 'mutable package executed'
+"$jq_bin" -e --slurpfile baseline "$output" \
+  '[.cells[].projection] == [$baseline[0].cells[].projection]' "$race_out" >/dev/null ||
+  fail 'source snapshot projection drift'
 /bin/cp "$race_saved" "$race_forge"
 /usr/bin/git -C "$fixture/cells/aa/assets" diff --quiet -- packages/forge-a.sh ||
   fail 'package race restore'
-pass 'mapped package mutation cannot change snapshot execution'
+fixture_git -C "$fixture/target" diff --quiet -- source.txt || fail 'source race restore'
+pass 'mapped package and source mutation cannot change snapshot execution'
 
 expect_failure() {
   local name=$1

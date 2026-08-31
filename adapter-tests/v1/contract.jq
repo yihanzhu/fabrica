@@ -103,11 +103,29 @@ def stage_result($c; $output_id; $media_type; $payload_sha):
     ref:{content_id:("output."+$c.case_id+"."+$c.phase),media_type:$media_type,sha256:$payload_sha}}] |
   if $c.phase == "producer" then .body.delta_ref=.body.outputs[0].ref else . end;
 def request_envelope_ok:
+  . as $request |
   exact(["case_id","payloads","phase","protocol_version","stage_request"]) and
   .protocol_version == 1 and (.phase == "producer" or .phase == "forge") and
   .stage_request.schema_version == 2 and .stage_request.kind == "stage_request" and
   (.payloads | type == "array" and all(.[];payload_ok) and
-    ([.[].payload_id] | length == (unique | length)));
+    ([.[].payload_id] | length == (unique | length))) and
+  ([.payloads[].payload_id] | sort) ==
+    (if .phase == "producer" then ["resolved-profile","source"]
+     else ["producer.patch","resolved-profile","source"] end) and
+  ([.payloads[] | select(.payload_id=="resolved-profile" and
+      .media_type=="application/json" and
+      .sha256==$request.stage_request.body.resolved_profile_ref.sha256)] | length) == 1 and
+  ([.payloads[] | select(.payload_id=="source" and .media_type=="text/plain")] | length) == 1 and
+  (if .phase == "forge" then
+     ([.stage_request.body.inputs[] |
+       select(.input_id=="input.producer-patch") |
+       .value.value.value.sha256] | length) == 1 and
+     ([.payloads[] as $payload |
+       select($payload.payload_id=="producer.patch" and $payload.media_type=="text/x-diff" and
+         ([$request.stage_request.body.inputs[] |
+           select(.input_id=="input.producer-patch" and
+                  .value.value.value.sha256==$payload.sha256)] | length == 1))] | length) == 1
+   else true end);
 def response_envelope_ok:
   (.response | exact(["case_id","payloads","phase","protocol_version","stage_result"])) and
   .response.protocol_version == 1 and .response.case_id == .case_id and
