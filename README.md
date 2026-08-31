@@ -61,6 +61,17 @@ fixed limits, and disposable directories, but this test does not provide or clai
 mechanical network or host-filesystem isolation. Real-adapter sandbox qualification
 and an external-target smoke remain required.
 
+## Inactive control policy-set validator
+
+`control/v1/` defines a canonical identity bundle for six later Control foundation
+policies: duty separation, sandbox, credentials, risk gates, kill switch, and
+immutable evidence. Its validator checks exact immutable policy and decision refs;
+it does not contain or evaluate those policies.
+
+The package stays inactive and fail-closed. It grants no authority, activates no
+profile, reads no credential, launches no adapter, and performs no external write.
+Later bounded units own each policy body and its enforcement.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

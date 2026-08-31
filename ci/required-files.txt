@@ -166,3 +166,8 @@ adapter-tests/v1/fakes/forge-b.sh
 adapter-tests/v1/fakes/protocol-fault.sh
 adapter-tests/v1/fixture/source.txt
 scripts/test/portable-adapter-contracts.test.sh
+
+# Inactive control policy-set identity seam
+control/v1/policy-set.jq
+control/v1/validate.sh
+scripts/test/control-policy-set.test.sh
