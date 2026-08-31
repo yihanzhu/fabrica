@@ -96,8 +96,9 @@ for unchanged_export in contracts.jq modules/schema.jq modules/profile_graph.jq 
     "$accounted_generation_root/$unchanged_export" ||
     fail "copied export moved: $unchanged_export"
 done
-if grep -Eq '(^|[^<])<<([^<]|$)' "$accounted_ingress"; then
-  fail 'accounted program body uses a heredoc'
+if grep -Eq '(^|[^<])<<([^<]|$)' "$accounted_ingress" ||
+   grep -Fq '<<<' "$accounted_ingress"; then
+  fail 'accounted program body uses a heredoc or here-string'
 fi
 
 canonical_registry="$accounted_tmp/registry.canonical"
@@ -256,6 +257,38 @@ PATH="$accounted_path" "$package_wrapper" --accounted-validation \
   [ "$(cat "$accounted_tmp/unsafe.stderr")" = E_RUNTIME ] &&
   [ "$(receipt_bytes "$accounted_tmp/unsafe.receipt")" -eq 0 ] ||
   fail 'unsafe scratch root was accepted'
+
+multiline_root="$accounted_tmp/multiline"$'\n'"component"$'\r'"tail"
+multiline_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$multiline_root" 536870912 \
+  validate-document "$accounted_registry" \
+  3> "$accounted_tmp/multiline.receipt" \
+  > "$accounted_tmp/multiline.stdout" \
+  2> "$accounted_tmp/multiline.stderr" || multiline_status=$?
+[ "$multiline_status" -ne 0 ] && [ ! -s "$accounted_tmp/multiline.stdout" ] &&
+  [ "$(cat "$accounted_tmp/multiline.stderr")" = E_RUNTIME ] &&
+  [ "$(receipt_bytes "$accounted_tmp/multiline.receipt")" -eq 0 ] &&
+  [ ! -e "$multiline_root" ] && [ ! -L "$multiline_root" ] ||
+  fail 'multiline scratch root traversed or misstated its receipt'
+
+symlink_real_root="$accounted_tmp/symlink-real-root"
+symlink_root="$accounted_tmp/symlink-root"
+mkdir -m 700 "$symlink_real_root"
+ln -s "$symlink_real_root" "$symlink_root"
+symlink_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$symlink_root" 536870912 \
+  validate-document "$accounted_registry" \
+  3> "$accounted_tmp/symlink.receipt" \
+  > "$accounted_tmp/symlink.stdout" \
+  2> "$accounted_tmp/symlink.stderr" || symlink_status=$?
+[ "$symlink_status" -ne 0 ] && [ ! -s "$accounted_tmp/symlink.stdout" ] &&
+  [ "$(cat "$accounted_tmp/symlink.stderr")" = E_RUNTIME ] &&
+  [ "$(receipt_bytes "$accounted_tmp/symlink.receipt")" -eq 0 ] &&
+  [ -L "$symlink_root" ] &&
+  [ -z "$(find "$symlink_real_root" -mindepth 1 -print -quit)" ] ||
+  fail 'symlink scratch root traversed or misstated its receipt'
 
 ordinary_status=0
 PATH="$accounted_path" "$package_wrapper" validate-document \
@@ -778,6 +811,69 @@ valid_profile="$accounted_tmp/valid-profile.json"
     fixture::profile_doc($manifest_shas)
   ' > "$valid_profile"
 
+validator_fake_bin="$accounted_tmp/validator-fake-bin"
+mkdir -p "$validator_fake_bin"
+cat > "$validator_fake_bin/jq" <<'VALIDATOR_FAKE'
+#!/bin/bash
+set -uo pipefail
+validator_call=false
+for argument in "$@"; do
+  case "$argument" in */contracts.jq) validator_call=true ;; esac
+done
+if [ "$validator_call" = false ]; then
+  exec "$ACCOUNTED_REAL_JQ" "$@"
+fi
+validator_count="$(/bin/cat "$ACCOUNTED_VALIDATOR_COUNTER")"
+validator_count=$((validator_count + 1))
+printf '%s\n' "$validator_count" > "$ACCOUNTED_VALIDATOR_COUNTER"
+case "$ACCOUNTED_VALIDATOR_MODE" in
+  exact) printf 'E_SHAPE\n' ;;
+  double-newline) printf 'E_SHAPE\n\n' ;;
+  nul) printf 'E_SHAPE\000\n' ;;
+  empty) ;;
+  nonzero)
+    printf 'E_SHAPE\n'
+    exit 42
+    ;;
+  *) exit 43 ;;
+esac
+VALIDATOR_FAKE
+chmod 0755 "$validator_fake_bin/jq"
+
+run_validator_case() {
+  local case_id="$1"
+  local expected_status="$2"
+  local expected_error="$3"
+  local case_root="$accounted_tmp/validator-$case_id-root"
+  local case_counter="$accounted_tmp/validator-$case_id.count"
+  local case_status=0
+  mkdir -m 700 "$case_root"
+  printf '0\n' > "$case_counter"
+  ACCOUNTED_REAL_JQ="$accounted_jq" \
+  ACCOUNTED_VALIDATOR_COUNTER="$case_counter" \
+  ACCOUNTED_VALIDATOR_MODE="$case_id" \
+    PATH="$validator_fake_bin:$accounted_path" /bin/bash "$package_wrapper" \
+      --accounted-validation "$case_root" 536870912 \
+      validate-document "$accounted_registry" \
+      3> "$accounted_tmp/validator-$case_id.receipt" \
+      > "$accounted_tmp/validator-$case_id.stdout" \
+      2> "$accounted_tmp/validator-$case_id.stderr" || case_status=$?
+  [ "$case_status" -eq "$expected_status" ] &&
+    [ ! -s "$accounted_tmp/validator-$case_id.stdout" ] &&
+    [ "$(cat "$accounted_tmp/validator-$case_id.stderr")" = \
+      "$expected_error" ] &&
+    [ "$(cat "$case_counter")" -eq 1 ] &&
+    [ "$(receipt_bytes "$accounted_tmp/validator-$case_id.receipt")" -gt 0 ] &&
+    [ -z "$(find "$case_root" -mindepth 1 -print -quit)" ] ||
+    fail "validator byte case failed: $case_id"
+}
+
+run_validator_case exact 1 E_SHAPE
+run_validator_case double-newline 1 E_RUNTIME
+run_validator_case nul 1 E_RUNTIME
+run_validator_case empty 0 ''
+run_validator_case nonzero 1 E_RUNTIME
+
 finalization_root="$accounted_tmp/finalization-root"
 finalization_marker="$accounted_tmp/finalization.marker"
 mkdir -m 700 "$finalization_root"
@@ -853,4 +949,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 32/32 passed\n'
+printf 'portable core accounted validation: 39/39 passed\n'

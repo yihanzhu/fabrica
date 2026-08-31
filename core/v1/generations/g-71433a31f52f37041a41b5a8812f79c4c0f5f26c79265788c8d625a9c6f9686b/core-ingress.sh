@@ -25,23 +25,30 @@ portable_core_ingress_physical_file_path() {
   local candidate_path="$1"
   local current_path=''
   local component
-  local component_index
-  local -a path_components
+  local remaining_path
 
   case "$candidate_path" in /*) ;; *) return 1 ;; esac
-  IFS='/' read -r -a path_components <<< "$candidate_path"
-  [ "${#path_components[@]}" -gt 1 ] || return 1
-  for ((component_index = 1;
-       component_index < ${#path_components[@]};
-       component_index++)); do
-    component="${path_components[$component_index]}"
+  case "$candidate_path" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  remaining_path="${candidate_path#/}"
+  [ -n "$remaining_path" ] || return 1
+  while [ -n "$remaining_path" ]; do
+    case "$remaining_path" in
+      */*)
+        component="${remaining_path%%/*}"
+        remaining_path="${remaining_path#*/}"
+        ;;
+      *)
+        component="$remaining_path"
+        remaining_path=''
+        ;;
+    esac
     case "$component" in ''|.|..) return 1 ;; esac
     current_path="$current_path/$component"
     [ ! -L "$current_path" ] || return 1
-    if [ "$component_index" -eq $((${#path_components[@]} - 1)) ]; then
-      [ -f "$current_path" ] || return 1
-    else
+    if [ -n "$remaining_path" ]; then
       [ -d "$current_path" ] || return 1
+    else
+      [ -f "$current_path" ] || return 1
     fi
   done
 }
@@ -50,16 +57,23 @@ portable_core_ingress_physical_directory_path() {
   local candidate_path="$1"
   local current_path=''
   local component
-  local component_index
-  local -a path_components
+  local remaining_path
 
   case "$candidate_path" in /*) ;; *) return 1 ;; esac
-  IFS='/' read -r -a path_components <<< "$candidate_path"
-  [ "${#path_components[@]}" -gt 1 ] || return 1
-  for ((component_index = 1;
-       component_index < ${#path_components[@]};
-       component_index++)); do
-    component="${path_components[$component_index]}"
+  case "$candidate_path" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  remaining_path="${candidate_path#/}"
+  [ -n "$remaining_path" ] || return 1
+  while [ -n "$remaining_path" ]; do
+    case "$remaining_path" in
+      */*)
+        component="${remaining_path%%/*}"
+        remaining_path="${remaining_path#*/}"
+        ;;
+      *)
+        component="$remaining_path"
+        remaining_path=''
+        ;;
+    esac
     case "$component" in ''|.|..) return 1 ;; esac
     current_path="$current_path/$component"
     [ ! -L "$current_path" ] && [ -d "$current_path" ] || return 1
@@ -528,11 +542,15 @@ portable_core_ingress_digest() {
       return 1
       ;;
   esac
-  read -r digest _ <<< "$digest_output"
-  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] && [[ "$digest_output" != *$'\n'* ]] || {
+  case "$digest_output" in *$'\n'*|*$'\r'*)
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  esac
+  [[ "$digest_output" =~ ^([0-9a-f]{64})([[:space:]].*)?$ ]] || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
+  digest="${BASH_REMATCH[1]}"
   PORTABLE_CORE_INGRESS_SHA256="$digest"
 }
 
@@ -1049,16 +1067,18 @@ portable_core_ingress_analyze() {
       portable_core_ingress_error E_RUNTIME
       return 1
     }
-    IFS=' ' read -r scalar_size key_size key_pair_size meta_size extra_meta \
-      <<< "$scan_sizes"
-    portable_core_ingress_decimal "$scalar_size" &&
-      portable_core_ingress_decimal "$key_size" &&
-      portable_core_ingress_decimal "$key_pair_size" &&
-      portable_core_ingress_decimal "$meta_size" &&
-      [ -z "${extra_meta:-}" ] && [[ "$scan_sizes" != *$'\n'* ]] || {
-        portable_core_ingress_error E_RUNTIME
-        return 1
-      }
+    case "$scan_sizes" in *$'\n'*|*$'\r'*)
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    esac
+    [[ "$scan_sizes" =~ ^([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)$ ]] || {
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    }
+    scalar_size="${BASH_REMATCH[1]}"
+    key_size="${BASH_REMATCH[2]}"
+    key_pair_size="${BASH_REMATCH[3]}"
+    meta_size="${BASH_REMATCH[4]}"
     expected_scan_bytes=$((scalar_size + key_size + key_pair_size + meta_size))
     portable_core_ingress_account_reserve "$expected_scan_bytes" || return 1
   else
@@ -1487,7 +1507,12 @@ portable_core_ingress_finish_driver() {
 portable_core_ingress_validate() {
   local output_size
   local token
-  local validator_text
+  local validator_capture
+  local validator_encoded
+  local validator_status_record
+  local validator_jq_status
+  local validator_od_status
+  local -a pipeline_status
 
   if [ "$#" -ne 0 ] ||
      ! portable_core_ingress_regular_file "${PORTABLE_CORE_INGRESS_DRIVER:-}" ||
@@ -1496,30 +1521,77 @@ portable_core_ingress_validate() {
       return 1
   fi
   PORTABLE_CORE_INGRESS_OUTPUT="$PORTABLE_CORE_INGRESS_TEMP/validator.out"
-  validator_text="$(
-    CDPATH='' cd -P -- "$PORTABLE_CORE_INGRESS_MODULE_DIR" &&
-      HOME=/nonexistent JQ_LIBRARY_PATH=/nonexistent \
-        "$PORTABLE_CORE_INGRESS_JQ" -L "$PORTABLE_CORE_INGRESS_MODULE_DIR" -r \
-        -f "$PORTABLE_CORE_INGRESS_ROOT" "$PORTABLE_CORE_INGRESS_DRIVER"
-  )" 2>/dev/null || {
+  validator_capture="$(
+    if (
+        CDPATH='' cd -P -- "$PORTABLE_CORE_INGRESS_MODULE_DIR" &&
+          HOME=/nonexistent JQ_LIBRARY_PATH=/nonexistent \
+            "$PORTABLE_CORE_INGRESS_JQ" -L "$PORTABLE_CORE_INGRESS_MODULE_DIR" -r \
+            -f "$PORTABLE_CORE_INGRESS_ROOT" "$PORTABLE_CORE_INGRESS_DRIVER"
+      ) 2>/dev/null | "$PORTABLE_CORE_INGRESS_OD" -An -v -t u1 2>/dev/null; then
+      pipeline_status=("${PIPESTATUS[@]}")
+    else
+      pipeline_status=("${PIPESTATUS[@]}")
+    fi
+    printf 'S %s %s\n' "${pipeline_status[0]}" "${pipeline_status[1]}"
+  )" || {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
-  if [ -n "$validator_text" ]; then
-    output_size=$((${#validator_text} + 1))
-  else
-    output_size=0
-  fi
+  case "$validator_capture" in
+    *$'\n'*)
+      validator_encoded="${validator_capture%$'\n'*}"
+      validator_status_record="${validator_capture##*$'\n'}"
+      ;;
+    *)
+      validator_encoded=''
+      validator_status_record="$validator_capture"
+      ;;
+  esac
+  [[ "$validator_status_record" =~ ^S[[:space:]]([0-9]+)[[:space:]]([0-9]+)$ ]] || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  validator_jq_status="${BASH_REMATCH[1]}"
+  validator_od_status="${BASH_REMATCH[2]}"
+  [ "$validator_jq_status" -eq 0 ] && [ "$validator_od_status" -eq 0 ] || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  output_size="$(
+    printf '%s\n' "$validator_encoded" |
+      "$PORTABLE_CORE_INGRESS_AWK" '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i !~ /^[0-9]+$/ || ($i + 0) < 0 || ($i + 0) > 255) {
+              invalid = 1
+              exit 42
+            }
+            count++
+          }
+        }
+        END { if (!invalid) print count + 0 }
+      ' 2>/dev/null
+  )" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  output_size="${output_size//[[:space:]]/}"
+  portable_core_ingress_decimal "$output_size" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
   portable_core_ingress_account_reserve "$output_size" || return 1
-  if [ -n "$validator_text" ]; then
-    if ! printf '%s\n' "$validator_text" \
-        2>/dev/null > "$PORTABLE_CORE_INGRESS_OUTPUT"; then
-      portable_core_ingress_account_files "$output_size" \
-        "$PORTABLE_CORE_INGRESS_OUTPUT" >/dev/null 2>&1 || :
-      portable_core_ingress_error E_RUNTIME
-      return 1
-    fi
-  elif ! : 2>/dev/null > "$PORTABLE_CORE_INGRESS_OUTPUT"; then
+  if printf '%s\n' "$validator_encoded" |
+      "$PORTABLE_CORE_INGRESS_AWK" '
+        { for (i = 1; i <= NF; i++) printf "%c", ($i + 0) }
+      ' 2>/dev/null > "$PORTABLE_CORE_INGRESS_OUTPUT"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  if [ "${#pipeline_status[@]}" -ne 2 ] ||
+     [ "${pipeline_status[0]}" -ne 0 ] ||
+     [ "${pipeline_status[1]}" -ne 0 ]; then
     portable_core_ingress_account_files "$output_size" \
       "$PORTABLE_CORE_INGRESS_OUTPUT" >/dev/null 2>&1 || :
     portable_core_ingress_error E_RUNTIME
