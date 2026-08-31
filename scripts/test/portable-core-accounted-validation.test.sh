@@ -12,8 +12,14 @@ accounted_wrapper="$accounted_root/scripts/core-contract.sh"
 accounted_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ystack-core-accounted.XXXXXX")"
 accounted_tmp="$(cd "$accounted_tmp" && pwd -P)"
 accounted_download=''
+accounted_background_pids=()
 
 cleanup() {
+  local background_pid
+  for background_pid in "${accounted_background_pids[@]}"; do
+    kill "$background_pid" >/dev/null 2>&1 || :
+    wait "$background_pid" >/dev/null 2>&1 || :
+  done
   if [ -n "${PORTABLE_CORE_INGRESS_TEMP:-}" ]; then
     portable_core_ingress_close >/dev/null 2>&1 || :
   fi
@@ -138,6 +144,59 @@ receipt_bytes() {
   sed -n 's/^written-bytes://p' "$1"
 }
 
+run_snapshot_probe() {
+  local mode="$1"
+  local input_path="$2"
+  local scratch_root="$3"
+  local probe_path="$4"
+  PATH="$probe_path" /bin/bash -c '
+    set -uo pipefail
+    # shellcheck source=/dev/null
+    source "$1"
+    if [ "$2" = accounted ]; then
+      portable_core_ingress_open "$3" 536870912
+    else
+      portable_core_ingress_open
+    fi
+    portable_core_ingress_begin document
+    portable_core_ingress_snapshot "$4"
+    "$PORTABLE_CORE_INGRESS_OD" -An -v -t u1 \
+      "$PORTABLE_CORE_INGRESS_SNAPSHOT"
+    portable_core_ingress_close
+  ' _ "$accounted_ingress" "$mode" "$scratch_root" "$input_path"
+}
+
+snapshot_tokens() {
+  awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if (seen) printf " "
+        printf "%s", $i
+        seen = 1
+      }
+    }
+    END { print "" }
+  ' "$1"
+}
+
+wait_probe() {
+  local probe_pid="$1"
+  local probe_name="$2"
+  local probe_status=0
+  local _
+  for _ in 1 2 3 4 5; do
+    if ! kill -0 "$probe_pid" >/dev/null 2>&1; then
+      wait "$probe_pid" || probe_status=$?
+      [ "$probe_status" -eq 0 ] || fail "$probe_name failed"
+      return 0
+    fi
+    /bin/sleep 1
+  done
+  kill "$probe_pid" >/dev/null 2>&1 || :
+  wait "$probe_pid" >/dev/null 2>&1 || :
+  fail "$probe_name read its source more than once"
+}
+
 run_case high 536870912
 [ "$RUN_STATUS" -ne 0 ] && [ ! -s "$RUN_STDOUT" ] &&
   [ "$(cat "$RUN_STDERR")" = E_SHAPE ] || fail 'accounted validation semantics'
@@ -200,6 +259,163 @@ PATH="$accounted_path" "$package_wrapper" validate-document \
   [ "$(cat "$accounted_tmp/ordinary.stderr")" = E_SHAPE ] ||
   fail 'ordinary interface changed'
 
+stdin_ordinary="$accounted_tmp/stdin-ordinary.bytes"
+printf '{}\000\n\n' |
+  run_snapshot_probe ordinary /dev/stdin '' "$accounted_path" > "$stdin_ordinary"
+[ "$(snapshot_tokens "$stdin_ordinary")" = '123 125 0 10 10' ] ||
+  fail 'ordinary stdin snapshot bytes moved'
+
+stdin_accounted_root="$accounted_tmp/stdin-accounted-root"
+mkdir -m 700 "$stdin_accounted_root"
+stdin_accounted="$accounted_tmp/stdin-accounted.bytes"
+printf '{}\000\n\n' |
+  run_snapshot_probe accounted /dev/stdin "$stdin_accounted_root" \
+    "$accounted_path" > "$stdin_accounted"
+[ "$(snapshot_tokens "$stdin_accounted")" = '123 125 0 10 10' ] &&
+  [ -z "$(find "$stdin_accounted_root" -mindepth 1 -print -quit)" ] ||
+  fail 'accounted stdin snapshot bytes moved'
+
+fifo_path="$accounted_tmp/one-read.fifo"
+fifo_root="$accounted_tmp/fifo-root"
+fifo_bytes="$accounted_tmp/fifo.bytes"
+mkfifo "$fifo_path"
+mkdir -m 700 "$fifo_root"
+run_snapshot_probe accounted "$fifo_path" "$fifo_root" "$accounted_path" \
+  > "$fifo_bytes" &
+fifo_reader_pid=$!
+accounted_background_pids+=("$fifo_reader_pid")
+printf '{}\000\n\n' > "$fifo_path" &
+fifo_writer_pid=$!
+accounted_background_pids+=("$fifo_writer_pid")
+wait_probe "$fifo_writer_pid" 'FIFO writer'
+wait_probe "$fifo_reader_pid" 'FIFO snapshot'
+[ "$(snapshot_tokens "$fifo_bytes")" = '123 125 0 10 10' ] &&
+  [ -z "$(find "$fifo_root" -mindepth 1 -print -quit)" ] ||
+  fail 'FIFO snapshot bytes moved'
+
+mutable_source="$accounted_tmp/mutable.json"
+mutable_counter="$accounted_tmp/head.count"
+mutable_bin="$accounted_tmp/mutable-bin"
+mutable_root="$accounted_tmp/mutable-root"
+mutable_bytes="$accounted_tmp/mutable.bytes"
+mkdir -p "$mutable_bin"
+mkdir -m 700 "$mutable_root"
+printf '{"first":true}\n' > "$mutable_source"
+printf '0\n' > "$mutable_counter"
+cat > "$mutable_bin/head" <<'HEAD_WRAPPER'
+#!/bin/bash
+set -uo pipefail
+count="$(cat "$ACCOUNTED_HEAD_COUNTER")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$ACCOUNTED_HEAD_COUNTER"
+status=0
+"$ACCOUNTED_REAL_HEAD" "$@" || status=$?
+printf '{"second":true}\n' > "$ACCOUNTED_MUTABLE_SOURCE"
+exit "$status"
+HEAD_WRAPPER
+chmod 0755 "$mutable_bin/head"
+ACCOUNTED_HEAD_COUNTER="$mutable_counter" \
+ACCOUNTED_REAL_HEAD="$(command -v head)" \
+ACCOUNTED_MUTABLE_SOURCE="$mutable_source" \
+  run_snapshot_probe accounted "$mutable_source" "$mutable_root" \
+    "$mutable_bin:$accounted_path" > "$mutable_bytes"
+[ "$(cat "$mutable_counter")" -eq 1 ] &&
+  [ "$(snapshot_tokens "$mutable_bytes")" = \
+    '123 34 102 105 114 115 116 34 58 116 114 117 101 125 10' ] &&
+  [ "$(cat "$mutable_source")" = '{"second":true}' ] ||
+  fail 'mutable source was read more than once'
+
+stream_ordinary_status=0
+printf '{}\000\n' |
+  PATH="$accounted_path" /bin/bash "$package_wrapper" validate-document \
+    /dev/stdin > "$accounted_tmp/stream-ordinary.stdout" \
+    2> "$accounted_tmp/stream-ordinary.stderr" || stream_ordinary_status=$?
+[ "$stream_ordinary_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/stream-ordinary.stdout" ] &&
+  [ "$(cat "$accounted_tmp/stream-ordinary.stderr")" = E_PARSE ] ||
+  fail 'ordinary stdin NUL semantics moved'
+
+stream_accounted_root="$accounted_tmp/stream-accounted-root"
+mkdir -m 700 "$stream_accounted_root"
+stream_accounted_status=0
+printf '{}\000\n' |
+  PATH="$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$stream_accounted_root" 536870912 \
+    validate-document /dev/stdin 3> "$accounted_tmp/stream-accounted.receipt" \
+    > "$accounted_tmp/stream-accounted.stdout" \
+    2> "$accounted_tmp/stream-accounted.stderr" || stream_accounted_status=$?
+[ "$stream_accounted_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/stream-accounted.stdout" ] &&
+  [ "$(cat "$accounted_tmp/stream-accounted.stderr")" = E_PARSE ] &&
+  [ "$(receipt_bytes "$accounted_tmp/stream-accounted.receipt")" -gt 0 ] ||
+  fail 'accounted stdin NUL semantics moved'
+
+newline_ordinary_status=0
+printf '{}\n\n' |
+  PATH="$accounted_path" /bin/bash "$package_wrapper" validate-document \
+    /dev/stdin > "$accounted_tmp/newline-ordinary.stdout" \
+    2> "$accounted_tmp/newline-ordinary.stderr" || newline_ordinary_status=$?
+[ "$newline_ordinary_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/newline-ordinary.stdout" ] &&
+  [ "$(cat "$accounted_tmp/newline-ordinary.stderr")" = E_CANONICAL ] ||
+  fail 'ordinary trailing-newline semantics moved'
+
+newline_accounted_root="$accounted_tmp/newline-accounted-root"
+mkdir -m 700 "$newline_accounted_root"
+newline_accounted_status=0
+printf '{}\n\n' |
+  PATH="$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$newline_accounted_root" 536870912 \
+    validate-document /dev/stdin 3> "$accounted_tmp/newline-accounted.receipt" \
+    > "$accounted_tmp/newline-accounted.stdout" \
+    2> "$accounted_tmp/newline-accounted.stderr" || newline_accounted_status=$?
+[ "$newline_accounted_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/newline-accounted.stdout" ] &&
+  [ "$(cat "$accounted_tmp/newline-accounted.stderr")" = E_CANONICAL ] &&
+  [ "$(receipt_bytes "$accounted_tmp/newline-accounted.receipt")" -gt 0 ] ||
+  fail 'accounted trailing-newline semantics moved'
+
+probe_input="$accounted_tmp/limit-probe.json"
+awk 'BEGIN { for (i = 0; i < 1048577; i++) printf "x" }' > "$probe_input"
+probe_ordinary_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" validate-document \
+  "$probe_input" > "$accounted_tmp/probe-ordinary.stdout" \
+  2> "$accounted_tmp/probe-ordinary.stderr" || probe_ordinary_status=$?
+[ "$probe_ordinary_status" -ne 0 ] &&
+  [ "$(cat "$accounted_tmp/probe-ordinary.stderr")" = E_LIMIT ] ||
+  fail 'ordinary 1,048,577-byte probe moved'
+
+probe_accounted_root="$accounted_tmp/probe-accounted-root"
+mkdir -m 700 "$probe_accounted_root"
+probe_accounted_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$probe_accounted_root" 536870912 \
+  validate-document "$probe_input" 3> "$accounted_tmp/probe-accounted.receipt" \
+  > "$accounted_tmp/probe-accounted.stdout" \
+  2> "$accounted_tmp/probe-accounted.stderr" || probe_accounted_status=$?
+[ "$probe_accounted_status" -ne 0 ] &&
+  [ "$(cat "$accounted_tmp/probe-accounted.stderr")" = E_LIMIT ] &&
+  [ "$(receipt_bytes "$accounted_tmp/probe-accounted.receipt")" -ge 1048577 ] ||
+  fail 'accounted 1,048,577-byte probe moved'
+
+ordinary_bin="$accounted_tmp/ordinary-bin"
+mkdir -p "$ordinary_bin"
+for ordinary_tool in jq head wc cmp cat rm od awk mktemp dirname \
+  sha256sum shasum; do
+  if ordinary_tool_path="$(command -v "$ordinary_tool" 2>/dev/null)"; then
+    ln -s "$ordinary_tool_path" "$ordinary_bin/$ordinary_tool"
+  fi
+done
+[ ! -e "$ordinary_bin/stat" ] && [ ! -e "$ordinary_bin/mkdir" ] ||
+  fail 'ordinary compatibility PATH contains accounted-only tools'
+isolated_status=0
+PATH="$ordinary_bin" /bin/bash "$package_wrapper" validate-document \
+  "$accounted_registry" > "$accounted_tmp/isolated.stdout" \
+  2> "$accounted_tmp/isolated.stderr" || isolated_status=$?
+[ "$isolated_status" -ne 0 ] && [ ! -s "$accounted_tmp/isolated.stdout" ] &&
+  [ "$(cat "$accounted_tmp/isolated.stderr")" = E_SHAPE ] ||
+  fail 'ordinary mode requires accounted-only tools'
+
 for required_path in \
   "core/v1/generations/$accounted_generation/modules/schema.jq" \
   "core/v1/generations/$accounted_generation/core-ingress.sh" \
@@ -213,4 +429,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 12/12 passed\n'
+printf 'portable core accounted validation: 23/23 passed\n'

@@ -355,22 +355,6 @@ portable_core_ingress_open() {
       ;;
   esac
 
-  PORTABLE_CORE_INGRESS_STAT="$(command -v stat 2>/dev/null)" || {
-    portable_core_ingress_error E_RUNTIME
-    return 1
-  }
-  PORTABLE_CORE_INGRESS_MKDIR="$(command -v mkdir 2>/dev/null)" || {
-    portable_core_ingress_error E_RUNTIME
-    return 1
-  }
-  case "$PORTABLE_CORE_INGRESS_STAT:$PORTABLE_CORE_INGRESS_MKDIR" in
-    /*:/*) ;;
-    *)
-      portable_core_ingress_error E_RUNTIME
-      return 1
-      ;;
-  esac
-
   PORTABLE_CORE_INGRESS_ACCOUNTED="$accounted"
   PORTABLE_CORE_INGRESS_SCRATCH_ROOT=''
   PORTABLE_CORE_INGRESS_INITIAL_BYTES="$accounted_budget"
@@ -378,6 +362,21 @@ portable_core_ingress_open() {
   PORTABLE_CORE_INGRESS_WRITTEN_BYTES=0
   PORTABLE_CORE_INGRESS_RESERVED_BYTES=''
   if [ "$accounted" = true ]; then
+    PORTABLE_CORE_INGRESS_STAT="$(command -v stat 2>/dev/null)" || {
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    }
+    PORTABLE_CORE_INGRESS_MKDIR="$(command -v mkdir 2>/dev/null)" || {
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    }
+    case "$PORTABLE_CORE_INGRESS_STAT:$PORTABLE_CORE_INGRESS_MKDIR" in
+      /*:/*) ;;
+      *)
+        portable_core_ingress_error E_RUNTIME
+        return 1
+        ;;
+    esac
     portable_core_ingress_physical_directory_path "$accounted_root" &&
       [ -O "$accounted_root" ] || {
         portable_core_ingress_error E_RUNTIME
@@ -517,7 +516,9 @@ portable_core_ingress_snapshot() {
   local input_path
   local snapshot_number
   local raw_path
+  local encoded_bytes
   local byte_count
+  local -a pipeline_status
 
   [ "$#" -eq 1 ] || {
     portable_core_ingress_error E_RUNTIME
@@ -533,9 +534,27 @@ portable_core_ingress_snapshot() {
 
   snapshot_number=$((PORTABLE_CORE_INGRESS_COUNT + 1))
   raw_path="$PORTABLE_CORE_INGRESS_TEMP/raw.$snapshot_number"
-  byte_count="$(
+  encoded_bytes="$(
     "$PORTABLE_CORE_INGRESS_HEAD" -c 1048577 -- "$input_path" 2>/dev/null |
-      "$PORTABLE_CORE_INGRESS_WC" -c 2>/dev/null
+      "$PORTABLE_CORE_INGRESS_OD" -An -v -t u1 2>/dev/null
+  )" || {
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  }
+  byte_count="$(
+    printf '%s\n' "$encoded_bytes" |
+      "$PORTABLE_CORE_INGRESS_AWK" '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i !~ /^[0-9]+$/ || ($i + 0) < 0 || ($i + 0) > 255) {
+              invalid = 1
+              exit 42
+            }
+            count++
+          }
+        }
+        END { if (!invalid) print count + 0 }
+      ' 2>/dev/null
   )" || {
     portable_core_ingress_error E_RUNTIME
     return 1
@@ -546,8 +565,17 @@ portable_core_ingress_snapshot() {
     return 1
   }
   portable_core_ingress_account_reserve "$byte_count" || return 1
-  if "$PORTABLE_CORE_INGRESS_HEAD" -c "$byte_count" -- "$input_path" \
-      2>/dev/null > "$raw_path"; then
+  if printf '%s\n' "$encoded_bytes" |
+      "$PORTABLE_CORE_INGRESS_AWK" '
+        { for (i = 1; i <= NF; i++) printf "%c", ($i + 0) }
+      ' > "$raw_path" 2>/dev/null; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  if [ "${#pipeline_status[@]}" -eq 2 ] &&
+     [ "${pipeline_status[0]}" -eq 0 ] &&
+     [ "${pipeline_status[1]}" -eq 0 ]; then
     portable_core_ingress_account_files "$byte_count" "$raw_path" || return 1
   else
     portable_core_ingress_account_files "$byte_count" "$raw_path" \
