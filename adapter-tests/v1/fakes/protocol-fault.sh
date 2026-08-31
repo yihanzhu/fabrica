@@ -14,7 +14,13 @@ case "$mode" in
   partial) /usr/bin/printf '%s\n' \
     '{"case_id":"matrix-aa","payloads":[],"phase":"producer","protocol_version":1}' ;;
   degraded) /usr/bin/printf '%s\n' '{"status":"degraded"}' ;;
-  timeout) /bin/sleep 5 ;;
+  timeout)
+    marker_parent=${TMPDIR%/*}
+    marker="${marker_parent%/*}/timeout-survived"
+    (trap '' TERM; /bin/sleep 2; /usr/bin/printf survived > "$marker") &
+    trap '' TERM
+    wait
+    ;;
   transport) exit 9 ;;
   relabelled|multiple|unlinked|duplicate)
     /bin/bash "${BASH_SOURCE[0]%/*}/producer-a.sh" "$request" "$jq_bin" \

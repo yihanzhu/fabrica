@@ -30,7 +30,33 @@ fixture_root=$(CDPATH='' cd -P -- "$fixture_root" && pwd -P) || runner_error E_F
 
 run_tmp=$(/usr/bin/mktemp -d "$fixture_root/scratch/run.XXXXXX") || runner_error
 cleanup() { /bin/rm -rf -- "$run_tmp"; }
-trap cleanup EXIT HUP INT TERM
+ACTIVE_CHILD_GROUP=''
+ACTIVE_CHILD_PID=''
+terminate_active_group() {
+  local group=$ACTIVE_CHILD_GROUP
+  local leader=$ACTIVE_CHILD_PID
+  ACTIVE_CHILD_GROUP=''
+  ACTIVE_CHILD_PID=''
+  if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
+    kill -TERM -- "-$group" 2>/dev/null || :
+    /bin/sleep 0.1
+    kill -KILL -- "-$group" 2>/dev/null || :
+  fi
+  if [[ "$leader" =~ ^[1-9][0-9]*$ ]]; then
+    wait "$leader" 2>/dev/null || :
+  fi
+}
+signal_exit() {
+  local status=$1
+  trap - EXIT HUP INT TERM
+  terminate_active_group
+  cleanup
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'signal_exit 129' HUP
+trap 'signal_exit 130' INT
+trap 'signal_exit 143' TERM
 /bin/mkdir -m 700 "$run_tmp/home"
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
@@ -132,7 +158,7 @@ package_digest() {
     fake.producer.b) printf '%s\n' 602650c6cf4b161f5b92b273b6944a42fb84eb5946918e9ec13fed9746a20049 ;;
     fake.forge.a) printf '%s\n' 672636d079df76736b3b9160d7a38f67ff83767d7da455458c418c1cb0b539a6 ;;
     fake.forge.b) printf '%s\n' a87a8453b2daf7723a9565bb597531f198c7c891d2b47c7dfef80ffd3dc2096b ;;
-    fake.protocol-fault) printf '%s\n' 6daeccbda2b6752415c457967dfad03811837da75d25f38370a400381382de28 ;;
+    fake.protocol-fault) printf '%s\n' d151dffcc4128d5925da82d6defe67efc7a05332441601fc5a740e7099e7bae3 ;;
     *) return 1 ;;
   esac
 }
@@ -280,6 +306,7 @@ run_child() {
   CHILD_STATUS=0
   CHILD_ERROR=''
   /bin/mkdir -m 700 "$child_home"
+  set -m
   (
     ulimit -t 2 -f 2048 -n 64
     child_args=("$request" "$jq_bin" "$contract" "$core_fixture_modules")
@@ -293,19 +320,21 @@ run_child() {
       /bin/bash "$executable" "${child_args[@]}"
   ) > "$output" 2> "$diagnostic" &
   pid=$!
+  ACTIVE_CHILD_GROUP=$pid
+  ACTIVE_CHILD_PID=$pid
+  set +m
   while kill -0 "$pid" 2>/dev/null; do
     tick=$((tick + 1))
     if [ "$tick" -ge 20 ]; then
-      kill -TERM "$pid" 2>/dev/null || :
-      /bin/sleep 0.1
-      kill -KILL "$pid" 2>/dev/null || :
-      wait "$pid" 2>/dev/null || :
+      terminate_active_group
       CHILD_ERROR=E_TIMEOUT
       return 1
     fi
     /bin/sleep 0.05
   done
   wait "$pid" || CHILD_STATUS=$?
+  ACTIVE_CHILD_GROUP=''
+  ACTIVE_CHILD_PID=''
   [ "$CHILD_STATUS" -eq 0 ] || { CHILD_ERROR=E_TRANSPORT; return 1; }
   [ "$(wc -c < "$output" | tr -d ' ')" -le 1048576 ] &&
     [ "$(wc -c < "$diagnostic" | tr -d ' ')" -le 4096 ] || {
@@ -609,6 +638,8 @@ for negative in degraded empty malformed partial relabelled timeout transport mu
   "$jq_bin" -S -c -n --arg case_id "$negative_id" --arg observed_error "$observed" \
     '{assertion_ids:["expected-error"],case_id:$case_id,observed_error:$observed_error}' >> "$negatives"
 done
+/bin/sleep 1.2
+[ ! -e "$fixture_root/scratch/timeout-survived" ] || runner_error E_GROUP_LEAK
 
 "$jq_bin" -s -e '([.[].projection] | unique | length) == 1 and
   ([.[].provenance.producer.package_id] | unique | length) == 2 and

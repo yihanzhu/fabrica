@@ -70,13 +70,25 @@ pass 'fixed resolver launcher and dependencies built'
 fixture="$tmp/garden-fixture"
 /bin/mkdir -m 700 "$fixture" "$fixture/cells" "$fixture/scratch" "$fixture/target"
 /bin/cp "$test_root/adapter-tests/v1/fixture/source.txt" "$fixture/target/source.txt"
-/usr/bin/git init -q "$fixture/target"
-/usr/bin/git -C "$fixture/target" config user.name fixture
-/usr/bin/git -C "$fixture/target" config user.email fixture@example.invalid
-GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
-  /usr/bin/git -C "$fixture/target" add source.txt
-GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
-  /usr/bin/git -C "$fixture/target" commit -q -m fixture
+git_home="$tmp/git-home"
+/bin/mkdir -m 700 "$git_home"
+fixture_git() {
+  /usr/bin/env -i HOME="$git_home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects "$@"
+}
+/usr/bin/env -i HOME="$git_home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_DEFAULT_HASH=sha256 \
+  /usr/bin/git -c init.defaultObjectFormat=sha256 init -q --object-format=sha1 "$fixture/target"
+[ "$(fixture_git -C "$fixture/target" rev-parse --show-object-format)" = sha1 ] ||
+  fail 'explicit target SHA-1 format'
+fixture_git -C "$fixture/target" config user.name fixture
+fixture_git -C "$fixture/target" config user.email fixture@example.invalid
+fixture_git -C "$fixture/target" add source.txt
+fixture_git -C "$fixture/target" commit -q -m fixture
+pass 'hostile defaults cannot override explicit target SHA-1'
 
 for cell in aa ab ba bb; do
   cell_root="$fixture/cells/$cell"
@@ -97,7 +109,7 @@ pass 'four honest profile variants resolved through the inactive resolver'
           root:($root+"/cells/"+$cell+"/"+$repo)})) | add))}
 ' > "$fixture/repository-map.json"
 
-fingerprint_before=$(/usr/bin/git -C "$fixture/target" rev-parse 'HEAD^{tree}')
+fingerprint_before=$(fixture_git -C "$fixture/target" rev-parse 'HEAD^{tree}')
 output="$tmp/observation.json"
 error="$tmp/observation.stderr"
 GH_TOKEN=must-not-leak AWS_SECRET_ACCESS_KEY=must-not-leak SSH_AUTH_SOCK=/must/not/leak \
@@ -115,7 +127,7 @@ GH_TOKEN=must-not-leak AWS_SECRET_ACCESS_KEY=must-not-leak SSH_AUTH_SOCK=/must/n
   (.non_claims | index("network-isolation") != null) and
   (.inventory_acceptance_ref.authorization_comment_id == 5476938197)
 ' "$output" >/dev/null || fail 'observation shape and equivalence'
-[ "$fingerprint_before" = "$(/usr/bin/git -C "$fixture/target" rev-parse 'HEAD^{tree}')" ] ||
+[ "$fingerprint_before" = "$(fixture_git -C "$fixture/target" rev-parse 'HEAD^{tree}')" ] ||
   fail 'target changed'
 [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] || fail 'scratch cleanup'
 /usr/bin/grep -Fq 'moon-garden' "$fixture/target/source.txt" || fail 'unrelated target fixture'
@@ -246,8 +258,7 @@ if [ -z "$late_marker" ]; then
   wait "$late_pid" 2>/dev/null || :
   fail 'late target marker'
 fi
-GIT_AUTHOR_DATE=2000-01-06T00:00:00Z GIT_COMMITTER_DATE=2000-01-06T00:00:00Z \
-  /usr/bin/git -C "$fixture/target" commit -q --allow-empty -m late-change
+fixture_git -C "$fixture/target" commit -q --allow-empty -m late-change
 if wait "$late_pid"; then
   fail 'late target mutation accepted'
 fi
@@ -255,17 +266,40 @@ fi
   fail 'late target mutation error'
 pass 'late target commit recheck'
 
+signal_out="$tmp/signal.out"
+signal_err="$tmp/signal.err"
+PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$signal_out" 2> "$signal_err" &
+signal_pid=$!
+signal_marker=''
+for _ in {1..6000}; do
+  signal_marker=$(/usr/bin/find "$fixture/scratch" -path '*/timeout.home' -type d -print -quit)
+  [ -z "$signal_marker" ] || break
+  /bin/kill -0 "$signal_pid" 2>/dev/null || break
+  /bin/sleep 0.02
+done
+if [ -z "$signal_marker" ]; then
+  /bin/kill "$signal_pid" 2>/dev/null || :
+  wait "$signal_pid" 2>/dev/null || :
+  fail 'signal child marker'
+fi
+/bin/kill -TERM "$signal_pid"
+signal_status=0
+wait "$signal_pid" || signal_status=$?
+/bin/sleep 2.2
+[ "$signal_status" -eq 143 ] && [ ! -s "$signal_out" ] && [ ! -s "$signal_err" ] &&
+  [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'signal group cleanup'
+pass 'TERM stops adapter group and cleans scratch'
+
 source_saved="$tmp/source.saved"
 /bin/cp "$fixture/target/source.txt" "$source_saved"
 /usr/bin/printf '%s\n' changed > "$fixture/target/source.txt"
-/usr/bin/git -C "$fixture/target" add source.txt
-GIT_AUTHOR_DATE=2000-01-02T00:00:00Z GIT_COMMITTER_DATE=2000-01-02T00:00:00Z \
-  /usr/bin/git -C "$fixture/target" commit -q -m changed
+fixture_git -C "$fixture/target" add source.txt
+fixture_git -C "$fixture/target" commit -q -m changed
 expect_failure fixture-digest-mismatch E_FIXTURE
 /bin/cp "$source_saved" "$fixture/target/source.txt"
-/usr/bin/git -C "$fixture/target" add source.txt
-GIT_AUTHOR_DATE=2000-01-03T00:00:00Z GIT_COMMITTER_DATE=2000-01-03T00:00:00Z \
-  /usr/bin/git -C "$fixture/target" commit -q -m restored
+fixture_git -C "$fixture/target" add source.txt
+fixture_git -C "$fixture/target" commit -q -m restored
 
 producer="$fixture/cells/aa/assets/packages/producer-a.sh"
 /usr/bin/printf '%s\n' '# changed' >> "$producer"
