@@ -90,10 +90,10 @@ pass 'four honest profile variants resolved through the inactive resolver'
 
 "$jq_bin" -S -c -n --arg root "$fixture" '
   {version:1,repositories:
-    ([{repository_id:"fixture.target",root:($root+"/target")}] +
+    ([{cell_id:"shared",repository_id:"fixture.target",root:($root+"/target")}] +
      (["aa","ab","ba","bb"] |
       map(. as $cell | ["assets","manifests","profile"] |
-        map(. as $repo | {repository_id:($cell+"."+$repo),
+        map(. as $repo | {cell_id:$cell,repository_id:("repo."+$repo),
           root:($root+"/cells/"+$cell+"/"+$repo)})) | add))}
 ' > "$fixture/repository-map.json"
 
@@ -108,7 +108,7 @@ GH_TOKEN=must-not-leak AWS_SECRET_ACCESS_KEY=must-not-leak SSH_AUTH_SOCK=/must/n
 [ ! -s "$error" ] || fail 'success diagnostics'
 "$jq_bin" -e '
   .schema_version == 1 and .kind == "adapter_contract_observation" and
-  (.cells | length) == 4 and (.negative_observations | length) == 7 and
+  (.cells | length) == 4 and (.negative_observations | length) == 10 and
   ([.cells[].projection] | unique | length) == 1 and
   ([.cells[].provenance.profile_sha256] | unique | length) == 4 and
   (.non_claims | index("external-target-smoke") != null) and
@@ -165,6 +165,39 @@ resolved_saved="$tmp/resolved.saved"
   "$fixture/cells/aa/resolved.json"
 expect_failure core-ref-mismatch E_CORE
 /bin/cp "$resolved_saved" "$fixture/cells/aa/resolved.json"
+
+profile_file="$fixture/cells/aa/profile/profiles/default.json"
+profile_saved="$tmp/profile.saved"
+/bin/cp "$profile_file" "$profile_saved"
+resolved_ref_saved="$tmp/resolved-ref.saved"
+/bin/cp "$fixture/cells/aa/resolved.json" "$resolved_ref_saved"
+original_package_object=$("$jq_bin" -r \
+  '.body.bindings[] | select(.role=="producer") | .package_ref.object_id' "$profile_file")
+for ref_mutation in repository revision hash path type mode; do
+  case "$ref_mutation" in
+    repository) mutate='def mutate: .revision.repository_id="repo.manifests";' ;;
+    revision) mutate='def mutate: .revision.commit_id=("0"*64);' ;;
+    hash) mutate='def mutate: .revision.hash_algorithm="sha1";' ;;
+    path) mutate='def mutate: .location={kind:"path",value:"packages/producer-b.sh"};' ;;
+    type) mutate='def mutate: .object_type="tree";' ;;
+    mode) mutate='def mutate: .mode="100644";' ;;
+  esac
+  "$jq_bin" -S -c "$mutate (.body.bindings[] | select(.role==\"producer\") | .package_ref) |= mutate" \
+    "$profile_saved" > "$profile_file"
+  "$jq_bin" -S -c "$mutate (.body.bindings[] | select(.binding.role==\"producer\") | .binding.package_ref) |= mutate" \
+    "$resolved_ref_saved" > "$fixture/cells/aa/resolved.json"
+  [ "$("$jq_bin" -r '.body.bindings[] | select(.role=="producer") | .package_ref.object_id' \
+      "$profile_file")" = "$original_package_object" ] || fail "ref-$ref_mutation changed object id"
+  /usr/bin/git -C "$fixture/cells/aa/profile" add profiles/default.json
+  GIT_AUTHOR_DATE=2000-01-04T00:00:00Z GIT_COMMITTER_DATE=2000-01-04T00:00:00Z \
+    /usr/bin/git -C "$fixture/cells/aa/profile" commit -q -m "ref-$ref_mutation"
+  expect_failure "package-ref-$ref_mutation" E_PACKAGE
+  /bin/cp "$profile_saved" "$profile_file"
+  /bin/cp "$resolved_ref_saved" "$fixture/cells/aa/resolved.json"
+  /usr/bin/git -C "$fixture/cells/aa/profile" add profiles/default.json
+  GIT_AUTHOR_DATE=2000-01-05T00:00:00Z GIT_COMMITTER_DATE=2000-01-05T00:00:00Z \
+    /usr/bin/git -C "$fixture/cells/aa/profile" commit -q -m "restore-$ref_mutation"
+done
 
 source_saved="$tmp/source.saved"
 /bin/cp "$fixture/target/source.txt" "$source_saved"

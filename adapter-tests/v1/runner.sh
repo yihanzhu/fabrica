@@ -38,10 +38,12 @@ sha_text() { /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '
 canonical() {
   local source=$1
   local output=$2
-  "$jq_bin" -S -c . "$source" > "$output" 2>/dev/null && cmp -s "$source" "$output"
+  "$jq_bin" -s -e 'length == 1' "$source" >/dev/null 2>&1 &&
+    "$jq_bin" -S -c . "$source" > "$output" 2>/dev/null &&
+    cmp -s "$source" "$output"
 }
 
-[ "$(sha_file "$inventory")" = 1be4e488423d753cf083430aa3560b8dda8d66985b234bce9629b5c0fb1c003a ] ||
+[ "$(sha_file "$inventory")" = 73b90745ba3ae879f8d6d958e3133e33fb6169bc89fb9c26a826be1be9fd9fd6 ] ||
   runner_error E_INVENTORY
 inventory_canonical="$run_tmp/inventory.canonical"
 canonical "$inventory" "$inventory_canonical" || runner_error E_INVENTORY
@@ -82,13 +84,15 @@ fi
 "$jq_bin" -e --arg root "$fixture_root" '
   . as $map |
   .version == 1 and (.repositories | length) == 13 and
-  ([.repositories[].repository_id] | length == (unique | length)) and
+  ([.repositories[] | [.cell_id,.repository_id]] | length == (unique | length)) and
   ([.repositories[].root] | length == (unique | length)) and
-  ([.repositories[] | select(.repository_id == "fixture.target" and .root == ($root+"/target"))] | length) == 1 and
+  ([.repositories[] | select(.cell_id == "shared" and
+    .repository_id == "fixture.target" and .root == ($root+"/target"))] | length) == 1 and
   all(["aa","ab","ba","bb"][];
     . as $cell | all(["assets","manifests","profile"][];
       . as $repo |
-      ([$map.repositories[] | select(.repository_id == ($cell+"."+$repo) and
+      ([$map.repositories[] | select(.cell_id == $cell and
+        .repository_id == ("repo."+$repo) and
         .root == ($root+"/cells/"+$cell+"/"+$repo))] | length) == 1))
 ' "$mapping" >/dev/null || runner_error E_MAPPING
 
@@ -108,7 +112,7 @@ package_digest() {
     fake.producer.b) printf '%s\n' 602650c6cf4b161f5b92b273b6944a42fb84eb5946918e9ec13fed9746a20049 ;;
     fake.forge.a) printf '%s\n' 672636d079df76736b3b9160d7a38f67ff83767d7da455458c418c1cb0b539a6 ;;
     fake.forge.b) printf '%s\n' a87a8453b2daf7723a9565bb597531f198c7c891d2b47c7dfef80ffd3dc2096b ;;
-    fake.protocol-fault) printf '%s\n' d0410d55da98008834c5f77bea606111e674edefc2df33fd7b08e0189930b353 ;;
+    fake.protocol-fault) printf '%s\n' 6daeccbda2b6752415c457967dfad03811837da75d25f38370a400381382de28 ;;
     *) return 1 ;;
   esac
 }
@@ -125,19 +129,43 @@ package_path() {
 }
 
 verify_package() {
-  local assets=$1
+  local cell=$1
   local package=$2
-  local expected_ref=${3:-}
-  local relative digest entry meta mode type object
+  local ref=$3
+  local relative digest repository_id root algorithm commit entry meta mode type object snapshot
   relative=$(package_path "$package") || return 1
   digest=$(package_digest "$package") || return 1
-  [ "$(sha_file "$assets/$relative")" = "$digest" ] || return 1
-  entry=$(git_safe -C "$assets" ls-tree HEAD -- "$relative")
+  "$jq_bin" -e --arg path "$relative" '
+    type == "object" and
+    (keys | sort) == ["location","mode","object_id","object_type","revision"] and
+    (.revision | type == "object" and
+      (keys | sort) == ["commit_id","hash_algorithm","repository_id"] and
+      .repository_id == "repo.assets" and
+      (.hash_algorithm == "sha1" or .hash_algorithm == "sha256") and
+      (.commit_id | test("\\A[0-9a-f]{40}([0-9a-f]{24})?\\z"))) and
+    .location == {kind:"path",value:$path} and .object_type == "blob" and
+    .mode == "100755" and (.object_id | test("\\A[0-9a-f]{40}([0-9a-f]{24})?\\z"))
+  ' <<< "$ref" >/dev/null || return 1
+  repository_id=$("$jq_bin" -r '.revision.repository_id' <<< "$ref")
+  root=$("$jq_bin" -r --arg cell "$cell" --arg id "$repository_id" '
+    [.repositories[] | select(.cell_id==$cell and .repository_id==$id)] |
+    if length == 1 then .[0].root else "" end
+  ' "$mapping")
+  [ -n "$root" ] && verify_repo "$root" || return 1
+  algorithm=$(git_safe -C "$root" rev-parse --show-object-format)
+  [ "$algorithm" = "$("$jq_bin" -r '.revision.hash_algorithm' <<< "$ref")" ] || return 1
+  commit=$("$jq_bin" -r '.revision.commit_id' <<< "$ref")
+  git_safe -C "$root" cat-file -e "$commit^{commit}" >/dev/null 2>&1 || return 1
+  entry=$(git_safe -C "$root" ls-tree "$commit" -- "$relative")
   meta=${entry%%$'\t'*}
   read -r mode type object <<< "$meta"
-  [ "$mode:$type" = 100755:blob ] &&
-    [ "$object" = "$(git_safe -C "$assets" hash-object "$relative")" ] &&
-    { [ -z "$expected_ref" ] || [ "$object" = "$expected_ref" ]; }
+  [ "$mode" = "$("$jq_bin" -r '.mode' <<< "$ref")" ] &&
+    [ "$type" = "$("$jq_bin" -r '.object_type' <<< "$ref")" ] &&
+    [ "$object" = "$("$jq_bin" -r '.object_id' <<< "$ref")" ] || return 1
+  snapshot="$run_tmp/package.$cell.${package##*.}"
+  git_safe -C "$root" cat-file blob "$object" > "$snapshot" || return 1
+  [ -f "$root/$relative" ] && [ ! -L "$root/$relative" ] &&
+    cmp -s "$snapshot" "$root/$relative" && [ "$(sha_file "$snapshot")" = "$digest" ]
 }
 
 CHILD_STATUS=0
@@ -215,6 +243,52 @@ stage_consistent() {
   ' "$result" >/dev/null
 }
 
+RESPONSE_ERROR=''
+validate_response() {
+  local response=$1
+  local request=$2
+  local resolved=$3
+  local case_id=$4
+  local phase=$5
+  local result_output=$6
+  local roots response_context observed_error payload_id payload_index=0
+  RESPONSE_ERROR=''
+  [ -s "$response" ] || { RESPONSE_ERROR=E_EMPTY; return 1; }
+  roots=$("$jq_bin" -s 'length' "$response" 2>/dev/null) || {
+    RESPONSE_ERROR=E_MALFORMED
+    return 1
+  }
+  [ "$roots" -eq 1 ] || { RESPONSE_ERROR=E_MULTIPLE; return 1; }
+  canonical "$response" "$run_tmp/response.canonical" || {
+    RESPONSE_ERROR=E_MALFORMED
+    return 1
+  }
+  response_context="$run_tmp/response-context.json"
+  "$jq_bin" -S -c -n --slurpfile response "$response" --arg case_id "$case_id" \
+    --arg phase "$phase" '{case_id:$case_id,phase:$phase,response:$response[0]}' > "$response_context"
+  observed_error=$("$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -r \
+    --arg command response-error -f "$contract" "$response_context") || {
+    RESPONSE_ERROR=E_PARTIAL
+    return 1
+  }
+  [ -z "$observed_error" ] || { RESPONSE_ERROR=$observed_error; return 1; }
+  "$jq_bin" -S -c '.stage_result' "$response" > "$result_output"
+  "$core" validate-stage-run "$request" "$resolved" "$result_output" \
+    >/dev/null 2>&1 || { RESPONSE_ERROR=E_CORE; return 1; }
+  stage_consistent "$request" "$resolved" "$result_output" || {
+    RESPONSE_ERROR=E_PROVENANCE
+    return 1
+  }
+  while IFS= read -r payload_id; do
+    extract_payload "$response" "$payload_id" \
+      "$run_tmp/accepted-payload.$payload_index" || {
+      RESPONSE_ERROR=E_PAYLOAD_DIGEST
+      return 1
+    }
+    payload_index=$((payload_index + 1))
+  done < <("$jq_bin" -r '.payloads[].payload_id' "$response")
+}
+
 git_write() {
   /usr/bin/env -i HOME="$run_tmp/home" TMPDIR="$run_tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
@@ -245,11 +319,23 @@ for cell in aa ab ba bb; do
   forge_package="fake.forge.$forge_variant"
   producer_path=$(package_path "$producer_package")
   forge_path=$(package_path "$forge_package")
-  producer_ref=$("$jq_bin" -r '.body.bindings[] | select(.role=="producer") | .package_ref.object_id' "$cell_root/profile/profiles/default.json")
-  forge_ref=$("$jq_bin" -r '.body.bindings[] | select(.role=="forge") | .package_ref.object_id' "$cell_root/profile/profiles/default.json")
-  if ! verify_package "$assets" "$producer_package" "$producer_ref" ||
-     ! verify_package "$assets" "$forge_package" "$forge_ref" ||
-     ! verify_package "$assets" fake.protocol-fault; then
+  producer_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="producer") | .package_ref' "$cell_root/profile/profiles/default.json")
+  forge_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="forge") | .package_ref' "$cell_root/profile/profiles/default.json")
+  producer_resolved_ref=$("$jq_bin" -c '.body.bindings[] | select(.binding.role=="producer") | .binding.package_ref' "$resolved")
+  forge_resolved_ref=$("$jq_bin" -c '.body.bindings[] | select(.binding.role=="forge") | .binding.package_ref' "$resolved")
+  assets_commit=$("$jq_bin" -r '.revision.commit_id' <<< "$forge_ref")
+  fault_entry=$(git_safe -C "$assets" ls-tree "$assets_commit" -- packages/protocol-fault.sh 2>/dev/null) ||
+    runner_error E_PACKAGE
+  fault_meta=${fault_entry%%$'\t'*}
+  read -r fault_mode fault_type fault_object <<< "$fault_meta"
+  fault_ref=$("$jq_bin" -c --arg path packages/protocol-fault.sh \
+    --arg mode "$fault_mode" --arg type "$fault_type" --arg object "$fault_object" \
+    '.location={kind:"path",value:$path} | .mode=$mode | .object_type=$type | .object_id=$object' \
+    <<< "$forge_ref")
+  if [ "$producer_ref" != "$producer_resolved_ref" ] || [ "$forge_ref" != "$forge_resolved_ref" ] ||
+     ! verify_package "$cell" "$producer_package" "$producer_ref" ||
+     ! verify_package "$cell" "$forge_package" "$forge_ref" ||
+     ! verify_package "$cell" fake.protocol-fault "$fault_ref"; then
     runner_error E_PACKAGE
   fi
   profile="$profiles/profiles/default.json"
@@ -301,20 +387,10 @@ for cell in aa ab ba bb; do
   producer_error="$run_tmp/$cell.producer.stderr"
   run_child "$assets/$producer_path" direct "$producer_request" "$producer_output" \
     "$producer_error" "$run_tmp/$cell.producer.home" || runner_error "$CHILD_ERROR"
-  if [ -s "$producer_error" ] ||
-     ! canonical "$producer_output" "$run_tmp/$cell.producer.canonical"; then
-    runner_error E_PROTOCOL_PRODUCER_OUTPUT
-  fi
-  producer_response_context="$run_tmp/$cell.producer.response-context"
-  "$jq_bin" -S -c -n --slurpfile response "$producer_output" --arg case_id "$cell_id" \
-    '{case_id:$case_id,phase:"producer",response:$response[0]}' > "$producer_response_context"
-  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
-    --arg command response-envelope -f "$contract" "$producer_response_context" >/dev/null || runner_error E_PROTOCOL_PRODUCER_RESPONSE
   producer_result="$run_tmp/$cell.producer.stage-result"
-  "$jq_bin" -S -c '.stage_result' "$producer_output" > "$producer_result"
-  "$core" validate-stage-run "$producer_stage_request" "$resolved" "$producer_result" \
-    >/dev/null 2>&1 || runner_error E_CORE_PRODUCER_RESULT
-  stage_consistent "$producer_stage_request" "$resolved" "$producer_result" || runner_error E_PROVENANCE
+  [ ! -s "$producer_error" ] || runner_error E_PROTOCOL_PRODUCER_OUTPUT
+  validate_response "$producer_output" "$producer_stage_request" "$resolved" \
+    "$cell_id" producer "$producer_result" || runner_error "$RESPONSE_ERROR"
   producer_patch="$run_tmp/$cell.producer.patch"
   extract_payload "$producer_output" producer.patch "$producer_patch" || runner_error E_OBSERVATION
   patch_sha=$(sha_file "$producer_patch")
@@ -353,20 +429,10 @@ for cell in aa ab ba bb; do
   forge_home="$run_tmp/$cell.forge.home"
   run_child "$assets/$forge_path" direct "$forge_request" "$forge_output" \
     "$forge_error" "$forge_home" || runner_error "$CHILD_ERROR"
-  if [ -s "$forge_error" ] ||
-     ! canonical "$forge_output" "$run_tmp/$cell.forge.canonical"; then
-    runner_error E_PROTOCOL_FORGE_OUTPUT
-  fi
-  forge_response_context="$run_tmp/$cell.forge.response-context"
-  "$jq_bin" -S -c -n --slurpfile response "$forge_output" --arg case_id "$cell_id" \
-    '{case_id:$case_id,phase:"forge",response:$response[0]}' > "$forge_response_context"
-  "$jq_bin" -L "$runner_dir" -L "$core_fixture_modules" -e \
-    --arg command response-envelope -f "$contract" "$forge_response_context" >/dev/null || runner_error E_PROTOCOL_FORGE_RESPONSE
   forge_result="$run_tmp/$cell.forge.stage-result"
-  "$jq_bin" -S -c '.stage_result' "$forge_output" > "$forge_result"
-  "$core" validate-stage-run "$forge_stage_request" "$resolved" "$forge_result" \
-    >/dev/null 2>&1 || runner_error E_CORE_FORGE_RESULT
-  stage_consistent "$forge_stage_request" "$resolved" "$forge_result" || runner_error E_PROVENANCE
+  [ ! -s "$forge_error" ] || runner_error E_PROTOCOL_FORGE_OUTPUT
+  validate_response "$forge_output" "$forge_stage_request" "$resolved" \
+    "$cell_id" forge "$forge_result" || runner_error "$RESPONSE_ERROR"
   receipt="$run_tmp/$cell.receipt"
   extract_payload "$forge_output" candidate.repository "$receipt" || runner_error E_OBSERVATION
   receipt_sha=$(sha_file "$receipt")
@@ -420,26 +486,23 @@ for cell in aa ab ba bb; do
 done
 
 fault_executable="$fixture_root/cells/aa/assets/packages/protocol-fault.sh"
-for negative in degraded empty malformed partial relabelled timeout transport; do
+negative_request="$run_tmp/aa.producer.request"
+negative_stage_request="$run_tmp/aa.producer.stage-request"
+negative_resolved="$fixture_root/cells/aa/resolved.json"
+for negative in degraded empty malformed partial relabelled timeout transport multiple unlinked duplicate; do
   negative_id="reject-$negative"
-  negative_request="$run_tmp/$negative.request"
-  /usr/bin/printf '%s\n' '{}' > "$negative_request"
   negative_output="$run_tmp/$negative.output"
   negative_stderr="$run_tmp/$negative.stderr"
+  negative_result="$run_tmp/$negative.stage-result"
   observed=''
   if ! run_child "$fault_executable" "$negative" "$negative_request" "$negative_output" \
       "$negative_stderr" "$run_tmp/$negative.home"; then
     observed=$CHILD_ERROR
-  elif [ ! -s "$negative_output" ]; then
-    observed=E_EMPTY
-  elif ! "$jq_bin" -e . "$negative_output" >/dev/null 2>&1; then
-    observed=E_MALFORMED
-  elif [ "$("$jq_bin" -r '.status // ""' "$negative_output")" = degraded ]; then
-    observed=E_DEGRADED
-  elif [ "$negative" = relabelled ]; then
-    observed=E_RELABELLED
+  elif validate_response "$negative_output" "$negative_stage_request" "$negative_resolved" \
+      matrix-aa producer "$negative_result"; then
+    observed=E_UNEXPECTED_PASS
   else
-    observed=E_PARTIAL
+    observed=$RESPONSE_ERROR
   fi
   expected=$("$jq_bin" -r --arg id "$negative_id" '.cases[] | select(.case_id==$id) | .expected_error' "$inventory")
   [ "$observed" = "$expected" ] || runner_error E_NEGATIVE

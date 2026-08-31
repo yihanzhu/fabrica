@@ -26,7 +26,10 @@ def expected_cases($fixture):
     {case_id:"reject-partial",expected_error:"E_PARTIAL"},
     {case_id:"reject-relabelled",expected_error:"E_RELABELLED"},
     {case_id:"reject-timeout",expected_error:"E_TIMEOUT"},
-    {case_id:"reject-transport",expected_error:"E_TRANSPORT"}
+    {case_id:"reject-transport",expected_error:"E_TRANSPORT"},
+    {case_id:"reject-multiple",expected_error:"E_MULTIPLE"},
+    {case_id:"reject-unlinked",expected_error:"E_UNLINKED_PAYLOAD"},
+    {case_id:"reject-duplicate",expected_error:"E_DUPLICATE_PAYLOAD"}
   ] | map(if has("phase") then . else . + {
     phase:"producer",producer_package_id:"fake.protocol-fault",forge_package_id:"none",
     expected_verdict:"reject",equivalence_group:"protocol-negative",
@@ -109,7 +112,31 @@ def response_envelope_ok:
   .response.protocol_version == 1 and .response.case_id == .case_id and
   .response.phase == .phase and .response.stage_result.schema_version == 2 and
   .response.stage_result.kind == "stage_result" and
-  (.response.payloads | type == "array" and all(.[];payload_ok));
+  (.response.payloads | type == "array" and all(.[];payload_ok)) and
+  ([.response.payloads[].payload_id] | length == (unique | length)) and
+  ([.response.payloads[].payload_id] | sort) ==
+    ([.response.stage_result.body.outputs[].output_id] | sort) and
+  .response as $response |
+  all($response.payloads[];
+    . as $payload |
+    [$response.stage_result.body.outputs[] |
+     select(.output_id==$payload.payload_id and .ref.media_type==$payload.media_type and
+            .ref.sha256==$payload.sha256)] | length == 1);
+def response_error:
+  if (.response | type) != "object" then "E_PARTIAL"
+  elif .response.status? == "degraded" then "E_DEGRADED"
+  elif (.response | exact(["case_id","payloads","phase","protocol_version","stage_result"]) | not)
+  then "E_PARTIAL"
+  elif .response.case_id != .case_id or .response.phase != .phase then "E_RELABELLED"
+  elif (.response.payloads | type) != "array" then "E_PARTIAL"
+  elif ([.response.payloads[].payload_id] as $ids |
+        ($ids | length) != ($ids | unique | length))
+  then "E_DUPLICATE_PAYLOAD"
+  elif ([.response.payloads[].payload_id] | sort) !=
+       ([.response.stage_result.body.outputs[]?.output_id] | sort)
+  then "E_UNLINKED_PAYLOAD"
+  elif (response_envelope_ok | not) then "E_PARTIAL"
+  else "" end;
 def projection:
   {artifact_sha256:.artifact_sha256,risk:.producer_request.body.risk,
    gate_refs:.producer_request.body.risk.required_gate_refs,
@@ -126,5 +153,6 @@ elif $command == "forge-request" then forge_request(.)
 elif $command == "stage-result" then stage_result(.;.output_id;.media_type;.payload_sha)
 elif $command == "request-envelope" then request_envelope_ok
 elif $command == "response-envelope" then response_envelope_ok
+elif $command == "response-error" then response_error
 elif $command == "projection" then projection
 else error("unknown-command") end
