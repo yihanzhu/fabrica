@@ -67,12 +67,22 @@ fixture_scope() {
       scope_sha256:$hash}'
 }
 
-if [ "$#" -ne 2 ]; then
-  printf '%s\n' 'usage: portable-profile-resolution-fixtures.sh OUTPUT_ROOT JQ_1_6' >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  printf '%s\n' 'usage: portable-profile-resolution-fixtures.sh OUTPUT_ROOT JQ_1_6 [aa|ab|ba|bb]' >&2
   exit 64
 fi
 fixture_root=$1
 fixture_jq=$2
+fixture_variant=${3:-default}
+case "$fixture_variant" in
+  default) fixture_producer_variant=a; fixture_forge_variant=a; fixture_profile_id=profile.example ;;
+  aa|ab|ba|bb)
+    fixture_producer_variant=${fixture_variant%?}
+    fixture_forge_variant=${fixture_variant#?}
+    fixture_profile_id="profile.$fixture_variant"
+    ;;
+  *) exit 64 ;;
+esac
 case "$fixture_jq" in /*) ;; *) exit 1 ;; esac
 [ -x "$fixture_jq" ] && [ -f "$fixture_jq" ] && [ ! -L "$fixture_jq" ] &&
   [ "$("$fixture_jq" --version)" = jq-1.6 ] || exit 1
@@ -96,10 +106,23 @@ fixture_init_repo "$fixture_assets" sha256
 /usr/bin/printf '%s\n' 'Bounded fixture skill.' > "$fixture_assets/skills/producer.md"
 /usr/bin/printf '%s\n' tool-package > "$fixture_assets/tools/producer.bin"
 /usr/bin/printf '%s\n' '{"tool":true}' > "$fixture_assets/tools/producer.json"
+if [ "$fixture_variant" != default ]; then
+  for fixture_fake in producer-a producer-b forge-a forge-b protocol-fault; do
+    /bin/cp "$fixture_repo/adapter-tests/v1/fakes/$fixture_fake.sh" \
+      "$fixture_assets/packages/$fixture_fake.sh"
+    /bin/chmod 0755 "$fixture_assets/packages/$fixture_fake.sh"
+  done
+fi
 /bin/dd if=/dev/zero of="$fixture_assets/packages/producer-large.bin" bs=1048576 count=17 2>/dev/null
 fixture_assets_commit=$(fixture_commit "$fixture_assets")
 fixture_producer_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/producer.bin)
 fixture_forge_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/forge.bin)
+if [ "$fixture_variant" != default ]; then
+  fixture_producer_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 \
+    "$fixture_assets_commit" "packages/producer-$fixture_producer_variant.sh")
+  fixture_forge_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 \
+    "$fixture_assets_commit" "packages/forge-$fixture_forge_variant.sh")
+fi
 fixture_publisher_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/publisher.bin)
 fixture_reviewer_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/reviewer.bin)
 fixture_verifier_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/verifier.bin)
@@ -119,6 +142,7 @@ fixture_tool=$("$fixture_jq" -S -c -n --argjson package "$fixture_tool_package" 
 fixture_init_repo "$fixture_manifests" sha1
 /bin/mkdir -p "$fixture_manifests/manifests"
 for fixture_role in forge producer publisher reviewer verifier; do
+  fixture_adapter_version=v1
   case "$fixture_role" in
     forge)
       fixture_package=$fixture_forge_package
@@ -127,6 +151,7 @@ for fixture_role in forge producer publisher reviewer verifier; do
       fixture_permissions='["core.perm.candidate-repository.write.v2","core.perm.evidence.write.v1","core.perm.scratch.write.v1","core.perm.target.read.v1"]'
       fixture_tools='[]'
       fixture_extra=''
+      [ "$fixture_variant" = default ] || fixture_adapter_version="fake-$fixture_forge_variant"
       ;;
     producer)
       fixture_package=$fixture_producer_package
@@ -135,6 +160,7 @@ for fixture_role in forge producer publisher reviewer verifier; do
       fixture_permissions='["core.perm.evidence.write.v1","core.perm.model.invoke.v1","core.perm.scratch.write.v1","core.perm.target.read.v1"]'
       fixture_tools="[$fixture_tool]"
       fixture_extra=",\"config_contract_ref\":$fixture_config_scope"
+      [ "$fixture_variant" = default ] || fixture_adapter_version="fake-$fixture_producer_variant"
       ;;
     publisher)
       fixture_package=$fixture_publisher_package
@@ -162,7 +188,7 @@ for fixture_role in forge producer publisher reviewer verifier; do
       ;;
   esac
   /usr/bin/printf '%s\n' \
-    "{\"schema_version\":2,\"kind\":\"adapter_manifest\",\"id\":\"manifest.$fixture_role\",\"body\":{\"adapter_version\":\"v1\",\"package_ref\":$fixture_package,\"offered_roles\":[\"$fixture_role\"],\"offered_execution_kinds\":[\"$fixture_execution\"],\"offered_capabilities\":$fixture_capabilities,\"offered_permissions\":$fixture_permissions,\"offered_tools\":$fixture_tools$fixture_extra}}" |
+    "{\"schema_version\":2,\"kind\":\"adapter_manifest\",\"id\":\"manifest.$fixture_role\",\"body\":{\"adapter_version\":\"$fixture_adapter_version\",\"package_ref\":$fixture_package,\"offered_roles\":[\"$fixture_role\"],\"offered_execution_kinds\":[\"$fixture_execution\"],\"offered_capabilities\":$fixture_capabilities,\"offered_permissions\":$fixture_permissions,\"offered_tools\":$fixture_tools$fixture_extra}}" |
     fixture_canonical "$fixture_manifests/manifests/$fixture_role.json"
   /bin/bash "$fixture_core" validate-document "$fixture_manifests/manifests/$fixture_role.json"
 done
@@ -253,7 +279,8 @@ for fixture_role in forge producer publisher reviewer verifier; do
   fixture_bindings=$("$fixture_jq" -S -c --argjson binding "$fixture_binding" '. + [$binding] | sort_by(.binding_id)' <<< "$fixture_bindings")
 done
 "$fixture_jq" -S -c -n --argjson bindings "$fixture_bindings" \
-  '{schema_version:2,kind:"profile",id:"profile.example",body:{profile_version:"v1",bindings:$bindings}}' \
+  --arg profile_id "$fixture_profile_id" \
+  '{schema_version:2,kind:"profile",id:$profile_id,body:{profile_version:"v1",bindings:$bindings}}' \
   > "$fixture_profile/profiles/default.json"
 /bin/bash "$fixture_core" validate-document "$fixture_profile/profiles/default.json"
 /bin/cp "$fixture_profile/profiles/default.json" "$fixture_profile/default.json"

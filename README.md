@@ -47,6 +47,19 @@ The stable `scripts/core-contract.sh` wrapper and inactive resolver select this 
 generation together. This is a repo-only compatibility switch. It does not install
 the resolver, select a live profile, or qualify a real forge.
 
+## Inactive fake adapter contract matrix
+
+`adapter-tests/v1/` runs a fixed 2×2 producer/forge matrix against one unrelated
+local Git fixture. Its accepted inventory and four distinct fake entrypoints are
+digest-pinned. The runner revalidates each resolved profile with portable core v2,
+then checks package, target, artifact, candidate, and Git identities itself.
+
+The result is observation only. It grants no authority, qualification, approval,
+publish, merge, or branch-write capability. The fakes run with a cleared environment,
+fixed limits, and disposable directories, but this test does not provide or claim
+mechanical network or host-filesystem isolation. Real-adapter sandbox qualification
+and an external-target smoke remain required.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
