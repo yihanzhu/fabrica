@@ -592,6 +592,80 @@ PATH="$accounted_path" /bin/bash \
   [ "$(receipt_bytes "$accounted_tmp/missing-package.receipt")" -eq 0 ] ||
   fail 'accepted accounted package failure omitted its receipt'
 
+inherited_source_package="$accounted_tmp/inherited-source-package"
+cp -R "$package_root" "$inherited_source_package"
+printf '\nreturn 1\n' >> \
+  "$inherited_source_package/core/v1/generations/$accounted_generation/core-ingress.sh"
+
+run_inherited_state_case() {
+  local case_id="$1"
+  local case_route="$2"
+  local expected_error="$3"
+  local inherited_value="$4"
+  local external_root="$accounted_tmp/inherited-$case_id-external"
+  local external_pid="$$"
+  local external_temp="$external_root/portable-core-accounted-v1.$external_pid"
+  local case_scratch="$accounted_tmp/inherited-$case_id-scratch"
+  local case_wrapper
+  local case_command
+  local case_status=0
+  local inherited_pending="$inherited_value"
+  mkdir -m 700 "$external_root" "$case_scratch"
+  mkdir -m 700 "$external_temp"
+  printf 'external-state-must-survive\n' > "$external_temp/marker"
+  case "$case_route" in
+    usage)
+      case_wrapper="$package_wrapper"
+      case_command=invalid-command
+      ;;
+    missing)
+      case_wrapper="$missing_package_root/scripts/core-contract.sh"
+      case_command=validate-document
+      ;;
+    source)
+      case_wrapper="$inherited_source_package/scripts/core-contract.sh"
+      case_command=validate-document
+      inherited_pending="$inherited_value"$'\n'"$external_temp"
+      ;;
+    *) fail 'invalid inherited-state test route' ;;
+  esac
+  PORTABLE_CORE_INGRESS_ACCOUNTED=true \
+  PORTABLE_CORE_INGRESS_BUFFER_ERRORS=true \
+  PORTABLE_CORE_INGRESS_PENDING_ERROR="$inherited_pending" \
+  PORTABLE_CORE_INGRESS_WRITTEN_BYTES="$inherited_value" \
+  PORTABLE_CORE_INGRESS_RESERVED_BYTES="$inherited_value" \
+  PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL="$inherited_value" \
+  PORTABLE_CORE_INGRESS_CREATING_TEMP=true \
+  PORTABLE_CORE_INGRESS_OWNS_TEMP=true \
+  PORTABLE_CORE_INGRESS_TEMP="$external_temp" \
+  PORTABLE_CORE_INGRESS_SCRATCH_ROOT="$external_root" \
+  PORTABLE_CORE_INGRESS_OWNER_PID="$external_pid" \
+  PORTABLE_CORE_INGRESS_INITIAL_BYTES="$inherited_value" \
+  PORTABLE_CORE_INGRESS_REMAINING_BYTES="$inherited_value" \
+  PORTABLE_CORE_INGRESS_RM="$(command -v rm)" \
+    PATH="$accounted_path" /bin/bash "$case_wrapper" \
+      --accounted-validation "$case_scratch" 536870912 \
+      "$case_command" "$accounted_registry" \
+      3> "$accounted_tmp/inherited-$case_id.receipt" \
+      > "$accounted_tmp/inherited-$case_id.stdout" \
+      2> "$accounted_tmp/inherited-$case_id.stderr" || case_status=$?
+  if [ "$case_status" -eq 0 ] ||
+     [ -s "$accounted_tmp/inherited-$case_id.stdout" ] ||
+     [ "$(cat "$accounted_tmp/inherited-$case_id.stderr")" != \
+       "$expected_error" ] ||
+     [ "$(receipt_bytes "$accounted_tmp/inherited-$case_id.receipt")" -ne 0 ] ||
+     [ ! -f "$external_temp/marker" ] ||
+     [ -n "$(find "$case_scratch" -mindepth 1 -print -quit)" ] ||
+     grep -Fq "$external_temp" "$accounted_tmp/inherited-$case_id.stderr"; then
+    fail "inherited state escaped reset: $case_id"
+  fi
+}
+
+run_inherited_state_case numeric usage E_USAGE 777
+run_inherited_state_case nonnumeric missing E_RUNTIME not-a-number
+run_inherited_state_case huge source E_RUNTIME 999999999999999999999999999999999999
+run_inherited_state_case malicious source E_RUNTIME '${malicious inherited state}'
+
 mkdir_signal_bin="$accounted_tmp/mkdir-signal-bin"
 mkdir_signal_root="$accounted_tmp/mkdir-signal-root"
 mkdir_signal_marker="$accounted_tmp/mkdir-signal.marker"
@@ -1117,4 +1191,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 46/46 passed\n'
+printf 'portable core accounted validation: 50/50 passed\n'
