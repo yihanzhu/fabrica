@@ -5,10 +5,14 @@ set -euo pipefail
 schema_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 schema_generation="g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386"
 schema_selected_generation="g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b"
+schema_v2_generation="g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e"
 schema_base="38a26f5f046897c0455fef24874c5dbb40c20926"
 schema_module_dir="$schema_root/core/v1/generations/$schema_generation/modules"
 schema_module="$schema_module_dir/schema.jq"
 schema_registry="$schema_root/core/v1/generation-registry.json"
+schema_v2_registry="$schema_root/core/v2/generation-registry.json"
+schema_v2_root="$schema_root/core/v2/generations/$schema_v2_generation"
+schema_v2_test="$schema_root/scripts/test/portable-core-v2-fake-forge.test.sh"
 schema_fixture="$schema_root/scripts/test/portable-core-schema-fixtures.json"
 schema_ledger="$schema_root/scripts/test/portable-core-schema-ledger.tsv"
 schema_manifest="$schema_root/ci/required-files.txt"
@@ -562,6 +566,27 @@ private_generation_path_ok() {
   esac
 }
 
+v2_generation_path_ok() {
+  case "$1" in
+    "core/v2/generations/$schema_v2_generation/core-ingress.sh"|\
+    "core/v2/generations/$schema_v2_generation/contracts.jq"|\
+    "core/v2/generations/$schema_v2_generation/modules/schema.jq"|\
+    "core/v2/generations/$schema_v2_generation/modules/profile_graph.jq"|\
+    "core/v2/generations/$schema_v2_generation/modules/stage_request.jq"|\
+    "core/v2/generations/$schema_v2_generation/modules/result_facts.jq"|\
+    "core/v2/generations/$schema_v2_generation/modules/result_truth.jq") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+v2_generation_paths_ok() {
+  local paths_file="$1"
+  local generation_path
+  while IFS= read -r generation_path; do
+    v2_generation_path_ok "$generation_path" || return 1
+  done < "$paths_file"
+}
+
 guard_paths_ok() {
   local paths_file="$1"
   local generation_path
@@ -589,14 +614,21 @@ schema_activation_state_ok() {
     [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
     [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
-    [ -n "$selected_generation" ] &&
+    [ "$selected_generation" = "$schema_selected_generation" ] &&
     grep -Fq "\"generation_id\":\"$selected_generation\"" "$schema_registry" &&
     [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
     [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
-    [ -f "$selected_root/core-ingress.sh" ] && [ ! -L "$selected_root/core-ingress.sh" ]
+    [ -f "$selected_root/core-ingress.sh" ] && [ ! -L "$selected_root/core-ingress.sh" ] &&
+    [ -f "$selected_root/modules/schema.jq" ] &&
+    [ -f "$selected_root/modules/profile_graph.jq" ] &&
+    [ -f "$selected_root/modules/stage_request.jq" ] &&
+    [ -f "$selected_root/modules/result_facts.jq" ] &&
+    [ -f "$selected_root/modules/result_truth.jq" ] &&
+    [ "$(find "$selected_root" -type f | wc -l | tr -d ' ')" -eq 7 ] &&
+    [ -z "$(find "$selected_root" -type l -print -quit)" ]
 }
 
-schema_guard_total=35
+schema_guard_total=39
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -610,6 +642,64 @@ if guard_paths_ok "$schema_generation_files" &&
   schema_guard_passed=$((schema_guard_passed + 1))
 else
   fail_case "incomplete generation has a public, unknown, missing, or symlink member"
+fi
+schema_v2_generation_files="$schema_test_tmp/v2-generation-files"
+schema_v2_expected_files="$schema_test_tmp/v2-expected-files"
+find "$schema_v2_root" -type f -print |
+  sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_v2_generation_files"
+printf '%s\n' \
+  "core/v2/generations/$schema_v2_generation/contracts.jq" \
+  "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  "core/v2/generations/$schema_v2_generation/modules/profile_graph.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/result_facts.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/result_truth.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/schema.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/stage_request.jq" > \
+  "$schema_v2_expected_files"
+if v2_generation_paths_ok "$schema_v2_generation_files" &&
+   cmp -s "$schema_v2_generation_files" "$schema_v2_expected_files" &&
+   [ -z "$(find "$schema_v2_root" -type l -print -quit)" ]; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "core v2 generation has an unknown, missing, or symlink member"
+fi
+schema_v2_manifest_paths="core/v2/generation-registry.json
+core/v2/generations/$schema_v2_generation/contracts.jq
+core/v2/generations/$schema_v2_generation/core-ingress.sh
+core/v2/generations/$schema_v2_generation/modules/profile_graph.jq
+core/v2/generations/$schema_v2_generation/modules/result_facts.jq
+core/v2/generations/$schema_v2_generation/modules/result_truth.jq
+core/v2/generations/$schema_v2_generation/modules/schema.jq
+core/v2/generations/$schema_v2_generation/modules/stage_request.jq
+scripts/test/portable-core-v2-fake-forge.test.sh"
+schema_v2_manifest_ok=true
+while IFS= read -r schema_v2_required_path; do
+  [ "$(grep -Fxc "$schema_v2_required_path" "$schema_manifest" || true)" -eq 1 ] &&
+    [ -f "$schema_root/$schema_v2_required_path" ] &&
+    [ ! -L "$schema_root/$schema_v2_required_path" ] || schema_v2_manifest_ok=false
+done <<< "$schema_v2_manifest_paths"
+schema_v2_canonical_registry="$schema_test_tmp/v2-registry.canonical"
+if "$schema_jq" -s -S -c \
+     'if length == 1 then .[0] else error("root-count") end' \
+     "$schema_v2_registry" > "$schema_v2_canonical_registry" 2>/dev/null &&
+   cmp -s "$schema_v2_registry" "$schema_v2_canonical_registry" &&
+   "$schema_jq" -e \
+     --arg generation "$schema_v2_generation" \
+     --arg parent "$schema_selected_generation" '
+       length == 1 and
+       .[0] == {
+         authorization_comment_id:5476938197,
+         concern:"fake-forge-materialization-contract",
+         generation_id:$generation,
+         parent_generation_id:$parent,
+         semantic_identity:"core.contracts.v2"
+       }
+     ' "$schema_v2_registry" >/dev/null &&
+   [ "$schema_v2_manifest_ok" = true ] &&
+   [ -x "$schema_v2_test" ]; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "core v2 registry, restore manifest, or focused runner is incomplete"
 fi
 if [ -d "$schema_module_dir" ] && [ ! -L "$schema_module_dir" ] &&
    [ -f "$schema_module" ] && [ ! -L "$schema_module" ] &&
@@ -644,58 +734,117 @@ if [ "$schema_loaded_identity" = "core.contracts.v1" ]; then
 else
   fail_case "ambient module path changed the fixed schema import"
 fi
-tracked_activation_paths_ok() {
-  local paths_file="$1"
-  local activation_path
+v1_activation_path_ok() {
+  local activation_path="$1"
   local test_path
+  case "$activation_path" in
+    ci/required-files.txt|core/v1/generation-registry.json|\
+    core/v2/generation-registry.json|scripts/core-contract.sh|\
+    scripts/lib/profile-resolution.sh) ;;
+    scripts/test/portable-core-*)
+      test_path="${activation_path#scripts/test/}"
+      case "$test_path" in */*) return 1 ;; esac
+      ;;
+    *) private_generation_path_ok "$activation_path" || return 1 ;;
+  esac
+}
+
+v2_activation_path_ok() {
+  case "$1" in
+    README.md|RESTORE.md|ci/required-files.txt|\
+    core/v2/generation-registry.json|\
+    scripts/test/portable-core-schema.test.sh|\
+    scripts/test/portable-core-v2-fake-forge.test.sh) ;;
+    *) v2_generation_path_ok "$1" || return 1 ;;
+  esac
+}
+
+schema_import_path_ok() {
+  local import_path="$1"
+  local test_path
+  case "$import_path" in
+    scripts/test/portable-core-*)
+      test_path="${import_path#scripts/test/}"
+      case "$test_path" in */*) return 1 ;; esac
+      ;;
+    *)
+      private_generation_path_ok "$import_path" ||
+        v2_generation_path_ok "$import_path" || return 1
+      ;;
+  esac
+}
+
+activation_paths_ok() {
+  local paths_file="$1"
+  local predicate="$2"
+  local activation_path
   while IFS= read -r activation_path; do
-    case "$activation_path" in
-      ci/required-files.txt|core/v1/generation-registry.json|scripts/core-contract.sh) ;;
-      scripts/test/portable-core-*)
-        test_path="${activation_path#scripts/test/}"
-        case "$test_path" in */*) return 1 ;; esac
-        ;;
-      *) private_generation_path_ok "$activation_path" || return 1 ;;
-    esac
+    "$predicate" "$activation_path" || return 1
   done < "$paths_file"
 }
 
-schema_live_hits="$schema_test_tmp/live-hits"
+schema_v1_live_hits="$schema_test_tmp/v1-live-hits"
+schema_v2_live_hits="$schema_test_tmp/v2-live-hits"
 schema_import_hits="$schema_test_tmp/import-hits"
-: > "$schema_live_hits"
+: > "$schema_v1_live_hits"
+: > "$schema_v2_live_hits"
 : > "$schema_import_hits"
+schema_scan_content() {
+  "$schema_jq" -Rsr \
+    --arg generation "$schema_generation" \
+    --arg selected_generation "$schema_selected_generation" \
+    --arg v2_generation "$schema_v2_generation" \
+    --arg module_pattern "$schema_module_directive_pattern" \
+    '[(contains($generation) or contains($selected_generation)),
+      contains($v2_generation),
+      ([scan($module_pattern)] |
+       any(.[]; ((.[0] | try fromjson catch "") == "schema")))] |
+     @tsv'
+}
 while IFS= read -r -d '' schema_tracked_path; do
   if ! schema_scan_result="$(
     git -C "$schema_root" show ":$schema_tracked_path" 2>/dev/null |
-      "$schema_jq" -Rsr \
-        --arg generation "$schema_generation" \
-        --arg module_pattern "$schema_module_directive_pattern" \
-        '[contains($generation),
-          ([scan($module_pattern)] |
-           any(.[]; ((.[0] | try fromjson catch "") == "schema")))] |
-         @tsv'
+      schema_scan_content
   )"; then
     fail_case "unable to scan tracked path: $schema_tracked_path"
     continue
   fi
-  IFS=$'\t' read -r schema_has_generation schema_has_import <<< "$schema_scan_result"
-  if [ "$schema_has_generation" = true ]; then
-    printf '%s\n' "$schema_tracked_path" >> "$schema_live_hits"
+  IFS=$'\t' read -r schema_has_v1_generation schema_has_v2_generation \
+    schema_has_import <<< "$schema_scan_result"
+  if [ "$schema_has_v1_generation" = true ]; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_v1_live_hits"
+  fi
+  if [ "$schema_has_v2_generation" = true ]; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_v2_live_hits"
   fi
   if [ "$schema_has_import" = true ]; then
     printf '%s\n' "$schema_tracked_path" >> "$schema_import_hits"
   fi
 done < <(git -C "$schema_root" ls-files -z)
 
-if tracked_activation_paths_ok "$schema_live_hits"; then
+if activation_paths_ok "$schema_v1_live_hits" v1_activation_path_ok; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "generation ID appears outside the closed tracked-path allowlist"
+  fail_case "v1 generation ID appears outside its closed tracked-path allowlist"
 fi
-if tracked_activation_paths_ok "$schema_import_hits"; then
+schema_v2_expected_live_hits="$schema_test_tmp/v2-expected-live-hits"
+printf '%s\n' \
+  ci/required-files.txt \
+  core/v2/generation-registry.json \
+  "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-fake-forge.test.sh > \
+  "$schema_v2_expected_live_hits"
+if cmp -s "$schema_v2_live_hits" "$schema_v2_expected_live_hits" &&
+   activation_paths_ok "$schema_v2_live_hits" v2_activation_path_ok; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
-  fail_case "schema import appears outside the closed tracked-path allowlist"
+  fail_case "v2 generation ID appears outside its closed tracked-path allowlist"
+fi
+if activation_paths_ok "$schema_import_hits" schema_import_path_ok; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "schema import appears outside its closed tracked-path allowlist"
 fi
 
 for schema_invalid_path in \
@@ -704,12 +853,65 @@ for schema_invalid_path in \
   docs/portable-core.md \
   scripts/portable-core-loader.sh; do
   printf '%s\n' "$schema_invalid_path" > "$schema_test_tmp/invalid-tracked-path"
-  if ! tracked_activation_paths_ok "$schema_test_tmp/invalid-tracked-path"; then
+  if ! activation_paths_ok \
+       "$schema_test_tmp/invalid-tracked-path" v1_activation_path_ok &&
+     ! activation_paths_ok \
+       "$schema_test_tmp/invalid-tracked-path" v2_activation_path_ok &&
+     ! activation_paths_ok \
+       "$schema_test_tmp/invalid-tracked-path" schema_import_path_ok; then
     schema_guard_passed=$((schema_guard_passed + 1))
   else
     fail_case "tracked-path guard accepted: $schema_invalid_path"
   fi
 done
+
+schema_v2_allowed_paths="$schema_test_tmp/v2-allowed-paths"
+printf '%s\n' \
+  README.md \
+  RESTORE.md \
+  ci/required-files.txt \
+  core/v2/generation-registry.json \
+  "core/v2/generations/$schema_v2_generation/contracts.jq" \
+  "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  "core/v2/generations/$schema_v2_generation/modules/profile_graph.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/result_facts.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/result_truth.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/schema.jq" \
+  "core/v2/generations/$schema_v2_generation/modules/stage_request.jq" \
+  scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-fake-forge.test.sh > "$schema_v2_allowed_paths"
+schema_v2_injected_source="$schema_test_tmp/v2-injected-source"
+schema_v2_injected_hits="$schema_test_tmp/v2-injected-hits"
+schema_v1_only_path="$schema_test_tmp/v1-only-path"
+schema_v2_only_path="$schema_test_tmp/v2-only-path"
+schema_v2_injection_ok=true
+printf 'generation=%s\n' "$schema_v2_generation" > "$schema_v2_injected_source"
+printf '%s\n' scripts/lib/profile-resolution.sh > "$schema_v1_only_path"
+printf '%s\n' README.md > "$schema_v2_only_path"
+for schema_v2_invalid_path in \
+  .claude/hooks/portable-core-v2-loader.sh \
+  docs/portable-core-v2.md \
+  scripts/test/unrelated-v2-loader.test.sh; do
+  : > "$schema_v2_injected_hits"
+  schema_scan_result="$(schema_scan_content < "$schema_v2_injected_source")"
+  IFS=$'\t' read -r _ schema_has_v2_generation _ <<< "$schema_scan_result"
+  if [ "$schema_has_v2_generation" = true ]; then
+    printf '%s\n' "$schema_v2_invalid_path" >> "$schema_v2_injected_hits"
+  fi
+  [ "$(cat "$schema_v2_injected_hits")" = "$schema_v2_invalid_path" ] &&
+    ! activation_paths_ok "$schema_v2_injected_hits" v2_activation_path_ok ||
+      schema_v2_injection_ok=false
+done
+if activation_paths_ok "$schema_v2_allowed_paths" v2_activation_path_ok &&
+   activation_paths_ok "$schema_v1_only_path" v1_activation_path_ok &&
+   ! activation_paths_ok "$schema_v1_only_path" v2_activation_path_ok &&
+   activation_paths_ok "$schema_v2_only_path" v2_activation_path_ok &&
+   ! activation_paths_ok "$schema_v2_only_path" v1_activation_path_ok &&
+   [ "$schema_v2_injection_ok" = true ]; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "v2 identity guard accepted an unauthorized loader, doc, or test path"
+fi
 
 schema_load_case() {
   local case_id="$1"
