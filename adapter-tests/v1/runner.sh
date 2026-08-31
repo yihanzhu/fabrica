@@ -29,7 +29,11 @@ fixture_root=$(CDPATH='' cd -P -- "$fixture_root" && pwd -P) || runner_error E_F
 [ -d "$fixture_root/scratch" ] && [ -d "$fixture_root/target/.git" ] || runner_error E_FIXTURE
 
 run_tmp=$(/usr/bin/mktemp -d "$fixture_root/scratch/run.XXXXXX") || runner_error
-cleanup() { /bin/rm -rf -- "$run_tmp"; }
+cleanup() {
+  if [ -n "${run_tmp:-}" ]; then
+    /bin/rm -rf -- "$run_tmp"
+  fi
+}
 ACTIVE_CHILD_GROUP=''
 ACTIVE_CHILD_PID=''
 SIGNAL_DEFER=0
@@ -39,8 +43,8 @@ group_alive() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] && kill -0 -- "-$1" 2>/dev/null
 }
 terminate_active_group() {
-  local group=$ACTIVE_CHILD_GROUP
-  local leader=$ACTIVE_CHILD_PID
+  local group=${ACTIVE_CHILD_GROUP:-}
+  local leader=${ACTIVE_CHILD_PID:-}
   local tick
   if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
     kill -TERM -- "-$group" 2>/dev/null || :
@@ -59,7 +63,7 @@ terminate_active_group() {
   ACTIVE_CHILD_PID=''
 }
 signal_exit() {
-  local status=$1
+  local status=${1:-1}
   trap '' HUP INT TERM
   trap - EXIT
   exec >/dev/null 2>&1
@@ -68,10 +72,10 @@ signal_exit() {
   exit "$status"
 }
 handle_signal() {
-  local status=$1
-  [ "$SIGNAL_EXITING" -eq 0 ] || return 0
+  [ "${SIGNAL_EXITING:-0}" -eq 0 ] || return 0
+  local status=${1:-1}
   PENDING_SIGNAL_STATUS=$status
-  [ "$SIGNAL_DEFER" -eq 0 ] || return 0
+  [ "${SIGNAL_DEFER:-0}" -eq 0 ] || return 0
   SIGNAL_EXITING=1
   signal_exit "$status"
 }
@@ -352,7 +356,7 @@ run_child() {
   CHILD_STATUS=0
   CHILD_ERROR=''
   /bin/mkdir -m 700 "$child_home"
-  if [ -n "$ACTIVE_CHILD_GROUP" ] || [ -n "$ACTIVE_CHILD_PID" ]; then
+  if [ -n "${ACTIVE_CHILD_GROUP:-}" ] || [ -n "${ACTIVE_CHILD_PID:-}" ]; then
     CHILD_ERROR=E_RUNTIME
     return 1
   fi
@@ -377,7 +381,7 @@ run_child() {
   ACTIVE_CHILD_PID=$pid
   set +m
   SIGNAL_DEFER=0
-  pending_status=$PENDING_SIGNAL_STATUS
+  pending_status=${PENDING_SIGNAL_STATUS:-0}
   PENDING_SIGNAL_STATUS=0
   if [ "$pending_status" -ne 0 ]; then
     SIGNAL_EXITING=1
@@ -393,7 +397,7 @@ run_child() {
     /bin/sleep 0.05
   done
   wait "$pid" || CHILD_STATUS=$?
-  if group_alive "$ACTIVE_CHILD_GROUP"; then
+  if group_alive "${ACTIVE_CHILD_GROUP:-}"; then
     terminate_active_group
     CHILD_ERROR=E_DESCENDANT
     return 1
