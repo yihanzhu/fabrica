@@ -16,6 +16,22 @@ the team is improving the control plane itself.
 
 **Get started →** [QUICKSTART.md](QUICKSTART.md) · **Direction →** [ROADMAP.md](ROADMAP.md)
 
+## Inactive portable profile resolver
+
+`resolver/v1/` contains the first repo-only profile resolver. It reads exact local
+Git objects, assembles the existing portable-core `resolved_profile`, and asks
+`scripts/core-contract.sh` to validate the complete profile set. It does not select
+or activate a profile, authenticate a repository map, execute selected content, or
+access a remote or credential.
+
+The shell runtime is deliberately mode 0644. A trusted parent must start it with a
+direct fixed-path `execve`, an empty environment allowlist, fixed dependencies, and
+the test-proven resource limits. `scripts/test/portable-profile-resolution.test.sh`
+is the only shipped launcher today; it is proof, not a production activation path.
+The private native snapshot helper is the exception recorded in
+`work/portable-profile-resolution/spec.md`. Remove it only when every supported
+runtime has an equivalent accepted descriptor-relative no-follow API.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

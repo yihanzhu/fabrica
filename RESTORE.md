@@ -38,6 +38,23 @@ Read [`README.md`](README.md) once for the mental model (the team, the loop, the
 design "why") and [`AGENTS.md`](AGENTS.md) for the conventions and safety rails before
 you rebuild.
 
+### Restore the inactive profile resolver source
+
+The resolver is source-only and remains inactive after restore. Confirm the eight
+resolver files listed under “Inactive portable profile resolver v1” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/portable-profile-resolution.test.sh
+```
+
+That test obtains the pinned jq 1.6 release with its recorded digest, compiles the
+single private no-follow helper and the test-owned direct-`execve` launcher with the
+host compiler, creates hermetic SHA-1/SHA-256 repositories, and validates the output
+with the restored `scripts/core-contract.sh`. No compiled helper is installed or
+restored. A future activation must separately qualify and bind a production trusted
+parent; restoring these files does not select a live profile.
+
 ---
 
 ## 1. Recreate yshifu (the manager)

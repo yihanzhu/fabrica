@@ -124,6 +124,16 @@ scripts/test/portable-core-assembly-ledger.tsv
 scripts/test/portable-core-assembly.test.sh
 scripts/core-contract.sh
 
+# Inactive portable profile resolver v1
+resolver/v1/profile-resolve-runtime.sh
+resolver/v1/profile-resolution.jq
+resolver/v1/nofollow-snapshot.c
+scripts/lib/profile-resolution.sh
+scripts/test/portable-profile-resolution-launcher.c
+scripts/test/portable-profile-resolution-loader-trap.c
+scripts/test/portable-profile-resolution-fixtures.sh
+scripts/test/portable-profile-resolution.test.sh
+
 # Inactive portable core accounted-validation generation
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/schema.jq
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/core-ingress.sh
