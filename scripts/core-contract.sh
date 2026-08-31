@@ -11,6 +11,42 @@ assembly_error() {
   return 1
 }
 
+assembly_fd3_writable() {
+  local fdinfo_line
+  local fdinfo_key
+  local fdinfo_value
+  local flags_value=''
+  local flags_count=0
+  local record_count=0
+  local access_mode
+
+  case "${OSTYPE:-}" in
+    linux*)
+      [ -r /proc/self/fdinfo/3 ] || return 1
+      while IFS= read -r fdinfo_line || [ -n "$fdinfo_line" ]; do
+        record_count=$((record_count + 1))
+        [[ "$fdinfo_line" =~ ^([A-Za-z0-9_]+):[[:space:]]+([^[:cntrl:]]*)$ ]] ||
+          return 1
+        fdinfo_key="${BASH_REMATCH[1]}"
+        fdinfo_value="${BASH_REMATCH[2]}"
+        if [ "$fdinfo_key" = flags ]; then
+          flags_count=$((flags_count + 1))
+          flags_value="$fdinfo_value"
+        fi
+      done < /proc/self/fdinfo/3
+      [ "$record_count" -gt 0 ] && [ "$flags_count" -eq 1 ] &&
+        [[ "$flags_value" =~ ^[0-7]+$ ]] &&
+        [ "${#flags_value}" -le 20 ] || return 1
+      access_mode=$((8#$flags_value & 3))
+      case "$access_mode" in 1|2) return 0 ;; *) return 1 ;; esac
+      ;;
+    darwin*)
+      [ -e /dev/fd/3 ] && [ -w /dev/fd/3 ]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 assembly_accounted=false
 assembly_scratch_root=''
 assembly_byte_budget=0
@@ -19,6 +55,7 @@ assembly_receipt_emitted=false
 assembly_finalization_signal=''
 assembly_cleaning=false
 assembly_cleanup_signal=''
+assembly_error_emitted=false
 
 assembly_emit_receipt() {
   local receipt_status=0
@@ -36,15 +73,38 @@ assembly_emit_receipt() {
   [ -z "$assembly_finalization_signal" ] || return 2
 }
 
+assembly_emit_pending_error() {
+  local pending_error="${PORTABLE_CORE_INGRESS_PENDING_ERROR:-}"
+  [ "$assembly_accounted" = true ] || return 0
+  [ "$assembly_error_emitted" = false ] || return 0
+  [ -n "$pending_error" ] || return 0
+  case "$pending_error" in
+    E_RUNTIME|E_PARSE|E_CANONICAL|E_LIMIT|E_SHAPE|E_REF|E_RELATION) ;;
+    *) pending_error=E_RUNTIME ;;
+  esac
+  printf '%s\n' "$pending_error" >&2
+  assembly_error_emitted=true
+}
+
 assembly_cleanup() {
   local status=$?
   local receipt_status=0
+  local close_status=0
   trap - EXIT
   if [ "$(type -t portable_core_ingress_close 2>/dev/null)" = function ]; then
     assembly_cleaning=true
-    portable_core_ingress_close >/dev/null 2>&1 || :
+    portable_core_ingress_close >/dev/null 2>&1 || close_status=$?
+    if [ "$assembly_accounted" = true ] && [ "$close_status" -ne 0 ]; then
+      close_status=0
+      portable_core_ingress_close >/dev/null 2>&1 || close_status=$?
+    fi
     assembly_cleaning=false
   fi
+  if [ "$assembly_accounted" = true ] && [ "$close_status" -ne 0 ]; then
+    PORTABLE_CORE_INGRESS_PENDING_ERROR=E_RUNTIME
+    status=1
+  fi
+  assembly_emit_pending_error || status=1
   assembly_emit_receipt || receipt_status=$?
   [ "$receipt_status" -eq 0 ] || status=1
   [ -z "$assembly_finalization_signal" ] || status=1
@@ -75,7 +135,7 @@ if [ "${1:-}" = --accounted-validation ]; then
   if [ "$#" -lt 4 ] ||
      [[ ! "${3:-}" =~ ^(0|[1-9][0-9]*)$ ]] ||
      [ "${#3}" -gt 9 ] || [ "$3" -gt 536870912 ] ||
-     ! { : >&3; } 2>/dev/null; then
+     ! assembly_fd3_writable; then
     assembly_error E_USAGE
     exit 1
   fi

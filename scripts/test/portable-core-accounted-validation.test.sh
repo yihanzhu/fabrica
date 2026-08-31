@@ -204,6 +204,59 @@ wait_probe() {
   fail "$probe_name read its source more than once"
 }
 
+fd_closed_root="$accounted_tmp/fd-closed-root"
+mkdir -m 700 "$fd_closed_root"
+fd_closed_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$fd_closed_root" 536870912 \
+  validate-document "$accounted_registry" \
+  3>&- > "$accounted_tmp/fd-closed.stdout" \
+  2> "$accounted_tmp/fd-closed.stderr" || fd_closed_status=$?
+[ "$fd_closed_status" -ne 0 ] && [ ! -s "$accounted_tmp/fd-closed.stdout" ] &&
+  [ "$(cat "$accounted_tmp/fd-closed.stderr")" = E_USAGE ] &&
+  [ -z "$(find "$fd_closed_root" -mindepth 1 -print -quit)" ] ||
+  fail 'closed receipt descriptor was accepted'
+
+fd_readonly_root="$accounted_tmp/fd-readonly-root"
+fd_readonly_source="$accounted_tmp/fd-readonly.source"
+mkdir -m 700 "$fd_readonly_root"
+printf 'receipt-channel-sentinel\nsecond\n' > "$fd_readonly_source"
+(
+  fd_readonly_status=0
+  exec 3< "$fd_readonly_source"
+  PATH="$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$fd_readonly_root" 536870912 \
+    validate-document "$accounted_registry" \
+    > "$accounted_tmp/fd-readonly.stdout" \
+    2> "$accounted_tmp/fd-readonly.stderr" || fd_readonly_status=$?
+  IFS= read -r fd_readonly_first <&3 || :
+  exec 3<&-
+  printf '%s\n' "$fd_readonly_status" > "$accounted_tmp/fd-readonly.status"
+  printf '%s\n' "$fd_readonly_first" > "$accounted_tmp/fd-readonly.first"
+)
+[ "$(cat "$accounted_tmp/fd-readonly.status")" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/fd-readonly.stdout" ] &&
+  [ "$(cat "$accounted_tmp/fd-readonly.stderr")" = E_USAGE ] &&
+  [ "$(cat "$accounted_tmp/fd-readonly.first")" = receipt-channel-sentinel ] &&
+  [ -z "$(find "$fd_readonly_root" -mindepth 1 -print -quit)" ] ||
+  fail 'read-only receipt descriptor was accepted or consumed'
+
+fd_readwrite_root="$accounted_tmp/fd-readwrite-root"
+fd_readwrite_receipt="$accounted_tmp/fd-readwrite.receipt"
+mkdir -m 700 "$fd_readwrite_root"
+: > "$fd_readwrite_receipt"
+fd_readwrite_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$fd_readwrite_root" 536870912 \
+  validate-document "$accounted_registry" \
+  3<> "$fd_readwrite_receipt" > "$accounted_tmp/fd-readwrite.stdout" \
+  2> "$accounted_tmp/fd-readwrite.stderr" || fd_readwrite_status=$?
+[ "$fd_readwrite_status" -ne 0 ] &&
+  [ "$(cat "$accounted_tmp/fd-readwrite.stderr")" = E_SHAPE ] &&
+  [ "$(receipt_bytes "$fd_readwrite_receipt")" -gt 0 ] &&
+  [ -z "$(find "$fd_readwrite_root" -mindepth 1 -print -quit)" ] ||
+  fail 'read-write receipt descriptor was rejected'
+
 run_case high 536870912
 [ "$RUN_STATUS" -ne 0 ] && [ ! -s "$RUN_STDOUT" ] &&
   [ "$(cat "$RUN_STDERR")" = E_SHAPE ] || fail 'accounted validation semantics'
@@ -239,7 +292,8 @@ portable_core_ingress_validate 2> "$accounted_tmp/direct.stderr" ||
 direct_sum="$(find "$PORTABLE_CORE_INGRESS_TEMP" -type f -exec wc -c {} + |
   tail -n 1 | awk '{print $1}')"
 [ "$direct_status" -ne 0 ] &&
-  [ "$(cat "$accounted_tmp/direct.stderr")" = E_SHAPE ] &&
+  [ ! -s "$accounted_tmp/direct.stderr" ] &&
+  [ "$PORTABLE_CORE_INGRESS_PENDING_ERROR" = E_SHAPE ] &&
   [ "$PORTABLE_CORE_INGRESS_WRITTEN_BYTES" -eq "$direct_sum" ] ||
   fail 'receipt is not the exact written-byte sum'
 portable_core_ingress_close
@@ -464,7 +518,15 @@ cat > "$open_failure_bin/head" <<'HEAD_OPEN_FAILURE'
 set -uo pipefail
 status=0
 "$ACCOUNTED_REAL_HEAD" "$@" || status=$?
-/bin/mkdir "$ACCOUNTED_OPEN_FAILURE_ROOT/portable-core-accounted-v1/raw.1"
+open_failure_candidate=''
+for candidate in "$ACCOUNTED_OPEN_FAILURE_ROOT"/portable-core-accounted-v1.*; do
+  if [ -d "$candidate" ] && [ ! -L "$candidate" ]; then
+    open_failure_candidate="$candidate"
+    break
+  fi
+done
+[ -n "$open_failure_candidate" ] || exit 98
+/bin/mkdir "$open_failure_candidate/raw.1"
 exit "$status"
 HEAD_OPEN_FAILURE
 chmod 0755 "$open_failure_bin/head"
@@ -477,13 +539,24 @@ ACCOUNTED_OPEN_FAILURE_ROOT="$open_failure_root" \
     3> "$accounted_tmp/open-failure.receipt" \
     > "$accounted_tmp/open-failure.stdout" \
     2> "$accounted_tmp/open-failure.stderr" || open_failure_status=$?
-[ "$open_failure_status" -ne 0 ] &&
-  [ ! -s "$accounted_tmp/open-failure.stdout" ] &&
-  [ "$(cat "$accounted_tmp/open-failure.stderr")" = E_RUNTIME ] &&
-  [ "$(receipt_bytes "$accounted_tmp/open-failure.receipt")" -eq 0 ] &&
-  ! grep -Fq "$open_failure_root" "$accounted_tmp/open-failure.stderr" &&
-  [ -z "$(find "$open_failure_root" -mindepth 1 -print -quit)" ] ||
-  fail 'scratch open failure leaked its private path'
+open_failure_receipt="$(sed -n 's/^written-bytes://p' \
+  "$accounted_tmp/open-failure.receipt")"
+open_failure_token="$(cat "$accounted_tmp/open-failure.stderr")"
+open_failure_root_empty=false
+[ -z "$(find "$open_failure_root" -mindepth 1 -print -quit)" ] &&
+  open_failure_root_empty=true
+if [ "$open_failure_status" -eq 0 ] ||
+   [ -s "$accounted_tmp/open-failure.stdout" ] ||
+   [ "$open_failure_token" != E_RUNTIME ] ||
+   [ "$open_failure_receipt" != 0 ] ||
+   grep -Fq "$open_failure_root" "$accounted_tmp/open-failure.stderr" ||
+   [ "$open_failure_root_empty" != true ]; then
+    printf 'open_failure status=%s receipt=%s token=%s root_empty=%s\n' \
+      "$open_failure_status" "$open_failure_receipt" \
+      "$([ "$open_failure_token" = E_RUNTIME ] && printf '%s' E_RUNTIME ||
+          printf '%s' invalid)" "$open_failure_root_empty" >&2
+    fail 'scratch open failure leaked its private path'
+fi
 
 invalid_command_root="$accounted_tmp/invalid-command-root"
 mkdir -m 700 "$invalid_command_root"
@@ -565,11 +638,35 @@ PATH="$accounted_path" /bin/bash "$package_wrapper" \
   [ -z "$(find "$mkdir_signal_root" -mindepth 1 -print -quit)" ] ||
   fail 'post-signal mkdir retry did not start cleanly'
 
+partial_mkdir_bin="$accounted_tmp/partial-mkdir-bin"
+partial_mkdir_root="$accounted_tmp/partial-mkdir-root"
+mkdir -p "$partial_mkdir_bin"
+mkdir -m 700 "$partial_mkdir_root"
+cat > "$partial_mkdir_bin/mkdir" <<'PARTIAL_MKDIR'
+#!/bin/bash
+set -uo pipefail
+"$ACCOUNTED_REAL_MKDIR" "$@" || exit $?
+exit 42
+PARTIAL_MKDIR
+chmod 0755 "$partial_mkdir_bin/mkdir"
+partial_mkdir_status=0
+ACCOUNTED_REAL_MKDIR="$(command -v mkdir)" \
+  PATH="$partial_mkdir_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$partial_mkdir_root" 536870912 \
+    validate-document "$accounted_registry" \
+    3> "$accounted_tmp/partial-mkdir.receipt" \
+    > "$accounted_tmp/partial-mkdir.stdout" \
+    2> "$accounted_tmp/partial-mkdir.stderr" || partial_mkdir_status=$?
+[ "$partial_mkdir_status" -ne 0 ] &&
+  [ "$(cat "$accounted_tmp/partial-mkdir.stderr")" = E_RUNTIME ] &&
+  [ "$(receipt_bytes "$accounted_tmp/partial-mkdir.receipt")" -eq 0 ] &&
+  [ -z "$(find "$partial_mkdir_root" -mindepth 1 -print -quit)" ] ||
+  fail 'partial mkdir was not reclaimed by its unique owner'
+
 race_bin="$accounted_tmp/race-bin"
 race_root="$accounted_tmp/race-root"
 race_arrivals="$accounted_tmp/race.arrivals"
-race_winner="$accounted_tmp/race.winner"
-race_loser="$accounted_tmp/race.loser"
+race_created="$accounted_tmp/race.created"
 race_release="$accounted_tmp/race.release"
 mkdir -p "$race_bin"
 mkdir -m 700 "$race_root"
@@ -586,20 +683,15 @@ while [ "$(/usr/bin/wc -l < "$ACCOUNTED_RACE_ARRIVALS" | tr -d ' ')" -lt 2 ] &&
 done
 [ "$(/usr/bin/wc -l < "$ACCOUNTED_RACE_ARRIVALS" | tr -d ' ')" -ge 2 ] ||
   exit 96
-if "$ACCOUNTED_REAL_MKDIR" "$@"; then
-  printf '%s\n' "$PPID" > "$ACCOUNTED_RACE_WINNER"
-  race_wait=0
-  while [ ! -e "$ACCOUNTED_RACE_RELEASE" ] && [ "$race_wait" -lt 200 ]; do
-    /bin/sleep 0.1
-    race_wait=$((race_wait + 1))
-  done
-  [ -e "$ACCOUNTED_RACE_RELEASE" ] || exit 97
-  exit 0
-else
-  race_status=$?
-fi
-printf '%s\n' "$PPID" > "$ACCOUNTED_RACE_LOSER"
-exit "$race_status"
+"$ACCOUNTED_REAL_MKDIR" "$@" || exit $?
+printf '%s\n' "$PPID" >> "$ACCOUNTED_RACE_CREATED"
+race_wait=0
+while [ ! -e "$ACCOUNTED_RACE_RELEASE" ] && [ "$race_wait" -lt 200 ]; do
+  /bin/sleep 0.1
+  race_wait=$((race_wait + 1))
+done
+[ -e "$ACCOUNTED_RACE_RELEASE" ] || exit 97
+exit 0
 MKDIR_RACE
 chmod 0755 "$race_bin/mkdir"
 race_pids=()
@@ -608,8 +700,7 @@ for race_index in 1 2; do
     race_status=0
     ACCOUNTED_REAL_MKDIR="$(command -v mkdir)" \
     ACCOUNTED_RACE_ARRIVALS="$race_arrivals" \
-    ACCOUNTED_RACE_WINNER="$race_winner" \
-    ACCOUNTED_RACE_LOSER="$race_loser" \
+    ACCOUNTED_RACE_CREATED="$race_created" \
     ACCOUNTED_RACE_RELEASE="$race_release" \
       PATH="$race_bin:$accounted_path" /bin/bash "$package_wrapper" \
         --accounted-validation "$race_root" 536870912 \
@@ -666,40 +757,53 @@ race_bool() {
 }
 
 race_diagnostics() {
-  printf 'race status1=%s status2=%s receipt1=%s receipt2=%s token1=%s token2=%s winner=%s loser=%s loser_done=%s directory=%s root_empty=%s status_ok=%s receipt_ok=%s tokens_ok=%s\n' \
+  local created_count=0
+  [ -e "$race_created" ] &&
+    created_count="$(wc -l < "$race_created" | tr -d ' ')"
+  [[ "$created_count" =~ ^[0-9]+$ ]] || created_count=invalid
+  printf 'race status1=%s status2=%s receipt1=%s receipt2=%s token1=%s token2=%s created_count=%s distinct=%s dirs_ready=%s root_empty=%s status_ok=%s receipt_ok=%s tokens_ok=%s\n' \
     "$(race_status_value "$accounted_tmp/race-1.status")" \
     "$(race_status_value "$accounted_tmp/race-2.status")" \
     "$(race_receipt_value "$accounted_tmp/race-1.receipt")" \
     "$(race_receipt_value "$accounted_tmp/race-2.receipt")" \
     "$(race_token_value "$accounted_tmp/race-1.stderr")" \
     "$(race_token_value "$accounted_tmp/race-2.stderr")" \
-    "$(race_bool test -s "$race_winner")" \
-    "$(race_bool test -s "$race_loser")" \
-    "$(race_bool test -s "$accounted_tmp/race-1.status" -o \
-                       -s "$accounted_tmp/race-2.status")" \
-    "$(race_bool test -d "$race_root/portable-core-accounted-v1")" \
+    "$created_count" "${race_distinct:-pending}" "${race_dirs_ready:-pending}" \
     "$(race_bool test -z "$(find "$race_root" -mindepth 1 -print -quit)")" \
     "${race_status_ok:-pending}" "${race_receipt_ok:-pending}" \
     "${race_tokens_ok:-pending}" >&2
 }
 
-race_loser_done=false
+race_dirs_ready=false
+race_distinct=false
 race_parent_wait=0
 while [ "$race_parent_wait" -lt 100 ]; do
-  if [ -s "$race_loser" ] && [ -s "$race_winner" ] &&
-     { [ -s "$accounted_tmp/race-1.status" ] ||
-       [ -s "$accounted_tmp/race-2.status" ]; }; then
-    race_loser_done=true
+  if [ -e "$race_created" ] &&
+     [ "$(wc -l < "$race_created" | tr -d ' ')" -eq 2 ]; then
     break
   fi
   /bin/sleep 0.1
   race_parent_wait=$((race_parent_wait + 1))
 done
-if [ "$race_loser_done" != true ] || [ ! -s "$race_winner" ] ||
-   [ ! -d "$race_root/portable-core-accounted-v1" ]; then
+if [ -e "$race_created" ] &&
+   [ "$(wc -l < "$race_created" | tr -d ' ')" -eq 2 ]; then
+  race_pid_one="$(sed -n '1p' "$race_created")"
+  race_pid_two="$(sed -n '2p' "$race_created")"
+  if [[ "$race_pid_one" =~ ^[1-9][0-9]*$ ]] &&
+     [[ "$race_pid_two" =~ ^[1-9][0-9]*$ ]] &&
+     [ "$race_pid_one" != "$race_pid_two" ]; then
+    race_distinct=true
+  fi
+  if [ "$race_distinct" = true ] &&
+     [ -d "$race_root/portable-core-accounted-v1.$race_pid_one" ] &&
+     [ -d "$race_root/portable-core-accounted-v1.$race_pid_two" ]; then
+    race_dirs_ready=true
+  fi
+fi
+if [ "$race_dirs_ready" != true ]; then
   race_diagnostics
   : > "$race_release"
-  fail 'mkdir loser removed the winner directory'
+  fail 'concurrent mkdir identities were not independent'
 fi
 : > "$race_release"
 for race_pid in "${race_pids[@]}"; do
@@ -722,20 +826,18 @@ fi
 race_receipt_ok=false
 if [[ "$race_receipt_one" =~ ^[0-9]+$ ]] &&
    [[ "$race_receipt_two" =~ ^[0-9]+$ ]]; then
-  if [ "$race_receipt_one" -eq 0 ] && [ "$race_receipt_two" -gt 0 ]; then
-    race_receipt_ok=true
-  elif [ "$race_receipt_two" -eq 0 ] && [ "$race_receipt_one" -gt 0 ]; then
+  if [ "$race_receipt_one" -gt 0 ] && [ "$race_receipt_two" -gt 0 ]; then
     race_receipt_ok=true
   fi
 fi
 race_tokens_ok=false
-[ "$race_token_set" = $'E_RUNTIME\nE_SHAPE' ] && race_tokens_ok=true
+[ "$race_token_set" = $'E_SHAPE\nE_SHAPE' ] && race_tokens_ok=true
 race_root_ok=false
 [ -z "$(find "$race_root" -mindepth 1 -print -quit)" ] && race_root_ok=true
 if [ "$race_status_ok" != true ] || [ "$race_receipt_ok" != true ] ||
    [ "$race_tokens_ok" != true ] || [ "$race_root_ok" != true ]; then
   race_diagnostics
-  fail 'mkdir race receipts or ownership were invalid'
+  fail 'concurrent mkdir receipts or cleanup were invalid'
 fi
 
 signal_bin="$accounted_tmp/signal-bin"
@@ -936,6 +1038,72 @@ ACCOUNTED_CLOSE_SIGNAL_MARKER="$close_signal_marker" \
   [ -z "$(find "$close_signal_root" -mindepth 1 -print -quit)" ] ||
   fail 'signal during close interrupted cleanup or receipt'
 
+cleanup_failure_bin="$accounted_tmp/cleanup-failure-bin"
+mkdir -p "$cleanup_failure_bin"
+cat > "$cleanup_failure_bin/rm" <<'CLEANUP_FAILURE'
+#!/bin/bash
+set -uo pipefail
+cleanup_count="$(/bin/cat "$ACCOUNTED_CLEANUP_COUNTER")"
+cleanup_count=$((cleanup_count + 1))
+printf '%s\n' "$cleanup_count" > "$ACCOUNTED_CLEANUP_COUNTER"
+case "$ACCOUNTED_CLEANUP_MODE" in
+  once)
+    if [ "$cleanup_count" -eq 1 ]; then exit 42; fi
+    exec "$ACCOUNTED_REAL_RM" "$@"
+    ;;
+  persistent) exit 42 ;;
+  *) exit 43 ;;
+esac
+CLEANUP_FAILURE
+chmod 0755 "$cleanup_failure_bin/rm"
+
+cleanup_once_root="$accounted_tmp/cleanup-once-root"
+cleanup_once_counter="$accounted_tmp/cleanup-once.count"
+mkdir -m 700 "$cleanup_once_root"
+printf '0\n' > "$cleanup_once_counter"
+cleanup_once_status=0
+ACCOUNTED_REAL_RM="$(command -v rm)" \
+ACCOUNTED_CLEANUP_COUNTER="$cleanup_once_counter" \
+ACCOUNTED_CLEANUP_MODE=once \
+  PATH="$cleanup_failure_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$cleanup_once_root" 536870912 \
+    validate-document "$accounted_registry" \
+    3> "$accounted_tmp/cleanup-once.receipt" \
+    > "$accounted_tmp/cleanup-once.stdout" \
+    2> "$accounted_tmp/cleanup-once.stderr" || cleanup_once_status=$?
+[ "$cleanup_once_status" -ne 0 ] &&
+  [ "$(cat "$cleanup_once_counter")" -eq 2 ] &&
+  [ "$(cat "$accounted_tmp/cleanup-once.stderr")" = E_SHAPE ] &&
+  [ "$(receipt_bytes "$accounted_tmp/cleanup-once.receipt")" -gt 0 ] &&
+  [ -z "$(find "$cleanup_once_root" -mindepth 1 -print -quit)" ] ||
+  fail 'transient cleanup did not preserve the semantic token'
+
+cleanup_persistent_root="$accounted_tmp/cleanup-persistent-root"
+cleanup_persistent_counter="$accounted_tmp/cleanup-persistent.count"
+mkdir -m 700 "$cleanup_persistent_root"
+printf '0\n' > "$cleanup_persistent_counter"
+cleanup_persistent_status=0
+ACCOUNTED_REAL_RM="$(command -v rm)" \
+ACCOUNTED_CLEANUP_COUNTER="$cleanup_persistent_counter" \
+ACCOUNTED_CLEANUP_MODE=persistent \
+  PATH="$cleanup_failure_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$cleanup_persistent_root" 536870912 \
+    validate-document "$accounted_registry" \
+    3> "$accounted_tmp/cleanup-persistent.receipt" \
+    > "$accounted_tmp/cleanup-persistent.stdout" \
+    2> "$accounted_tmp/cleanup-persistent.stderr" || cleanup_persistent_status=$?
+cleanup_persistent_leftover="$(find "$cleanup_persistent_root" -mindepth 1 \
+  -maxdepth 1 -type d -print -quit)"
+[ "$cleanup_persistent_status" -ne 0 ] &&
+  [ "$(cat "$cleanup_persistent_counter")" -eq 2 ] &&
+  [ "$(cat "$accounted_tmp/cleanup-persistent.stderr")" = E_RUNTIME ] &&
+  [ "$(receipt_bytes "$accounted_tmp/cleanup-persistent.receipt")" -gt 0 ] &&
+  [ -n "$cleanup_persistent_leftover" ] ||
+  fail 'persistent cleanup failure did not override the semantic token'
+"$(command -v rm)" -rf -- "$cleanup_persistent_leftover"
+[ -z "$(find "$cleanup_persistent_root" -mindepth 1 -print -quit)" ] ||
+  fail 'test-owned persistent cleanup recovery failed'
+
 for required_path in \
   "core/v1/generations/$accounted_generation/modules/schema.jq" \
   "core/v1/generations/$accounted_generation/core-ingress.sh" \
@@ -949,4 +1117,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 39/39 passed\n'
+printf 'portable core accounted validation: 46/46 passed\n'

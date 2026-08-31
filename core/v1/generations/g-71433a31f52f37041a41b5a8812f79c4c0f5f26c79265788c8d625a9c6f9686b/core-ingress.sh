@@ -2,14 +2,22 @@
 # shellcheck disable=SC2016,SC2034
 
 portable_core_ingress_error() {
+  local error_token
   case "${1:-}" in
     E_RUNTIME|E_PARSE|E_CANONICAL|E_LIMIT|E_SHAPE|E_REF|E_RELATION)
-      printf '%s\n' "$1" >&2
+      error_token="$1"
       ;;
     *)
-      printf '%s\n' E_RUNTIME >&2
+      error_token=E_RUNTIME
       ;;
   esac
+  if [ "${PORTABLE_CORE_INGRESS_BUFFER_ERRORS:-false}" = true ]; then
+    if [ -z "${PORTABLE_CORE_INGRESS_PENDING_ERROR:-}" ]; then
+      PORTABLE_CORE_INGRESS_PENDING_ERROR="$error_token"
+    fi
+  else
+    printf '%s\n' "$error_token" >&2
+  fi
   return 1
 }
 
@@ -209,6 +217,7 @@ portable_core_ingress_open() {
   local required_dir
   local scratch_mode
   local mkdir_status=0
+  local owner_pid
 
   case "$#" in
     0) ;;
@@ -227,6 +236,9 @@ portable_core_ingress_open() {
       return 1
       ;;
   esac
+
+  PORTABLE_CORE_INGRESS_BUFFER_ERRORS="$accounted"
+  PORTABLE_CORE_INGRESS_PENDING_ERROR=''
 
   PORTABLE_CORE_INGRESS_GENERATION='g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b'
   case "${BASH_SOURCE[0]}" in
@@ -423,7 +435,13 @@ portable_core_ingress_open() {
       return 1
     }
     PORTABLE_CORE_INGRESS_SCRATCH_ROOT="$accounted_root"
-    temp_path="$accounted_root/portable-core-accounted-v1"
+    owner_pid="$$"
+    [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && [ "${#owner_pid}" -le 20 ] || {
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    }
+    PORTABLE_CORE_INGRESS_OWNER_PID="$owner_pid"
+    temp_path="$accounted_root/portable-core-accounted-v1.$owner_pid"
     if [ -e "$temp_path" ] || [ -L "$temp_path" ]; then
       portable_core_ingress_error E_RUNTIME
       return 1
@@ -434,6 +452,18 @@ portable_core_ingress_open() {
       mkdir_status=$?
     if [ "$mkdir_status" -eq 0 ]; then
       PORTABLE_CORE_INGRESS_OWNS_TEMP=true
+    elif portable_core_ingress_physical_directory_path "$temp_path" &&
+         [ -O "$temp_path" ]; then
+      if scratch_mode="$("$PORTABLE_CORE_INGRESS_STAT" -c %a -- \
+          "$temp_path" 2>/dev/null)"; then
+        :
+      elif scratch_mode="$("$PORTABLE_CORE_INGRESS_STAT" -f %Lp \
+          "$temp_path" 2>/dev/null)"; then
+        :
+      else
+        scratch_mode=''
+      fi
+      [ "$scratch_mode" = 700 ] && PORTABLE_CORE_INGRESS_OWNS_TEMP=true
     fi
     PORTABLE_CORE_INGRESS_CREATING_TEMP=false
     if [ -n "$PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL" ] ||
@@ -1634,7 +1664,8 @@ portable_core_ingress_close() {
   local temp_path="${PORTABLE_CORE_INGRESS_TEMP:-}"
   if [ "${PORTABLE_CORE_INGRESS_ACCOUNTED:-false}" = true ]; then
     if [ "$temp_path" = \
-         "${PORTABLE_CORE_INGRESS_SCRATCH_ROOT:-}/portable-core-accounted-v1" ]; then
+         "${PORTABLE_CORE_INGRESS_SCRATCH_ROOT:-}/portable-core-accounted-v1.${PORTABLE_CORE_INGRESS_OWNER_PID:-}" ] &&
+       [[ "${PORTABLE_CORE_INGRESS_OWNER_PID:-}" =~ ^[1-9][0-9]*$ ]]; then
       if [ "${PORTABLE_CORE_INGRESS_OWNS_TEMP:-false}" = true ]; then
         if [ -d "$temp_path" ] && [ ! -L "$temp_path" ]; then
           if ! "$PORTABLE_CORE_INGRESS_RM" -rf -- "$temp_path" \
@@ -1649,6 +1680,7 @@ portable_core_ingress_close() {
       fi
       PORTABLE_CORE_INGRESS_CREATING_TEMP=false
       PORTABLE_CORE_INGRESS_OWNS_TEMP=false
+      PORTABLE_CORE_INGRESS_OWNER_PID=''
       PORTABLE_CORE_INGRESS_TEMP=''
       return 0
     fi
