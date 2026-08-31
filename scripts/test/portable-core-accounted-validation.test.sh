@@ -12,11 +12,12 @@ accounted_wrapper="$accounted_root/scripts/core-contract.sh"
 accounted_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ystack-core-accounted.XXXXXX")"
 accounted_tmp="$(cd "$accounted_tmp" && pwd -P)"
 accounted_download=''
-accounted_background_pids=()
+accounted_background_pids=('')
 
 cleanup() {
   local background_pid
   for background_pid in "${accounted_background_pids[@]}"; do
+    [ -n "$background_pid" ] || continue
     kill "$background_pid" >/dev/null 2>&1 || :
     wait "$background_pid" >/dev/null 2>&1 || :
   done
@@ -139,8 +140,10 @@ run_case() {
 }
 
 receipt_bytes() {
-  grep -Eq '^written-bytes:(0|[1-9][0-9]*)$' "$1" ||
+  if [ "$(wc -l < "$1" | tr -d ' ')" -ne 1 ] ||
+     ! grep -Eq '^written-bytes:(0|[1-9][0-9]*)$' "$1"; then
     fail 'malformed accounted receipt'
+  fi
   sed -n 's/^written-bytes://p' "$1"
 }
 
@@ -416,6 +419,122 @@ PATH="$ordinary_bin" /bin/bash "$package_wrapper" validate-document \
   [ "$(cat "$accounted_tmp/isolated.stderr")" = E_SHAPE ] ||
   fail 'ordinary mode requires accounted-only tools'
 
+open_failure_bin="$accounted_tmp/open-failure-bin"
+open_failure_root="$accounted_tmp/open-failure-root"
+mkdir -p "$open_failure_bin"
+mkdir -m 700 "$open_failure_root"
+cat > "$open_failure_bin/head" <<'HEAD_OPEN_FAILURE'
+#!/bin/bash
+set -uo pipefail
+status=0
+"$ACCOUNTED_REAL_HEAD" "$@" || status=$?
+/bin/mkdir "$ACCOUNTED_OPEN_FAILURE_ROOT/portable-core-accounted-v1/raw.1"
+exit "$status"
+HEAD_OPEN_FAILURE
+chmod 0755 "$open_failure_bin/head"
+open_failure_status=0
+ACCOUNTED_REAL_HEAD="$(command -v head)" \
+ACCOUNTED_OPEN_FAILURE_ROOT="$open_failure_root" \
+  PATH="$open_failure_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$open_failure_root" 536870912 \
+    validate-document "$accounted_registry" \
+    3> "$accounted_tmp/open-failure.receipt" \
+    > "$accounted_tmp/open-failure.stdout" \
+    2> "$accounted_tmp/open-failure.stderr" || open_failure_status=$?
+[ "$open_failure_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/open-failure.stdout" ] &&
+  [ "$(cat "$accounted_tmp/open-failure.stderr")" = E_RUNTIME ] &&
+  [ "$(receipt_bytes "$accounted_tmp/open-failure.receipt")" -eq 0 ] &&
+  ! grep -Fq "$open_failure_root" "$accounted_tmp/open-failure.stderr" &&
+  [ -z "$(find "$open_failure_root" -mindepth 1 -print -quit)" ] ||
+  fail 'scratch open failure leaked its private path'
+
+invalid_command_root="$accounted_tmp/invalid-command-root"
+mkdir -m 700 "$invalid_command_root"
+invalid_command_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$invalid_command_root" 536870912 invalid-command \
+  3> "$accounted_tmp/invalid-command.receipt" \
+  > "$accounted_tmp/invalid-command.stdout" \
+  2> "$accounted_tmp/invalid-command.stderr" || invalid_command_status=$?
+[ "$invalid_command_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/invalid-command.stdout" ] &&
+  [ "$(cat "$accounted_tmp/invalid-command.stderr")" = E_USAGE ] &&
+  [ "$(receipt_bytes "$accounted_tmp/invalid-command.receipt")" -eq 0 ] ||
+  fail 'accepted accounted command failure omitted its receipt'
+
+missing_package_root="$accounted_tmp/missing-package"
+missing_package_scratch="$accounted_tmp/missing-package-scratch"
+mkdir -p "$missing_package_root/scripts"
+mkdir -m 700 "$missing_package_scratch"
+cp "$accounted_wrapper" "$missing_package_root/scripts/core-contract.sh"
+chmod 0755 "$missing_package_root/scripts/core-contract.sh"
+missing_package_status=0
+PATH="$accounted_path" /bin/bash \
+  "$missing_package_root/scripts/core-contract.sh" \
+  --accounted-validation "$missing_package_scratch" 536870912 \
+  validate-document "$accounted_registry" \
+  3> "$accounted_tmp/missing-package.receipt" \
+  > "$accounted_tmp/missing-package.stdout" \
+  2> "$accounted_tmp/missing-package.stderr" || missing_package_status=$?
+[ "$missing_package_status" -ne 0 ] &&
+  [ ! -s "$accounted_tmp/missing-package.stdout" ] &&
+  [ "$(cat "$accounted_tmp/missing-package.stderr")" = E_RUNTIME ] &&
+  [ "$(receipt_bytes "$accounted_tmp/missing-package.receipt")" -eq 0 ] ||
+  fail 'accepted accounted package failure omitted its receipt'
+
+signal_bin="$accounted_tmp/signal-bin"
+signal_root="$accounted_tmp/signal-root"
+signal_marker="$accounted_tmp/signal.marker"
+signal_payload="$accounted_tmp/signal.payload"
+mkdir -p "$signal_bin"
+mkdir -m 700 "$signal_root"
+cat > "$signal_bin/awk" <<'AWK_SIGNAL'
+#!/bin/bash
+set -uo pipefail
+decode=false
+for argument in "$@"; do
+  case "$argument" in *'printf "%c"'*) decode=true ;; esac
+done
+if [ "$decode" = false ]; then
+  exec "$ACCOUNTED_REAL_AWK" "$@"
+fi
+/bin/cat > "$ACCOUNTED_SIGNAL_PAYLOAD"
+"$ACCOUNTED_REAL_AWK" '
+  { for (i = 1; i <= NF; i++) if (++seen == 1) printf "%c", ($i + 0) }
+' "$ACCOUNTED_SIGNAL_PAYLOAD"
+printf '%s\n' "$PPID" > "$ACCOUNTED_SIGNAL_MARKER"
+kill -TERM "$PPID"
+/bin/sleep 1
+"$ACCOUNTED_REAL_AWK" '
+  { for (i = 1; i <= NF; i++) if (++seen > 1) printf "%c", ($i + 0) }
+' "$ACCOUNTED_SIGNAL_PAYLOAD"
+AWK_SIGNAL
+chmod 0755 "$signal_bin/awk"
+signal_status=0
+ACCOUNTED_REAL_AWK="$(command -v awk)" \
+ACCOUNTED_SIGNAL_MARKER="$signal_marker" \
+ACCOUNTED_SIGNAL_PAYLOAD="$signal_payload" \
+  PATH="$signal_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$signal_root" 536870912 \
+    validate-document "$accounted_registry" \
+    3> "$accounted_tmp/signal.receipt" \
+    > "$accounted_tmp/signal.stdout" \
+    2> "$accounted_tmp/signal.stderr" || signal_status=$?
+signal_expected_bytes="$(wc -c < "$accounted_registry" | tr -d ' ')"
+if [ "$signal_status" -eq 0 ] || [ ! -s "$signal_marker" ] ||
+   [ -s "$accounted_tmp/signal.stdout" ] ||
+   [ "$(cat "$accounted_tmp/signal.stderr")" != E_RUNTIME ] ||
+   [ "$(receipt_bytes "$accounted_tmp/signal.receipt")" -ne \
+     "$signal_expected_bytes" ] ||
+   [ -n "$(find "$signal_root" -mindepth 1 -print -quit)" ]; then
+  printf 'signal status=%s expected=%s receipt=%s stderr=%s\n' \
+    "$signal_status" "$signal_expected_bytes" \
+    "$(cat "$accounted_tmp/signal.receipt")" \
+    "$(cat "$accounted_tmp/signal.stderr")" >&2
+  fail 'deferred signal receipt did not match materialized bytes'
+fi
+
 for required_path in \
   "core/v1/generations/$accounted_generation/modules/schema.jq" \
   "core/v1/generations/$accounted_generation/core-ingress.sh" \
@@ -429,4 +548,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 23/23 passed\n'
+printf 'portable core accounted validation: 27/27 passed\n'

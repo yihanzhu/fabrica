@@ -14,6 +14,29 @@ assembly_error() {
 assembly_accounted=false
 assembly_scratch_root=''
 assembly_byte_budget=0
+
+assembly_cleanup() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$(type -t portable_core_ingress_close 2>/dev/null)" = function ]; then
+    portable_core_ingress_close >/dev/null 2>&1 || :
+  fi
+  if [ "$assembly_accounted" = true ]; then
+    printf 'written-bytes:%s\n' \
+      "${PORTABLE_CORE_INGRESS_WRITTEN_BYTES:-0}" 2>/dev/null >&3 || status=1
+  fi
+  exit "$status"
+}
+
+assembly_signal() {
+  if [ -n "${PORTABLE_CORE_INGRESS_RESERVED_BYTES:-}" ]; then
+    # shellcheck disable=SC2034
+    PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL="$1"
+    return 0
+  fi
+  exit 1
+}
+
 if [ "${1:-}" = --accounted-validation ]; then
   if [ "$#" -lt 4 ] ||
      [[ ! "${3:-}" =~ ^(0|[1-9][0-9]*)$ ]] ||
@@ -26,6 +49,10 @@ if [ "${1:-}" = --accounted-validation ]; then
   assembly_scratch_root="$2"
   assembly_byte_budget="$3"
   shift 3
+  trap assembly_cleanup EXIT
+  trap 'assembly_signal HUP' HUP
+  trap 'assembly_signal INT' INT
+  trap 'assembly_signal TERM' TERM
 fi
 
 case "${1:-}" in
@@ -105,20 +132,10 @@ for assembly_required_file in \
   fi
 done
 
-assembly_cleanup() {
-  local status=$?
-  if [ "$(type -t portable_core_ingress_close 2>/dev/null)" = function ]; then
-    portable_core_ingress_close >/dev/null 2>&1 || :
-  fi
-  if [ "$assembly_accounted" = true ]; then
-    printf 'written-bytes:%s\n' \
-      "${PORTABLE_CORE_INGRESS_WRITTEN_BYTES:-0}" >&3 2>/dev/null || status=1
-  fi
-  trap - EXIT
-  exit "$status"
-}
 trap assembly_cleanup EXIT
-trap 'exit 1' HUP INT TERM
+trap 'assembly_signal HUP' HUP
+trap 'assembly_signal INT' INT
+trap 'assembly_signal TERM' TERM
 
 # shellcheck source=/dev/null
 if ! source "$assembly_ingress" 2>/dev/null; then
@@ -148,7 +165,7 @@ portable_core_ingress_close || exit 1
 trap - EXIT HUP INT TERM
 if [ "$assembly_accounted" = true ] &&
    ! printf 'written-bytes:%s\n' "$PORTABLE_CORE_INGRESS_WRITTEN_BYTES" \
-       >&3 2>/dev/null; then
+       2>/dev/null >&3; then
   assembly_error E_RUNTIME
   exit 1
 fi

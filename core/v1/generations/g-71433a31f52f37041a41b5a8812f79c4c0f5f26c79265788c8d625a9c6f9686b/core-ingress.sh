@@ -125,26 +125,31 @@ portable_core_ingress_account_commit() {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
+  [ -z "${PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL:-}" ]
 }
 
 portable_core_ingress_account_files() {
   local expected_bytes="$1"
   local measured_path
   local measured_total=0
+  local invalid_path=false
   shift
 
   [ "${PORTABLE_CORE_INGRESS_ACCOUNTED:-false}" = true ] || return 0
   for measured_path in "$@"; do
     if ! portable_core_ingress_regular_file "$measured_path" ||
        ! portable_core_ingress_file_size "$measured_path"; then
-      PORTABLE_CORE_INGRESS_RESERVED_BYTES=''
-      portable_core_ingress_error E_RUNTIME
-      return 1
+      invalid_path=true
+      continue
     fi
     measured_total=$((measured_total + PORTABLE_CORE_INGRESS_MEASURED_SIZE))
   done
-  portable_core_ingress_account_commit "$measured_total" &&
-    [ "$measured_total" -eq "$expected_bytes" ]
+  portable_core_ingress_account_commit "$measured_total" || return 1
+  if [ "$invalid_path" = true ] ||
+     [ "$measured_total" -ne "$expected_bytes" ]; then
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  fi
 }
 
 portable_core_ingress_account_append() {
@@ -361,6 +366,7 @@ portable_core_ingress_open() {
   PORTABLE_CORE_INGRESS_REMAINING_BYTES="$accounted_budget"
   PORTABLE_CORE_INGRESS_WRITTEN_BYTES=0
   PORTABLE_CORE_INGRESS_RESERVED_BYTES=''
+  PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL=''
   if [ "$accounted" = true ]; then
     PORTABLE_CORE_INGRESS_STAT="$(command -v stat 2>/dev/null)" || {
       portable_core_ingress_error E_RUNTIME
@@ -568,7 +574,7 @@ portable_core_ingress_snapshot() {
   if printf '%s\n' "$encoded_bytes" |
       "$PORTABLE_CORE_INGRESS_AWK" '
         { for (i = 1; i <= NF; i++) printf "%c", ($i + 0) }
-      ' > "$raw_path" 2>/dev/null; then
+      ' 2>/dev/null > "$raw_path"; then
     pipeline_status=("${PIPESTATUS[@]}")
   else
     pipeline_status=("${PIPESTATUS[@]}")
@@ -1047,7 +1053,7 @@ AWK
         -v scalar_file="$scalar_path" \
         -v key_file="$key_path" \
         -v key_pair_file="$key_pair_path" "$scan_program" \
-        > "$meta_path" 2>/dev/null; then
+        2>/dev/null > "$meta_path"; then
     pipeline_status=("${PIPESTATUS[@]}")
   else
     pipeline_status=("${PIPESTATUS[@]}")
