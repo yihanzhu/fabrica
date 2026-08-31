@@ -120,7 +120,7 @@ GH_TOKEN=must-not-leak AWS_SECRET_ACCESS_KEY=must-not-leak SSH_AUTH_SOCK=/must/n
 [ ! -s "$error" ] || fail 'success diagnostics'
 "$jq_bin" -e '
   .schema_version == 1 and .kind == "adapter_contract_observation" and
-  (.cells | length) == 4 and (.negative_observations | length) == 10 and
+  (.cells | length) == 4 and (.negative_observations | length) == 11 and
   ([.cells[].projection] | unique | length) == 1 and
   ([.cells[].provenance.profile_sha256] | unique | length) == 4 and
   (.non_claims | index("external-target-smoke") != null) and
@@ -132,6 +132,40 @@ GH_TOKEN=must-not-leak AWS_SECRET_ACCESS_KEY=must-not-leak SSH_AUTH_SOCK=/must/n
 [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] || fail 'scratch cleanup'
 /usr/bin/grep -Fq 'moon-garden' "$fixture/target/source.txt" || fail 'unrelated target fixture'
 pass '2x2 projection, provenance, environment, Git truth, and cleanup'
+
+race_out="$tmp/package-race.out"
+race_err="$tmp/package-race.err"
+race_forge="$fixture/cells/aa/assets/packages/forge-a.sh"
+race_saved="$tmp/forge-a.saved"
+/bin/cp "$race_forge" "$race_saved"
+PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$race_out" 2> "$race_err" &
+race_pid=$!
+race_marker=''
+for _ in {1..12000}; do
+  race_marker=$(/usr/bin/find "$fixture/scratch" -name 'aa.producer.stage-result' -type f -print -quit)
+  [ -z "$race_marker" ] || break
+  /bin/kill -0 "$race_pid" 2>/dev/null || break
+  /bin/sleep 0.005
+done
+if [ -z "$race_marker" ]; then
+  /bin/kill "$race_pid" 2>/dev/null || :
+  wait "$race_pid" 2>/dev/null || :
+  fail 'immutable package race marker'
+fi
+/usr/bin/printf '%s\n' '#!/bin/bash' \
+  "/usr/bin/printf mutable > '$fixture/scratch/mutable-package-ran'" \
+  'exit 99' > "$race_forge"
+/bin/chmod 0755 "$race_forge"
+if ! wait "$race_pid"; then
+  fail 'immutable package race run'
+fi
+[ ! -s "$race_err" ] && [ ! -e "$fixture/scratch/mutable-package-ran" ] &&
+  [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'mutable package executed'
+/bin/cp "$race_saved" "$race_forge"
+/usr/bin/git -C "$fixture/cells/aa/assets" diff --quiet -- packages/forge-a.sh ||
+  fail 'package race restore'
+pass 'mapped package mutation cannot change snapshot execution'
 
 expect_failure() {
   local name=$1

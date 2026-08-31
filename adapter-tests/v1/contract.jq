@@ -29,7 +29,8 @@ def expected_cases($fixture):
     {case_id:"reject-transport",expected_error:"E_TRANSPORT"},
     {case_id:"reject-multiple",expected_error:"E_MULTIPLE"},
     {case_id:"reject-unlinked",expected_error:"E_UNLINKED_PAYLOAD"},
-    {case_id:"reject-duplicate",expected_error:"E_DUPLICATE_PAYLOAD"}
+    {case_id:"reject-duplicate",expected_error:"E_DUPLICATE_PAYLOAD"},
+    {case_id:"reject-descendant",expected_error:"E_DESCENDANT"}
   ] | map(if has("phase") then . else . + {
     phase:"producer",producer_package_id:"fake.protocol-fault",forge_package_id:"none",
     expected_verdict:"reject",equivalence_group:"protocol-negative",

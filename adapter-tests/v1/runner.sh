@@ -32,19 +32,28 @@ run_tmp=$(/usr/bin/mktemp -d "$fixture_root/scratch/run.XXXXXX") || runner_error
 cleanup() { /bin/rm -rf -- "$run_tmp"; }
 ACTIVE_CHILD_GROUP=''
 ACTIVE_CHILD_PID=''
+group_alive() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] && kill -0 -- "-$1" 2>/dev/null
+}
 terminate_active_group() {
   local group=$ACTIVE_CHILD_GROUP
   local leader=$ACTIVE_CHILD_PID
-  ACTIVE_CHILD_GROUP=''
-  ACTIVE_CHILD_PID=''
+  local tick
   if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
     kill -TERM -- "-$group" 2>/dev/null || :
-    /bin/sleep 0.1
-    kill -KILL -- "-$group" 2>/dev/null || :
+    for tick in {1..5}; do
+      group_alive "$group" || break
+      /bin/sleep 0.02
+    done
+    if group_alive "$group"; then
+      kill -KILL -- "-$group" 2>/dev/null || :
+    fi
   fi
   if [[ "$leader" =~ ^[1-9][0-9]*$ ]]; then
     wait "$leader" 2>/dev/null || :
   fi
+  ACTIVE_CHILD_GROUP=''
+  ACTIVE_CHILD_PID=''
 }
 signal_exit() {
   local status=$1
@@ -69,7 +78,7 @@ canonical() {
     cmp -s "$source" "$output"
 }
 
-[ "$(sha_file "$inventory")" = 73b90745ba3ae879f8d6d958e3133e33fb6169bc89fb9c26a826be1be9fd9fd6 ] ||
+[ "$(sha_file "$inventory")" = 100edb973c586192683917bc4896121117ef397161263510e09f03a0b269bd4a ] ||
   runner_error E_INVENTORY
 inventory_canonical="$run_tmp/inventory.canonical"
 canonical "$inventory" "$inventory_canonical" || runner_error E_INVENTORY
@@ -158,7 +167,7 @@ package_digest() {
     fake.producer.b) printf '%s\n' 602650c6cf4b161f5b92b273b6944a42fb84eb5946918e9ec13fed9746a20049 ;;
     fake.forge.a) printf '%s\n' 672636d079df76736b3b9160d7a38f67ff83767d7da455458c418c1cb0b539a6 ;;
     fake.forge.b) printf '%s\n' a87a8453b2daf7723a9565bb597531f198c7c891d2b47c7dfef80ffd3dc2096b ;;
-    fake.protocol-fault) printf '%s\n' d151dffcc4128d5925da82d6defe67efc7a05332441601fc5a740e7099e7bae3 ;;
+    fake.protocol-fault) printf '%s\n' a31c07896edb1ee04d2c87b4512e7199c6b6f514a998d110005ce24d42cdd27c ;;
     *) return 1 ;;
   esac
 }
@@ -183,11 +192,13 @@ mapped_root() {
   ' "$mapping"
 }
 
+VERIFIED_PACKAGE_SNAPSHOT=''
 verify_package() {
   local cell=$1
   local package=$2
   local ref=$3
-  local relative digest repository_id root algorithm commit entry meta mode type object snapshot
+  local relative digest repository_id root algorithm commit entry meta mode type object snapshot package_key
+  VERIFIED_PACKAGE_SNAPSHOT=''
   relative=$(package_path "$package") || return 1
   digest=$(package_digest "$package") || return 1
   "$jq_bin" -e --arg path "$relative" '
@@ -214,10 +225,15 @@ verify_package() {
   [ "$mode" = "$("$jq_bin" -r '.mode' <<< "$ref")" ] &&
     [ "$type" = "$("$jq_bin" -r '.object_type' <<< "$ref")" ] &&
     [ "$object" = "$("$jq_bin" -r '.object_id' <<< "$ref")" ] || return 1
-  snapshot="$run_tmp/package.$cell.${package##*.}"
+  package_key=${package//./-}
+  snapshot="$run_tmp/package.$cell.$package_key"
   git_safe -C "$root" cat-file blob "$object" > "$snapshot" || return 1
-  [ -f "$root/$relative" ] && [ ! -L "$root/$relative" ] &&
-    cmp -s "$snapshot" "$root/$relative" && [ "$(sha_file "$snapshot")" = "$digest" ]
+  /bin/chmod 0500 "$snapshot" || return 1
+  [ -f "$snapshot" ] && [ ! -L "$snapshot" ] &&
+    [ -f "$root/$relative" ] && [ ! -L "$root/$relative" ] &&
+    cmp -s "$snapshot" "$root/$relative" && [ "$(sha_file "$snapshot")" = "$digest" ] ||
+    return 1
+  VERIFIED_PACKAGE_SNAPSHOT=$snapshot
 }
 
 verify_source_claim() {
@@ -302,6 +318,7 @@ run_child() {
   local output=$4
   local diagnostic=$5
   local child_home=$6
+  local dependency=${7:-}
   local pid tick=0
   CHILD_STATUS=0
   CHILD_ERROR=''
@@ -310,6 +327,7 @@ run_child() {
   (
     ulimit -t 2 -f 2048 -n 64
     child_args=("$request" "$jq_bin" "$contract" "$core_fixture_modules")
+    [ -z "$dependency" ] || child_args+=("$dependency")
     [ "$mode" = direct ] || child_args=("$mode" "${child_args[@]}")
     exec /usr/bin/env -i HOME="$child_home" TMPDIR="$child_home" PATH=/usr/bin:/bin \
       LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
@@ -333,6 +351,11 @@ run_child() {
     /bin/sleep 0.05
   done
   wait "$pid" || CHILD_STATUS=$?
+  if group_alive "$ACTIVE_CHILD_GROUP"; then
+    terminate_active_group
+    CHILD_ERROR=E_DESCENDANT
+    return 1
+  fi
   ACTIVE_CHILD_GROUP=''
   ACTIVE_CHILD_PID=''
   [ "$CHILD_STATUS" -eq 0 ] || { CHILD_ERROR=E_TRANSPORT; return 1; }
@@ -445,8 +468,6 @@ for cell in aa ab ba bb; do
   forge_variant=${cell#?}
   producer_package="fake.producer.$producer_variant"
   forge_package="fake.forge.$forge_variant"
-  producer_path=$(package_path "$producer_package")
-  forge_path=$(package_path "$forge_package")
   producer_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="producer") | .package_ref' "$cell_root/profile/profiles/default.json")
   forge_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="forge") | .package_ref' "$cell_root/profile/profiles/default.json")
   producer_resolved_ref=$("$jq_bin" -c '.body.bindings[] | select(.binding.role=="producer") | .binding.package_ref' "$resolved")
@@ -460,12 +481,16 @@ for cell in aa ab ba bb; do
     --arg mode "$fault_mode" --arg type "$fault_type" --arg object "$fault_object" \
     '.location={kind:"path",value:$path} | .mode=$mode | .object_type=$type | .object_id=$object' \
     <<< "$forge_ref")
-  if [ "$producer_ref" != "$producer_resolved_ref" ] || [ "$forge_ref" != "$forge_resolved_ref" ] ||
-     ! verify_package "$cell" "$producer_package" "$producer_ref" ||
-     ! verify_package "$cell" "$forge_package" "$forge_ref" ||
-     ! verify_package "$cell" fake.protocol-fault "$fault_ref"; then
+  if [ "$producer_ref" != "$producer_resolved_ref" ] || [ "$forge_ref" != "$forge_resolved_ref" ]; then
     runner_error E_PACKAGE
   fi
+  verify_package "$cell" "$producer_package" "$producer_ref" || runner_error E_PACKAGE
+  producer_executable=$VERIFIED_PACKAGE_SNAPSHOT
+  [ "$cell" != aa ] || fault_producer_executable=$producer_executable
+  verify_package "$cell" "$forge_package" "$forge_ref" || runner_error E_PACKAGE
+  forge_executable=$VERIFIED_PACKAGE_SNAPSHOT
+  verify_package "$cell" fake.protocol-fault "$fault_ref" || runner_error E_PACKAGE
+  [ "$cell" != aa ] || fault_executable=$VERIFIED_PACKAGE_SNAPSHOT
   verify_all_sources "$cell" "$resolved" || runner_error E_SOURCE
   profile="$profiles/profiles/default.json"
   manifest_args=()
@@ -514,7 +539,7 @@ for cell in aa ab ba bb; do
     --arg command request-envelope -f "$contract" "$producer_request" >/dev/null || runner_error E_PROTOCOL_PRODUCER_REQUEST
   producer_output="$run_tmp/$cell.producer.output"
   producer_error="$run_tmp/$cell.producer.stderr"
-  run_child "$assets/$producer_path" direct "$producer_request" "$producer_output" \
+  run_child "$producer_executable" direct "$producer_request" "$producer_output" \
     "$producer_error" "$run_tmp/$cell.producer.home" || runner_error "$CHILD_ERROR"
   producer_result="$run_tmp/$cell.producer.stage-result"
   [ ! -s "$producer_error" ] || runner_error E_PROTOCOL_PRODUCER_OUTPUT
@@ -556,7 +581,7 @@ for cell in aa ab ba bb; do
   forge_output="$run_tmp/$cell.forge.output"
   forge_error="$run_tmp/$cell.forge.stderr"
   forge_home="$run_tmp/$cell.forge.home"
-  run_child "$assets/$forge_path" direct "$forge_request" "$forge_output" \
+  run_child "$forge_executable" direct "$forge_request" "$forge_output" \
     "$forge_error" "$forge_home" || runner_error "$CHILD_ERROR"
   forge_result="$run_tmp/$cell.forge.stage-result"
   [ ! -s "$forge_error" ] || runner_error E_PROTOCOL_FORGE_OUTPUT
@@ -614,18 +639,19 @@ for cell in aa ab ba bb; do
   ' >> "$cells"
 done
 
-fault_executable="$fixture_root/cells/aa/assets/packages/protocol-fault.sh"
+[ -n "${fault_executable:-}" ] || runner_error E_PACKAGE
+[ -n "${fault_producer_executable:-}" ] || runner_error E_PACKAGE
 negative_request="$run_tmp/aa.producer.request"
 negative_stage_request="$run_tmp/aa.producer.stage-request"
 negative_resolved="$fixture_root/cells/aa/resolved.json"
-for negative in degraded empty malformed partial relabelled timeout transport multiple unlinked duplicate; do
+for negative in degraded empty malformed partial relabelled timeout transport multiple unlinked duplicate descendant; do
   negative_id="reject-$negative"
   negative_output="$run_tmp/$negative.output"
   negative_stderr="$run_tmp/$negative.stderr"
   negative_result="$run_tmp/$negative.stage-result"
   observed=''
   if ! run_child "$fault_executable" "$negative" "$negative_request" "$negative_output" \
-      "$negative_stderr" "$run_tmp/$negative.home"; then
+      "$negative_stderr" "$run_tmp/$negative.home" "$fault_producer_executable"; then
     observed=$CHILD_ERROR
   elif validate_response "$negative_output" "$negative_stage_request" "$negative_resolved" \
       matrix-aa producer "$negative_result"; then
@@ -639,7 +665,8 @@ for negative in degraded empty malformed partial relabelled timeout transport mu
     '{assertion_ids:["expected-error"],case_id:$case_id,observed_error:$observed_error}' >> "$negatives"
 done
 /bin/sleep 1.2
-[ ! -e "$fixture_root/scratch/timeout-survived" ] || runner_error E_GROUP_LEAK
+[ ! -e "$fixture_root/scratch/timeout-survived" ] &&
+  [ ! -e "$fixture_root/scratch/descendant-survived" ] || runner_error E_GROUP_LEAK
 
 "$jq_bin" -s -e '([.[].projection] | unique | length) == 1 and
   ([.[].provenance.producer.package_id] | unique | length) == 2 and
