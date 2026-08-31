@@ -52,7 +52,7 @@ esac
 shift
 assembly_inputs=("$@")
 
-PORTABLE_CORE_GENERATION='g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386'
+PORTABLE_CORE_GENERATION='g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b'
 assembly_source="${BASH_SOURCE[0]}"
 case "$assembly_source" in
   /*) ;;
