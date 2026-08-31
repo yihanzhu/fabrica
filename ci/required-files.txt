@@ -154,3 +154,15 @@ core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa9218
 core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/schema.jq
 core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/stage_request.jq
 scripts/test/portable-core-v2-fake-forge.test.sh
+
+# Inactive fake producer/forge adapter contract matrix
+adapter-tests/v1/runner.sh
+adapter-tests/v1/contract.jq
+adapter-tests/v1/inventory.json
+adapter-tests/v1/fakes/producer-a.sh
+adapter-tests/v1/fakes/producer-b.sh
+adapter-tests/v1/fakes/forge-a.sh
+adapter-tests/v1/fakes/forge-b.sh
+adapter-tests/v1/fakes/protocol-fault.sh
+adapter-tests/v1/fixture/source.txt
+scripts/test/portable-adapter-contracts.test.sh

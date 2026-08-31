@@ -308,6 +308,17 @@ materialization in a caller-disposable repository. The package is not qualified 
 It grants no credential, network, publish, push, merge, or remote branch-write
 capability. The switch does not install the resolver or select a live profile.
 
+Restore every path in the manifest's inactive fake adapter matrix block, then run:
+
+```sh
+bash scripts/test/portable-adapter-contracts.test.sh
+```
+
+The proof resolves four fake-only profiles, validates both core stage records in
+each cell, and checks the accepted 2×2 matrix plus closed negative protocol cases.
+It uses no real adapter or credential and makes no network/host isolation,
+qualification, activation, or external-target-smoke claim.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
