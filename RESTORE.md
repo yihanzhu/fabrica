@@ -281,9 +281,10 @@ The proof checks the fixed package, public error boundary, and the complete 34-r
 279-row migration ledgers. It does not install or activate a profile, contact a target,
 or grant authority. The existing `/yshifu` restore path remains separate.
 
-The generation registry is ordered and append-only. The selected generation also
-contains the inactive accounted-validation interface. Restore every file listed in
-the manifest from the same commit, then run its focused proof:
+The v1 generation registry is ordered and append-only. Its last generation contains
+the inactive accounted-validation interface and remains restorable after the v2
+selection. Restore every file listed in the manifest from the same commit, then run
+its focused proof:
 
 ```sh
 bash scripts/test/portable-core-accounted-validation.test.sh
@@ -294,17 +295,18 @@ descriptor-3 receipt, ordinary-call compatibility, cleanup, and byte-for-byte co
 of the unchanged exports. It performs no install, activation, networked validation,
 or target use.
 
-`core/v2/` is a separate, append-only inactive fake-forge contract generation.
-Restore its registry and complete generation from one commit, then run:
+`core/v2/` is the append-only inactive fake-forge generation selected by the stable
+wrapper and inactive profile resolver. Restore its registry and complete generation
+from one commit, then run:
 
 ```sh
 bash scripts/test/portable-core-v2-fake-forge.test.sh
 ```
 
-This proof validates only deterministic fake candidate materialization in a
-caller-disposable repository. The package is not selected by the stable wrapper,
-is not qualified for a real forge, and grants no credential, network, publish,
-push, merge, or remote branch-write capability.
+This proof validates the atomic wrapper selection and deterministic fake candidate
+materialization in a caller-disposable repository. The package is not qualified for a real forge.
+It grants no credential, network, publish, push, merge, or remote branch-write
+capability. The switch does not install the resolver or select a live profile.
 
 ---
 

@@ -24,6 +24,9 @@ Git objects, assembles the existing portable-core `resolved_profile`, and asks
 or activate a profile, authenticate a repository map, execute selected content, or
 access a remote or credential.
 
+The `v1` directory names the resolver's request and repository-map transport. Those
+invocation documents remain version 1 while emitted core documents use schema 2.
+
 The shell runtime is deliberately mode 0644. A trusted parent must start it with a
 direct fixed-path `execve`, an empty environment allowlist, fixed dependencies, and
 the test-proven resource limits. `scripts/test/portable-profile-resolution.test.sh`
@@ -40,9 +43,9 @@ write only a caller-disposable candidate repository and scratch space, and appen
 deterministic evidence. It grants no network, credential, publish, push, merge, or
 remote branch-write capability and is not qualified for a real forge.
 
-The stable `scripts/core-contract.sh` wrapper still selects core v1. The v2 package
-is validated only by `scripts/test/portable-core-v2-fake-forge.test.sh` until a
-separate compatibility change switches the resolver and wrapper together.
+The stable `scripts/core-contract.sh` wrapper and inactive resolver select this v2
+generation together. This is a repo-only compatibility switch. It does not install
+the resolver, select a live profile, or qualify a real forge.
 
 ## The current default team
 
@@ -271,7 +274,7 @@ merging the doc change — `doctor.sh`'s static validation is unaffected.
 
 ## Portable contract validator
 
-`scripts/core-contract.sh` is the stable, manual front door for the portable v1
+`scripts/core-contract.sh` is the stable, manual front door for the portable v2
 contract package. It accepts canonical JSON through three fixed forms:
 
 ```text
@@ -283,8 +286,9 @@ scripts/core-contract.sh validate-stage-run REQUEST RESOLVED_PROFILE RESULT
 It requires jq 1.6. Success is silent. Failure prints one `E_*` class without
 printing document bytes or paths. Validation proves only that supplied records match
 the portable structure and relationships. It does not prove provenance, trust, a
-permission grant, or policy approval. No manager, profile, target template, installer,
-or live `/yshifu` path calls this command yet.
+permission grant, or policy approval. Only the inactive resolver and tests call it
+today. No manager, selected profile, target template, installer, or live `/yshifu`
+path calls it.
 
 A trusted inactive caller can account for the validator's own scratch writes by
 adding `--accounted-validation SCRATCH_ROOT REMAINING_BYTES` before one of the
@@ -312,7 +316,7 @@ scripts/codex-review.sh    Codex reviewer harness: post `codex exec review` to a
 scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed issue vs. the north star, post the verdict to the issue verbatim
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
-scripts/core-contract.sh    Manual public front door for the portable v1 contracts
+scripts/core-contract.sh    Manual public front door for the portable v2 contracts
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below

@@ -203,7 +203,8 @@ esac
 shift
 assembly_inputs=("$@")
 
-PORTABLE_CORE_GENERATION='g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b'
+PORTABLE_CORE_SCHEMA_MAJOR='2'
+PORTABLE_CORE_GENERATION='g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e'
 assembly_source="${BASH_SOURCE[0]}"
 case "$assembly_source" in
   /*) ;;
@@ -232,13 +233,14 @@ if [ "$assembly_source" != "$assembly_repo/scripts/core-contract.sh" ] ||
   exit 1
 fi
 
-assembly_generation_root="$assembly_repo/core/v1/generations/$PORTABLE_CORE_GENERATION"
+assembly_schema_root="$assembly_repo/core/v$PORTABLE_CORE_SCHEMA_MAJOR"
+assembly_generation_root="$assembly_schema_root/generations/$PORTABLE_CORE_GENERATION"
 assembly_ingress="$assembly_generation_root/core-ingress.sh"
 assembly_program="$assembly_generation_root/contracts.jq"
 assembly_modules="$assembly_generation_root/modules"
 for assembly_required_dir in \
-  "$assembly_repo" "$assembly_repo/core" "$assembly_repo/core/v1" \
-  "$assembly_repo/core/v1/generations" "$assembly_generation_root" \
+  "$assembly_repo" "$assembly_repo/core" "$assembly_schema_root" \
+  "$assembly_schema_root/generations" "$assembly_generation_root" \
   "$assembly_modules"; do
   if [ ! -d "$assembly_required_dir" ] || [ -L "$assembly_required_dir" ]; then
     assembly_error E_RUNTIME

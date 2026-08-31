@@ -9,7 +9,8 @@ assembly_generation_root="$assembly_root/core/v1/generations/$assembly_generatio
 assembly_selected_root="$assembly_root/core/v1/generations/$assembly_selected_generation"
 assembly_module_dir="$assembly_generation_root/modules"
 assembly_program="$assembly_generation_root/contracts.jq"
-assembly_wrapper="$assembly_root/scripts/core-contract.sh"
+assembly_stable_wrapper="$assembly_root/scripts/core-contract.sh"
+assembly_wrapper="$assembly_stable_wrapper"
 
 detect_phase() {
   local wrapper="$1"
@@ -39,6 +40,22 @@ assembly_ledger="$assembly_fixture_dir/portable-core-assembly-ledger.tsv"
 assembly_manifest="$assembly_root/ci/required-files.txt"
 assembly_tmp="$(mktemp -d "${TMPDIR:-/tmp}/ystack-portable-assembly.XXXXXX")"
 assembly_download=""
+if [ "$assembly_phase" = post-switch ]; then
+  assembly_package="$assembly_tmp/v1-package"
+  assembly_package_generation="$assembly_package/core/v1/generations/$assembly_selected_generation"
+  mkdir -p "$assembly_package/scripts" "$assembly_package_generation/modules"
+  for assembly_export in contracts.jq core-ingress.sh modules/schema.jq \
+    modules/profile_graph.jq modules/stage_request.jq modules/result_facts.jq \
+    modules/result_truth.jq; do
+    cp "$assembly_selected_root/$assembly_export" \
+      "$assembly_package_generation/$assembly_export"
+  done
+  assembly_wrapper="$assembly_package/scripts/core-contract.sh"
+  sed -e "s/^PORTABLE_CORE_SCHEMA_MAJOR='[0-9][0-9]*'$/PORTABLE_CORE_SCHEMA_MAJOR='1'/" \
+    -e "s/^PORTABLE_CORE_GENERATION='g-[0-9a-f][0-9a-f]*'$/PORTABLE_CORE_GENERATION='$assembly_selected_generation'/" \
+    "$assembly_stable_wrapper" > "$assembly_wrapper"
+  chmod 0755 "$assembly_wrapper"
+fi
 
 cleanup() {
   if [ -n "$assembly_download" ] && [ -f "$assembly_download" ]; then

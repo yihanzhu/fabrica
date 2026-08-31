@@ -121,7 +121,8 @@ for package_export in contracts.jq core-ingress.sh modules/schema.jq \
   cp "$accounted_generation_root/$package_export" \
     "$package_generation/$package_export"
 done
-sed "s/$accounted_old/$accounted_generation/" \
+sed -e "s/^PORTABLE_CORE_SCHEMA_MAJOR='[0-9][0-9]*'$/PORTABLE_CORE_SCHEMA_MAJOR='1'/" \
+  -e "s/^PORTABLE_CORE_GENERATION='g-[0-9a-f][0-9a-f]*'$/PORTABLE_CORE_GENERATION='$accounted_generation'/" \
   "$package_root/scripts/core-contract.sh" > "$accounted_tmp/switched-wrapper"
 mv "$accounted_tmp/switched-wrapper" "$package_root/scripts/core-contract.sh"
 chmod 0755 "$package_root/scripts/core-contract.sh"
