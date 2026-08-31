@@ -11,7 +11,15 @@ fixture_builder="$test_root/scripts/test/portable-profile-resolution-fixtures.sh
 resolver_runtime="$test_root/resolver/v1/profile-resolve-runtime.sh"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-adapter-contracts.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
-trap '/bin/rm -rf -- "$tmp"' EXIT
+download=''
+
+cleanup() {
+  if [ -n "$download" ] && [ -f "$download" ]; then
+    /bin/rm -f -- "$download"
+  fi
+  /bin/rm -rf -- "$tmp"
+}
+trap cleanup EXIT
 
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 pass_count=0
@@ -24,12 +32,23 @@ case "$platform" in
   Linux:x86_64) jq_asset=jq-linux64; compiler=/usr/bin/cc ;;
   *) fail "unsupported host $platform" ;;
 esac
-jq_cache="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
-[ -f "$jq_cache" ] || fail 'verified jq 1.6 cache missing'
 case "$jq_asset" in
   jq-osx-amd64) jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
   *) jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
 esac
+jq_cache_dir="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$jq_cache_dir"
+jq_cache="$jq_cache_dir/$jq_asset"
+if [ ! -f "$jq_cache" ] || [ "$(sha_file "$jq_cache")" != "$jq_sha" ]; then
+  download=$(/usr/bin/mktemp "$jq_cache_dir/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$jq_asset" \
+    -o "$download"
+  [ "$(sha_file "$download")" = "$jq_sha" ] || fail 'jq release digest'
+  /bin/chmod 0555 "$download"
+  /bin/mv "$download" "$jq_cache"
+  download=''
+fi
 [ "$(sha_file "$jq_cache")" = "$jq_sha" ] || fail 'jq digest'
 bin="$tmp/bin"
 /bin/mkdir -m 700 "$bin"
