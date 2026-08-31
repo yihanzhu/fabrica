@@ -281,6 +281,19 @@ The proof checks the fixed package, public error boundary, and the complete 34-r
 279-row migration ledgers. It does not install or activate a profile, contact a target,
 or grant authority. The existing `/yshifu` restore path remains separate.
 
+The generation registry is ordered and append-only. The selected generation also
+contains the inactive accounted-validation interface. Restore every file listed in
+the manifest from the same commit, then run its focused proof:
+
+```sh
+bash scripts/test/portable-core-accounted-validation.test.sh
+```
+
+That proof checks caller-owned mode-0700 scratch, exact boundary admission, the fixed
+descriptor-3 receipt, ordinary-call compatibility, cleanup, and byte-for-byte copies
+of the unchanged exports. It performs no install, activation, networked validation,
+or target use.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive

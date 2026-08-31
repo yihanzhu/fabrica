@@ -877,6 +877,32 @@ current_blob_ok() {
     [ "$oid" = "$expected_oid" ] && [ "$actual_path" = "$path" ]
 }
 
+stage_registry_prefix_ok() {
+  local current_oid
+  local canonical="$stage_tmp/registry-current.canonical"
+  local prefix="$stage_tmp/registry-accepted.prefix"
+  current_oid="$(git -C "$stage_root" hash-object "$stage_registry_path")"
+  current_blob_ok "$stage_root" "$stage_registry_path" "$current_oid" &&
+    "${stage_jq_command[@]}" -S -c . \
+      "$stage_root/$stage_registry_path" > "$canonical" &&
+    cmp -s "$stage_root/$stage_registry_path" "$canonical" &&
+    "${stage_jq_command[@]}" -S -c '.[0:1]' \
+      "$stage_root/$stage_registry_path" > "$prefix" &&
+    [ "$(git hash-object "$prefix")" = "$stage_registry_oid" ] &&
+    "${stage_jq_command[@]}" -e '
+      length >= 1 and
+      all(.[];
+        (keys | sort) ==
+          ["generation_id","parent_plan_merge_commit","parent_spec_blob"] and
+        (.generation_id | test("\\Ag-[0-9a-f]{64}\\z")) and
+        (.parent_spec_blob | test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z")) and
+        (.parent_plan_merge_commit |
+          test("\\A([0-9a-f]{40}|[0-9a-f]{64})\\z"))) and
+      (map(.generation_id) | length) ==
+        (map(.generation_id) | unique | length)
+    ' "$stage_root/$stage_registry_path" >/dev/null
+}
+
 if current_blob_ok "$stage_root" "$stage_schema_path" "$stage_schema_oid"; then
   guard_pass
 else
@@ -895,7 +921,7 @@ else
   guard_fail "profile-graph G3 export pin"
 fi
 
-if current_blob_ok "$stage_root" "$stage_registry_path" "$stage_registry_oid"; then
+if stage_registry_prefix_ok; then
   guard_pass
 else
   guard_fail "generation registry pin"
@@ -1025,16 +1051,26 @@ stage_activation_state_ok() {
   local wrapper="$2"
   local root_exists=false
   local wrapper_exists=false
+  local selected_generation
+  local selected_root
   { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
   { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
   if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
     return 0
   fi
+  selected_generation="$(sed -n \
+    "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$wrapper")"
+  selected_root="$stage_root/core/v1/generations/$selected_generation"
   [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
     [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
     [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
-    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$stage_generation'" "$wrapper")" -eq 1 ]
+    [ -n "$selected_generation" ] &&
+    grep -Fq "\"generation_id\":\"$selected_generation\"" \
+      "$stage_root/core/v1/generation-registry.json" &&
+    [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
+    [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
+    [ -f "$selected_root/core-ingress.sh" ] && [ ! -L "$selected_root/core-ingress.sh" ]
 }
 
 if stage_activation_state_ok \

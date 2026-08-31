@@ -274,6 +274,15 @@ the portable structure and relationships. It does not prove provenance, trust, a
 permission grant, or policy approval. No manager, profile, target template, installer,
 or live `/yshifu` path calls this command yet.
 
+A trusted inactive caller can account for the validator's own scratch writes by
+adding `--accounted-validation SCRATCH_ROOT REMAINING_BYTES` before one of the
+three forms above and opening file descriptor 3 for the receipt. The root must be
+a caller-owned physical directory with mode 0700. The validator checks the exact
+size before each file write, never writes past the supplied remainder, and returns
+exactly `written-bytes:N` on descriptor 3. Its normal stdout, stderr, exit status,
+and validation rules stay the same. This interface does not grant target, network,
+credential, install, or profile-selection authority.
+
 ## Layout
 
 ```
