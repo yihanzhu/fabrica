@@ -78,10 +78,21 @@ canonical() {
     cmp -s "$source" "$output"
 }
 
+snapshot_json() {
+  local source=$1
+  local snapshot=$2
+  local check=$3
+  [ -f "$source" ] && [ ! -L "$source" ] || return 1
+  /bin/cp "$source" "$snapshot" || return 1
+  /bin/chmod 0400 "$snapshot" || return 1
+  canonical "$snapshot" "$check"
+}
+
 [ "$(sha_file "$inventory")" = 100edb973c586192683917bc4896121117ef397161263510e09f03a0b269bd4a ] ||
   runner_error E_INVENTORY
 inventory_canonical="$run_tmp/inventory.canonical"
 canonical "$inventory" "$inventory_canonical" || runner_error E_INVENTORY
+inventory=$inventory_canonical
 fixture_source="$fixture_root/target/source.txt"
 [ -f "$fixture_source" ] && [ ! -L "$fixture_source" ] || runner_error E_FIXTURE
 fixture_sha=$(sha_file "$fixture_source")
@@ -116,6 +127,7 @@ if [ ! -f "$mapping" ] || [ -L "$mapping" ] ||
    ! canonical "$mapping" "$mapping_canonical"; then
   runner_error E_MAPPING
 fi
+mapping=$mapping_canonical
 "$jq_bin" -e --arg root "$fixture_root" '
   . as $map |
   .version == 1 and (.repositories | length) == 13 and
@@ -486,12 +498,26 @@ for cell in aa ab ba bb; do
   assets="$cell_root/assets"
   manifests="$cell_root/manifests"
   profiles="$cell_root/profile"
+  profile_input="$profiles/profiles/default.json"
+  profile="$run_tmp/profile.$cell.snapshot"
+  snapshot_json "$profile_input" "$profile" "$run_tmp/profile.$cell.canonical" ||
+    runner_error E_INPUT
   resolved_input="$cell_root/resolved.json"
   resolved="$run_tmp/resolved.$cell.snapshot"
-  [ -f "$resolved_input" ] && [ ! -L "$resolved_input" ] || runner_error E_INPUT
-  /bin/cp "$resolved_input" "$resolved" || runner_error E_INPUT
-  /bin/chmod 0400 "$resolved" || runner_error E_INPUT
-  canonical "$resolved" "$run_tmp/resolved.$cell.canonical" || runner_error E_INPUT
+  snapshot_json "$resolved_input" "$resolved" "$run_tmp/resolved.$cell.canonical" ||
+    runner_error E_INPUT
+  manifest_args=()
+  manifest_set="$run_tmp/manifest-set.$cell"
+  : > "$manifest_set"
+  for role in forge producer publisher reviewer verifier; do
+    manifest_input="$manifests/manifests/$role.json"
+    manifest_file="$run_tmp/manifest.$cell.$role.snapshot"
+    snapshot_json "$manifest_input" "$manifest_file" "$run_tmp/manifest.$cell.$role.canonical" ||
+      runner_error E_INPUT
+    manifest_args+=("$manifest_file")
+    /bin/cat "$manifest_file" >> "$manifest_set"
+  done
+  manifest_set_sha=$(sha_file "$manifest_set")
   for mapped_repo in "$assets" "$manifests" "$profiles"; do
     verify_repo "$mapped_repo" || runner_error E_GIT
   done
@@ -499,8 +525,8 @@ for cell in aa ab ba bb; do
   forge_variant=${cell#?}
   producer_package="fake.producer.$producer_variant"
   forge_package="fake.forge.$forge_variant"
-  producer_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="producer") | .package_ref' "$cell_root/profile/profiles/default.json")
-  forge_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="forge") | .package_ref' "$cell_root/profile/profiles/default.json")
+  producer_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="producer") | .package_ref' "$profile")
+  forge_ref=$("$jq_bin" -c '.body.bindings[] | select(.role=="forge") | .package_ref' "$profile")
   producer_resolved_ref=$("$jq_bin" -c '.body.bindings[] | select(.binding.role=="producer") | .binding.package_ref' "$resolved")
   forge_resolved_ref=$("$jq_bin" -c '.body.bindings[] | select(.binding.role=="forge") | .binding.package_ref' "$resolved")
   assets_commit=$("$jq_bin" -r '.revision.commit_id' <<< "$forge_ref")
@@ -523,12 +549,8 @@ for cell in aa ab ba bb; do
   verify_package "$cell" fake.protocol-fault "$fault_ref" || runner_error E_PACKAGE
   [ "$cell" != aa ] || fault_executable=$VERIFIED_PACKAGE_SNAPSHOT
   verify_all_sources "$cell" "$resolved" || runner_error E_SOURCE
-  profile="$profiles/profiles/default.json"
-  manifest_args=()
-  for role in forge producer publisher reviewer verifier; do
-    manifest_file="$manifests/manifests/$role.json"
+  for manifest_file in "${manifest_args[@]}"; do
     "$core" validate-document "$manifest_file" >/dev/null 2>&1 || runner_error E_CORE
-    manifest_args+=("$manifest_file")
   done
   "$core" validate-document "$profile" >/dev/null 2>&1 || runner_error E_CORE
   "$core" validate-profile-set "$profile" "$resolved" "${manifest_args[@]}" \
@@ -663,12 +685,13 @@ for cell in aa ab ba bb; do
     --arg command projection -f "$contract" "$projection_context")
   "$jq_bin" -S -c -n --arg case_id "$cell_id" --argjson projection "$projection" \
     --arg profile_sha256 "$(sha_file "$profile")" \
+    --arg manifest_set_sha256 "$manifest_set_sha" \
     --arg producer "$producer_package" --arg producer_digest "$(package_digest "$producer_package")" \
     --arg forge "$forge_package" --arg forge_digest "$(package_digest "$forge_package")" '
     {assertion_ids:["audit-projection","candidate-git","core-validation","environment-clean",
       "evidence-projection","gate-projection","outcome-projection","risk-projection","target-git"],
      case_id:$case_id,projection:$projection,
-     provenance:{profile_sha256:$profile_sha256,
+     provenance:{profile_sha256:$profile_sha256,manifest_set_sha256:$manifest_set_sha256,
        producer:{package_id:$producer,sha256:$producer_digest},
        forge:{package_id:$forge,sha256:$forge_digest}}}
   ' >> "$cells"

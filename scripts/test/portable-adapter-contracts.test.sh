@@ -6,7 +6,7 @@ umask 077
 
 test_root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 runner="$test_root/adapter-tests/v1/runner.sh"
-inventory="$test_root/adapter-tests/v1/inventory.json"
+inventory_source="$test_root/adapter-tests/v1/inventory.json"
 fixture_builder="$test_root/scripts/test/portable-profile-resolution-fixtures.sh"
 resolver_runtime="$test_root/resolver/v1/profile-resolve-runtime.sh"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-adapter-contracts.XXXXXX")
@@ -69,6 +69,8 @@ pass 'fixed resolver launcher and dependencies built'
 
 fixture="$tmp/garden-fixture"
 /bin/mkdir -m 700 "$fixture" "$fixture/cells" "$fixture/scratch" "$fixture/target"
+inventory="$fixture/inventory.json"
+/bin/cp "$inventory_source" "$inventory"
 /bin/cp "$test_root/adapter-tests/v1/fixture/source.txt" "$fixture/target/source.txt"
 git_home="$tmp/git-home"
 /bin/mkdir -m 700 "$git_home"
@@ -99,6 +101,19 @@ for cell in aa ab ba bb; do
     "$jq_bin" "$cell_root/request.json" "$cell_root/map.json" > "$cell_root/resolved.json"
 done
 pass 'four honest profile variants resolved through the inactive resolver'
+
+bad_request_payload="$tmp/bad-request-payload.json"
+"$jq_bin" -S -c -n '{case_id:"matrix-aa",phase:"producer",protocol_version:1,
+  stage_request:{schema_version:2,kind:"stage_request",body:{resolved_profile_ref:{sha256:("a"*64)}}},
+  payloads:[
+    {data:"resolved",media_type:"application/json",payload_id:"resolved-profile",sha256:("b"*64)},
+    {data:"source",media_type:"text/plain",payload_id:"source",sha256:("c"*64)}]}' > "$bad_request_payload"
+if "$jq_bin" -L "$test_root/adapter-tests/v1" -L "$test_root/scripts/test" -e \
+    --arg command request-envelope -f "$test_root/adapter-tests/v1/contract.jq" \
+    "$bad_request_payload" >/dev/null; then
+  fail 'declared request payload digest mismatch accepted'
+fi
+pass 'declared request payload digest mismatch'
 
 "$jq_bin" -S -c -n --arg root "$fixture" '
   {version:1,repositories:
@@ -138,8 +153,18 @@ race_err="$tmp/package-race.err"
 race_forge="$fixture/cells/aa/assets/packages/forge-a.sh"
 race_saved="$tmp/forge-a.saved"
 race_source_saved="$tmp/source-race.saved"
+race_inventory_saved="$tmp/inventory-race.saved"
+race_map_saved="$tmp/map-race.saved"
+race_profile="$fixture/cells/aa/profile/profiles/default.json"
+race_profile_saved="$tmp/profile-race.saved"
+race_manifest="$fixture/cells/aa/manifests/manifests/forge.json"
+race_manifest_saved="$tmp/manifest-race.saved"
 /bin/cp "$race_forge" "$race_saved"
 /bin/cp "$fixture/target/source.txt" "$race_source_saved"
+/bin/cp "$inventory" "$race_inventory_saved"
+/bin/cp "$fixture/repository-map.json" "$race_map_saved"
+/bin/cp "$race_profile" "$race_profile_saved"
+/bin/cp "$race_manifest" "$race_manifest_saved"
 PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$race_out" 2> "$race_err" &
 race_pid=$!
 race_marker=''
@@ -172,6 +197,10 @@ fi
   "/usr/bin/printf mutable > '$fixture/scratch/mutable-package-ran'" \
   'exit 99' > "$race_forge"
 /bin/chmod 0755 "$race_forge"
+/usr/bin/printf '%s\n' '{}' > "$inventory"
+/usr/bin/printf '%s\n' '{}' > "$fixture/repository-map.json"
+/usr/bin/printf '%s\n' '{}' > "$race_profile"
+/usr/bin/printf '%s\n' '{}' > "$race_manifest"
 race_marker=''
 for _ in {1..12000}; do
   race_marker=$(/usr/bin/find "$fixture/scratch" -name 'aa.forge.stage-result' -type f -print -quit)
@@ -180,6 +209,10 @@ for _ in {1..12000}; do
   /bin/sleep 0.005
 done
 /bin/cp "$race_source_saved" "$fixture/target/source.txt"
+/bin/cp "$race_inventory_saved" "$inventory"
+/bin/cp "$race_map_saved" "$fixture/repository-map.json"
+/bin/cp "$race_profile_saved" "$race_profile"
+/bin/cp "$race_manifest_saved" "$race_manifest"
 if [ -z "$race_marker" ]; then
   /bin/kill "$race_pid" 2>/dev/null || :
   wait "$race_pid" 2>/dev/null || :
@@ -191,14 +224,25 @@ fi
 [ ! -s "$race_err" ] && [ ! -e "$fixture/scratch/mutable-package-ran" ] &&
   [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] ||
   fail 'mutable package executed'
-"$jq_bin" -e --slurpfile baseline "$output" \
-  '[.cells[].projection] == [$baseline[0].cells[].projection]' "$race_out" >/dev/null ||
+"$jq_bin" -e --slurpfile baseline "$output" '
+  .inventory_acceptance_ref == $baseline[0].inventory_acceptance_ref and
+  [.cells[] | {projection,provenance}] ==
+    [$baseline[0].cells[] | {projection,provenance}]
+' "$race_out" >/dev/null ||
   fail 'source snapshot projection drift'
 /bin/cp "$race_saved" "$race_forge"
 /usr/bin/git -C "$fixture/cells/aa/assets" diff --quiet -- packages/forge-a.sh ||
   fail 'package race restore'
 fixture_git -C "$fixture/target" diff --quiet -- source.txt || fail 'source race restore'
-pass 'mapped package and source mutation cannot change snapshot execution'
+/usr/bin/git -C "$fixture/cells/aa/profile" diff --quiet -- profiles/default.json ||
+  fail 'profile race restore'
+/usr/bin/git -C "$fixture/cells/aa/manifests" diff --quiet -- manifests/forge.json ||
+  fail 'manifest race restore'
+if ! cmp -s "$race_inventory_saved" "$inventory" ||
+   ! cmp -s "$race_map_saved" "$fixture/repository-map.json"; then
+  fail 'metadata race restore'
+fi
+pass 'validated fixture mutations cannot change snapshot execution'
 
 expect_failure() {
   local name=$1
