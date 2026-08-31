@@ -32,6 +32,8 @@ run_tmp=$(/usr/bin/mktemp -d "$fixture_root/scratch/run.XXXXXX") || runner_error
 cleanup() { /bin/rm -rf -- "$run_tmp"; }
 ACTIVE_CHILD_GROUP=''
 ACTIVE_CHILD_PID=''
+SIGNAL_DEFER=0
+SIGNAL_EXITING=0
 PENDING_SIGNAL_STATUS=0
 group_alive() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] && kill -0 -- "-$1" 2>/dev/null
@@ -65,14 +67,18 @@ signal_exit() {
   cleanup
   exit "$status"
 }
-record_pending_signal() { PENDING_SIGNAL_STATUS=$1; }
-install_normal_signal_handlers() {
-  trap 'signal_exit 129' HUP
-  trap 'signal_exit 130' INT
-  trap 'signal_exit 143' TERM
+handle_signal() {
+  local status=$1
+  [ "$SIGNAL_EXITING" -eq 0 ] || return 0
+  PENDING_SIGNAL_STATUS=$status
+  [ "$SIGNAL_DEFER" -eq 0 ] || return 0
+  SIGNAL_EXITING=1
+  signal_exit "$status"
 }
 trap cleanup EXIT
-install_normal_signal_handlers
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 /bin/mkdir -m 700 "$run_tmp/home"
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
@@ -351,9 +357,7 @@ run_child() {
     return 1
   fi
   PENDING_SIGNAL_STATUS=0
-  trap 'record_pending_signal 129' HUP
-  trap 'record_pending_signal 130' INT
-  trap 'record_pending_signal 143' TERM
+  SIGNAL_DEFER=1
   set -m
   (
     ulimit -t 2 -f 2048 -n 64
@@ -372,10 +376,11 @@ run_child() {
   ACTIVE_CHILD_GROUP=$pid
   ACTIVE_CHILD_PID=$pid
   set +m
-  install_normal_signal_handlers
+  SIGNAL_DEFER=0
   pending_status=$PENDING_SIGNAL_STATUS
   PENDING_SIGNAL_STATUS=0
   if [ "$pending_status" -ne 0 ]; then
+    SIGNAL_EXITING=1
     signal_exit "$pending_status"
   fi
   while kill -0 "$pid" 2>/dev/null; do
