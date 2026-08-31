@@ -125,7 +125,10 @@ portable_core_ingress_account_commit() {
     portable_core_ingress_error E_RUNTIME
     return 1
   }
-  [ -z "${PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL:-}" ]
+  if [ -n "${PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL:-}" ]; then
+    portable_core_ingress_error E_RUNTIME
+    return 1
+  fi
 }
 
 portable_core_ingress_account_files() {
