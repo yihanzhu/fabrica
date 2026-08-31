@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016
 
-PROFILE_RESOLUTION_CORE_MERGE='28bb282d473fa2f6d3caede02984dc551c2472c6'
-PROFILE_RESOLUTION_CORE_GENERATION='g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b'
-PROFILE_RESOLUTION_CORE_PUBLISHER_RECEIPT_SHA256='e4946f273c6f586211bbaaac8ca2524b3a04ad39b57e3a5160c38553a116f486'
+PROFILE_RESOLUTION_CORE_MERGE='3b7ceecb7fe6e94bee10404abdcc73ad0f0722f9'
+PROFILE_RESOLUTION_CORE_GENERATION='g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e'
+PROFILE_RESOLUTION_CORE_PUBLISHER_RECEIPT_SHA256='25772b9054b433a2c2a5e689aa2364700e2872f514d1e4319aa26c9bb1803d47'
 PROFILE_RESOLUTION_CONTRACTS_BLOB='8efe7582480d179463e0e88aac9a7874689786d1'
-PROFILE_RESOLUTION_WRAPPER_BLOB='7b41f8041cb8cd47efd6b162d45edff036265c0b'
-PROFILE_RESOLUTION_REGISTRY_BLOB='a9cb0e4f6a05f4228fc219bef96ba52a324dc223'
-PROFILE_RESOLUTION_INGRESS_BLOB='f91517ee43a407770dff11311ba60f7fe4a14eb5'
-PROFILE_RESOLUTION_SCHEMA_MAJOR='1'
+PROFILE_RESOLUTION_WRAPPER_BLOB='dcb0e8500e52dd129c6aae9451049d563720b2ee'
+PROFILE_RESOLUTION_REGISTRY_BLOB='56071404b150b8187f8c10fd036385aad7b9a86c'
+PROFILE_RESOLUTION_INGRESS_BLOB='9ddaf700594266d67aeb17c881dea04236d5015f'
+PROFILE_RESOLUTION_SCHEMA_MAJOR='2'
 PROFILE_RESOLUTION_GLOBAL_LIMIT=536870912
 PROFILE_RESOLUTION_DIAGNOSTIC_RESERVE=256
 PROFILE_RESOLUTION_GIT_WALL_SECONDS=30
@@ -700,16 +700,16 @@ profile_resolution_main() {
       profile_resolution_error E_RUNTIME binding
       return 1
     }
-  [ "$PROFILE_RESOLUTION_CORE_MERGE" = 28bb282d473fa2f6d3caede02984dc551c2472c6 ] &&
-    [ "$PROFILE_RESOLUTION_CORE_GENERATION" = g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b ] &&
-    [ "$PROFILE_RESOLUTION_CORE_PUBLISHER_RECEIPT_SHA256" = e4946f273c6f586211bbaaac8ca2524b3a04ad39b57e3a5160c38553a116f486 ] &&
-    [ "$PROFILE_RESOLUTION_SCHEMA_MAJOR" = 1 ] || {
+  [ "$PROFILE_RESOLUTION_CORE_MERGE" = 3b7ceecb7fe6e94bee10404abdcc73ad0f0722f9 ] &&
+    [ "$PROFILE_RESOLUTION_CORE_GENERATION" = g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e ] &&
+    [ "$PROFILE_RESOLUTION_CORE_PUBLISHER_RECEIPT_SHA256" = 25772b9054b433a2c2a5e689aa2364700e2872f514d1e4319aa26c9bb1803d47 ] &&
+    [ "$PROFILE_RESOLUTION_SCHEMA_MAJOR" = 2 ] || {
       profile_resolution_error E_RUNTIME binding
       return 1
     }
-  profile_resolution_generation_root="$profile_resolution_repo/core/v1/generations/$PROFILE_RESOLUTION_CORE_GENERATION"
+  profile_resolution_generation_root="$profile_resolution_repo/core/v$PROFILE_RESOLUTION_SCHEMA_MAJOR/generations/$PROFILE_RESOLUTION_CORE_GENERATION"
   [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object scripts/core-contract.sh 2>/dev/null)" = "$PROFILE_RESOLUTION_WRAPPER_BLOB" ] &&
-    [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object core/v1/generation-registry.json 2>/dev/null)" = "$PROFILE_RESOLUTION_REGISTRY_BLOB" ] &&
+    [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object "core/v$PROFILE_RESOLUTION_SCHEMA_MAJOR/generation-registry.json" 2>/dev/null)" = "$PROFILE_RESOLUTION_REGISTRY_BLOB" ] &&
     [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object "$profile_resolution_generation_root/contracts.jq" 2>/dev/null)" = "$PROFILE_RESOLUTION_CONTRACTS_BLOB" ] &&
     [ "$(/usr/bin/git -C "$profile_resolution_repo" hash-object "$profile_resolution_generation_root/core-ingress.sh" 2>/dev/null)" = "$PROFILE_RESOLUTION_INGRESS_BLOB" ] || {
       profile_resolution_error E_RUNTIME binding

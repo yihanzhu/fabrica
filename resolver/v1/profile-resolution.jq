@@ -69,7 +69,7 @@ def map_ok:
     (.repositories | map(.repository_id) | unique | length);
 
 def document_ref($pair):
-  {schema_version:1,kind:$pair.content.kind,id:$pair.content.id,sha256:$pair.sha256};
+  {schema_version:2,kind:$pair.content.kind,id:$pair.content.id,sha256:$pair.sha256};
 
 def git_key:
   [.revision.repository_id,.revision.hash_algorithm,.revision.commit_id,
@@ -199,7 +199,7 @@ def run($command; $input):
     manifest_index_ok($input.profile;$input.records)
   elif $command == "assemble-body" then assembled_body($input)
   elif $command == "envelope" then
-    {schema_version:1,kind:"resolved_profile",
+    {schema_version:2,kind:"resolved_profile",
      id:("resolved-profile:" + $input.body_sha256),body:$input.body}
   else error("unknown-command")
   end;

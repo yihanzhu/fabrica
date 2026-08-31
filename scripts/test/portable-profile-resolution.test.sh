@@ -483,6 +483,10 @@ expect_internal_budget_failure 'global scratch budget keeps E_LIMIT' repo.profil
   "$resolver_fixture/profile/.git" sha1 "$resolver_small_profile_oid" 67108864 1 scratch-size
 
 resolver_output="$resolver_tmp/resolved.json"
+[ "$("$resolver_bound_jq" -r '.version' "$resolver_fixture/request.json")" = 1 ] &&
+  [ "$("$resolver_bound_jq" -r '.version' "$resolver_fixture/map.json")" = 1 ] ||
+  fail_case 'resolver transport version'
+pass_case 'request and repository-map transport remain version 1'
 run_resolver "$resolver_tmp/sandbox.success" "$resolver_fixture/request.json" "$resolver_fixture/map.json" \
   > "$resolver_output" 2> "$resolver_tmp/success.stderr" || {
     /bin/cat "$resolver_tmp/success.stderr" >&2
@@ -490,9 +494,15 @@ run_resolver "$resolver_tmp/sandbox.success" "$resolver_fixture/request.json" "$
   }
 [ ! -s "$resolver_tmp/success.stderr" ] || fail_case 'success stderr is empty'
 [ ! -e "$resolver_loader_marker" ] || fail_case 'clean resolver child loaded hostile library'
+[ "$("$resolver_bound_jq" -r '.schema_version' "$resolver_output")" = 2 ] || fail_case 'output schema major'
+"$resolver_bound_jq" -e '
+  .body.profile_ref.schema_version == 2 and
+  all(.body.bindings[]; .binding.manifest_ref.schema_version == 2)
+' "$resolver_output" >/dev/null || fail_case 'output reference schema major'
 [ "$("$resolver_bound_jq" -r '.kind' "$resolver_output")" = resolved_profile ] || fail_case 'output kind'
 PATH="$resolver_bin:/usr/bin:/bin" /bin/bash "$resolver_core" validate-profile-set \
   "$resolver_fixture/profile/profiles/default.json" "$resolver_output" \
+  "$resolver_fixture/manifests/manifests/forge.json" \
   "$resolver_fixture/manifests/manifests/producer.json" \
   "$resolver_fixture/manifests/manifests/publisher.json" \
   "$resolver_fixture/manifests/manifests/reviewer.json" \

@@ -600,22 +600,29 @@ schema_activation_state_ok() {
   local wrapper="$2"
   local root_exists=false
   local wrapper_exists=false
+  local selected_major
   local selected_generation
+  local selected_registry
   local selected_root
   { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
   { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
   if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
     return 0
   fi
+  selected_major="$(sed -n \
+    "s/^PORTABLE_CORE_SCHEMA_MAJOR='\([12]\)'$/\1/p" "$wrapper")"
   selected_generation="$(sed -n \
     "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$wrapper")"
-  selected_root="$schema_root/core/v1/generations/$selected_generation"
+  selected_registry="$schema_root/core/v$selected_major/generation-registry.json"
+  selected_root="$schema_root/core/v$selected_major/generations/$selected_generation"
   [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
     [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
     [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
+    [ "$(grep -Ec "^PORTABLE_CORE_SCHEMA_MAJOR='[12]'$" "$wrapper")" -eq 1 ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
-    [ "$selected_generation" = "$schema_selected_generation" ] &&
-    grep -Fq "\"generation_id\":\"$selected_generation\"" "$schema_registry" &&
+    [ "$selected_major" = 2 ] &&
+    [ "$selected_generation" = "$schema_v2_generation" ] &&
+    grep -Fq "\"generation_id\":\"$selected_generation\"" "$selected_registry" &&
     [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
     [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
     [ -f "$selected_root/core-ingress.sh" ] && [ ! -L "$selected_root/core-ingress.sh" ] &&
@@ -753,6 +760,7 @@ v2_activation_path_ok() {
   case "$1" in
     README.md|RESTORE.md|ci/required-files.txt|\
     core/v2/generation-registry.json|\
+    scripts/core-contract.sh|scripts/lib/profile-resolution.sh|\
     scripts/test/portable-core-schema.test.sh|\
     scripts/test/portable-core-v2-fake-forge.test.sh) ;;
     *) v2_generation_path_ok "$1" || return 1 ;;
@@ -832,6 +840,8 @@ printf '%s\n' \
   ci/required-files.txt \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  scripts/core-contract.sh \
+  scripts/lib/profile-resolution.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > \
   "$schema_v2_expected_live_hits"
@@ -878,6 +888,8 @@ printf '%s\n' \
   "core/v2/generations/$schema_v2_generation/modules/result_truth.jq" \
   "core/v2/generations/$schema_v2_generation/modules/schema.jq" \
   "core/v2/generations/$schema_v2_generation/modules/stage_request.jq" \
+  scripts/core-contract.sh \
+  scripts/lib/profile-resolution.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > "$schema_v2_allowed_paths"
 schema_v2_injected_source="$schema_test_tmp/v2-injected-source"
@@ -886,7 +898,7 @@ schema_v1_only_path="$schema_test_tmp/v1-only-path"
 schema_v2_only_path="$schema_test_tmp/v2-only-path"
 schema_v2_injection_ok=true
 printf 'generation=%s\n' "$schema_v2_generation" > "$schema_v2_injected_source"
-printf '%s\n' scripts/lib/profile-resolution.sh > "$schema_v1_only_path"
+printf '%s\n' core/v1/generation-registry.json > "$schema_v1_only_path"
 printf '%s\n' README.md > "$schema_v2_only_path"
 for schema_v2_invalid_path in \
   .claude/hooks/portable-core-v2-loader.sh \

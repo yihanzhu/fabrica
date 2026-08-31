@@ -86,6 +86,7 @@ fixture_init_repo "$fixture_assets" sha256
 /bin/mkdir -p "$fixture_assets/packages" "$fixture_assets/config" "$fixture_assets/prompts" \
   "$fixture_assets/skills" "$fixture_assets/tools"
 /usr/bin/printf '%s\n' producer-package > "$fixture_assets/packages/producer.bin"
+/usr/bin/printf '%s\n' forge-package > "$fixture_assets/packages/forge.bin"
 /usr/bin/printf '%s\n' publisher-package > "$fixture_assets/packages/publisher.bin"
 /usr/bin/printf '%s\n' reviewer-package > "$fixture_assets/packages/reviewer.bin"
 /usr/bin/printf '%s\n' verifier-package > "$fixture_assets/packages/verifier.bin"
@@ -98,6 +99,7 @@ fixture_init_repo "$fixture_assets" sha256
 /bin/dd if=/dev/zero of="$fixture_assets/packages/producer-large.bin" bs=1048576 count=17 2>/dev/null
 fixture_assets_commit=$(fixture_commit "$fixture_assets")
 fixture_producer_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/producer.bin)
+fixture_forge_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/forge.bin)
 fixture_publisher_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/publisher.bin)
 fixture_reviewer_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/reviewer.bin)
 fixture_verifier_package=$(fixture_git_ref repo.assets "$fixture_assets" sha256 "$fixture_assets_commit" packages/verifier.bin)
@@ -116,8 +118,16 @@ fixture_tool=$("$fixture_jq" -S -c -n --argjson package "$fixture_tool_package" 
 
 fixture_init_repo "$fixture_manifests" sha1
 /bin/mkdir -p "$fixture_manifests/manifests"
-for fixture_role in producer publisher reviewer verifier; do
+for fixture_role in forge producer publisher reviewer verifier; do
   case "$fixture_role" in
+    forge)
+      fixture_package=$fixture_forge_package
+      fixture_execution=deterministic
+      fixture_capabilities='["core.forge.materialize-candidate.v2"]'
+      fixture_permissions='["core.perm.candidate-repository.write.v2","core.perm.evidence.write.v1","core.perm.scratch.write.v1","core.perm.target.read.v1"]'
+      fixture_tools='[]'
+      fixture_extra=''
+      ;;
     producer)
       fixture_package=$fixture_producer_package
       fixture_execution=model
@@ -152,7 +162,7 @@ for fixture_role in producer publisher reviewer verifier; do
       ;;
   esac
   /usr/bin/printf '%s\n' \
-    "{\"schema_version\":1,\"kind\":\"adapter_manifest\",\"id\":\"manifest.$fixture_role\",\"body\":{\"adapter_version\":\"v1\",\"package_ref\":$fixture_package,\"offered_roles\":[\"$fixture_role\"],\"offered_execution_kinds\":[\"$fixture_execution\"],\"offered_capabilities\":$fixture_capabilities,\"offered_permissions\":$fixture_permissions,\"offered_tools\":$fixture_tools$fixture_extra}}" |
+    "{\"schema_version\":2,\"kind\":\"adapter_manifest\",\"id\":\"manifest.$fixture_role\",\"body\":{\"adapter_version\":\"v1\",\"package_ref\":$fixture_package,\"offered_roles\":[\"$fixture_role\"],\"offered_execution_kinds\":[\"$fixture_execution\"],\"offered_capabilities\":$fixture_capabilities,\"offered_permissions\":$fixture_permissions,\"offered_tools\":$fixture_tools$fixture_extra}}" |
     fixture_canonical "$fixture_manifests/manifests/$fixture_role.json"
   /bin/bash "$fixture_core" validate-document "$fixture_manifests/manifests/$fixture_role.json"
 done
@@ -164,13 +174,13 @@ fixture_manifests_commit=$(fixture_commit "$fixture_manifests")
 
 fixture_manifest_refs='{}'
 fixture_manifest_locators='[]'
-for fixture_role in producer publisher reviewer verifier; do
+for fixture_role in forge producer publisher reviewer verifier; do
   fixture_manifest_file="$fixture_manifests/manifests/$fixture_role.json"
   fixture_manifest_digest=$(fixture_digest "$fixture_manifest_file")
   fixture_manifest_source=$(fixture_git_ref repo.manifests "$fixture_manifests" sha1 "$fixture_manifests_commit" "manifests/$fixture_role.json")
   fixture_manifest_locator=$(fixture_locator "$fixture_manifest_source")
   fixture_manifest_refs=$("$fixture_jq" -S -c --arg role "$fixture_role" --arg digest "$fixture_manifest_digest" \
-    '. + {($role):{schema_version:1,kind:"adapter_manifest",id:("manifest."+$role),sha256:$digest}}' <<< "$fixture_manifest_refs")
+    '. + {($role):{schema_version:2,kind:"adapter_manifest",id:("manifest."+$role),sha256:$digest}}' <<< "$fixture_manifest_refs")
   fixture_manifest_locators=$("$fixture_jq" -S -c --argjson locator "$fixture_manifest_locator" '. + [$locator]' <<< "$fixture_manifest_locators")
 done
 fixture_large_manifest_file="$fixture_manifests/manifests/producer-large.json"
@@ -179,13 +189,19 @@ fixture_large_manifest_source=$(fixture_git_ref repo.manifests "$fixture_manifes
   "$fixture_manifests_commit" manifests/producer-large.json)
 fixture_large_manifest_locator=$(fixture_locator "$fixture_large_manifest_source")
 fixture_large_manifest_ref=$("$fixture_jq" -S -c -n --arg digest "$fixture_large_manifest_digest" \
-  '{schema_version:1,kind:"adapter_manifest",id:"manifest.producer-large",sha256:$digest}')
+  '{schema_version:2,kind:"adapter_manifest",id:"manifest.producer-large",sha256:$digest}')
 
 fixture_init_repo "$fixture_profile" sha1
 /bin/mkdir -p "$fixture_profile/profiles"
 fixture_bindings='[]'
-for fixture_role in producer publisher reviewer verifier; do
+for fixture_role in forge producer publisher reviewer verifier; do
   case "$fixture_role" in
+    forge)
+      fixture_package=$fixture_forge_package; fixture_execution=deterministic
+      fixture_capabilities='["core.forge.materialize-candidate.v2"]'
+      fixture_permissions='["core.perm.candidate-repository.write.v2","core.perm.evidence.write.v1","core.perm.scratch.write.v1","core.perm.target.read.v1"]'
+      fixture_tools='[]'; fixture_optional='{"skill_refs":[]}'
+      ;;
     producer)
       fixture_package=$fixture_producer_package
       fixture_execution=model
@@ -217,6 +233,7 @@ for fixture_role in producer publisher reviewer verifier; do
       ;;
   esac
   case "$fixture_role" in
+    forge) fixture_authority_character=5 ;;
     producer) fixture_authority_character=1 ;;
     publisher) fixture_authority_character=2 ;;
     reviewer) fixture_authority_character=3 ;;
@@ -236,7 +253,7 @@ for fixture_role in producer publisher reviewer verifier; do
   fixture_bindings=$("$fixture_jq" -S -c --argjson binding "$fixture_binding" '. + [$binding] | sort_by(.binding_id)' <<< "$fixture_bindings")
 done
 "$fixture_jq" -S -c -n --argjson bindings "$fixture_bindings" \
-  '{schema_version:1,kind:"profile",id:"profile.example",body:{profile_version:"v1",bindings:$bindings}}' \
+  '{schema_version:2,kind:"profile",id:"profile.example",body:{profile_version:"v1",bindings:$bindings}}' \
   > "$fixture_profile/profiles/default.json"
 /bin/bash "$fixture_core" validate-document "$fixture_profile/profiles/default.json"
 /bin/cp "$fixture_profile/profiles/default.json" "$fixture_profile/default.json"
@@ -249,7 +266,7 @@ fixture_large_bindings=$("$fixture_jq" -S -c --argjson package "$fixture_large_p
   'map(if .role == "producer" then .package_ref = $package | .manifest_ref = $manifest else . end)' \
   <<< "$fixture_bindings")
 "$fixture_jq" -S -c -n --argjson bindings "$fixture_large_bindings" \
-  '{schema_version:1,kind:"profile",id:"profile.large",body:{profile_version:"v1",bindings:$bindings}}' \
+  '{schema_version:2,kind:"profile",id:"profile.large",body:{profile_version:"v1",bindings:$bindings}}' \
   > "$fixture_profile/profiles/large.json"
 /bin/bash "$fixture_core" validate-document "$fixture_profile/profiles/large.json"
 fixture_profile_commit=$(fixture_commit "$fixture_profile")

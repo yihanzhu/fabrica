@@ -6,6 +6,7 @@ test_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 test_dir="$test_root/scripts/test"
 generation_id="g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e"
 parent_generation="g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b"
+parent_root="$test_root/core/v1/generations/$parent_generation"
 generation_root="$test_root/core/v2/generations/$generation_id"
 registry="$test_root/core/v2/generation-registry.json"
 wrapper="$test_root/scripts/core-contract.sh"
@@ -109,6 +110,20 @@ run_v2() (
   trap - EXIT
 )
 
+run_v1_document() (
+  set -uo pipefail
+  # shellcheck source=/dev/null
+  source "$parent_root/core-ingress.sh" 2>/dev/null || exit 1
+  trap 'portable_core_ingress_close >/dev/null 2>&1 || :' EXIT
+  portable_core_ingress_open || exit 1
+  portable_core_ingress_begin document || exit 1
+  portable_core_ingress_snapshot "$1" || exit 1
+  portable_core_ingress_finish_driver || exit 1
+  portable_core_ingress_validate || exit 1
+  portable_core_ingress_close || exit 1
+  trap - EXIT
+)
+
 expect_v2_pass() {
   local case_id="$1"
   local mode="$2"
@@ -138,7 +153,7 @@ expect_v1_error() {
   local document="$3"
   local out="$test_tmp/$case_id.out"
   local err="$test_tmp/$case_id.err"
-  if bash "$wrapper" validate-document "$document" >"$out" 2>"$err"; then
+  if run_v1_document "$document" >"$out" 2>"$err"; then
     return 1
   fi
   [ ! -s "$out" ] && [ "$(cat "$err")" = "$expected" ]
@@ -452,13 +467,18 @@ check semantic-identity test \
 check v1-tree-unchanged test \
   "$(git -C "$test_root" rev-parse HEAD:core/v1)" = \
   4af76e02fc8b86ead009156bf165ee700aabe7f8
-check wrapper-unchanged test \
-  "$(git -C "$test_root" rev-parse HEAD:scripts/core-contract.sh)" = \
-  7b41f8041cb8cd47efd6b162d45edff036265c0b
-check generation-inactive grep -Fq \
-  "PORTABLE_CORE_GENERATION='${parent_generation}'" "$wrapper"
-check generation-not-selected test -z \
-  "$(grep -Fl "$generation_id" "$wrapper" || true)"
+check wrapper-known test \
+  "$(git -C "$test_root" hash-object scripts/core-contract.sh)" = \
+  dcb0e8500e52dd129c6aae9451049d563720b2ee
+check schema-major-selected grep -Fxq \
+  "PORTABLE_CORE_SCHEMA_MAJOR='2'" "$wrapper"
+check generation-selected grep -Fxq \
+  "PORTABLE_CORE_GENERATION='${generation_id}'" "$wrapper"
+check wrapper-document "$wrapper" validate-document "$forge_manifest"
+check wrapper-profile-set "$wrapper" validate-profile-set \
+  "$profile_file" "$resolved_file" "${manifest_files[@]}"
+check wrapper-stage-run "$wrapper" validate-stage-run \
+  "$request_file" "$resolved_file" "$result_file"
 
 check policy-exact "${jq_command[@]}" -L "$generation_root/modules" -e -n '
   import "schema" as schema;
