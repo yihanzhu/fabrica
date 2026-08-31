@@ -14,17 +14,37 @@ assembly_error() {
 assembly_accounted=false
 assembly_scratch_root=''
 assembly_byte_budget=0
+assembly_finalizing=false
+assembly_receipt_emitted=false
+assembly_finalization_signal=''
+
+assembly_emit_receipt() {
+  local receipt_status=0
+  [ "$assembly_accounted" = true ] || return 0
+  [ "$assembly_receipt_emitted" = false ] || return 0
+  assembly_finalizing=true
+  printf 'written-bytes:%s\n' \
+    "${PORTABLE_CORE_INGRESS_WRITTEN_BYTES:-0}" \
+    2>/dev/null >&3 || receipt_status=$?
+  if [ "$receipt_status" -eq 0 ]; then
+    assembly_receipt_emitted=true
+  fi
+  assembly_finalizing=false
+  [ "$receipt_status" -eq 0 ] || return 1
+  [ -z "$assembly_finalization_signal" ] || return 2
+}
 
 assembly_cleanup() {
   local status=$?
-  trap - EXIT HUP INT TERM
+  local receipt_status=0
+  trap - EXIT
   if [ "$(type -t portable_core_ingress_close 2>/dev/null)" = function ]; then
     portable_core_ingress_close >/dev/null 2>&1 || :
   fi
-  if [ "$assembly_accounted" = true ]; then
-    printf 'written-bytes:%s\n' \
-      "${PORTABLE_CORE_INGRESS_WRITTEN_BYTES:-0}" 2>/dev/null >&3 || status=1
-  fi
+  assembly_emit_receipt || receipt_status=$?
+  [ "$receipt_status" -eq 0 ] || status=1
+  [ -z "$assembly_finalization_signal" ] || status=1
+  trap - HUP INT TERM
   exit "$status"
 }
 
@@ -32,6 +52,10 @@ assembly_signal() {
   if [ -n "${PORTABLE_CORE_INGRESS_RESERVED_BYTES:-}" ]; then
     # shellcheck disable=SC2034
     PORTABLE_CORE_INGRESS_DEFERRED_SIGNAL="$1"
+    return 0
+  fi
+  if [ "$assembly_finalizing" = true ]; then
+    assembly_finalization_signal="$1"
     return 0
   fi
   exit 1
@@ -162,10 +186,14 @@ done
 portable_core_ingress_finish_driver || exit 1
 portable_core_ingress_validate || exit 1
 portable_core_ingress_close || exit 1
+assembly_receipt_status=0
+assembly_emit_receipt || assembly_receipt_status=$?
+case "$assembly_receipt_status" in
+  0) ;;
+  1)
+    assembly_error E_RUNTIME
+    exit 1
+    ;;
+  2) exit 1 ;;
+esac
 trap - EXIT HUP INT TERM
-if [ "$assembly_accounted" = true ] &&
-   ! printf 'written-bytes:%s\n' "$PORTABLE_CORE_INGRESS_WRITTEN_BYTES" \
-       2>/dev/null >&3; then
-  assembly_error E_RUNTIME
-  exit 1
-fi

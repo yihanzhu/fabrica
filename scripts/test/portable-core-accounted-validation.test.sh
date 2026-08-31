@@ -483,6 +483,52 @@ PATH="$accounted_path" /bin/bash \
   [ "$(receipt_bytes "$accounted_tmp/missing-package.receipt")" -eq 0 ] ||
   fail 'accepted accounted package failure omitted its receipt'
 
+mkdir_signal_bin="$accounted_tmp/mkdir-signal-bin"
+mkdir_signal_root="$accounted_tmp/mkdir-signal-root"
+mkdir_signal_marker="$accounted_tmp/mkdir-signal.marker"
+mkdir -p "$mkdir_signal_bin"
+mkdir -m 700 "$mkdir_signal_root"
+cat > "$mkdir_signal_bin/mkdir" <<'MKDIR_SIGNAL'
+#!/bin/bash
+set -uo pipefail
+status=0
+"$ACCOUNTED_REAL_MKDIR" "$@" || status=$?
+printf '%s\n' "$PPID" > "$ACCOUNTED_MKDIR_SIGNAL_MARKER"
+kill -TERM "$PPID"
+/bin/sleep 1
+exit "$status"
+MKDIR_SIGNAL
+chmod 0755 "$mkdir_signal_bin/mkdir"
+mkdir_signal_status=0
+ACCOUNTED_REAL_MKDIR="$(command -v mkdir)" \
+ACCOUNTED_MKDIR_SIGNAL_MARKER="$mkdir_signal_marker" \
+  PATH="$mkdir_signal_bin:$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$mkdir_signal_root" 536870912 \
+    validate-document "$accounted_registry" \
+    3> "$accounted_tmp/mkdir-signal.receipt" \
+    > "$accounted_tmp/mkdir-signal.stdout" \
+    2> "$accounted_tmp/mkdir-signal.stderr" || mkdir_signal_status=$?
+[ "$mkdir_signal_status" -ne 0 ] && [ -s "$mkdir_signal_marker" ] &&
+  [ ! -s "$accounted_tmp/mkdir-signal.stdout" ] &&
+  { [ ! -s "$accounted_tmp/mkdir-signal.stderr" ] ||
+    [ "$(cat "$accounted_tmp/mkdir-signal.stderr")" = E_RUNTIME ]; } &&
+  [ "$(receipt_bytes "$accounted_tmp/mkdir-signal.receipt")" -eq 0 ] &&
+  [ -z "$(find "$mkdir_signal_root" -mindepth 1 -print -quit)" ] ||
+  fail 'signal during mkdir left the accounted directory'
+
+mkdir_retry_status=0
+PATH="$accounted_path" /bin/bash "$package_wrapper" \
+  --accounted-validation "$mkdir_signal_root" 536870912 \
+  validate-document "$accounted_registry" \
+  3> "$accounted_tmp/mkdir-retry.receipt" \
+  > "$accounted_tmp/mkdir-retry.stdout" \
+  2> "$accounted_tmp/mkdir-retry.stderr" || mkdir_retry_status=$?
+[ "$mkdir_retry_status" -ne 0 ] &&
+  [ "$(cat "$accounted_tmp/mkdir-retry.stderr")" = E_SHAPE ] &&
+  [ "$(receipt_bytes "$accounted_tmp/mkdir-retry.receipt")" -gt 0 ] &&
+  [ -z "$(find "$mkdir_signal_root" -mindepth 1 -print -quit)" ] ||
+  fail 'post-signal mkdir retry did not start cleanly'
+
 signal_bin="$accounted_tmp/signal-bin"
 signal_root="$accounted_tmp/signal-root"
 signal_marker="$accounted_tmp/signal.marker"
@@ -535,6 +581,57 @@ if [ "$signal_status" -eq 0 ] || [ ! -s "$signal_marker" ] ||
   fail 'deferred signal receipt did not match materialized bytes'
 fi
 
+valid_manifest_shas=()
+for valid_index in 0 1 2 3; do
+  valid_manifest_file="$accounted_tmp/valid-manifest-$valid_index.json"
+  "$accounted_jq" -L "$accounted_root/scripts/test" -S -c -n \
+    "import \"portable-core-assembly-fixtures\" as fixture;
+     fixture::manifest_docs[$valid_index]" > "$valid_manifest_file"
+  valid_manifest_shas+=("$(sha256_path "$valid_manifest_file")")
+done
+valid_manifest_map="$("$accounted_jq" -n \
+  --arg producer "${valid_manifest_shas[0]}" \
+  --arg publisher "${valid_manifest_shas[1]}" \
+  --arg reviewer "${valid_manifest_shas[2]}" \
+  --arg verifier "${valid_manifest_shas[3]}" \
+  '{producer:$producer,publisher:$publisher,reviewer:$reviewer,verifier:$verifier}')"
+valid_profile="$accounted_tmp/valid-profile.json"
+"$accounted_jq" -L "$accounted_root/scripts/test" -S -c -n \
+  --argjson manifest_shas "$valid_manifest_map" '
+    import "portable-core-assembly-fixtures" as fixture;
+    fixture::profile_doc($manifest_shas)
+  ' > "$valid_profile"
+
+finalization_root="$accounted_tmp/finalization-root"
+finalization_marker="$accounted_tmp/finalization.marker"
+mkdir -m 700 "$finalization_root"
+finalization_status=0
+(
+  # shellcheck disable=SC2059,SC2329
+  printf() {
+    if [ "${1:-}" = 'written-bytes:%s\n' ] &&
+       [ ! -e "$ACCOUNTED_FINALIZATION_MARKER" ]; then
+      builtin printf '%s\n' TERM > "$ACCOUNTED_FINALIZATION_MARKER"
+      kill -TERM "$$"
+    fi
+    builtin printf "$@"
+  }
+  export -f printf
+  export ACCOUNTED_FINALIZATION_MARKER="$finalization_marker"
+  PATH="$accounted_path" /bin/bash "$package_wrapper" \
+    --accounted-validation "$finalization_root" 536870912 \
+    validate-document "$valid_profile" \
+    3> "$accounted_tmp/finalization.receipt" \
+    > "$accounted_tmp/finalization.stdout" \
+    2> "$accounted_tmp/finalization.stderr"
+) || finalization_status=$?
+[ "$finalization_status" -ne 0 ] && [ -s "$finalization_marker" ] &&
+  [ ! -s "$accounted_tmp/finalization.stdout" ] &&
+  [ ! -s "$accounted_tmp/finalization.stderr" ] &&
+  [ "$(receipt_bytes "$accounted_tmp/finalization.receipt")" -gt 0 ] &&
+  [ -z "$(find "$finalization_root" -mindepth 1 -print -quit)" ] ||
+  fail 'signal during final receipt duplicated or lost finalization'
+
 for required_path in \
   "core/v1/generations/$accounted_generation/modules/schema.jq" \
   "core/v1/generations/$accounted_generation/core-ingress.sh" \
@@ -548,4 +645,4 @@ for required_path in \
     fail "restore manifest entry: $required_path"
 done
 
-printf 'portable core accounted validation: 27/27 passed\n'
+printf 'portable core accounted validation: 29/29 passed\n'

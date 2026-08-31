@@ -407,8 +407,12 @@ portable_core_ingress_open() {
     }
     PORTABLE_CORE_INGRESS_SCRATCH_ROOT="$accounted_root"
     temp_path="$accounted_root/portable-core-accounted-v1"
-    if [ -e "$temp_path" ] || [ -L "$temp_path" ] ||
-       ! "$PORTABLE_CORE_INGRESS_MKDIR" -m 700 -- "$temp_path" 2>/dev/null; then
+    if [ -e "$temp_path" ] || [ -L "$temp_path" ]; then
+      portable_core_ingress_error E_RUNTIME
+      return 1
+    fi
+    PORTABLE_CORE_INGRESS_TEMP="$temp_path"
+    if ! "$PORTABLE_CORE_INGRESS_MKDIR" -m 700 -- "$temp_path" 2>/dev/null; then
       portable_core_ingress_error E_RUNTIME
       return 1
     fi
