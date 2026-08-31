@@ -294,6 +294,18 @@ descriptor-3 receipt, ordinary-call compatibility, cleanup, and byte-for-byte co
 of the unchanged exports. It performs no install, activation, networked validation,
 or target use.
 
+`core/v2/` is a separate, append-only inactive fake-forge contract generation.
+Restore its registry and complete generation from one commit, then run:
+
+```sh
+bash scripts/test/portable-core-v2-fake-forge.test.sh
+```
+
+This proof validates only deterministic fake candidate materialization in a
+caller-disposable repository. The package is not selected by the stable wrapper,
+is not qualified for a real forge, and grants no credential, network, publish,
+push, merge, or remote branch-write capability.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive

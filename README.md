@@ -32,6 +32,18 @@ The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
 
+## Inactive portable core v2 fake-forge contract
+
+`core/v2/` contains an inactive, repo-only contract for deterministic candidate
+materialization by a fake forge adapter. The operation can read an exact target,
+write only a caller-disposable candidate repository and scratch space, and append
+deterministic evidence. It grants no network, credential, publish, push, merge, or
+remote branch-write capability and is not qualified for a real forge.
+
+The stable `scripts/core-contract.sh` wrapper still selects core v1. The v2 package
+is validated only by `scripts/test/portable-core-v2-fake-forge.test.sh` until a
+separate compatibility change switches the resolver and wrapper together.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

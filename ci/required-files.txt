@@ -143,3 +143,14 @@ core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/result_truth.jq
 core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/contracts.jq
 scripts/test/portable-core-accounted-validation.test.sh
+
+# Inactive portable core v2 fake-forge materialization contract
+core/v2/generation-registry.json
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/profile_graph.jq
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/result_facts.jq
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/result_truth.jq
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/schema.jq
+core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/stage_request.jq
+scripts/test/portable-core-v2-fake-forge.test.sh
