@@ -4,7 +4,9 @@ set -euo pipefail
 
 assembly_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 assembly_generation="g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386"
+assembly_selected_generation="g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b"
 assembly_generation_root="$assembly_root/core/v1/generations/$assembly_generation"
+assembly_selected_root="$assembly_root/core/v1/generations/$assembly_selected_generation"
 assembly_module_dir="$assembly_generation_root/modules"
 assembly_program="$assembly_generation_root/contracts.jq"
 assembly_wrapper="$assembly_root/scripts/core-contract.sh"
@@ -452,7 +454,18 @@ write_synthetic_wrapper "$pair_wrapper" \
 proof activation-wrong-generation activation_pair_rejected "$pair_root" "$pair_wrapper"
 proof no-live-caller \
   sh -c 'git -C "$1" rev-parse --git-dir >/dev/null 2>&1 && ! git -C "$1" grep -q -E "$2" -- manager reviewer routines templates config scripts/install.sh scripts/setup-target-repo.sh scripts/doctor.sh' \
-  sh "$assembly_root" "scripts/core-contract\\.sh|$assembly_generation"
+  sh "$assembly_root" \
+  "scripts/core-contract\\.sh|$assembly_generation|$assembly_selected_generation"
+
+for selected_export in contracts.jq modules/schema.jq modules/profile_graph.jq \
+  modules/stage_request.jq modules/result_facts.jq modules/result_truth.jq; do
+  proof "selected-export-${selected_export//\//-}" cmp -s \
+    "$assembly_generation_root/$selected_export" \
+    "$assembly_selected_root/$selected_export"
+done
+proof selected-ingress-generation \
+  grep -Fq "PORTABLE_CORE_INGRESS_GENERATION='$assembly_selected_generation'" \
+    "$assembly_selected_root/core-ingress.sh"
 
 metadata="$(fixture_value 'fixture::metadata')"
 expected_oids=(
@@ -483,7 +496,7 @@ proof dependency-metadata \
     <<< "$metadata")" = true
 proof registry-current-tree test \
   "$(git -C "$assembly_root" hash-object core/v1/generation-registry.json)" = \
-  5e113105777694a280166e71d31efd19752e9562
+  a9cb0e4f6a05f4228fc219bef96ba52a324dc223
 
 ledger_files=(
   "$assembly_fixture_dir/portable-core-schema-ledger.tsv"
@@ -665,7 +678,8 @@ if [ "$assembly_phase" = pre-switch ]; then
     "$(grep -Fxc scripts/core-contract.sh "$assembly_manifest" || true)" -eq 0
 else
   proof portable-core-assembly.test.fixed-generation \
-    grep -qF "PORTABLE_CORE_GENERATION='$assembly_generation'" "$assembly_wrapper"
+    grep -qF "PORTABLE_CORE_GENERATION='$assembly_selected_generation'" \
+      "$assembly_wrapper"
   proof wrapper-executable test -x "$assembly_wrapper"
   proof wrapper-manifest test \
     "$(grep -Fxc scripts/core-contract.sh "$assembly_manifest")" -eq 1

@@ -123,3 +123,13 @@ scripts/test/portable-core-assembly-fixtures.jq
 scripts/test/portable-core-assembly-ledger.tsv
 scripts/test/portable-core-assembly.test.sh
 scripts/core-contract.sh
+
+# Inactive portable core accounted-validation generation
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/schema.jq
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/core-ingress.sh
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/profile_graph.jq
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/stage_request.jq
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/result_facts.jq
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/modules/result_truth.jq
+core/v1/generations/g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b/contracts.jq
+scripts/test/portable-core-accounted-validation.test.sh

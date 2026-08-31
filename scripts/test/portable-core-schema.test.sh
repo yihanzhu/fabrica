@@ -4,6 +4,7 @@ set -euo pipefail
 
 schema_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 schema_generation="g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386"
+schema_selected_generation="g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b"
 schema_base="38a26f5f046897c0455fef24874c5dbb40c20926"
 schema_module_dir="$schema_root/core/v1/generations/$schema_generation/modules"
 schema_module="$schema_module_dir/schema.jq"
@@ -464,7 +465,7 @@ fi
 if "$schema_jq" -e --arg generation "$schema_generation" \
     --arg spec "c6511d96c1a5e6aed27ba2075b5add65c121f782" \
     --arg authorization "$schema_base" \
-    'length == 1 and .[0] == {generation_id:$generation,parent_spec_blob:$spec,parent_plan_merge_commit:$authorization}' \
+    'length >= 1 and .[0] == {generation_id:$generation,parent_spec_blob:$spec,parent_plan_merge_commit:$authorization}' \
     "$schema_registry" >/dev/null; then
   schema_registry_passed=$((schema_registry_passed + 1))
 else
@@ -549,7 +550,14 @@ private_generation_path_ok() {
     "core/v1/generations/$schema_generation/modules/profile_graph.jq"|\
     "core/v1/generations/$schema_generation/modules/stage_request.jq"|\
     "core/v1/generations/$schema_generation/modules/result_facts.jq"|\
-    "core/v1/generations/$schema_generation/modules/result_truth.jq") return 0 ;;
+    "core/v1/generations/$schema_generation/modules/result_truth.jq"|\
+    "core/v1/generations/$schema_selected_generation/core-ingress.sh"|\
+    "core/v1/generations/$schema_selected_generation/contracts.jq"|\
+    "core/v1/generations/$schema_selected_generation/modules/schema.jq"|\
+    "core/v1/generations/$schema_selected_generation/modules/profile_graph.jq"|\
+    "core/v1/generations/$schema_selected_generation/modules/stage_request.jq"|\
+    "core/v1/generations/$schema_selected_generation/modules/result_facts.jq"|\
+    "core/v1/generations/$schema_selected_generation/modules/result_truth.jq") return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -567,16 +575,25 @@ schema_activation_state_ok() {
   local wrapper="$2"
   local root_exists=false
   local wrapper_exists=false
+  local selected_generation
+  local selected_root
   { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
   { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
   if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
     return 0
   fi
+  selected_generation="$(sed -n \
+    "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$wrapper")"
+  selected_root="$schema_root/core/v1/generations/$selected_generation"
   [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
     [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
     [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
-    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$schema_generation'" "$wrapper")" -eq 1 ]
+    [ -n "$selected_generation" ] &&
+    grep -Fq "\"generation_id\":\"$selected_generation\"" "$schema_registry" &&
+    [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
+    [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
+    [ -f "$selected_root/core-ingress.sh" ] && [ ! -L "$selected_root/core-ingress.sh" ]
 }
 
 schema_guard_total=35
