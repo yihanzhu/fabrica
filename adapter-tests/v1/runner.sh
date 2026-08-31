@@ -32,6 +32,7 @@ run_tmp=$(/usr/bin/mktemp -d "$fixture_root/scratch/run.XXXXXX") || runner_error
 cleanup() { /bin/rm -rf -- "$run_tmp"; }
 ACTIVE_CHILD_GROUP=''
 ACTIVE_CHILD_PID=''
+PENDING_SIGNAL_STATUS=0
 group_alive() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] && kill -0 -- "-$1" 2>/dev/null
 }
@@ -57,15 +58,20 @@ terminate_active_group() {
 }
 signal_exit() {
   local status=$1
-  trap - EXIT HUP INT TERM
+  trap '' HUP INT TERM
+  trap - EXIT
   terminate_active_group
   cleanup
   exit "$status"
 }
+record_pending_signal() { PENDING_SIGNAL_STATUS=$1; }
+install_normal_signal_handlers() {
+  trap 'signal_exit 129' HUP
+  trap 'signal_exit 130' INT
+  trap 'signal_exit 143' TERM
+}
 trap cleanup EXIT
-trap 'signal_exit 129' HUP
-trap 'signal_exit 130' INT
-trap 'signal_exit 143' TERM
+install_normal_signal_handlers
 /bin/mkdir -m 700 "$run_tmp/home"
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
@@ -335,10 +341,18 @@ run_child() {
   local diagnostic=$5
   local child_home=$6
   local dependency=${7:-}
-  local pid tick=0
+  local pid tick=0 pending_status
   CHILD_STATUS=0
   CHILD_ERROR=''
   /bin/mkdir -m 700 "$child_home"
+  if [ -n "$ACTIVE_CHILD_GROUP" ] || [ -n "$ACTIVE_CHILD_PID" ]; then
+    CHILD_ERROR=E_RUNTIME
+    return 1
+  fi
+  PENDING_SIGNAL_STATUS=0
+  trap 'record_pending_signal 129' HUP
+  trap 'record_pending_signal 130' INT
+  trap 'record_pending_signal 143' TERM
   set -m
   (
     ulimit -t 2 -f 2048 -n 64
@@ -357,6 +371,12 @@ run_child() {
   ACTIVE_CHILD_GROUP=$pid
   ACTIVE_CHILD_PID=$pid
   set +m
+  install_normal_signal_handlers
+  pending_status=$PENDING_SIGNAL_STATUS
+  PENDING_SIGNAL_STATUS=0
+  if [ "$pending_status" -ne 0 ]; then
+    signal_exit "$pending_status"
+  fi
   while kill -0 "$pid" 2>/dev/null; do
     tick=$((tick + 1))
     if [ "$tick" -ge 20 ]; then

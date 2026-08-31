@@ -383,7 +383,7 @@ PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$signal_out" 2> "
 signal_pid=$!
 signal_marker=''
 for _ in {1..6000}; do
-  signal_marker=$(/usr/bin/find "$fixture/scratch" -path '*/timeout.home' -type d -print -quit)
+  signal_marker=$(/usr/bin/find "$fixture/scratch" -name 'request-payload.1' -type f -print -quit)
   [ -z "$signal_marker" ] || break
   /bin/kill -0 "$signal_pid" 2>/dev/null || break
   /bin/sleep 0.02
@@ -391,13 +391,20 @@ done
 if [ -z "$signal_marker" ]; then
   /bin/kill "$signal_pid" 2>/dev/null || :
   wait "$signal_pid" 2>/dev/null || :
-  fail 'signal child marker'
+  fail 'signal launch marker'
 fi
-/bin/kill -TERM "$signal_pid"
+signal_sent=0
+for _ in {1..200}; do
+  /bin/kill -0 "$signal_pid" 2>/dev/null || break
+  /bin/kill -TERM "$signal_pid" 2>/dev/null || break
+  signal_sent=$((signal_sent + 1))
+  /bin/sleep 0.005
+done
 signal_status=0
 wait "$signal_pid" || signal_status=$?
 /bin/sleep 2.2
-[ "$signal_status" -eq 143 ] && [ ! -s "$signal_out" ] && [ ! -s "$signal_err" ] &&
+[ "$signal_sent" -gt 0 ] && [ "$signal_status" -eq 143 ] &&
+  [ ! -s "$signal_out" ] && [ ! -s "$signal_err" ] &&
   [ -z "$(find "$fixture/scratch" -mindepth 1 -print -quit)" ] ||
   fail 'signal group cleanup'
 pass 'TERM stops adapter group and cleans scratch'
