@@ -655,16 +655,26 @@ facts_activation_state_ok() {
   local wrapper="$2"
   local root_exists=false
   local wrapper_exists=false
+  local selected_generation
+  local selected_root
   { [ -e "$root_program" ] || [ -L "$root_program" ]; } && root_exists=true
   { [ -e "$wrapper" ] || [ -L "$wrapper" ]; } && wrapper_exists=true
   if [ "$root_exists" = false ] && [ "$wrapper_exists" = false ]; then
     return 0
   fi
+  selected_generation="$(sed -n \
+    "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$wrapper")"
+  selected_root="$facts_root/core/v1/generations/$selected_generation"
   [ "$root_exists" = true ] && [ "$wrapper_exists" = true ] &&
     [ -f "$root_program" ] && [ ! -L "$root_program" ] &&
     [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && [ -x "$wrapper" ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
-    [ "$(grep -Fxc "PORTABLE_CORE_GENERATION='$facts_generation'" "$wrapper")" -eq 1 ]
+    [ -n "$selected_generation" ] &&
+    grep -Fq "\"generation_id\":\"$selected_generation\"" \
+      "$facts_root/core/v1/generation-registry.json" &&
+    [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
+    [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
+    [ -f "$selected_root/core-ingress.sh" ] && [ ! -L "$selected_root/core-ingress.sh" ]
 }
 
 if facts_activation_state_ok "$facts_root/$facts_generation_root/contracts.jq" \

@@ -11,6 +11,23 @@ assembly_error() {
   return 1
 }
 
+assembly_accounted=false
+assembly_scratch_root=''
+assembly_byte_budget=0
+if [ "${1:-}" = --accounted-validation ]; then
+  if [ "$#" -lt 4 ] ||
+     [[ ! "${3:-}" =~ ^(0|[1-9][0-9]*)$ ]] ||
+     [ "${#3}" -gt 9 ] || [ "$3" -gt 536870912 ] ||
+     ! { : >&3; } 2>/dev/null; then
+    assembly_error E_USAGE
+    exit 1
+  fi
+  assembly_accounted=true
+  assembly_scratch_root="$2"
+  assembly_byte_budget="$3"
+  shift 3
+fi
+
 case "${1:-}" in
   validate-document)
     [ "$#" -eq 2 ] || { assembly_error E_USAGE; exit 1; }
@@ -88,19 +105,33 @@ for assembly_required_file in \
   fi
 done
 
+assembly_cleanup() {
+  local status=$?
+  if [ "$(type -t portable_core_ingress_close 2>/dev/null)" = function ]; then
+    portable_core_ingress_close >/dev/null 2>&1 || :
+  fi
+  if [ "$assembly_accounted" = true ]; then
+    printf 'written-bytes:%s\n' \
+      "${PORTABLE_CORE_INGRESS_WRITTEN_BYTES:-0}" >&3 2>/dev/null || status=1
+  fi
+  trap - EXIT
+  exit "$status"
+}
+trap assembly_cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
 # shellcheck source=/dev/null
 if ! source "$assembly_ingress" 2>/dev/null; then
   assembly_error E_RUNTIME
   exit 1
 fi
 
-assembly_cleanup() {
-  portable_core_ingress_close >/dev/null 2>&1 || :
-}
-trap assembly_cleanup EXIT
-trap 'exit 1' HUP INT TERM
-
-portable_core_ingress_open || exit 1
+if [ "$assembly_accounted" = true ]; then
+  portable_core_ingress_open "$assembly_scratch_root" \
+    "$assembly_byte_budget" || exit 1
+else
+  portable_core_ingress_open || exit 1
+fi
 if [ "$PORTABLE_CORE_INGRESS_GENERATION" != "$PORTABLE_CORE_GENERATION" ] ||
    [ "$PORTABLE_CORE_INGRESS_ROOT" != "$assembly_program" ] ||
    [ "$PORTABLE_CORE_INGRESS_MODULE_DIR" != "$assembly_modules" ]; then
@@ -115,3 +146,9 @@ portable_core_ingress_finish_driver || exit 1
 portable_core_ingress_validate || exit 1
 portable_core_ingress_close || exit 1
 trap - EXIT HUP INT TERM
+if [ "$assembly_accounted" = true ] &&
+   ! printf 'written-bytes:%s\n' "$PORTABLE_CORE_INGRESS_WRITTEN_BYTES" \
+       >&3 2>/dev/null; then
+  assembly_error E_RUNTIME
+  exit 1
+fi
