@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,8 @@
 #include <dirent.h>
 #elif defined(__APPLE__)
 #include <libproc.h>
+#include <mach/vm_prot.h>
+#include <sys/proc_info.h>
 #endif
 
 #ifndef O_CLOEXEC
@@ -27,14 +30,15 @@
 #ifndef O_NOFOLLOW
 #define O_NOFOLLOW 0
 #endif
-
 #define PROCESS_LIMIT 32U
 #define INVOCATION_SECONDS 300
 #define ERROR_BYTES_MAX 256U
+#define ADDRESS_SPACE_LIMIT UINT64_C(536870912)
 
 enum stop_reason {
     STOP_NONE = 0,
     STOP_PROCESS,
+    STOP_MEMORY,
     STOP_TIME
 };
 
@@ -266,6 +270,121 @@ static unsigned process_group_count(pid_t group) {
 }
 #endif
 
+#if defined(__APPLE__)
+static int darwin_private_virtual_size(pid_t process, uint64_t *total) {
+    struct proc_taskinfo task;
+    uint64_t address = 0U;
+    uint64_t bytes = 0U;
+    unsigned regions = 0U;
+    int task_size = proc_pidinfo(process, PROC_PIDTASKINFO, 0, &task,
+                                 (int)sizeof(task));
+    if (task_size != (int)sizeof(task)) {
+        return -1;
+    }
+    for (;;) {
+        struct proc_regioninfo region;
+        int region_size = proc_pidinfo(process, PROC_PIDREGIONINFO, address,
+                                       &region, (int)sizeof(region));
+        int charge = 0;
+        if (region_size == 0) {
+            break;
+        }
+        if (region_size != (int)sizeof(region) || region.pri_size == 0U ||
+            region.pri_address < address ||
+            UINT64_MAX - region.pri_address < region.pri_size ||
+            ++regions > 1048576U) {
+            return -1;
+        }
+        /* Shared read-only mappings are host state. Private and writable regions spend the bound. */
+        switch (region.pri_share_mode) {
+        case SM_PRIVATE:
+        case SM_PRIVATE_ALIASED:
+        case SM_LARGE_PAGE:
+            charge = 1;
+            break;
+        case SM_COW:
+        case SM_EMPTY:
+            charge = (region.pri_protection & VM_PROT_WRITE) != 0U;
+            break;
+        case SM_SHARED:
+        case SM_TRUESHARED:
+        case SM_SHARED_ALIASED:
+            break;
+        default:
+            return -1;
+        }
+        if (charge != 0) {
+            if (UINT64_MAX - bytes < region.pri_size) {
+                return -1;
+            }
+            bytes += region.pri_size;
+            if (bytes > ADDRESS_SPACE_LIMIT) {
+                *total = bytes;
+                return 0;
+            }
+        }
+        address = region.pri_address + region.pri_size;
+    }
+    if (bytes > task.pti_virtual_size) {
+        return -1;
+    }
+    *total = bytes;
+    return 0;
+}
+
+static int process_group_address_space_exceeded(pid_t group) {
+    for (unsigned attempt = 0U; attempt < 3U; attempt++) {
+        int estimated = proc_listallpids(NULL, 0);
+        pid_t *processes;
+        int observed;
+        if (estimated <= 0 || estimated > 1048576) {
+            return -1;
+        }
+        estimated += 64;
+        processes = calloc((size_t)estimated, sizeof(*processes));
+        if (processes == NULL) {
+            return -1;
+        }
+        observed = proc_listallpids(processes,
+                                   estimated * (int)sizeof(*processes));
+        if (observed < 0) {
+            free(processes);
+            return -1;
+        }
+        if (observed < estimated) {
+            for (int index = 0; index < observed; index++) {
+                uint64_t private_virtual_size = 0U;
+                pid_t process = processes[index];
+                if (process <= 0 || getpgid(process) != group) {
+                    continue;
+                }
+                if (darwin_private_virtual_size(process,
+                                                &private_virtual_size) != 0) {
+                    if (getpgid(process) == group) {
+                        free(processes);
+                        return -1;
+                    }
+                    continue;
+                }
+                if (private_virtual_size > ADDRESS_SPACE_LIMIT) {
+                    free(processes);
+                    return 1;
+                }
+            }
+            free(processes);
+            return 0;
+        }
+        free(processes);
+    }
+    return -1;
+}
+#else
+static int process_group_address_space_exceeded(pid_t group) {
+    (void)group;
+    return 0;
+}
+#endif
+
 static int apply_child_limits(void) {
     if (set_limit(RLIMIT_CPU, 300) != 0 ||
 #if !defined(__APPLE__)
@@ -287,6 +406,7 @@ static int supervise(const char *program, char *const child_argv[],
     pid_t child;
     int status = 0;
     enum stop_reason stopped = STOP_NONE;
+    unsigned memory_scan_failures = 0U;
     time_t started;
     struct timespec interval = {0, 10000000L};
 
@@ -350,6 +470,17 @@ static int supervise(const char *program, char *const child_argv[],
             stopped = STOP_PROCESS;
             break;
         }
+        {
+            int memory_state = process_group_address_space_exceeded(child);
+            if (memory_state > 0 ||
+                (memory_state < 0 && ++memory_scan_failures >= 3U)) {
+                stopped = STOP_MEMORY;
+                break;
+            }
+            if (memory_state == 0) {
+                memory_scan_failures = 0U;
+            }
+        }
         if (monotonic_seconds(&now) != 0 || now - started >= INVOCATION_SECONDS) {
             stopped = STOP_TIME;
             break;
@@ -363,8 +494,10 @@ static int supervise(const char *program, char *const child_argv[],
         }
         if (stopped == STOP_TIME) {
             fputs("E_LIMIT time-limit\n", stderr);
-        } else {
+        } else if (stopped == STOP_PROCESS) {
             fputs("E_LIMIT process-limit\n", stderr);
+        } else {
+            fputs("E_LIMIT resource-limit\n", stderr);
         }
         return 75;
     }
@@ -400,7 +533,7 @@ static int supervise(const char *program, char *const child_argv[],
 
 int main(int argc, char **argv) {
     char *child_argv[6];
-    char *child_env[9];
+    char *child_env[12];
     char home[PATH_MAX];
     char temp[PATH_MAX];
     char tool_path[PATH_MAX];
@@ -408,6 +541,8 @@ int main(int argc, char **argv) {
     char *slash;
     const char *sandbox;
     int remove_helper = 0;
+    int git_wall_test = 0;
+    size_t child_env_count = 8U;
 
     if (argc == 2 && strcmp(argv[1], "trap-child") == 0) {
         return 0;
@@ -429,6 +564,19 @@ int main(int argc, char **argv) {
                 (void)pause();
             }
         }
+        if (strcmp(argv[2], "memory") == 0) {
+            struct timespec settle = {0, 200000000L};
+            volatile unsigned char *allocation;
+            (void)nanosleep(&settle, NULL);
+            allocation = malloc(600U * 1024U * 1024U);
+            if (allocation == NULL) {
+                return 75;
+            }
+            allocation[0] = 0U;
+            for (;;) {
+                (void)pause();
+            }
+        }
         if (strcmp(argv[2], "file") == 0) {
             static char block[1048576];
             for (unsigned index = 0U; index < 68U; index++) {
@@ -446,7 +594,11 @@ int main(int argc, char **argv) {
     if (argc == 4 && strcmp(argv[1], "limit-control") == 0 &&
         regular_absolute(argv[0], 1) && argv[3][0] == '/') {
         char *control_argv[] = {argv[0], "limit-child", argv[2], NULL};
+#if defined(__APPLE__)
+        char *control_env[] = {"LC_ALL=C", "MallocNanoZone=0", NULL};
+#else
         char *control_env[] = {"LC_ALL=C", NULL};
+#endif
         return supervise(argv[0], control_argv, control_env, argv[3]);
     }
     if (argc == 4 && strcmp(argv[1], "loader-control") == 0 &&
@@ -474,8 +626,12 @@ int main(int argc, char **argv) {
     if (argc == 7 && strcmp(argv[1], "resolve-missing-helper") == 0) {
         remove_helper = 1;
     }
+    if (argc == 7 && strcmp(argv[1], "resolve-git-wall") == 0) {
+        git_wall_test = 1;
+    }
     if (argc != 7 ||
-        (strcmp(argv[1], "resolve") != 0 && remove_helper == 0) ||
+        (strcmp(argv[1], "resolve") != 0 && remove_helper == 0 &&
+         git_wall_test == 0) ||
         !regular_absolute(argv[2], 0) || !regular_absolute(argv[3], 1) ||
         !regular_absolute(argv[4], 1) || argv[5][0] != '/' || argv[6][0] != '/') {
         fputs("E_USAGE\n", stderr);
@@ -523,8 +679,16 @@ int main(int argc, char **argv) {
     child_env[5] = environment_value("YSTACK_RESOLVER_HELPER", argv[3]);
     child_env[6] = environment_value("YSTACK_RESOLVER_JQ", argv[4]);
     child_env[7] = strdup("GIT_TERMINAL_PROMPT=0");
-    child_env[8] = NULL;
-    for (size_t index = 0; index < 8; index++) {
+#if defined(__APPLE__)
+    /* Avoid Darwin's fixed nano arena before measuring the 512 MiB process bound. */
+    child_env[child_env_count++] = strdup("MallocNanoZone=0");
+#endif
+    if (git_wall_test != 0) {
+        child_env[child_env_count++] = strdup("YSTACK_RESOLVER_TEST_GIT_WALL_SECONDS=1");
+        child_env[child_env_count++] = strdup("YSTACK_RESOLVER_TEST_GIT_STOP=1");
+    }
+    child_env[child_env_count] = NULL;
+    for (size_t index = 0; index < child_env_count; index++) {
         if (child_env[index] == NULL) {
             fputs("E_RUNTIME unexpected\n", stderr);
             return 70;

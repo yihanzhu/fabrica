@@ -273,6 +273,29 @@ expect_launcher_failure() {
   pass_case "$resolver_name"
 }
 
+expect_git_wall_failure() {
+  resolver_wall_sandbox="$resolver_tmp/git-wall-sandbox"
+  resolver_wall_stdout="$resolver_tmp/git-wall.stdout"
+  resolver_wall_stderr="$resolver_tmp/git-wall.stderr"
+  /bin/mkdir -m 700 "$resolver_wall_sandbox"
+  resolver_wall_started=$SECONDS
+  if YSTACK_TEST_SANDBOX="$resolver_wall_sandbox" \
+      "$resolver_bin/launcher" resolve-git-wall "$resolver_runtime" \
+      "$resolver_bin/nofollow-snapshot" "$resolver_bound_jq" \
+      "$resolver_fixture/request.json" "$resolver_fixture/map.json" \
+      > "$resolver_wall_stdout" 2> "$resolver_wall_stderr"; then
+    fail_case 'Git wall watchdog'
+  fi
+  resolver_wall_elapsed=$((SECONDS - resolver_wall_started))
+  [ ! -s "$resolver_wall_stdout" ] &&
+    [ "$(/usr/bin/sed -n '1p' "$resolver_wall_stderr")" = 'E_LIMIT time-limit' ] &&
+    [ "$resolver_wall_elapsed" -lt 10 ] || {
+      /bin/cat "$resolver_wall_stderr" >&2
+      fail_case 'Git wall watchdog token or duration'
+    }
+  pass_case 'Git wall watchdog kills and reaps the exact child'
+}
+
 expect_missing_dependency() {
   resolver_missing_helper="$resolver_tmp/missing-helper"
   resolver_missing_sandbox="$resolver_tmp/missing-helper-sandbox"
@@ -338,6 +361,97 @@ expect_internal_budget_failure() {
   pass_case "$resolver_name"
 }
 
+expect_cache_reuse() {
+  resolver_cache_scratch="$resolver_tmp/cache-reuse"
+  resolver_cache_result="$resolver_tmp/cache-reuse.result"
+  resolver_cache_size=$(/usr/bin/git --git-dir="$resolver_fixture/profile/.git" \
+    cat-file -s "$resolver_small_profile_oid")
+  /bin/mkdir -m 700 "$resolver_cache_scratch" "$resolver_cache_scratch/object-cache"
+  (
+    set +e
+    # shellcheck source=/dev/null
+    source "$resolver_root/scripts/lib/profile-resolution.sh"
+    profile_resolution_scratch=$resolver_cache_scratch
+    profile_resolution_snapshots="$resolver_cache_scratch/snapshots.tsv"
+    /usr/bin/printf '%s\t%s\tidentity\tsha1\n' repo.profile \
+      "$resolver_fixture/profile/.git" > "$profile_resolution_snapshots"
+    profile_resolution_value_remaining=$resolver_cache_size
+    profile_resolution_global_remaining=$resolver_cache_size
+    profile_resolution_verify_object_payload repo.profile sha1 \
+      "$resolver_small_profile_oid" blob "$resolver_cache_scratch/first"
+    first_status=$?
+    profile_resolution_verify_object_payload repo.profile sha1 \
+      "$resolver_small_profile_oid" blob "$resolver_cache_scratch/second"
+    second_status=$?
+    if [ "$resolver_cache_scratch/first" -ef "$resolver_cache_scratch/second" ]; then
+      same_snapshot=true
+    else
+      same_snapshot=false
+    fi
+    /usr/bin/printf '%s\t%s\t%s\t%s\t%s\n' "$first_status" "$second_status" \
+      "$profile_resolution_value_remaining" "$profile_resolution_global_remaining" \
+      "$same_snapshot"
+  ) > "$resolver_cache_result"
+  [ "$(/usr/bin/sed -n '1p' "$resolver_cache_result")" = $'0\t0\t0\t0\ttrue' ] || {
+    /bin/cat "$resolver_cache_result" >&2
+    fail_case 'object cache reuse ledger'
+  }
+  pass_case 'cache hits reuse one snapshot without another byte write'
+}
+
+expect_internal_scratch_ledger() {
+  resolver_ledger_scratch="$resolver_tmp/internal-ledger"
+  resolver_ledger_result="$resolver_tmp/internal-ledger.result"
+  /bin/mkdir -m 700 "$resolver_ledger_scratch"
+  (
+    set +e
+    # shellcheck source=/dev/null
+    source "$resolver_root/scripts/lib/profile-resolution.sh"
+    profile_resolution_global_remaining=4
+    profile_resolution_limit_reason=''
+    profile_resolution_write_text "$resolver_ledger_scratch/exact" abc
+    exact_status=$?
+    profile_resolution_write_text "$resolver_ledger_scratch/over" x
+    over_status=$?
+    /usr/bin/printf '%s\t%s\t%s\t%s\t%s\n' "$exact_status" "$over_status" \
+      "$profile_resolution_global_remaining" "$profile_resolution_limit_reason" \
+      "$([ ! -e "$resolver_ledger_scratch/over" ] && /usr/bin/printf true || /usr/bin/printf false)"
+  ) > "$resolver_ledger_result"
+  [ "$(/usr/bin/sed -n '1p' "$resolver_ledger_result")" = $'0\t50\t0\tscratch-size\ttrue' ] ||
+    fail_case 'pre-write scratch ledger'
+  pass_case 'one pre-write ledger admits exact bytes and rejects one over'
+}
+
+expect_core_accounted_receipt() {
+  resolver_core_scratch="$resolver_tmp/core-accounted"
+  resolver_core_result="$resolver_tmp/core-accounted.result"
+  resolver_core_error="$resolver_tmp/core-accounted.error"
+  /bin/mkdir -m 700 "$resolver_core_scratch"
+  (
+    set +e
+    # shellcheck source=/dev/null
+    source "$resolver_root/scripts/lib/profile-resolution.sh"
+    exec 3> "$resolver_core_error"
+    PATH="$resolver_bin:/usr/bin:/bin"
+    export PATH
+    # shellcheck disable=SC2034
+    profile_resolution_scratch=$resolver_core_scratch
+    # shellcheck disable=SC2034
+    profile_resolution_core=$resolver_core
+    profile_resolution_global_remaining=536870912
+    profile_resolution_core_validate validate-document \
+      "$resolver_fixture/profile/profiles/default.json"
+    core_status=$?
+    core_spent=$((536870912 - profile_resolution_global_remaining))
+    /usr/bin/printf '%s\t%s\n' "$core_status" "$core_spent"
+  ) > "$resolver_core_result"
+  resolver_core_status=$(/usr/bin/awk -F '\t' 'NR == 1 { print $1 }' "$resolver_core_result")
+  resolver_core_spent=$(/usr/bin/awk -F '\t' 'NR == 1 { print $2 }' "$resolver_core_result")
+  [ "$resolver_core_status" = 0 ] && [ "$resolver_core_spent" -gt 0 ] &&
+    [ ! -s "$resolver_core_error" ] || fail_case 'accounted core receipt debit'
+  pass_case 'core scratch receipt is exact and debited from the parent ledger'
+}
+
 resolver_ambient_bin="$resolver_tmp/ambient-bin"
 resolver_ambient_request="$resolver_tmp/ambient-awk-request.json"
 /bin/mkdir -m 700 "$resolver_ambient_bin"
@@ -350,12 +464,17 @@ expect_missing_dependency
 expect_launcher_failure 'launcher sanitizes silent child failure' silent 'E_RUNTIME unexpected'
 expect_launcher_failure 'launcher converts file limit to a token' file 'E_LIMIT resource-limit'
 expect_launcher_failure 'launcher bounds its process group' process 'E_LIMIT process-limit'
+expect_launcher_failure 'launcher bounds each process virtual address space' memory 'E_LIMIT resource-limit'
+expect_git_wall_failure
+expect_internal_scratch_ledger
+expect_core_accounted_receipt
 
 resolver_large_package_oid=$("$resolver_bound_jq" -r \
   '.body.bindings[] | select(.role == "producer") | .package_ref.object_id' \
   "$resolver_fixture/profile/profiles/large.json")
 resolver_small_profile_oid=$("$resolver_bound_jq" -r '.profile_source.object_id' \
   "$resolver_fixture/request.json")
+expect_cache_reuse
 expect_internal_budget_failure 'per-value budget keeps E_LIMIT' repo.assets \
   "$resolver_fixture/assets/.git" sha256 "$resolver_large_package_oid" 67108864 536870912 value-size
 expect_internal_budget_failure 'aggregate value budget keeps E_LIMIT' repo.profile \
