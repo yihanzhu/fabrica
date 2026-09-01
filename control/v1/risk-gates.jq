@@ -141,13 +141,26 @@ def claim_shape_ok:
 ($claim[0]) as $claim_doc |
 (if ($p | policy_ok) then true else error("invalid shipped risk policy") end) |
 ($claim_doc | claim_shape_ok) as $claim_valid |
-(($claim_doc.body.classification.tier? // null) as $candidate_tier |
+(($claim_doc.body.classification? // null) as $raw_classification |
+  if ($raw_classification | type) == "object" then $raw_classification else {} end) as
+  $classification |
+(($classification.tier? // null) as $candidate_tier |
   if ($candidate_tier | type) == "string" and
      ($candidate_tier == "routine" or $candidate_tier == "high" or
       $candidate_tier == "bootstrap")
   then $candidate_tier else "unknown" end) as $claimed_tier |
-($claim_doc.body.decision.state? // "invalid") as $claim_decision_state |
-($claim_doc.body.decision.value.asserted_decision? // "invalid") as $claim_assertion |
+(($claim_doc.body.decision? // null) as $raw_decision |
+  if ($raw_decision | type) == "object" then $raw_decision else {} end) as
+  $claim_decision |
+(($claim_decision.value? // null) as $raw_decision_value |
+  if ($raw_decision_value | type) == "object" then $raw_decision_value else {} end) as
+  $claim_decision_value |
+(($claim_decision_value.decided_by? // null) as $raw_actor |
+  if ($raw_actor | type) == "object" then $raw_actor else {} end) as $claim_actor |
+($claim_decision.state? // "invalid") as $claim_decision_state |
+($claim_decision_value.asserted_decision? // "invalid") as $claim_assertion |
+($claim_decision_value.decision_kind? // "invalid") as $claim_decision_kind |
+($claim_decision_value.recorded_at? // "invalid") as $claim_decision_time |
 
 content_ref($p.id;"application/vnd.ystack.control-policy+json";$policy_sha) as
   $risk_policy_ref |
@@ -181,7 +194,8 @@ content_ref($claim_doc.id;
   $request_doc.body.risk.tier.name == "high" or
   $request_doc.body.risk.tier.name == "bootstrap")) as $core_tier_supported |
 ($request_doc.body.risk.tier.name) as $declared_tier |
-(if ($core_tier_supported | not) then "unknown"
+(if $claimed_tier == "unknown" then "unknown"
+ elif ($core_tier_supported | not) then "unknown"
  elif $request_doc.body.target_revision.state == "absent" or
     $request_doc.body.base.state == "absent" then "bootstrap"
  elif any($request_doc.body.risk.reason_ids[];
@@ -211,9 +225,9 @@ content_ref($claim_doc.id;
  (if ($risk_decision_refs | length) == 1 and
      $risk_decision_refs[0] == $expected_gate_decision then []
   elif ($risk_decision_refs | length) > 1 then ["decision.ambiguous"]
-  else ["decision.unbound"] end) +
+ else ["decision.unbound"] end) +
  (if $claim_valid and
-     $claim_doc.body.classification.reason_ids == $request_doc.body.risk.reason_ids
+     ($classification.reason_ids? // null) == $request_doc.body.risk.reason_ids
   then [] else ["classification.reasons-mismatch"] end) +
  (if $claim_valid and $minimum_tier == $claimed_tier then []
   else ["classification.forced-tier-mismatch"] end) +
@@ -227,14 +241,14 @@ content_ref($claim_doc.id;
   else [] end) +
  (if $claim_valid and $claim_decision_state == "present" and
      $matching_rule != null then
-    (if $claim_doc.body.decision.value.decision_kind == $matching_rule.decision_kind
+    (if $claim_decision_kind == $matching_rule.decision_kind
      then [] else ["decision.kind-denied"] end) +
-    (if $claim_doc.body.decision.value.decided_by.role == $matching_rule.decision_role
+    (if ($claim_actor.role? // "invalid") == $matching_rule.decision_role
      then [] else ["decision.role-denied"] end) +
     (if decision_actor_bound($matching_rule;$request_doc;$resolved_doc;
-          $claim_doc.body.decision.value.decided_by)
+          $claim_actor)
      then [] else ["decision.actor-unbound"] end) +
-    (if $claim_doc.body.decision.value.recorded_at <= $request_doc.body.requested_at
+    (if $claim_decision_time <= $request_doc.body.requested_at
      then [] else ["decision.after-request"] end)
   else [] end) | sort | unique) as $violations |
 

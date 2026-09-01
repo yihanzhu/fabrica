@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 077
 
 if [ "${YSTACK_RISK_TEST_BOUNDED:-0}" != 1 ]; then
-  YSTACK_RISK_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 240; exec @ARGV' "$0"
+  YSTACK_RISK_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 420; exec @ARGV' "$0"
 fi
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
@@ -187,7 +187,8 @@ build_case() {
     request::request_doc("producer";$resolved_sha) |
     walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
   ' >"$base_request"
-  if [ "$mode" = bootstrap ]; then
+  if [ "$mode" = bootstrap ] || [ "$mode" = tier-number-bootstrap ] ||
+    [ "$mode" = tier-object-bootstrap ] || [ "$mode" = tier-null-bootstrap ]; then
     "$jq_bin" -S -c '.body.target_revision={state:"absent"} |
       .body.base={state:"absent"}' "$base_request" >"$dir/request.seed"
   elif [ "$mode" = duty-collision ]; then
@@ -274,17 +275,38 @@ build_case() {
     "$jq_bin" -S -c '.body.classification.tier=""' "$dir/claim.json" \
       >"$dir/claim.changed"
     /bin/mv "$dir/claim.changed" "$dir/claim.json"
-  elif [ "$mode" = tier-number ]; then
+  elif [ "$mode" = tier-number ] || [ "$mode" = tier-number-forced ] ||
+    [ "$mode" = tier-number-bootstrap ]; then
     "$jq_bin" -S -c '.body.classification.tier=1' "$dir/claim.json" \
       >"$dir/claim.changed"
     /bin/mv "$dir/claim.changed" "$dir/claim.json"
-  elif [ "$mode" = tier-object ]; then
+  elif [ "$mode" = tier-object ] || [ "$mode" = tier-object-forced ] ||
+    [ "$mode" = tier-object-bootstrap ]; then
     "$jq_bin" -S -c '.body.classification.tier={value:"routine"}' "$dir/claim.json" \
       >"$dir/claim.changed"
     /bin/mv "$dir/claim.changed" "$dir/claim.json"
-  elif [ "$mode" = tier-null ]; then
+  elif [ "$mode" = tier-null ] || [ "$mode" = tier-null-forced ] ||
+    [ "$mode" = tier-null-bootstrap ]; then
     "$jq_bin" -S -c '.body.classification.tier=null' "$dir/claim.json" \
       >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = decision-scalar ]; then
+    "$jq_bin" -S -c '.body.decision=1' "$dir/claim.json" >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = decision-array ]; then
+    "$jq_bin" -S -c '.body.decision=[]' "$dir/claim.json" >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = decision-null ]; then
+    "$jq_bin" -S -c '.body.decision=null' "$dir/claim.json" >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = value-scalar ]; then
+    "$jq_bin" -S -c '.body.decision.value=1' "$dir/claim.json" >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = value-array ]; then
+    "$jq_bin" -S -c '.body.decision.value=[]' "$dir/claim.json" >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = value-null ]; then
+    "$jq_bin" -S -c '.body.decision.value=null' "$dir/claim.json" >"$dir/claim.changed"
     /bin/mv "$dir/claim.changed" "$dir/claim.json"
   fi
   claim_sha=$(sha256_path "$dir/claim.json")
@@ -400,6 +422,30 @@ build_case malformed-claim routine routine present independent-plan-check review
   risk.routine malformed-claim
 expect_eval malformed-claim violated decision.claim-malformed
 
+build_case decision-scalar routine routine present independent-plan-check reviewer accept \
+  risk.routine decision-scalar
+expect_eval decision-scalar violated decision.claim-malformed
+
+build_case decision-array routine routine present independent-plan-check reviewer accept \
+  risk.routine decision-array
+expect_eval decision-array violated decision.claim-malformed
+
+build_case decision-null routine routine present independent-plan-check reviewer accept \
+  risk.routine decision-null
+expect_eval decision-null violated decision.claim-malformed
+
+build_case value-scalar routine routine present independent-plan-check reviewer accept \
+  risk.routine value-scalar
+expect_eval value-scalar violated decision.claim-malformed
+
+build_case value-array routine routine present independent-plan-check reviewer accept \
+  risk.routine value-array
+expect_eval value-array violated decision.claim-malformed
+
+build_case value-null routine routine present independent-plan-check reviewer accept \
+  risk.routine value-null
+expect_eval value-null violated decision.claim-malformed
+
 build_case malformed-classification routine routine present independent-plan-check reviewer \
   accept risk.routine malformed-classification
 expect_eval malformed-classification violated decision.claim-malformed
@@ -429,6 +475,36 @@ build_case tier-null routine routine present independent-plan-check reviewer acc
   risk.routine tier-null
 expect_eval tier-null violated decision.claim-malformed
 expect_minimum tier-null unknown
+
+build_case forced-high-number high high present operator-plan-approval operator accept \
+  risk.security-control tier-number-forced
+expect_eval forced-high-number violated decision.claim-malformed
+expect_minimum forced-high-number unknown
+
+build_case forced-high-object high high present operator-plan-approval operator accept \
+  risk.security-control tier-object-forced
+expect_eval forced-high-object violated decision.claim-malformed
+expect_minimum forced-high-object unknown
+
+build_case forced-high-null high high present operator-plan-approval operator accept \
+  risk.security-control tier-null-forced
+expect_eval forced-high-null violated decision.claim-malformed
+expect_minimum forced-high-null unknown
+
+build_case bootstrap-number bootstrap bootstrap present operator-bootstrap-approval operator \
+  accept risk.bootstrap tier-number-bootstrap
+expect_eval bootstrap-number violated decision.claim-malformed
+expect_minimum bootstrap-number unknown
+
+build_case bootstrap-object bootstrap bootstrap present operator-bootstrap-approval operator \
+  accept risk.bootstrap tier-object-bootstrap
+expect_eval bootstrap-object violated decision.claim-malformed
+expect_minimum bootstrap-object unknown
+
+build_case bootstrap-null bootstrap bootstrap present operator-bootstrap-approval operator \
+  accept risk.bootstrap tier-null-bootstrap
+expect_eval bootstrap-null violated decision.claim-malformed
+expect_minimum bootstrap-null unknown
 
 build_case malformed-time routine routine present independent-plan-check reviewer accept \
   risk.routine normal core 2026-99-99T99:99:99Z
