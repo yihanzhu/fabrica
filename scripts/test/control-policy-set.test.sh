@@ -101,17 +101,37 @@ mutate() {
 }
 
 expect_pass canonical-valid "$valid"
-core_generation=g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e
-core_modules="$root/core/v2/generations/$core_generation/modules"
-[ -f "$core_modules/schema.jq" ] || fail 'core schema seam'
-"$jq_bin" -L "$core_modules" -e '
-  import "schema" as schema;
-  (.body.sections | length) == 6 and
-  all(.body.sections[];
-    (.policy_ref | schema::content_ref_ok) and
-    (.decision_ref | schema::content_ref_ok))
-' "$valid" >/dev/null || fail 'core content refs'
-pass 'policy and decision refs satisfy core content-ref contract'
+core_wrapper="$root/scripts/core-contract.sh"
+core_fixture_dir="$root/scripts/test"
+core_request="$tmp/core-request.json"
+[ -x "$core_wrapper" ] || fail 'core public seam'
+"$jq_bin" -L "$core_fixture_dir" -S -c -n '
+  import "portable-core-stage-request-fixtures" as fixture;
+  fixture::request_doc("producer";("0"*64)) |
+  .schema_version=2 |
+  .body.resolved_profile_ref.schema_version=2
+' > "$core_request"
+core_ref_count=0
+for section_index in 0 1 2 3 4 5; do
+  for ref_field in policy_ref decision_ref; do
+    core_ref_count=$((core_ref_count + 1))
+    core_case="$tmp/core-ref-$section_index-$ref_field.json"
+    "$jq_bin" -S -c --argjson index "$section_index" --arg field "$ref_field" \
+      --slurpfile policy "$valid" \
+      '.body.selection_ref.decision_record_ref =
+        $policy[0].body.sections[$index][$field]' \
+      "$core_request" > "$core_case"
+    core_out="$tmp/core-ref-$core_ref_count.out"
+    core_err="$tmp/core-ref-$core_ref_count.err"
+    PATH="$bin:/usr/bin:/bin" /bin/bash "$core_wrapper" \
+      validate-document "$core_case" > "$core_out" 2> "$core_err" ||
+      fail "core content ref $core_ref_count"
+    [ ! -s "$core_out" ] && [ ! -s "$core_err" ] ||
+      fail "core content ref output $core_ref_count"
+  done
+done
+[ "$core_ref_count" -eq 12 ] || fail 'core content ref coverage'
+pass 'all policy and decision refs pass the public core seam'
 for field in schema_version kind id body; do
   expect_error "missing-envelope-$field" E_SHAPE "$(mutate "missing-envelope-$field" "del(.$field)")"
 done
