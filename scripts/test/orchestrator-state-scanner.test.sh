@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC2016
+# shellcheck disable=SC2016,SC2329
 set -euo pipefail
 export LC_ALL=C
 
@@ -18,19 +18,37 @@ sha_line() {
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
-  Darwin:*) jq_asset=jq-osx-amd64; jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
-  Linux:x86_64) jq_asset=jq-linux64; jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
+  Darwin:x86_64)
+    jq_asset=jq-osx-amd64; jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
+    expected_host_arch=x86_64; expected_execution_mode=native
+    ;;
+  Darwin:arm64)
+    jq_asset=jq-osx-amd64; jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
+    expected_host_arch=arm64; expected_execution_mode=rosetta
+    ;;
+  Linux:x86_64)
+    jq_asset=jq-linux64; jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44
+    expected_host_arch=x86_64; expected_execution_mode=native
+    ;;
   *) /usr/bin/printf 'FAIL: unsupported host %s\n' "$platform" >&2; exit 1 ;;
 esac
-system_jq=$(command -v jq)
-jq_source=$system_jq
-if [ "$($system_jq --version 2>/dev/null)" != jq-1.6 ]; then
-  jq_source="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
-  [ -f "$jq_source" ] && [ "$(sha_file "$jq_source")" = "$jq_sha" ] || {
-    /usr/bin/printf '%s\n' 'FAIL: verified jq 1.6 required' >&2
-    exit 1
-  }
-fi
+jq_source=''
+for candidate in "${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset" \
+  /usr/bin/jq "$(command -v jq)"; do
+  if [ -f "$candidate" ] && [ ! -L "$candidate" ] &&
+     [ "$(sha_file "$candidate")" = "$jq_sha" ]; then
+    jq_source=$candidate
+    break
+  fi
+done
+[ -n "$jq_source" ] || {
+  /usr/bin/printf '%s\n' 'FAIL: verified architecture-bound jq 1.6 required' >&2
+  exit 1
+}
+case "$platform" in
+  Darwin:*) /usr/bin/file "$jq_source" | /usr/bin/grep -Fq x86_64 ;;
+  Linux:x86_64) /usr/bin/file "$jq_source" | /usr/bin/grep -Eq 'x86-64|x86_64' ;;
+esac
 /bin/mkdir -m 700 "$tmp/bin"
 /bin/cp "$jq_source" "$tmp/bin/jq"
 /bin/chmod 0555 "$tmp/bin/jq"
@@ -47,21 +65,63 @@ pass() { passed=$((passed + 1)); }
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; failed=$((failed + 1)); }
 
 expect_class() {
-  local name=$1 snapshot=$2 commit=$3 class=$4 action=$5 reason=$6 output
+  local name=$1 snapshot=$2 commit=$3 class=$4 action=$5 reason=$6
+  local output snapshot_sha item_content item_sha
+  snapshot_sha=$(sha_file "$snapshot")
+  item_content=$("$jq_bin" -S -c '.body.items[0]' "$snapshot")
+  item_sha=$(sha_line "$item_content")
   if ! output=$("$scanner" scan repo.example "$commit" "$snapshot" 2>"$tmp/$name.err"); then
     fail "$name returned $(<"$tmp/$name.err")"
     return
   fi
   if /usr/bin/printf '%s\n' "$output" | "$jq_bin" -e -S -c \
-    --arg class "$class" --arg action "$action" --arg reason "$reason" '
+    --arg class "$class" --arg action "$action" --arg reason "$reason" \
+    --arg snapshot_sha "$snapshot_sha" --arg item_sha "$item_sha" \
+    --arg host_arch "$expected_host_arch" \
+    --arg execution_mode "$expected_execution_mode" --slurpfile snapshot "$snapshot" '
       .schema_version == 1 and .kind == "orchestrator_state_observation" and
+      (.body | keys) == ["activation_state","authority_effect","classifications",
+        "core_contract","evaluator","mode","observed_at","snapshot_ref",
+        "source_revision"] and
       .body.activation_state == "inactive" and
       .body.authority_effect == "none" and .body.mode == "observation-only" and
+      .body.snapshot_ref == {schema_identity:"orchestrator.state-snapshot.v1",
+        kind:"orchestrator_state_snapshot",id:$snapshot[0].id,sha256:$snapshot_sha} and
+      .body.evaluator.sha256 ==
+        .body.classifications[0].provenance.evaluator_ref.sha256 and
+      (.body.evaluator.content.body.bootstrap_ref.sha256 |
+        test("^[0-9a-f]{64}$")) and
+      .body.evaluator.content.body.program_ref.sha256 ==
+        "8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80" and
+      .body.evaluator.content.body.driver_ref.sha256 ==
+        "daaf761762722730d61e882f97794478afd5a157bab5e556be4e7169dbc4cc04" and
+      .body.evaluator.content.body.runtime.host_architecture == $host_arch and
+      .body.evaluator.content.body.runtime.execution_mode == $execution_mode and
+      (.body.evaluator.content.body.core_closure | length) == 9 and
       (.body.classifications | length) == 1 and
+      (.body.classifications[0] | keys) == ["class","provenance","recovery","stage_key"] and
+      (.body.classifications[0].provenance | keys) == ["active_attempt","evaluator_ref",
+        "item_ref","latest_result_ref","request_ref","resolved_profile_ref","snapshot_ref"] and
+      (.body.classifications[0].recovery | keys) == ["action","attempt_number",
+        "reason_id","retry_limit","source_reason"] and
+      .body.classifications[0].provenance.snapshot_ref == .body.snapshot_ref and
+      .body.classifications[0].provenance.item_ref ==
+        {schema_identity:"orchestrator.state-item.v1",sha256:$item_sha} and
+      .body.classifications[0].provenance.request_ref.sha256 ==
+        $snapshot[0].body.items[0].request.sha256 and
+      .body.classifications[0].provenance.resolved_profile_ref.sha256 ==
+        $snapshot[0].body.items[0].resolved_profile.sha256 and
+      .body.classifications[0].provenance.active_attempt ==
+        $snapshot[0].body.items[0].attempt and
+      .body.classifications[0].provenance.latest_result_ref ==
+        (if $snapshot[0].body.items[0].latest_result.state == "present" then
+           {state:"present",value:{schema_version:2,kind:"stage_result",
+             id:$snapshot[0].body.items[0].latest_result.value.content.id,
+             sha256:$snapshot[0].body.items[0].latest_result.value.sha256}}
+         else {state:"absent"} end) and
       .body.classifications[0].class == $class and
       .body.classifications[0].recovery.action == $action and
-      .body.classifications[0].recovery.reason_id == $reason and
-      ((tojson | test("grant|approval|qualification|publish|schedule|wake")) | not)
+      .body.classifications[0].recovery.reason_id == $reason
     ' >/dev/null &&
     [ "$output" = "$(/usr/bin/printf '%s\n' "$output" | "$jq_bin" -S -c .)" ]; then
     pass
@@ -187,6 +247,8 @@ make_snapshot() {
             retry_limit:$retry_limit
           }],
           observed_at:"2026-08-30T00:10:00Z",
+          snapshot_contract:{completeness:"complete",declared_item_count:1,
+            maximum_item_count:64,schema_identity:"orchestrator.state-snapshot.v1"},
           source_revision:{repository_id:"repo.example",hash_algorithm:"sha1",commit_id:$commit}
         }
       }
@@ -205,6 +267,71 @@ commit_two=2222222222222222222222222222222222222222
 pending="$tmp/pending.json"
 make_snapshot "$pending" absent absent 2026-08-30T00:20:00Z 2 "$commit_one"
 expect_class pending "$pending" "$commit_one" pending dispatch-stage scanner.no-attempt
+baseline_output=$("$scanner" scan repo.example "$commit_one" "$pending")
+malicious_path="$tmp/malicious-path"
+/bin/mkdir "$malicious_path"
+{
+  /usr/bin/printf '%s\n' '#!/bin/bash'
+  /usr/bin/printf ': > "%s"\n' "$tmp/path-jq-ran"
+  /usr/bin/printf '%s\n' 'exit 0'
+} >"$malicious_path/jq"
+/bin/chmod 0500 "$malicious_path/jq"
+path_output=$(PATH="$malicious_path:/usr/bin:/bin" \
+  "$scanner" scan repo.example "$commit_one" "$pending")
+if [ "$path_output" = "$baseline_output" ] && [ ! -e "$tmp/path-jq-ran" ]; then
+  pass
+else
+  fail 'writable PATH runtime is ignored'
+fi
+
+poison_dir="$tmp/perl-poison"
+/bin/mkdir "$poison_dir"
+{
+  /usr/bin/printf '%s\n' 'package ScannerPoison;'
+  /usr/bin/printf 'BEGIN { open(my $fh, ">", "%s") or die; print {$fh} "ran\\n"; close($fh) or die; }\n' \
+    "$tmp/perl-poison-ran"
+  /usr/bin/printf '%s\n' '1;'
+} >"$poison_dir/ScannerPoison.pm"
+compgen() { /usr/bin/printf '%s\n' LC_ALL PATH PWD SHLVL TMPDIR; }
+export -f compgen
+poison_output=$(PERL5LIB="$poison_dir" PERL5OPT=-MScannerPoison \
+  "$scanner" scan repo.example "$commit_one" "$pending" 2>"$tmp/perl-poison.err")
+unset -f compgen
+if [ "$poison_output" = "$baseline_output" ] && [ ! -s "$tmp/perl-poison.err" ] &&
+   [ ! -e "$tmp/perl-poison-ran" ]; then
+  pass
+else
+  fail 'ambient Perl options are removed before snapshotting'
+fi
+
+set +e
+"$scanner" scan repo.example "$commit_one" "$pending" \
+  >&- 2>"$tmp/closed-output.err"
+closed_output_status=$?
+set -e
+if [ "$closed_output_status" -ne 0 ] &&
+   [ "$(<"$tmp/closed-output.err")" = E_RUNTIME ]; then
+  pass
+else
+  fail 'failed output delivery cannot return success'
+fi
+
+empty="$tmp/empty.json"
+"$jq_bin" -S -c '
+  .id="snapshot.empty" | .body.items=[] |
+  .body.snapshot_contract.declared_item_count=0
+' "$pending" >"$empty"
+if empty_output=$("$scanner" scan repo.example "$commit_one" "$empty") &&
+   /usr/bin/printf '%s\n' "$empty_output" | "$jq_bin" -e \
+     --arg sha "$(sha_file "$empty")" '
+       .id == "snapshot.empty" and .body.classifications == [] and
+       .body.snapshot_ref.sha256 == $sha and
+       .body.evaluator.content.kind == "orchestrator_state_scanner_evaluator"
+     ' >/dev/null; then
+  pass
+else
+  fail 'empty complete snapshot'
+fi
 
 inflight="$tmp/inflight.json"
 make_snapshot "$inflight" absent started 2026-08-30T00:20:00Z 2 "$commit_one"
@@ -220,7 +347,7 @@ for spec in \
   'stale stale refresh-stage-inputs scanner.stage-stale 2' \
   'blocked blocked resolve-stage-blocker scanner.stage-blocked 2' \
   'failed retryable retry-stage scanner.stage-failed 2' \
-  'cancelled retryable retry-stage scanner.stage-cancelled 2' \
+  'cancelled terminal none scanner.stage-cancelled 2' \
   'failed blocked operator-reconcile scanner.retry-limit-reached 1'; do
   read -r flavor expected_class action reason retry_limit <<<"$spec"
   snapshot="$tmp/$flavor-$retry_limit.json"
@@ -239,11 +366,47 @@ make_snapshot "$completed_moved" "$tmp/result-completed.json" absent \
   2026-08-30T00:20:00Z 2 "$commit_two"
 expect_class immutable-terminal "$completed_moved" "$commit_two" terminal none scanner.stage-completed
 
+cancelled_moved="$tmp/cancelled-moved.json"
+make_snapshot "$cancelled_moved" "$tmp/result-cancelled.json" absent \
+  2026-08-30T00:20:00Z 2 "$commit_two"
+expect_class immutable-cancellation "$cancelled_moved" "$commit_two" terminal none scanner.stage-cancelled
+
+other_pending="$tmp/pending-other.json"
+"$jq_bin" -S -c \
+  '.body.items[0].request.content.body.requested_by.principal_id="principal.other"' \
+  "$pending" >"$other_pending.raw"
+other_content=$("$jq_bin" -S -c '.body.items[0].request.content' "$other_pending.raw")
+other_request_sha=$(sha_line "$other_content")
+"$jq_bin" -S -c --arg sha "$other_request_sha" \
+  '.body.items[0].request.sha256=$sha' "$other_pending.raw" >"$other_pending"
+other_output=$("$scanner" scan repo.example "$commit_one" "$other_pending")
+if [ "$baseline_output" != "$other_output" ] &&
+   [ "$(/usr/bin/printf '%s\n' "$other_output" | "$jq_bin" -r \
+       '.body.classifications[0].provenance.request_ref.sha256')" = "$other_request_sha" ] &&
+   [ "$(/usr/bin/printf '%s\n' "$other_output" | "$jq_bin" -r \
+       '.body.snapshot_ref.sha256')" = "$(sha_file "$other_pending")" ]; then
+  pass
+else
+  fail 'distinct snapshots retain distinct provenance'
+fi
+
 bad_core="$tmp/bad-core.json"
 "$jq_bin" -S -c '.body.core_contract.semantic_identity="core.contracts.v9"' \
   "$pending" >"$bad_core"
 expect_error stale-core E_STALE "$bad_core"
 expect_error stale-snapshot E_STALE "$pending" "$commit_two"
+
+truncated="$tmp/truncated.json"
+"$jq_bin" -S -c '.body.snapshot_contract.declared_item_count=0' \
+  "$pending" >"$truncated"
+expect_error incomplete-count E_SHAPE "$truncated"
+partial="$tmp/partial.json"
+"$jq_bin" -S -c '.body.snapshot_contract.completeness="partial"' \
+  "$pending" >"$partial"
+expect_error partial-page E_SHAPE "$partial"
+paged="$tmp/paged.json"
+"$jq_bin" -S -c '.body.snapshot_contract.page_cursor="next"' "$pending" >"$paged"
+expect_error ambiguous-page-field E_SHAPE "$paged"
 
 bad_sha="$tmp/bad-sha.json"
 "$jq_bin" -S -c '.body.items[0].request.sha256=("0"*64)' "$pending" >"$bad_sha"
@@ -260,13 +423,17 @@ time_travel="$tmp/time-travel.json"
 expect_error observation-before-request E_RELATION "$time_travel"
 
 duplicate="$tmp/duplicate.json"
-"$jq_bin" -S -c '.body.items += [.body.items[0]]' "$pending" >"$duplicate"
+"$jq_bin" -S -c '
+  .body.items += [.body.items[0]] |
+  .body.snapshot_contract.declared_item_count=2
+' "$pending" >"$duplicate"
 expect_error duplicate-stage E_RELATION "$duplicate"
 
 unordered="$tmp/unordered.json"
 "$jq_bin" -S -c '
   .body.items=[(.body.items[0] | .request.content.body.stage_id="stage.z"),
-               (.body.items[0] | .request.content.body.stage_id="stage.a")]
+               (.body.items[0] | .request.content.body.stage_id="stage.a")] |
+  .body.snapshot_contract.declared_item_count=2
 ' "$pending" >"$unordered.raw"
 for index in 0 1; do
   content=$("$jq_bin" -S -c ".body.items[$index].request.content" "$unordered.raw")
@@ -279,7 +446,10 @@ done
 expect_error unordered-stage E_RELATION "$unordered"
 
 too_many="$tmp/too-many.json"
-"$jq_bin" -S -c '.body.items=[range(0;65) as $n | {}]' \
+"$jq_bin" -S -c '
+  .body.items=[range(0;65) as $n | {}] |
+  .body.snapshot_contract.declared_item_count=65
+' \
   "$pending" >"$too_many"
 expect_error item-bound E_SHAPE "$too_many"
 oversize="$tmp/oversize.json"
@@ -299,6 +469,100 @@ expect_error duplicate-key E_CANONICAL "$duplicate_key"
 link="$tmp/input-link.json"
 /bin/ln -s "$pending" "$link"
 expect_error symlink-input E_RUNTIME "$link"
+
+copy_root="$tmp/scanner-copy"
+copy_modules="$copy_root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules"
+/bin/mkdir -p "$copy_root/orchestrator/v1" "$copy_modules" "$copy_root/scripts"
+/bin/cp "$root/orchestrator/v1/scan-state.sh" \
+  "$root/orchestrator/v1/state-scanner-launcher.sh" \
+  "$root/orchestrator/v1/state-scanner-driver.sh" \
+  "$root/orchestrator/v1/state-scanner.jq" "$copy_root/orchestrator/v1/"
+/bin/cp "$root/core/v2/generation-registry.json" "$copy_root/core/v2/"
+/bin/cp "$root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq" \
+  "$root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh" \
+  "$copy_root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/"
+/bin/cp "$root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/"*.jq \
+  "$copy_modules/"
+/bin/cp "$root/scripts/core-contract.sh" "$copy_root/scripts/"
+/bin/chmod 0500 "$copy_root/orchestrator/v1/scan-state.sh"
+copy_scanner="$copy_root/orchestrator/v1/scan-state.sh"
+race_tmp="$tmp/race-tmp"
+/bin/mkdir -p "$race_tmp/ystack-portable-core-jq16"
+/bin/cp "$jq_source" "$race_tmp/ystack-portable-core-jq16/$jq_asset"
+/bin/chmod 0500 "$race_tmp/ystack-portable-core-jq16/$jq_asset"
+
+program_copy="$copy_root/orchestrator/v1/state-scanner.jq"
+/bin/cp "$program_copy" "$tmp/program-saved"
+/usr/bin/printf '\n' >>"$program_copy"
+set +e
+tampered_output=$(TMPDIR="$race_tmp" "$copy_scanner" scan \
+  repo.example "$commit_one" "$pending" 2>"$tmp/tampered-program.err")
+tampered_status=$?
+set -e
+if [ "$tampered_status" -ne 0 ] && [ -z "$tampered_output" ] &&
+   [ "$(<"$tmp/tampered-program.err")" = E_STALE ]; then
+  pass
+else
+  fail 'same-inode program mutation fails closed'
+fi
+/bin/cp "$tmp/program-saved" "$program_copy"
+
+/bin/mv "$program_copy" "$tmp/program-real"
+/bin/ln -s "$tmp/program-real" "$program_copy"
+set +e
+symlink_output=$(TMPDIR="$race_tmp" "$copy_scanner" scan \
+  repo.example "$commit_one" "$pending" 2>"$tmp/symlink-program.err")
+symlink_status=$?
+set -e
+if [ "$symlink_status" -ne 0 ] && [ -z "$symlink_output" ] &&
+   [ "$(<"$tmp/symlink-program.err")" = E_STALE ]; then
+  pass
+else
+  fail 'swapped program symlink fails closed'
+fi
+/bin/rm "$program_copy"
+/bin/mv "$tmp/program-real" "$program_copy"
+
+race_cache="$race_tmp/ystack-portable-core-jq16/$jq_asset"
+/bin/cp "$program_copy" "$tmp/program-race-saved"
+/bin/cp "$race_cache" "$tmp/jq-race-saved"
+TMPDIR="$race_tmp" "$copy_scanner" scan repo.example "$commit_one" "$pending" \
+  >"$tmp/race-output" 2>"$tmp/race-error" &
+race_pid=$!
+runtime_ready=''
+for _ in {1..200}; do
+  for candidate in "$race_tmp"/ystack-state-scan.*/runtime; do
+    if [ -f "$candidate/program.jq" ] && [ -f "$candidate/jq" ]; then
+      runtime_ready=$candidate
+      break 2
+    fi
+  done
+  /bin/sleep 0.01
+done
+if [ -n "$runtime_ready" ] && kill -0 "$race_pid" 2>/dev/null; then
+  /usr/bin/printf '\n' >>"$program_copy"
+  /bin/chmod 0700 "$race_cache"
+  /usr/bin/printf '\000' >>"$race_cache"
+  program_size=$(/usr/bin/wc -c <"$tmp/program-race-saved" | /usr/bin/tr -d ' ')
+  jq_size=$(/usr/bin/wc -c <"$tmp/jq-race-saved" | /usr/bin/tr -d ' ')
+  /bin/dd if="$tmp/program-race-saved" of="$program_copy" bs=65536 conv=notrunc 2>/dev/null
+  /usr/bin/truncate -s "$program_size" "$program_copy"
+  /bin/dd if="$tmp/jq-race-saved" of="$race_cache" bs=65536 conv=notrunc 2>/dev/null
+  /usr/bin/truncate -s "$jq_size" "$race_cache"
+  /bin/chmod 0500 "$race_cache"
+else
+  fail 'private runtime was not observable before completion'
+fi
+set +e
+wait "$race_pid"
+race_status=$?
+set -e
+if [ "$race_status" -eq 0 ] && [ ! -s "$tmp/race-error" ] &&
+   [ "$(<"$tmp/race-output")" = "$baseline_output" ]; then
+  pass
+else
+  fail 'private snapshot survives source swap-restore'
+fi
 
 if [ "$failed" -ne 0 ]; then
   /usr/bin/printf 'orchestrator state scanner: %s passed, %s failed\n' "$passed" "$failed" >&2
