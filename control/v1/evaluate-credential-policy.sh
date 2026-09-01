@@ -201,11 +201,76 @@ sha256_path() {
     print $actual_digest,"\n";
   ' "$1" "$expected_identity"
 }
+capture_pinned_text() {
+  local expected_identity
+  expected_identity=$(pinned_identity "$1") || return 1
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
+    use strict; use warnings;
+    my ($path,$expected_identity)=@ARGV;
+    my ($expected_parent_dev,$expected_parent_ino,$expected_leaf_dev,
+      $expected_leaf_ino,$expected_size,$expected_mtime,$expected_ctime,
+      $expected_digest)=split(/:/,$expected_identity,8);
+    my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+    exit 2 unless defined($parent) && defined($name) && $expected_size <= 1048576;
+    my $resolved_parent=abs_path($parent);
+    exit 2 unless defined($resolved_parent) && $resolved_parent eq $parent;
+    my @parent_before=lstat($parent);
+    exit 2 unless @parent_before && S_ISDIR($parent_before[2]) &&
+      $parent_before[0]==$expected_parent_dev &&
+      $parent_before[1]==$expected_parent_ino;
+    chdir($parent) or exit 2;
+    my @cwd=stat(".");
+    my @before=lstat($name);
+    exit 2 unless @cwd && @before && S_ISREG($before[2]) &&
+      $before[0]==$expected_leaf_dev && $before[1]==$expected_leaf_ino &&
+      $before[7]==$expected_size && $before[9]==$expected_mtime &&
+      $before[10]==$expected_ctime;
+    sysopen(my $input,$name,O_RDONLY|O_NOFOLLOW) or exit 2;
+    binmode($input);
+    my @opened=stat($input);
+    exit 2 unless @opened && S_ISREG($opened[2]) &&
+      $opened[0]==$expected_leaf_dev && $opened[1]==$expected_leaf_ino &&
+      $opened[7]==$expected_size && $opened[9]==$expected_mtime &&
+      $opened[10]==$expected_ctime;
+    my $sha=Digest::SHA->new(256);
+    my $content="";
+    my $total=0;
+    while (1) {
+      my $read=sysread($input,my $buffer,65536);
+      exit 2 unless defined $read;
+      last if $read==0;
+      $total += $read;
+      exit 2 if $total > 1048576;
+      $sha->add($buffer);
+      $content .= $buffer;
+    }
+    my @after=stat($input);
+    my @path_after=lstat($name);
+    my @parent_after=lstat($parent);
+    my $resolved_after=abs_path($parent);
+    exit 2 unless $total==$expected_size && $sha->hexdigest eq $expected_digest &&
+      @after && @path_after && @parent_after && defined($resolved_after) &&
+      $resolved_after eq $parent && S_ISREG($path_after[2]) &&
+      S_ISDIR($parent_after[2]) &&
+      $opened[0]==$after[0] && $opened[1]==$after[1] &&
+      $opened[7]==$after[7] && $opened[9]==$after[9] &&
+      $opened[10]==$after[10] &&
+      $after[0]==$path_after[0] && $after[1]==$path_after[1] &&
+      $path_after[7]==$expected_size && $path_after[9]==$expected_mtime &&
+      $path_after[10]==$expected_ctime &&
+      $cwd[0]==$parent_after[0] && $cwd[1]==$parent_after[1] &&
+      $parent_after[0]==$expected_parent_dev &&
+      $parent_after[1]==$expected_parent_ino;
+    print $content;
+  ' "$1" "$expected_identity"
+}
 [ "$(sha256_path "$live_jq")" = "$jq_sha" ] || emit_error E_RUNTIME
 
-scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-credential-policy.XXXXXX" \
-  2>/dev/null) || emit_error E_RUNTIME
+scratch=
 cleanup() {
+  [ -z "${scratch:-}" ] && return 0
+  case "$scratch" in /*/ystack-credential-policy.??????) ;; *) return 1 ;; esac
   /bin/rm -rf -- "$scratch" >/dev/null 2>&1 &&
     [ ! -e "$scratch" ] && [ ! -L "$scratch" ]
 }
@@ -215,17 +280,21 @@ early_signal_exit() {
   [ "${EARLY_SIGNAL_EXITING:-0}" -eq 0 ] || return 0
   EARLY_SIGNAL_EXITING=1
   exec >/dev/null 2>&1
-  cleanup || :
-  trap - EXIT HUP INT TERM
-  exit "$exit_status"
+  if cleanup; then
+    trap - EXIT HUP INT TERM
+    exit "$exit_status"
+  fi
+  exit 125
 }
 trap cleanup EXIT
 trap 'early_signal_exit 129' HUP
 trap 'early_signal_exit 130' INT
 trap 'early_signal_exit 143' TERM
-scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) ||
-  emit_error E_RUNTIME
+scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-credential-policy.XXXXXX" \
+  2>/dev/null) || emit_error E_RUNTIME
 /usr/bin/printf '%s\n' "$$" >"$scratch/input-snapshot-pending" ||
+  emit_error E_RUNTIME
+scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
 /bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
 ACTIVE_PID=
@@ -236,38 +305,66 @@ PENDING_SIGNAL_STATUS=0
 SELF_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') ||
   emit_error E_RUNTIME
 [[ "$SELF_PGID" =~ ^[1-9][0-9]*$ ]] || emit_error E_RUNTIME
-group_alive() {
-  [ -n "${1:-}" ] && /bin/kill -0 -- "-$1" 2>/dev/null
+group_live_count() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  /bin/ps -axo pgid=,state= 2>/dev/null |
+    /usr/bin/awk -v group="$1" '
+      $1 == group && $2 !~ /^Z/ {count += 1}
+      END {print count + 0}
+    '
+}
+owned_leader_state() {
+  /bin/ps -o state= -p "$1" 2>/dev/null | /usr/bin/tr -d ' '
 }
 terminate_active() {
-  local attempt=0 group=${ACTIVE_PGID:-} leader=${ACTIVE_PID:-}
+  local attempt=0 group=${ACTIVE_PGID:-} leader=${ACTIVE_PID:-} live_count state
   [[ "$group" =~ ^[1-9][0-9]*$ ]] && [[ "$leader" =~ ^[1-9][0-9]*$ ]] ||
     return 1
   /bin/kill -TERM -- "-$group" 2>/dev/null || :
-  while group_alive "$group" && [ "$attempt" -lt 100 ]; do
+  state=$(owned_leader_state "$leader") || state=
+  while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 100 ]; do
     attempt=$((attempt + 1))
     /bin/sleep 0.01
+    state=$(owned_leader_state "$leader") || state=
   done
-  if group_alive "$group"; then
+  live_count=$(group_live_count "$group") || return 1
+  if { [ -n "$state" ] && [[ "$state" != Z* ]]; } || [ "$live_count" -gt 0 ]; then
     /bin/kill -KILL -- "-$group" 2>/dev/null || :
     attempt=0
-    while group_alive "$group" && [ "$attempt" -lt 100 ]; do
+    state=$(owned_leader_state "$leader") || state=
+    while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 100 ]; do
       attempt=$((attempt + 1))
       /bin/sleep 0.01
+      state=$(owned_leader_state "$leader") || state=
     done
   fi
-  group_alive "$group" && return 1
+  [ -z "$state" ] || [[ "$state" == Z* ]] || return 1
   wait "$leader" 2>/dev/null || :
+  state=$(owned_leader_state "$leader") || state=
+  [ -z "$state" ] || return 1
+  attempt=0
+  live_count=$(group_live_count "$group") || return 1
+  while [ "$live_count" -gt 0 ] && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+    live_count=$(group_live_count "$group") || return 1
+  done
+  [ "$live_count" -eq 0 ] || return 1
   ACTIVE_PID=
   ACTIVE_PGID=
-  ! group_alive "$group"
+  return 0
 }
 signal_exit() {
   exec >/dev/null 2>&1
-  if [ -n "${ACTIVE_PGID:-}" ]; then terminate_active || :; fi
-  cleanup || :
-  trap - EXIT HUP INT TERM
-  exit "${1:-1}"
+  if [ -n "${ACTIVE_PGID:-}" ] && ! terminate_active; then
+    cleanup || :
+    exit 125
+  fi
+  if cleanup; then
+    trap - EXIT HUP INT TERM
+    exit "${1:-1}"
+  fi
+  exit 125
 }
 handle_signal() {
   local exit_status=${1:-1}
@@ -289,7 +386,7 @@ replay_pending_signal() {
   fi
 }
 run_child() {
-  local child child_status=0 gate pgid wait_status
+  local child child_status=0 gate pgid remaining wait_status
   [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
   gate="$scratch/child-gate"
   PENDING_SIGNAL_STATUS=0
@@ -359,7 +456,8 @@ run_child() {
     replay_pending_signal
     return 125
   }
-  if group_alive "$ACTIVE_PGID"; then
+  remaining=$(group_live_count "$ACTIVE_PGID") || remaining=-1
+  if [ "$remaining" -ne 0 ]; then
     terminate_active || :
     /bin/rm -f -- "$scratch/child-teardown"
     replay_pending_signal
@@ -728,7 +826,6 @@ trap cleanup EXIT
 trap 'handle_signal 129' HUP
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
-: >"$scratch/runtime-handlers-ready" || emit_error E_RUNTIME
 : >"$scratch/duty-ready"
 duty_status=0
 run_child /usr/bin/env -i LC_ALL=C PATH="${jq_bin%/*}:/usr/bin:/bin" \
@@ -773,6 +870,7 @@ claim_sha=$(sha256_path "$scratch/claim.json") || emit_error E_RUNTIME
   --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" \
   --arg duty_sha "$duty_sha" --arg claim_sha "$claim_sha" \
   >"$scratch/output.json" 2>/dev/null || emit_error E_RELATION
+pin_path "$scratch/output.json" 1048576 || emit_error E_RUNTIME
 : >"$scratch/credential-complete"
 /usr/bin/printf '%s\n' "$$" >"$scratch/final-cleanup-pending" ||
   emit_error E_RUNTIME
@@ -849,15 +947,11 @@ canonical_json "$scratch/output.json" "$scratch/output.canonical"
   (.body.reason_ids|index("credential-policy.satisfied")==null) and
   ((.body|has("grant_ref") or has("activation") or has("credential_ref"))|not)
 ' "$scratch/output.json" >/dev/null 2>&1 || emit_error E_RUNTIME
-: >"$scratch/final-output-validated" || emit_error E_RUNTIME
-exec 7<"$scratch/output.json" || emit_error E_RUNTIME
+output_text=$(capture_pinned_text "$scratch/output.json") || emit_error E_RUNTIME
+/usr/bin/printf '%s\n' "$$" >"$scratch/final-output-validated" ||
+  emit_error E_RUNTIME
 if ! cleanup; then
-  exec 7<&-
   emit_error E_RUNTIME
 fi
 trap - EXIT HUP INT TERM
-/bin/cat <&7 || {
-  exec 7<&-
-  emit_error E_RUNTIME
-}
-exec 7<&-
+/usr/bin/printf '%s\n' "$output_text" || emit_error E_RUNTIME

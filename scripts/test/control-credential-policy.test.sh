@@ -22,6 +22,7 @@ tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 INPUT_RACE_PID=
 INPUT_RACE_PGID=
 INPUT_RACE_STATUS=
+STOPPED_MARKER_PATH=
 SIGNAL_CHILD_PID=
 SIGNAL_CHILD_PGID=
 SIGNAL_DESCENDANT_PID=
@@ -158,25 +159,53 @@ fi
 pass 'mirrored executables pin only after final mode'
 
 final_success_body=$(/usr/bin/awk '
-  /^exec 7<"\$scratch\/output.json"/ {capture=1}
+  /^output_text=\$\(capture_pinned_text/ {capture=1}
   capture {print}
 ' "$evaluator")
-final_open_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
-  /usr/bin/awk '/^exec 7</ {print NR; exit}')
+final_capture_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
+  /usr/bin/awk '/^output_text=\$\(capture_pinned_text/ {print NR; exit}')
 final_cleanup_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
   /usr/bin/awk '/^if ! cleanup/ {print NR; exit}')
 final_disarm_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
   /usr/bin/awk '/^trap - EXIT HUP INT TERM/ {print NR; exit}')
 final_output_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
-  /usr/bin/awk '/^\/bin\/cat <&7/ {print NR; exit}')
-if [ -z "$final_open_line" ] || [ -z "$final_cleanup_line" ] ||
+  /usr/bin/awk '/^\/usr\/bin\/printf .*"\$output_text"/ {print NR; exit}')
+if [ -z "$final_capture_line" ] || [ -z "$final_cleanup_line" ] ||
    [ -z "$final_disarm_line" ] || [ -z "$final_output_line" ] ||
-   [ "$final_open_line" -ge "$final_cleanup_line" ] ||
+   [ "$final_capture_line" -ge "$final_cleanup_line" ] ||
    [ "$final_cleanup_line" -ge "$final_disarm_line" ] ||
    [ "$final_disarm_line" -ge "$final_output_line" ]; then
   fail 'success cleanup trap order'
 fi
 pass 'success keeps cleanup armed through deletion before output'
+
+startup_trap_line=$(/usr/bin/awk '/^trap cleanup EXIT/ {print NR; exit}' "$evaluator")
+startup_mktemp_line=$(/usr/bin/awk "/^scratch=\\\$\\(\\/usr\\/bin\\/mktemp/ {print NR; exit}" \
+  "$evaluator")
+if [ -z "$startup_trap_line" ] || [ -z "$startup_mktemp_line" ] ||
+   [ "$startup_trap_line" -ge "$startup_mktemp_line" ]; then
+  fail 'cleanup trap must precede scratch creation'
+fi
+pass 'cleanup is armed before scratch creation'
+
+terminate_body=$(/usr/bin/awk '
+  /^terminate_active\(\) \{/ {capture=1}
+  capture {print}
+  capture && /^}$/ {exit}
+' "$evaluator")
+terminate_wait_line=$(/usr/bin/printf '%s\n' "$terminate_body" |
+  /usr/bin/awk '/wait "\$leader"/ {print NR; exit}')
+terminate_clear_line=$(/usr/bin/printf '%s\n' "$terminate_body" |
+  /usr/bin/awk '/ACTIVE_PID=/ {line=NR} END {print line}')
+terminate_post_group_line=$(/usr/bin/printf '%s\n' "$terminate_body" |
+  /usr/bin/awk '/group_live_count/ {line=NR} END {print line}')
+if [ -z "$terminate_wait_line" ] || [ -z "$terminate_clear_line" ] ||
+   [ -z "$terminate_post_group_line" ] ||
+   [ "$terminate_wait_line" -ge "$terminate_post_group_line" ] ||
+   [ "$terminate_post_group_line" -ge "$terminate_clear_line" ]; then
+  fail 'owned leader reap must precede group clear'
+fi
+pass 'terminate reaps its owned leader before clearing the process group'
 
 policy_set="$tmp/policy-set.json"
 "$jq_bin" -S -c -n --arg credential_policy_sha "$policy_sha" \
@@ -443,6 +472,7 @@ stop_at_owned_marker() {
     INPUT_RACE_PGID=
     fail "$name missed guarded window before $forbidden_marker"
   fi
+  STOPPED_MARKER_PATH=$marker
 }
 
 stop_at_input_pending() {
@@ -596,24 +626,6 @@ signal_owned_child_group() {
   SIGNAL_DESCENDANT_PID=$descendant
   /bin/kill -TERM "$INPUT_RACE_PID" || fail "$name signal delivery"
 }
-
-startup_cleanup_scratch="$tmp/startup-cleanup-scratch"
-/bin/mkdir "$startup_cleanup_scratch"
-start_input_race startup-cleanup "$startup_cleanup_scratch" "$claim"
-stop_at_input_pending startup-cleanup "$startup_cleanup_scratch"
-if /usr/bin/find "$startup_cleanup_scratch" -type f \
-  -name runtime-handlers-ready -print -quit | /usr/bin/grep -q .; then
-  fail 'startup cleanup missed early-handler window'
-fi
-/bin/kill -TERM "$INPUT_RACE_PID" || fail 'startup cleanup signal delivery'
-/bin/kill -CONT -- "-$INPUT_RACE_PGID" || fail 'startup cleanup resume'
-wait_evaluator_group startup-cleanup
-if [ "$INPUT_RACE_STATUS" -ne 143 ] || [ -s "$tmp/startup-cleanup.out" ] ||
-   [ -s "$tmp/startup-cleanup.err" ] ||
-   [ -n "$(/usr/bin/find "$startup_cleanup_scratch" -mindepth 1 -print -quit)" ]; then
-  fail 'startup signal cleanup'
-fi
-pass 'startup signal keeps cleanup armed and removes scratch'
 
 run_driver baseline
 "$jq_bin" -e '.body.verdict=="inconclusive" and
@@ -880,6 +892,36 @@ copy_runtime() {
   /bin/cp -R "$root/core/v2" "$destination/core/v2"
 }
 
+startup_runtime="$tmp/startup-runtime"
+copy_runtime "$startup_runtime"
+startup_instrumented="$tmp/startup-evaluator.instrumented"
+/usr/bin/awk '
+  {print}
+  $0 == "  2>/dev/null) || emit_error E_RUNTIME" {
+    print "/bin/kill -TERM $$"
+    injected += 1
+  }
+  END {if (injected != 1) exit 2}
+' "$startup_runtime/control/v1/evaluate-credential-policy.sh" >"$startup_instrumented" ||
+  fail 'startup cleanup instrumentation'
+/bin/chmod 0500 "$startup_instrumented"
+/bin/mv "$startup_instrumented" \
+  "$startup_runtime/control/v1/evaluate-credential-policy.sh"
+startup_cleanup_scratch="$tmp/startup-cleanup-scratch"
+/bin/mkdir "$startup_cleanup_scratch"
+startup_cleanup_status=0
+TMPDIR="$startup_cleanup_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$startup_runtime/control/v1/evaluate-credential-policy.sh" evaluate \
+  "$policy_set" "$request" "$resolved" "$result" "$duty" "$claim" \
+  >"$tmp/startup-cleanup.out" 2>"$tmp/startup-cleanup.err" ||
+  startup_cleanup_status=$?
+if [ "$startup_cleanup_status" -ne 143 ] || [ -s "$tmp/startup-cleanup.out" ] ||
+   [ -s "$tmp/startup-cleanup.err" ] ||
+   [ -n "$(/usr/bin/find "$startup_cleanup_scratch" -mindepth 1 -print -quit)" ]; then
+  fail 'startup signal cleanup'
+fi
+pass 'startup signal keeps cleanup armed before physicalization'
+
 binding_runtime="$tmp/binding-runtime"
 copy_runtime "$binding_runtime"
 binding_scratch="$tmp/binding-scratch"
@@ -962,6 +1004,58 @@ SIGNAL_CHILD_PID=
 SIGNAL_CHILD_PGID=
 SIGNAL_DESCENDANT_PID=
 pass 'owned live child group is signaled, reaped, and scratch-cleaned'
+
+output_swap_scratch="$tmp/output-swap-scratch"
+/bin/mkdir "$output_swap_scratch"
+start_input_race output-swap "$output_swap_scratch" "$claim"
+stop_at_owned_marker output-swap "$output_swap_scratch" final-cleanup-pending \
+  final-output-validated
+output_swap_path="${STOPPED_MARKER_PATH%/*}/output.json"
+output_swap_backup="$tmp/output-swap.backup"
+/bin/mv "$output_swap_path" "$output_swap_backup"
+/bin/cp "$output_swap_backup" "$output_swap_path"
+resume_and_wait_input_race output-swap
+if [ "$INPUT_RACE_STATUS" -eq 0 ] || [ -s "$tmp/output-swap.out" ] ||
+   [ "$(/bin/cat "$tmp/output-swap.err")" != E_RUNTIME ] ||
+   [ -n "$(/usr/bin/find "$output_swap_scratch" -mindepth 1 -print -quit)" ]; then
+  fail 'final identical-byte output replacement'
+fi
+pass 'final output replacement is identity-rejected before emission'
+
+output_symlink_scratch="$tmp/output-symlink-scratch"
+/bin/mkdir "$output_symlink_scratch"
+start_input_race output-symlink "$output_symlink_scratch" "$claim"
+stop_at_owned_marker output-symlink "$output_symlink_scratch" final-cleanup-pending \
+  final-output-validated
+output_symlink_path="${STOPPED_MARKER_PATH%/*}/output.json"
+output_symlink_backup="$tmp/output-symlink.backup"
+/bin/mv "$output_symlink_path" "$output_symlink_backup"
+/bin/ln -s "$output_symlink_backup" "$output_symlink_path"
+resume_and_wait_input_race output-symlink
+if [ "$INPUT_RACE_STATUS" -eq 0 ] || [ -s "$tmp/output-symlink.out" ] ||
+   [ "$(/bin/cat "$tmp/output-symlink.err")" != E_RUNTIME ] ||
+   [ -n "$(/usr/bin/find "$output_symlink_scratch" -mindepth 1 -print -quit)" ]; then
+  fail 'final symlink output replacement'
+fi
+pass 'final output symlink is rejected before emission'
+
+cleanup_failure_scratch="$tmp/cleanup-failure-scratch"
+/bin/mkdir "$cleanup_failure_scratch"
+start_input_race cleanup-failure "$cleanup_failure_scratch" "$claim"
+stop_at_owned_marker cleanup-failure "$cleanup_failure_scratch" final-cleanup-pending \
+  final-output-validated
+/bin/chmod 0500 "$cleanup_failure_scratch"
+resume_and_wait_input_race cleanup-failure
+cleanup_failure_residual=$(/usr/bin/find "$cleanup_failure_scratch" -mindepth 1 \
+  -print -quit 2>/dev/null)
+/bin/chmod 0700 "$cleanup_failure_scratch"
+if [ "$INPUT_RACE_STATUS" -eq 0 ] || [ -s "$tmp/cleanup-failure.out" ] ||
+   [ "$(/bin/cat "$tmp/cleanup-failure.err")" != E_RUNTIME ] ||
+   [ -z "$cleanup_failure_residual" ]; then
+  fail 'forced cleanup failure result'
+fi
+/bin/rm -rf -- "$cleanup_failure_scratch"
+pass 'cleanup failure stays non-success and emits no output'
 
 final_cleanup_scratch="$tmp/final-cleanup-scratch"
 /bin/mkdir "$final_cleanup_scratch"
