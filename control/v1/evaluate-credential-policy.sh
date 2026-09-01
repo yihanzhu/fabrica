@@ -270,9 +270,10 @@ replay_pending_signal() {
   fi
 }
 run_child() {
-  local child child_status=0 gate pgid wait_status
+  local child child_status=0 gate owned_marker pgid wait_status
   [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
   gate="$scratch/child-gate"
+  owned_marker="$scratch/child-owned"
   PENDING_SIGNAL_STATUS=0
   SIGNAL_DEFER=1
   /usr/bin/mkfifo "$gate" || { replay_pending_signal; return 125; }
@@ -311,15 +312,23 @@ run_child() {
   fi
   ACTIVE_PID=$child
   ACTIVE_PGID=$pgid
-  /usr/bin/printf 'go\n' >&9 || {
+  /usr/bin/printf '%s %s\n' "$ACTIVE_PID" "$ACTIVE_PGID" >"$owned_marker" || {
     exec 9>&-
     /bin/rm -f -- "$scratch/child-launching"
     terminate_active || :
     replay_pending_signal
     return 125
   }
+  /usr/bin/printf 'go\n' >&9 || {
+    exec 9>&-
+    /bin/rm -f -- "$scratch/child-launching" "$owned_marker"
+    terminate_active || :
+    replay_pending_signal
+    return 125
+  }
   exec 9>&-
   /bin/rm -f -- "$scratch/child-launching" || {
+    /bin/rm -f -- "$owned_marker"
     terminate_active || :
     replay_pending_signal
     return 125
@@ -342,13 +351,13 @@ run_child() {
   }
   if group_alive "$ACTIVE_PGID"; then
     terminate_active || :
-    /bin/rm -f -- "$scratch/child-teardown"
+    /bin/rm -f -- "$scratch/child-teardown" "$owned_marker"
     replay_pending_signal
     return 125
   fi
   ACTIVE_PID=
   ACTIVE_PGID=
-  /bin/rm -f -- "$scratch/child-teardown" || {
+  /bin/rm -f -- "$scratch/child-teardown" "$owned_marker" || {
     replay_pending_signal
     return 125
   }

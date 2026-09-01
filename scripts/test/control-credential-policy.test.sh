@@ -22,6 +22,9 @@ tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
 INPUT_RACE_PID=
 INPUT_RACE_PGID=
 INPUT_RACE_STATUS=
+SIGNAL_CHILD_PID=
+SIGNAL_CHILD_PGID=
+SIGNAL_DESCENDANT_PID=
 TEST_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || exit 1
 [[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 1
 group_alive() {
@@ -51,6 +54,9 @@ terminate_input_race() {
 cleanup() {
   if [ -n "${INPUT_RACE_PID:-}" ] || [ -n "${INPUT_RACE_PGID:-}" ]; then
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+  fi
+  if [ -n "${SIGNAL_CHILD_PID:-}" ] || [ -n "${SIGNAL_CHILD_PGID:-}" ]; then
+    terminate_input_race "$SIGNAL_CHILD_PID" "$SIGNAL_CHILD_PGID" || :
   fi
   /bin/rm -rf -- "$tmp"
 }
@@ -269,7 +275,8 @@ mutate_claim() {
 }
 
 start_input_race() {
-  local name=$1 scratch_root=$2 claim_path=$3 gate leader pgid attempt=0
+  local name=$1 scratch_root=$2 claim_path=$3
+  local race_evaluator=${4:-$evaluator} gate leader pgid attempt=0
   gate="$tmp/$name.launch.gate"
   INPUT_RACE_OUT="$tmp/$name.out"
   INPUT_RACE_ERR="$tmp/$name.err"
@@ -284,7 +291,7 @@ start_input_race() {
     race_path=$2
     shift 2
     TMPDIR=$race_tmp PATH=$race_path exec "$@"
-  ' input-race "$scratch_root" "$bin:/usr/bin:/bin" "$evaluator" evaluate \
+  ' input-race "$scratch_root" "$bin:/usr/bin:/bin" "$race_evaluator" evaluate \
     "$policy_set" "$request" "$resolved" "$result" "$duty" "$claim_path" \
     >"$INPUT_RACE_OUT" 2>"$INPUT_RACE_ERR" &
   leader=$!
@@ -378,9 +385,8 @@ stop_at_input_pending() {
   fi
 }
 
-resume_and_wait_input_race() {
+wait_evaluator_group() {
   local name=$1 attempt=0 state status=0
-  /bin/kill -CONT -- "-$INPUT_RACE_PGID" || fail "$name resume evaluator group"
   while [ "$attempt" -lt 1000 ]; do
     state=$(/bin/ps -o state= -p "$INPUT_RACE_PID" 2>/dev/null |
       /usr/bin/tr -d ' ') || state=
@@ -404,6 +410,89 @@ resume_and_wait_input_race() {
   INPUT_RACE_STATUS=$status
   INPUT_RACE_PID=
   INPUT_RACE_PGID=
+}
+
+resume_and_wait_input_race() {
+  local name=$1
+  /bin/kill -CONT -- "-$INPUT_RACE_PGID" || fail "$name resume evaluator group"
+  wait_evaluator_group "$name"
+}
+
+signal_owned_child_group() {
+  local name=$1 scratch_root=$2 attempt=0 marker leader group extra parent descendant
+  local descendant_group
+  marker=
+  while [ -z "$marker" ] && [ "$attempt" -lt 5000 ]; do
+    marker=$(/usr/bin/find "$scratch_root" -type f -name child-owned -print -quit \
+      2>/dev/null) || marker=
+    if [ -z "$marker" ] && ! /bin/kill -0 "$INPUT_RACE_PID" 2>/dev/null; then
+      wait "$INPUT_RACE_PID" 2>/dev/null || :
+      INPUT_RACE_PID=
+      INPUT_RACE_PGID=
+      fail "$name evaluator exited before child ownership"
+    fi
+    [ -n "$marker" ] || /bin/sleep 0.001
+    attempt=$((attempt + 1))
+  done
+  [ -n "$marker" ] || {
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name child ownership timeout"
+  }
+  case "$marker" in "$scratch_root"/*/child-owned) ;; *)
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name child marker escaped scratch"
+  esac
+  leader=
+  group=
+  extra=
+  IFS=' ' read -r leader group extra <"$marker" || fail "$name child marker read"
+  if [[ ! "$leader" =~ ^[1-9][0-9]*$ ]] ||
+     [[ ! "$group" =~ ^[1-9][0-9]*$ ]] || [ -n "$extra" ] ||
+     [ "$leader" != "$group" ] || [ "$group" = "$INPUT_RACE_PGID" ] ||
+     [ "$group" = "$TEST_PGID" ]; then
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name invalid child ownership"
+  fi
+  parent=$(/bin/ps -o ppid= -p "$leader" 2>/dev/null | /usr/bin/tr -d ' ') ||
+    parent=
+  [ "$parent" = "$INPUT_RACE_PID" ] || fail "$name child parent mismatch"
+  descendant=
+  attempt=0
+  while [ -z "$descendant" ] && [ "$attempt" -lt 5000 ] &&
+    /bin/kill -0 "$INPUT_RACE_PID" 2>/dev/null && group_alive "$group"; do
+    descendant=$(/bin/ps -axo pid=,pgid=,state= |
+      /usr/bin/awk -v group="$group" -v leader="$leader" \
+        '$2 == group && $1 != leader && $3 !~ /^Z/ {print $1; exit}') ||
+      descendant=
+    if [ -n "$descendant" ]; then
+      descendant_group=$(/bin/ps -o pgid= -p "$descendant" 2>/dev/null |
+        /usr/bin/tr -d ' ') || descendant_group=
+      if ! /bin/kill -0 "$descendant" 2>/dev/null ||
+         [ "$descendant_group" != "$group" ]; then
+        descendant=
+      fi
+    fi
+    [ -n "$descendant" ] || /bin/sleep 0.001
+    attempt=$((attempt + 1))
+  done
+  if [[ ! "$descendant" =~ ^[1-9][0-9]*$ ]] ||
+     ! /bin/kill -0 "$leader" 2>/dev/null ||
+     ! /bin/kill -0 "$descendant" 2>/dev/null || ! group_alive "$group"; then
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name child group was not live"
+  fi
+  SIGNAL_CHILD_PID=$leader
+  SIGNAL_CHILD_PGID=$group
+  SIGNAL_DESCENDANT_PID=$descendant
+  /bin/kill -TERM "$INPUT_RACE_PID" || fail "$name signal delivery"
 }
 
 run_driver baseline
@@ -738,51 +827,20 @@ signal_runtime="$tmp/signal-runtime"
 copy_runtime "$signal_runtime"
 signal_scratch="$tmp/signal-scratch"
 /bin/mkdir "$signal_scratch"
-TMPDIR="$signal_scratch" PATH="$bin:/usr/bin:/bin" \
-  "$signal_runtime/control/v1/evaluate-credential-policy.sh" evaluate \
-  "$policy_set" "$request" "$resolved" "$result" "$duty" "$claim" \
-  >"$tmp/signal.out" 2>"$tmp/signal.err" &
-signal_pid=$!
-signal_marker=
-signal_attempt=0
-while [ -z "$signal_marker" ] && /bin/kill -0 "$signal_pid" 2>/dev/null &&
-  [ "$signal_attempt" -lt 5000 ]; do
-  signal_marker=$(/usr/bin/find "$signal_scratch" -type f -name child-launching \
-    -print -quit 2>/dev/null)
-  [ -n "$signal_marker" ] || /bin/sleep 0.001
-  signal_attempt=$((signal_attempt + 1))
-done
-[ -n "$signal_marker" ] || fail 'signal marker'
-signal_child=
-signal_child_attempt=0
-while [ -z "$signal_child" ] && /bin/kill -0 "$signal_pid" 2>/dev/null &&
-  [ "$signal_child_attempt" -lt 1000 ]; do
-  signal_child=$(/usr/bin/pgrep -P "$signal_pid" | /usr/bin/head -n 1 || :)
-  [ -n "$signal_child" ] || /bin/sleep 0.001
-  signal_child_attempt=$((signal_child_attempt + 1))
-done
-[[ "$signal_child" =~ ^[1-9][0-9]*$ ]] || fail 'signal child identity'
-signal_child_pgid=$(/bin/ps -o pgid= -p "$signal_child" | /usr/bin/tr -d ' ')
-[[ "$signal_child_pgid" =~ ^[1-9][0-9]*$ ]] &&
-  [ "$signal_child_pgid" = "$signal_child" ] || fail 'signal child group'
-for _ in 1 2 3; do /bin/kill -TERM "$signal_pid" 2>/dev/null || :; done
-signal_wait=0
-while /bin/kill -0 "$signal_pid" 2>/dev/null && [ "$signal_wait" -lt 1000 ]; do
-  signal_wait=$((signal_wait + 1))
-  /bin/sleep 0.01
-done
-if /bin/kill -0 "$signal_pid" 2>/dev/null; then
-  /bin/kill -KILL "$signal_pid" 2>/dev/null || :
-  wait "$signal_pid" 2>/dev/null || :
-  fail 'signal termination deadline'
-fi
-signal_status=0
-wait "$signal_pid" 2>/dev/null || signal_status=$?
-[ "$signal_status" -eq 143 ] && [ ! -s "$tmp/signal.out" ] &&
-  [ ! -s "$tmp/signal.err" ] &&
-  ! /bin/kill -0 -- "-$signal_child_pgid" 2>/dev/null &&
-  [ -z "$(/usr/bin/find "$signal_scratch" -mindepth 1 -print -quit)" ] ||
+start_input_race signal "$signal_scratch" "$claim" \
+  "$signal_runtime/control/v1/evaluate-credential-policy.sh"
+signal_owned_child_group signal "$signal_scratch"
+wait_evaluator_group signal
+if [ "$INPUT_RACE_STATUS" -ne 143 ] || [ -s "$tmp/signal.out" ] ||
+   [ -s "$tmp/signal.err" ] || /bin/kill -0 "$SIGNAL_CHILD_PID" 2>/dev/null ||
+   /bin/kill -0 "$SIGNAL_DESCENDANT_PID" 2>/dev/null ||
+   group_alive "$SIGNAL_CHILD_PGID" ||
+   [ -n "$(/usr/bin/find "$signal_scratch" -mindepth 1 -print -quit)" ]; then
   fail 'signal cleanup'
-pass 'launch-window signal reaps the full child group and scratch'
+fi
+SIGNAL_CHILD_PID=
+SIGNAL_CHILD_PGID=
+SIGNAL_DESCENDANT_PID=
+pass 'owned live child group is signaled, reaped, and scratch-cleaned'
 
 /usr/bin/printf 'control credential policy: %s passed\n' "$passes"
