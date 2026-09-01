@@ -28,9 +28,9 @@ policy="$source_dir/duty-separation-policy.json"
 decision="$source_dir/duty-separation-decision.json"
 program="$source_dir/duty-separation.jq"
 policy_validator="$source_dir/validate.sh"
+validator_program="$source_dir/policy-set.jq"
 core_validator="$repo/scripts/core-contract.sh"
-for required in "$source_path" "$policy" "$decision" "$program" \
-  "$policy_validator" "$core_validator"; do
+for required in "$source_path" "$policy" "$decision" "$program" "$core_validator"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_RUNTIME
 done
 for input in "$@"; do
@@ -43,6 +43,19 @@ case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 sha256_text() {
   /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
+validator_pair_ok() {
+  local pair_dir=$1 driver=$2 validator_jq=$3 expected_driver=$4 expected_program=$5
+  local physical_dir
+  [ -d "$pair_dir" ] && [ ! -L "$pair_dir" ] || return 1
+  physical_dir=$(CDPATH='' cd -P -- "$pair_dir" 2>/dev/null && pwd -P) || return 1
+  [ "$physical_dir" = "$pair_dir" ] &&
+    [ "$driver" = "$pair_dir/validate.sh" ] &&
+    [ "$validator_jq" = "$pair_dir/policy-set.jq" ] &&
+    [ -f "$driver" ] && [ ! -L "$driver" ] &&
+    [ -f "$validator_jq" ] && [ ! -L "$validator_jq" ] &&
+    [ "$(sha256_path "$driver")" = "$expected_driver" ] &&
+    [ "$(sha256_path "$validator_jq")" = "$expected_program" ]
 }
 selected_core_generation() {
   local wrapper=$1 selected assignment_count
@@ -174,6 +187,18 @@ build_core_mirror() {
   /bin/chmod 0500 "$mirror/scripts/core-contract.sh" || return 1
   /usr/bin/printf '%s\n' "$mirror"
 }
+build_validator_mirror() {
+  local mirror="$scratch/policy-validator/control/v1" source target mirror_size
+  /bin/mkdir -p "$mirror" || return 1
+  for source in "$policy_validator" "$validator_program"; do
+    target="$mirror/${source##*/}"
+    /bin/dd if="$source" of="$target" bs=1048577 count=1 2>/dev/null || return 1
+    mirror_size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || return 1
+    [ "$mirror_size" -le 1048576 ] || return 1
+  done
+  /bin/chmod 0500 "$mirror/validate.sh" || return 1
+  /usr/bin/printf '%s\n' "$mirror"
+}
 trap cleanup EXIT
 trap signal_exit HUP INT TERM
 names=(policy-set request resolved result)
@@ -190,9 +215,6 @@ snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
 snapshot_fixed "$program" "$scratch/program.jq"
 
-PATH="${jq_bin%/*}:/usr/bin:/bin" "$policy_validator" validate \
-  "$scratch/policy-set.json" >"$scratch/policy.out" 2>"$scratch/policy.err" ||
-  emit_error E_POLICY_SET
 for static_name in policy decision; do
   "$jq_bin" -s -S -c 'if length==1 then .[0] else error("root-count") end' \
     "$scratch/$static_name.json" >"$scratch/$static_name.canonical" 2>/dev/null ||
@@ -200,10 +222,66 @@ for static_name in policy decision; do
   /usr/bin/cmp -s "$scratch/$static_name.json" "$scratch/$static_name.canonical" ||
     emit_error E_RELATION
 done
+for control_dir in "$repo/control" "$repo/control/v1"; do
+  [ -d "$control_dir" ] && [ ! -L "$control_dir" ] || emit_error E_RELATION
+done
+[ "$source_dir" = "$repo/control/v1" ] || emit_error E_RELATION
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 decision_sha=$(sha256_path "$scratch/decision.json") || emit_error E_RUNTIME
 program_sha=$(sha256_path "$scratch/program.jq") || emit_error E_RUNTIME
 driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
+validator_driver_sha=$(sha256_path "$policy_validator") || emit_error E_RELATION
+validator_program_sha=$(sha256_path "$validator_program") || emit_error E_RELATION
+validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
+  "$validator_driver_sha" "$validator_program_sha" || emit_error E_RELATION
+mirror_validator_dir=$(build_validator_mirror) || emit_error E_RELATION
+mirror_policy_validator="$mirror_validator_dir/validate.sh"
+mirror_validator_program="$mirror_validator_dir/policy-set.jq"
+validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
+  "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha" ||
+  emit_error E_RELATION
+"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha" \
+  --arg program_sha "$program_sha" --arg validator_driver_sha "$validator_driver_sha" \
+  --arg validator_program_sha "$validator_program_sha" \
+  --slurpfile policy "$scratch/policy.json" \
+  --slurpfile decision "$scratch/decision.json" '
+  $decision[0] == {
+    schema_version:1,kind:"duty_separation_decision",
+    id:"control-decision.duty-separation",
+    body:{activation_state:"inactive",decision:"allow-observation-only-evaluation",
+      fail_mode:"closed",
+      policy_ref:{content_id:$policy[0].id,
+        media_type:"application/vnd.ystack.control-policy+json",sha256:$policy_sha},
+      evaluator:{
+        driver_ref:{content_id:"control-evaluator-driver.duty-separation.v1",
+          media_type:"text/x-shellscript",sha256:$driver_sha},
+        program_ref:{content_id:"control-evaluator-program.duty-separation.v1",
+          media_type:"text/x-jq",sha256:$program_sha},
+        policy_set_validator:{
+          driver_ref:{content_id:"control-policy-set-validator-driver.v1",
+            media_type:"text/x-shellscript",sha256:$validator_driver_sha},
+          program_ref:{content_id:"control-policy-set-validator-program.v1",
+            media_type:"text/x-jq",sha256:$validator_program_sha}}},
+      semantics:{authority_effect:"none",
+        input_contract:"control-policy-set+public-core-stage-run.v1",
+        output_kind:"duty_separation_evaluation",output_schema_version:1,
+        reference_semantics:"identity-only",
+        verdicts:["inconclusive","satisfied","violated"]}}
+  }
+' >/dev/null 2>&1 || emit_error E_RELATION
+: >"$scratch/policy-validator-ready"
+policy_status=0
+PATH="${jq_bin%/*}:/usr/bin:/bin" "$mirror_policy_validator" validate \
+  "$scratch/policy-set.json" >"$scratch/policy.out" 2>"$scratch/policy.err" ||
+  policy_status=$?
+: >"$scratch/policy-validator-complete"
+if ! validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
+     "$validator_driver_sha" "$validator_program_sha" ||
+   ! validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
+     "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha"; then
+  emit_error E_RELATION
+fi
+[ "$policy_status" -eq 0 ] || emit_error E_POLICY_SET
 policy_set_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
 request_sha=$(sha256_path "$scratch/request.json") || emit_error E_RUNTIME
 resolved_sha=$(sha256_path "$scratch/resolved.json") || emit_error E_RUNTIME
@@ -224,8 +302,7 @@ core_package_sha=$(core_closure_sha \
 [ "$core_package_sha" = "$live_core_package_sha" ] || emit_error E_RELATION
 
 "$jq_bin" -e --arg policy_sha "$policy_sha" \
-  --arg decision_sha "$decision_sha" --arg program_sha "$program_sha" \
-  --arg driver_sha "$driver_sha" \
+  --arg decision_sha "$decision_sha" \
   --arg generation_id_sha "$generation_id_sha" \
   --arg core_package_sha "$core_package_sha" \
   --slurpfile policy "$scratch/policy.json" \
@@ -245,24 +322,6 @@ core_package_sha=$(core_closure_sha \
     content_id:$decision[0].id,
     media_type:"application/vnd.ystack.control-decision+json",
     sha256:$decision_sha
-  }) and
-  ($decision[0] == {
-    schema_version:1,kind:"duty_separation_decision",
-    id:"control-decision.duty-separation",
-    body:{activation_state:"inactive",decision:"allow-observation-only-evaluation",
-      fail_mode:"closed",
-      policy_ref:{content_id:$policy[0].id,
-        media_type:"application/vnd.ystack.control-policy+json",sha256:$policy_sha},
-      evaluator:{
-        driver_ref:{content_id:"control-evaluator-driver.duty-separation.v1",
-          media_type:"text/x-shellscript",sha256:$driver_sha},
-        program_ref:{content_id:"control-evaluator-program.duty-separation.v1",
-          media_type:"text/x-jq",sha256:$program_sha}},
-      semantics:{authority_effect:"none",
-        input_contract:"control-policy-set+public-core-stage-run.v1",
-        output_kind:"duty_separation_evaluation",output_schema_version:1,
-        reference_semantics:"identity-only",
-        verdicts:["inconclusive","satisfied","violated"]}}
   })
 ' "$scratch/policy-set.json" >/dev/null 2>&1 || emit_error E_RELATION
 
@@ -288,6 +347,12 @@ post_mirror_package_sha=$(core_closure_sha \
   emit_error E_RELATION
 [ "$post_core_package_sha" = "$live_core_package_sha" ] &&
   [ "$post_mirror_package_sha" = "$core_package_sha" ] || emit_error E_RELATION
+if ! validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
+     "$validator_driver_sha" "$validator_program_sha" ||
+   ! validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
+     "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha"; then
+  emit_error E_RELATION
+fi
 [ "$core_status" -eq 0 ] && [ "$run_status" -eq 0 ] || emit_error E_CORE
 [ "$(sha256_path "$policy")" = "$policy_sha" ] &&
   [ "$(sha256_path "$decision")" = "$decision_sha" ] &&
@@ -308,6 +373,12 @@ post_mirror_package_sha=$(core_closure_sha \
   [ "$(sha256_path "$decision")" = "$decision_sha" ] &&
   [ "$(sha256_path "$program")" = "$program_sha" ] &&
   [ "$(sha256_path "$source_path")" = "$driver_sha" ] || emit_error E_RELATION
+if ! validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
+     "$validator_driver_sha" "$validator_program_sha" ||
+   ! validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
+     "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha"; then
+  emit_error E_RELATION
+fi
 "$jq_bin" -s -S -c 'if length==1 then .[0] else error("root-count") end' \
   "$scratch/evaluation.json" >"$scratch/evaluation.canonical" 2>/dev/null ||
   emit_error E_RUNTIME

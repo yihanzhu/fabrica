@@ -59,6 +59,16 @@ policy_sha=$(sha256_path "$policy")
 "$jq_bin" -S -c . "$decision" >"$tmp/decision-canonical.json"
 /usr/bin/cmp -s "$decision" "$tmp/decision-canonical.json" || fail 'canonical decision'
 decision_sha=$(sha256_path "$decision")
+validator_driver_sha=$(sha256_path "$root/control/v1/validate.sh")
+validator_program_sha=$(sha256_path "$root/control/v1/policy-set.jq")
+"$jq_bin" -e --arg driver_sha "$validator_driver_sha" \
+  --arg program_sha "$validator_program_sha" '
+  .body.evaluator.policy_set_validator=={
+    driver_ref:{content_id:"control-policy-set-validator-driver.v1",
+      media_type:"text/x-shellscript",sha256:$driver_sha},
+    program_ref:{content_id:"control-policy-set-validator-program.v1",
+      media_type:"text/x-jq",sha256:$program_sha}}
+' "$decision" >/dev/null || fail 'decision validator identities'
 
 closure_members="$tmp/core-closure-members.tsv"
 closure_paths=(
@@ -554,6 +564,134 @@ for unsafe_kind in extra symlink; do
   expect_error "unsafe-core-$unsafe_kind" E_RELATION \
     "$policy_set" "$request" "$resolved" "$result"
 done
+evaluator=$original_evaluator
+
+rebound_decision_root="$tmp/rebound-validator-decision"
+copy_runtime "$rebound_decision_root"
+"$jq_bin" -S -c '.body.evaluator.policy_set_validator.driver_ref.sha256=("7"*64)' \
+  "$rebound_decision_root/control/v1/duty-separation-decision.json" \
+  >"$rebound_decision_root/decision.next"
+/bin/mv "$rebound_decision_root/decision.next" \
+  "$rebound_decision_root/control/v1/duty-separation-decision.json"
+rebound_decision_sha=$(sha256_path \
+  "$rebound_decision_root/control/v1/duty-separation-decision.json")
+"$jq_bin" -S -c --arg sha "$rebound_decision_sha" \
+  '(.body.sections[] | select(.section_id=="duty-separation") |
+    .decision_ref.sha256)=$sha' "$policy_set" >"$tmp/rebound-decision-policy-set.json"
+evaluator="$rebound_decision_root/control/v1/evaluate-duty.sh"
+expect_error rebound-validator-decision E_RELATION \
+  "$tmp/rebound-decision-policy-set.json" "$request" "$resolved" "$result"
+evaluator=$original_evaluator
+
+for stale_kind in validator-driver validator-program; do
+  stale_root="$tmp/stale-$stale_kind"
+  stale_sentinel="$tmp/stale-$stale_kind-ran"
+  copy_runtime "$stale_root"
+  if [ "$stale_kind" = validator-driver ]; then
+    /usr/bin/printf '\n: > "%s"\n' "$stale_sentinel" \
+      >>"$stale_root/control/v1/validate.sh"
+  else
+    /usr/bin/printf '\n' >>"$stale_root/control/v1/policy-set.jq"
+  fi
+  evaluator="$stale_root/control/v1/evaluate-duty.sh"
+  expect_error "stale-$stale_kind" E_RELATION \
+    "$policy_set" "$request" "$resolved" "$result"
+  [ ! -e "$stale_sentinel" ] || fail "stale $stale_kind executed"
+done
+evaluator=$original_evaluator
+
+validator_link_root="$tmp/validator-link"
+copy_runtime "$validator_link_root"
+/bin/rm -f "$validator_link_root/control/v1/validate.sh"
+/bin/ln -s "$root/control/v1/validate.sh" "$validator_link_root/control/v1/validate.sh"
+evaluator="$validator_link_root/control/v1/evaluate-duty.sh"
+expect_error symlinked-validator E_RELATION "$policy_set" "$request" "$resolved" "$result"
+evaluator=$original_evaluator
+
+validator_move_root="$tmp/moving-validator"
+validator_move_scratch="$tmp/moving-validator-scratch"
+validator_move_sentinel="$tmp/moving-validator-ran"
+copy_runtime "$validator_move_root"
+/bin/mkdir -p "$validator_move_scratch"
+(
+  while [ -z "$(/usr/bin/find "$validator_move_scratch" -name policy-validator-ready \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /usr/bin/printf '\n: > "%s"\n' "$validator_move_sentinel" \
+    >>"$validator_move_root/control/v1/validate.sh"
+) &
+validator_move_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$validator_move_scratch"
+evaluator="$validator_move_root/control/v1/evaluate-duty.sh"
+expect_error moving-validator E_RELATION "$policy_set" "$request" "$resolved" "$result"
+wait "$validator_move_pid"
+[ ! -e "$validator_move_sentinel" ] || fail 'moving live validator executed'
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
+evaluator=$original_evaluator
+
+validator_failure_root="$tmp/moving-validator-failure"
+validator_failure_scratch="$tmp/moving-validator-failure-scratch"
+copy_runtime "$validator_failure_root"
+/bin/mkdir -p "$validator_failure_scratch"
+(
+  while [ -z "$(/usr/bin/find "$validator_failure_scratch" -name policy-validator-ready \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /usr/bin/printf '\n' >>"$validator_failure_root/control/v1/policy-set.jq"
+) &
+validator_failure_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$validator_failure_scratch"
+evaluator="$validator_failure_root/control/v1/evaluate-duty.sh"
+expect_error validator-movement-beats-policy-error E_RELATION \
+  "$pretty_set" "$request" "$resolved" "$result"
+wait "$validator_failure_pid"
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
+evaluator=$original_evaluator
+
+validator_swap_root="$tmp/validator-swap"
+validator_swap_scratch="$tmp/validator-swap-scratch"
+validator_swap_sentinel="$tmp/validator-swap-ran"
+copy_runtime "$validator_swap_root"
+/bin/mkdir -p "$validator_swap_scratch"
+/bin/cp "$validator_swap_root/control/v1/validate.sh" "$tmp/validator.saved"
+(
+  while [ -z "$(/usr/bin/find "$validator_swap_scratch" -name policy-validator-ready \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /usr/bin/printf '\n: > "%s"\n' "$validator_swap_sentinel" \
+    >>"$validator_swap_root/control/v1/validate.sh"
+  while [ -z "$(/usr/bin/find "$validator_swap_scratch" -name policy-validator-complete \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /bin/cp "$tmp/validator.saved" "$validator_swap_root/control/v1/validate.sh"
+) &
+validator_swap_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$validator_swap_scratch"
+evaluator="$validator_swap_root/control/v1/evaluate-duty.sh"
+expect_eval validator-swap-restore satisfied duty.satisfied \
+  "$policy_set" "$request" "$resolved" "$result"
+wait "$validator_swap_pid"
+[ ! -e "$validator_swap_sentinel" ] || fail 'swap-restore live validator executed'
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
+evaluator=$original_evaluator
+
+mirror_move_root="$tmp/moving-validator-mirror"
+mirror_move_scratch="$tmp/moving-validator-mirror-scratch"
+copy_runtime "$mirror_move_root"
+/bin/mkdir -p "$mirror_move_scratch"
+(
+  while [ -z "$(/usr/bin/find "$mirror_move_scratch" -name policy-validator-ready \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  mirror_program=$( /usr/bin/find "$mirror_move_scratch" \
+    -path '*/policy-validator/control/v1/policy-set.jq' -type f -print -quit )
+  /usr/bin/printf '\n' >>"$mirror_program"
+) &
+mirror_move_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$mirror_move_scratch"
+evaluator="$mirror_move_root/control/v1/evaluate-duty.sh"
+expect_error moving-validator-mirror E_RELATION "$policy_set" "$request" "$resolved" "$result"
+wait "$mirror_move_pid"
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
 
 for stale_kind in decision program driver; do

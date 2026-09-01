@@ -336,11 +336,11 @@ Restore the five paths in the manifest's inactive duty-separation block, then ru
 bash scripts/test/control-duty-separation.test.sh
 ```
 
-This checks the exact policy and decision links, the full selected public-core
-package closure, evaluator identities, role and permission ceilings, all three
-identity-separation dimensions, dormant publisher behavior, and canonical observation
-results. It does not enforce effective sandbox or credential permissions and grants
-no authority or external write.
+This checks the exact policy and decision links, mirrored policy-set validator,
+full selected public-core package closure, evaluator identities, role and permission
+ceilings, all three identity-separation dimensions, dormant publisher behavior, and
+canonical observation results. It does not enforce effective sandbox or credential
+permissions and grants no authority or external write.
 
 ---
 
