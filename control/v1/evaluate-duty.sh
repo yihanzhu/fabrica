@@ -38,6 +38,10 @@ jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
 case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 [ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
+sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+sha256_text() {
+  /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
 
 scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-duty.XXXXXX" 2>/dev/null) ||
   emit_error E_RUNTIME
@@ -70,17 +74,24 @@ PATH="${jq_bin%/*}:/usr/bin:/bin" "$core_validator" validate-stage-run \
   "$scratch/request.json" "$scratch/resolved.json" "$scratch/result.json" \
   >"$scratch/run.out" 2>"$scratch/run.err" || emit_error E_CORE
 
-sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 policy_set_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
 request_sha=$(sha256_path "$scratch/request.json") || emit_error E_RUNTIME
 resolved_sha=$(sha256_path "$scratch/resolved.json") || emit_error E_RUNTIME
 result_sha=$(sha256_path "$scratch/result.json") || emit_error E_RUNTIME
+core_package_sha=$(sha256_path "$core_validator") || emit_error E_RUNTIME
+generation_id=$("$jq_bin" -er '.body.core_contract.generation_id' \
+  "$scratch/policy-set.json" 2>/dev/null) || emit_error E_RELATION
+generation_id_sha=$(sha256_text "$generation_id") || emit_error E_RUNTIME
 
 "$jq_bin" -e --arg policy_sha "$policy_sha" \
+  --arg generation_id_sha "$generation_id_sha" \
+  --arg core_package_sha "$core_package_sha" \
   --slurpfile policy "$scratch/policy.json" '
   .body.core_contract.semantic_identity == $policy[0].body.core_contract.semantic_identity and
-  .body.core_contract.generation_id == $policy[0].body.core_contract.generation_id and
+  $generation_id_sha == $policy[0].body.core_contract.generation_id_sha256 and
+  .body.core_contract.package_ref == $policy[0].body.core_contract.package_ref and
+  $core_package_sha == $policy[0].body.core_contract.package_ref.sha256 and
   ([.body.sections[] | select(.section_id == "duty-separation")] | length) == 1 and
   ([.body.sections[] | select(.section_id == "duty-separation")][0].policy_ref == {
     content_id:$policy[0].id,
@@ -95,7 +106,7 @@ result_sha=$(sha256_path "$scratch/result.json") || emit_error E_RUNTIME
   --slurpfile request "$scratch/request.json" \
   --slurpfile resolved "$scratch/resolved.json" \
   --slurpfile result "$scratch/result.json" \
-  --arg policy_sha "$policy_sha" --arg policy_set_sha "$policy_set_sha" \
+  --arg policy_set_sha "$policy_set_sha" \
   --arg resolved_sha "$resolved_sha" --arg request_sha "$request_sha" \
   --arg result_sha "$result_sha" || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM

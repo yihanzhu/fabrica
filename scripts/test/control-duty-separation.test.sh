@@ -7,6 +7,8 @@ umask 077
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 evaluator="$root/control/v1/evaluate-duty.sh"
 policy="$root/control/v1/duty-separation-policy.json"
+core_wrapper="$root/scripts/core-contract.sh"
+core_registry="$root/core/v2/generation-registry.json"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-duty-test.XXXXXX")
 trap '/bin/rm -rf -- "$tmp"' EXIT
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
@@ -37,6 +39,9 @@ bin="$tmp/bin"
 /bin/chmod 0555 "$bin/jq"
 jq_bin="$bin/jq"
 [ "$($jq_bin --version)" = jq-1.6 ] || fail 'jq identity'
+generation=$("$jq_bin" -er 'if length==1 then .[0].generation_id else empty end' \
+  "$core_registry") || fail 'selected generation'
+core_package_sha=$(sha256_path "$core_wrapper")
 
 canonical="$tmp/policy-canonical.json"
 "$jq_bin" -S -c . "$policy" >"$canonical"
@@ -44,7 +49,8 @@ canonical="$tmp/policy-canonical.json"
 policy_sha=$(sha256_path "$policy")
 
 policy_set="$tmp/policy-set.json"
-"$jq_bin" -S -c -n --arg duty_sha "$policy_sha" '
+"$jq_bin" -S -c -n --arg duty_sha "$policy_sha" --arg generation "$generation" \
+  --arg core_package_sha "$core_package_sha" '
   def ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
   def section($id;$policy_sha;$decision_sha):
     {section_id:$id,
@@ -55,9 +61,9 @@ policy_set="$tmp/policy-set.json"
   {schema_version:1,kind:"control_policy_set",id:"control-policy-set.example",
    body:{activation_state:"inactive",fail_mode:"closed",policy_version:"v1",
      core_contract:{semantic_identity:"core.contracts.v2",
-       generation_id:"g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e",
+       generation_id:$generation,
        package_ref:ref("core-contract-package.v2";
-         "application/vnd.ystack.core-contract+json";("9"*64))},
+         "application/vnd.ystack.core-contract+json";$core_package_sha)},
      sections:[section("credential-policy";("1"*64);("a"*64)),
        section("duty-separation";$duty_sha;("b"*64)),
        section("evidence-integrity";("3"*64);("c"*64)),
@@ -300,6 +306,10 @@ bad_generation="$tmp/bad-generation.json"
 "$jq_bin" -S -c '.body.core_contract.generation_id=("g-"+("8"*64))' \
   "$policy_set" >"$bad_generation"
 expect_error core-generation E_RELATION "$bad_generation" "$request" "$resolved" "$result"
+bad_package="$tmp/bad-package.json"
+"$jq_bin" -S -c '.body.core_contract.package_ref.sha256=("7"*64)' \
+  "$policy_set" >"$bad_package"
+expect_error core-package E_RELATION "$bad_package" "$request" "$resolved" "$result"
 
 bad_request="$tmp/bad-permission-request.json"
 bad_request_result="$tmp/bad-permission-result.json"

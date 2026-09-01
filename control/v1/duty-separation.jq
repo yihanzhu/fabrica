@@ -43,8 +43,13 @@ def policy_ok:
       "protected_roles","reporter_relation","requester_roles"]) and
     .activation_state == "inactive" and .evaluation_mode == "observation-only" and
     .fail_mode == "closed" and .policy_version == "v1" and
-    .core_contract == {semantic_identity:"core.contracts.v2",
-      generation_id:"g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e"} and
+    .core_contract == {
+      semantic_identity:"core.contracts.v2",
+      generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
+      package_ref:{content_id:"core-contract-package.v2",
+        media_type:"application/vnd.ystack.core-contract+json",
+        sha256:"bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3"}
+    } and
     .protected_roles == expected_roles and .dormant_roles == expected_dormant and
     .identity_dimensions == expected_dimensions and
     .requester_roles == ["manager","operator","orchestrator"] and
