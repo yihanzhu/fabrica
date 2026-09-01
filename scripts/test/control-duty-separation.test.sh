@@ -11,8 +11,60 @@ decision="$root/control/v1/duty-separation-decision.json"
 core_wrapper="$root/scripts/core-contract.sh"
 core_registry="$root/core/v2/generation-registry.json"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-duty-test.XXXXXX")
-trap '/bin/rm -rf -- "$tmp"' EXIT
+RACE_PID=''
+RACE_PGID=''
+TEST_PGID=''
+group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+terminate_reap() {
+  local evaluator_pid=$1 evaluator_pgid=$2 mode=${3:-} attempt=0
+  [[ "$evaluator_pgid" =~ ^[1-9][0-9]*$ ]] &&
+    [ "$evaluator_pgid" = "$evaluator_pid" ] &&
+    [ "$evaluator_pgid" != "$TEST_PGID" ] || return 1
+  if group_alive "$evaluator_pgid"; then kill -TERM -- "-$evaluator_pgid" 2>/dev/null || :; fi
+  while group_alive "$evaluator_pgid" && [ "$attempt" -lt 50 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  if group_alive "$evaluator_pgid"; then kill -KILL -- "-$evaluator_pgid" 2>/dev/null || :; fi
+  attempt=0
+  while group_alive "$evaluator_pgid" && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  [ "$mode" != force-post-kill-live ] || return 1
+  group_alive "$evaluator_pgid" && return 1
+  wait "$evaluator_pid" 2>/dev/null || :
+  attempt=0
+  while group_alive "$evaluator_pgid" && [ "$attempt" -lt 50 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  ! group_alive "$evaluator_pgid"
+}
+cleanup() {
+  if [ -n "${RACE_PID:-}" ] && [ -n "${RACE_PGID:-}" ]; then
+    if terminate_reap "$RACE_PID" "$RACE_PGID"; then
+      RACE_PID=''
+      RACE_PGID=''
+    else
+      /usr/bin/printf 'FAIL: EXIT could not reap race process group %s\n' "$RACE_PGID" >&2
+      return 1
+    fi
+  fi
+  /bin/rm -rf -- "$tmp"
+}
+on_exit() {
+  local status=$?
+  trap - EXIT
+  cleanup || status=1
+  exit "$status"
+}
+trap on_exit EXIT
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+if ! TEST_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' '); then
+  fail 'test process group inspection'
+fi
+[[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || fail 'test process group identity'
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
@@ -244,6 +296,217 @@ copy_runtime() {
   /bin/cp "$root/scripts/core-contract.sh" "$destination/scripts/core-contract.sh"
   /bin/cp -R "$root/core/v2" "$destination/core/v2"
 }
+record_race_group() {
+  local leader_pid=$2 evaluator_pgid
+  if ! evaluator_pgid=$(/bin/ps -o pgid= -p "$leader_pid" 2>/dev/null |
+    /usr/bin/tr -d ' '); then
+    return 1
+  fi
+  if [[ ! "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] ||
+     [[ ! "$evaluator_pgid" =~ ^[1-9][0-9]*$ ]] ||
+     [ "$evaluator_pgid" != "$leader_pid" ] || [ "$evaluator_pgid" = "$TEST_PGID" ]; then
+    return 1
+  fi
+  RACE_PID=$leader_pid
+  RACE_PGID=$evaluator_pgid
+}
+terminate_unowned_leader() {
+  local leader_pid=$1 attempt=0
+  if kill -0 "$leader_pid" 2>/dev/null; then kill -TERM "$leader_pid" 2>/dev/null || :; fi
+  while kill -0 "$leader_pid" 2>/dev/null && [ "$attempt" -lt 50 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  if kill -0 "$leader_pid" 2>/dev/null; then kill -KILL "$leader_pid" 2>/dev/null || :; fi
+  wait "$leader_pid" 2>/dev/null || :
+}
+start_gated_group() {
+  local name=$1 group_out=$2 group_err=$3 leader_pid gate
+  shift 3
+  gate="$tmp/$name.race.gate"
+  /usr/bin/mkfifo "$gate" || fail "$name gate creation"
+  exec 9<>"$gate" || fail "$name gate open"
+  set -m
+  /bin/bash -c '
+    gate=$1; race_path=$2; shift 2
+    IFS= read -r token <"$gate" || exit 125
+    [ "$token" = go ] || exit 125
+    PATH=$race_path; export PATH
+    exec "$@"
+  ' race-supervisor "$gate" "$bin:/usr/bin:/bin" "$@" \
+    9>&- >"$group_out" 2>"$group_err" &
+  leader_pid=$!
+  set +m
+  if ! record_race_group "$name" "$leader_pid"; then
+    exec 9>&-
+    /bin/rm -f "$gate"
+    terminate_unowned_leader "$leader_pid"
+    fail "$name unsafe evaluator process group"
+  fi
+  if ! /usr/bin/printf 'go\n' >&9; then
+    exec 9>&-
+    /bin/rm -f "$gate"
+    if terminate_reap "$RACE_PID" "$RACE_PGID"; then
+      RACE_PID=''; RACE_PGID=''
+    fi
+    fail "$name gate release"
+  fi
+  exec 9>&-
+  /bin/rm -f "$gate"
+}
+start_race() {
+  local name=$1 set=$2 req=$3 resolved_input=$4 result_input=$5
+  RACE_OUT="$tmp/$name.race.out"
+  RACE_ERR="$tmp/$name.race.err"
+  start_gated_group "$name" "$RACE_OUT" "$RACE_ERR" "$evaluator" evaluate \
+    "$set" "$req" "$resolved_input" "$result_input"
+}
+wait_for_marker() {
+  local name=$1 search_root=$2 marker=$3 evaluator_pid=$4 attempt=0
+  MARKER_PATH=''
+  MARKER_ERROR=''
+  while [ "$attempt" -lt 500 ]; do
+    MARKER_PATH=$(/usr/bin/find "$search_root" -name "$marker" \
+      -type f -print -quit 2>/dev/null)
+    [ -n "$MARKER_PATH" ] && return 0
+    if ! kill -0 "$evaluator_pid" 2>/dev/null; then
+      if group_alive "$RACE_PGID"; then
+        if terminate_reap "$evaluator_pid" "$RACE_PGID"; then
+          RACE_PID=''; RACE_PGID=''
+        else
+          MARKER_ERROR="$name process-group cleanup failed before marker $marker"
+          return 1
+        fi
+      else
+        wait "$evaluator_pid" 2>/dev/null || :
+        RACE_PID=''; RACE_PGID=''
+      fi
+      MARKER_ERROR="$name evaluator exited before marker $marker"
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  if terminate_reap "$evaluator_pid" "$RACE_PGID"; then
+    RACE_PID=''; RACE_PGID=''
+    MARKER_ERROR="$name marker timeout: $marker"
+  else
+    MARKER_ERROR="$name marker timeout cleanup failed: $marker"
+  fi
+  return 1
+}
+require_marker() { wait_for_marker "$@" || fail "$MARKER_ERROR"; }
+wait_for_evaluator() {
+  local name=$1 evaluator_pid=$2 attempt=0 status=0
+  while [ "$attempt" -lt 1000 ]; do
+    if ! kill -0 "$evaluator_pid" 2>/dev/null; then
+      wait "$evaluator_pid" || status=$?
+      if group_alive "$RACE_PGID"; then
+        if terminate_reap "$evaluator_pid" "$RACE_PGID"; then
+          RACE_PID=''; RACE_PGID=''
+          fail "$name evaluator left child processes"
+        else
+          fail "$name evaluator child cleanup failed"
+        fi
+      fi
+      RACE_STATUS=$status
+      RACE_PID=''
+      RACE_PGID=''
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  if terminate_reap "$evaluator_pid" "$RACE_PGID"; then
+    RACE_PID=''; RACE_PGID=''
+    fail "$name evaluator completion timeout"
+  else
+    fail "$name evaluator completion cleanup failed"
+  fi
+}
+finish_race_error() {
+  local name=$1 expected=$2 evaluator_pid=$3
+  wait_for_evaluator "$name" "$evaluator_pid"
+  [ "$RACE_STATUS" -ne 0 ] && [ ! -s "$RACE_OUT" ] &&
+    [ "$(/bin/cat "$RACE_ERR")" = "$expected" ] || fail "$name"
+  pass "$name"
+}
+finish_race_eval() {
+  local name=$1 expected=$2 reason=$3 evaluator_pid=$4 canonical
+  wait_for_evaluator "$name" "$evaluator_pid"
+  [ "$RACE_STATUS" -eq 0 ] && [ ! -s "$RACE_ERR" ] || fail "$name status"
+  "$jq_bin" -e --arg verdict "$expected" --arg reason "$reason" '
+    .kind=="duty_separation_evaluation" and .body.verdict==$verdict and
+    (.body.reason_ids|index($reason)!=null) and
+    .body.reason_ids==(.body.reason_ids|sort|unique)
+  ' "$RACE_OUT" >/dev/null || fail "$name verdict"
+  canonical="$tmp/$name.race.canonical"
+  "$jq_bin" -S -c . "$RACE_OUT" >"$canonical"
+  /usr/bin/cmp -s "$RACE_OUT" "$canonical" || fail "$name canonical"
+  pass "$name"
+}
+
+/bin/mkdir -p "$tmp/no-markers"
+set -m
+/usr/bin/false &
+setup_pid=$!
+set +m
+wait "$setup_pid" 2>/dev/null || :
+if record_race_group setup-early-exit "$setup_pid"; then
+  fail 'setup inspection accepted an exited group leader'
+fi
+[ -z "$RACE_PID" ] && [ -z "$RACE_PGID" ] || fail 'setup failure claimed ownership'
+pass 'gated setup handles early supervisor exit without ownership'
+
+start_gated_group marker-early-exit "$tmp/marker-early-group.out" \
+  "$tmp/marker-early-group.err" \
+  /bin/sleep 0.2
+marker_pid=$RACE_PID
+if wait_for_marker marker-early-exit "$tmp/no-markers" absent.marker "$marker_pid" \
+  2>"$tmp/marker-early.err"; then
+  fail 'marker early-exit helper accepted a missing marker'
+fi
+if [ "$MARKER_ERROR" != 'marker-early-exit evaluator exited before marker absent.marker' ] ||
+   [ -n "$RACE_PID" ] || [ -n "$RACE_PGID" ]; then
+  fail 'marker early-exit helper result'
+fi
+pass 'marker helper bounds evaluator early exit'
+
+child_marker="$tmp/nested-child.pid"
+start_gated_group marker-timeout "$tmp/marker-timeout-group.out" \
+  "$tmp/marker-timeout-group.err" \
+  /bin/bash -c '/bin/sleep 30 & child=$!; /usr/bin/printf "%s\n" "$child" >"$1"; wait "$child"' \
+  nested-race "$child_marker"
+marker_pid=$RACE_PID
+require_marker marker-timeout-child "$tmp" nested-child.pid "$marker_pid"
+nested_child_pid=$(/bin/cat "$child_marker")
+if wait_for_marker marker-timeout "$tmp/no-markers" absent.marker "$marker_pid" \
+  2>"$tmp/marker-timeout.err"; then
+  fail 'marker timeout helper accepted a missing marker'
+fi
+if [ "$MARKER_ERROR" != 'marker-timeout marker timeout: absent.marker' ] ||
+   [ -n "$RACE_PID" ] || [ -n "$RACE_PGID" ] ||
+   kill -0 "$marker_pid" 2>/dev/null || kill -0 "$nested_child_pid" 2>/dev/null; then
+  fail 'marker timeout helper cleanup'
+fi
+pass 'marker helper bounds timeout and reaps process group'
+
+start_gated_group forced-post-kill "$tmp/forced-post-kill.out" \
+  "$tmp/forced-post-kill.err" /bin/sleep 30
+forced_pid=$RACE_PID
+forced_pgid=$RACE_PGID
+if terminate_reap "$forced_pid" "$forced_pgid" force-post-kill-live \
+  2>"$tmp/forced-post-kill.cleanup"; then
+  fail 'post-KILL live-group branch reported cleanup success'
+fi
+if [ "$RACE_PID" != "$forced_pid" ] || [ "$RACE_PGID" != "$forced_pgid" ]; then
+  fail 'post-KILL cleanup failure discarded ownership'
+fi
+terminate_reap "$forced_pid" "$forced_pgid" 2>>"$tmp/forced-post-kill.cleanup" ||
+  fail 'post-KILL cleanup retry'
+RACE_PID=''
+RACE_PGID=''
+pass 'post-KILL live-group branch returns bounded with ownership'
 
 expect_eval satisfied satisfied duty.satisfied "$policy_set" "$request" "$resolved" "$result"
 result_sha=$(sha256_path "$result")
@@ -475,17 +738,14 @@ copy_runtime "$moving_root"
 /bin/mkdir -p "$moving_scratch"
 moving_sentinel="$tmp/moving-live-ingress-ran"
 moving_target="$moving_root/core/v2/generations/$generation/core-ingress.sh"
-(
-  while [ -z "$(/usr/bin/find "$moving_scratch" -name core-closure-mirror.json \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /usr/bin/printf '\n: > "%s"\n' "$moving_sentinel" >>"$moving_target"
-) &
-moving_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$moving_scratch"
 evaluator="$moving_root/control/v1/evaluate-duty.sh"
-expect_error moving-core-postflight E_RELATION "$policy_set" "$request" "$resolved" "$result"
-wait "$moving_pid"
+start_race moving-core-postflight "$policy_set" "$request" "$resolved" "$result"
+require_marker moving-core-postflight "$moving_scratch" \
+  core-closure-mirror.json "$RACE_PID"
+/usr/bin/printf '\n: > "%s"\n' "$moving_sentinel" >>"$moving_target"
+finish_race_error moving-core-postflight E_RELATION "$RACE_PID"
 [ ! -e "$moving_sentinel" ] || fail 'moving live ingress executed'
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
@@ -494,19 +754,16 @@ failure_root="$tmp/moving-core-failure"
 failure_scratch="$tmp/moving-failure-scratch"
 copy_runtime "$failure_root"
 /bin/mkdir -p "$failure_scratch"
-(
-  while [ -z "$(/usr/bin/find "$failure_scratch" -name core-closure-mirror.json \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /usr/bin/printf '\n' \
-    >>"$failure_root/core/v2/generations/$generation/modules/schema.jq"
-) &
-failure_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$failure_scratch"
 evaluator="$failure_root/control/v1/evaluate-duty.sh"
-expect_error moving-core-beats-core-error E_RELATION \
+start_race moving-core-beats-core-error \
   "$policy_set" "$bad_request" "$resolved" "$bad_request_result"
-wait "$failure_pid"
+require_marker moving-core-beats-core-error "$failure_scratch" \
+  core-closure-mirror.json "$RACE_PID"
+/usr/bin/printf '\n' \
+  >>"$failure_root/core/v2/generations/$generation/modules/schema.jq"
+finish_race_error moving-core-beats-core-error E_RELATION "$RACE_PID"
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
 
@@ -517,21 +774,16 @@ copy_runtime "$swap_root"
 /bin/mkdir -p "$swap_scratch"
 swap_target="$swap_root/core/v2/generations/$generation/core-ingress.sh"
 /bin/cp "$swap_target" "$tmp/swap-ingress.saved"
-(
-  while [ -z "$(/usr/bin/find "$swap_scratch" -name core-closure-mirror.json \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /usr/bin/printf '\n: > "%s"\n' "$swap_sentinel" >>"$swap_target"
-  while [ -z "$(/usr/bin/find "$swap_scratch" -name run.out \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /bin/cp "$tmp/swap-ingress.saved" "$swap_target"
-) &
-swap_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$swap_scratch"
 evaluator="$swap_root/control/v1/evaluate-duty.sh"
-expect_eval live-swap-restore satisfied duty.satisfied \
+start_race live-swap-restore \
   "$policy_set" "$request" "$resolved" "$result"
-wait "$swap_pid"
+require_marker live-swap-restore "$swap_scratch" core-closure-mirror.json "$RACE_PID"
+/usr/bin/printf '\n: > "%s"\n' "$swap_sentinel" >>"$swap_target"
+require_marker live-swap-restore "$swap_scratch" run.out "$RACE_PID"
+/bin/cp "$tmp/swap-ingress.saved" "$swap_target"
+finish_race_eval live-swap-restore satisfied duty.satisfied "$RACE_PID"
 [ ! -e "$swap_sentinel" ] || fail 'swap-restore live ingress executed'
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
@@ -613,18 +865,15 @@ validator_move_scratch="$tmp/moving-validator-scratch"
 validator_move_sentinel="$tmp/moving-validator-ran"
 copy_runtime "$validator_move_root"
 /bin/mkdir -p "$validator_move_scratch"
-(
-  while [ -z "$(/usr/bin/find "$validator_move_scratch" -name policy-validator-ready \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /usr/bin/printf '\n: > "%s"\n' "$validator_move_sentinel" \
-    >>"$validator_move_root/control/v1/validate.sh"
-) &
-validator_move_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$validator_move_scratch"
 evaluator="$validator_move_root/control/v1/evaluate-duty.sh"
-expect_error moving-validator E_RELATION "$policy_set" "$request" "$resolved" "$result"
-wait "$validator_move_pid"
+start_race moving-validator "$policy_set" "$request" "$resolved" "$result"
+require_marker moving-validator "$validator_move_scratch" \
+  policy-validator-ready "$RACE_PID"
+/usr/bin/printf '\n: > "%s"\n' "$validator_move_sentinel" \
+  >>"$validator_move_root/control/v1/validate.sh"
+finish_race_error moving-validator E_RELATION "$RACE_PID"
 [ ! -e "$validator_move_sentinel" ] || fail 'moving live validator executed'
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
@@ -633,18 +882,15 @@ validator_failure_root="$tmp/moving-validator-failure"
 validator_failure_scratch="$tmp/moving-validator-failure-scratch"
 copy_runtime "$validator_failure_root"
 /bin/mkdir -p "$validator_failure_scratch"
-(
-  while [ -z "$(/usr/bin/find "$validator_failure_scratch" -name policy-validator-ready \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /usr/bin/printf '\n' >>"$validator_failure_root/control/v1/policy-set.jq"
-) &
-validator_failure_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$validator_failure_scratch"
 evaluator="$validator_failure_root/control/v1/evaluate-duty.sh"
-expect_error validator-movement-beats-policy-error E_RELATION \
+start_race validator-movement-beats-policy-error \
   "$pretty_set" "$request" "$resolved" "$result"
-wait "$validator_failure_pid"
+require_marker validator-movement-beats-policy-error "$validator_failure_scratch" \
+  policy-validator-ready "$RACE_PID"
+/usr/bin/printf '\n' >>"$validator_failure_root/control/v1/policy-set.jq"
+finish_race_error validator-movement-beats-policy-error E_RELATION "$RACE_PID"
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
 
@@ -654,22 +900,17 @@ validator_swap_sentinel="$tmp/validator-swap-ran"
 copy_runtime "$validator_swap_root"
 /bin/mkdir -p "$validator_swap_scratch"
 /bin/cp "$validator_swap_root/control/v1/validate.sh" "$tmp/validator.saved"
-(
-  while [ -z "$(/usr/bin/find "$validator_swap_scratch" -name policy-validator-ready \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /usr/bin/printf '\n: > "%s"\n' "$validator_swap_sentinel" \
-    >>"$validator_swap_root/control/v1/validate.sh"
-  while [ -z "$(/usr/bin/find "$validator_swap_scratch" -name policy-validator-complete \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  /bin/cp "$tmp/validator.saved" "$validator_swap_root/control/v1/validate.sh"
-) &
-validator_swap_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$validator_swap_scratch"
 evaluator="$validator_swap_root/control/v1/evaluate-duty.sh"
-expect_eval validator-swap-restore satisfied duty.satisfied \
+start_race validator-swap-restore \
   "$policy_set" "$request" "$resolved" "$result"
-wait "$validator_swap_pid"
+require_marker validator-swap-restore "$validator_swap_scratch" \
+  policy-validator-ready "$RACE_PID"
+/usr/bin/printf '\n: > "%s"\n' "$validator_swap_sentinel" \
+  >>"$validator_swap_root/control/v1/validate.sh"
+/bin/cp "$tmp/validator.saved" "$validator_swap_root/control/v1/validate.sh"
+finish_race_eval validator-swap-restore satisfied duty.satisfied "$RACE_PID"
 [ ! -e "$validator_swap_sentinel" ] || fail 'swap-restore live validator executed'
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
@@ -678,19 +919,24 @@ mirror_move_root="$tmp/moving-validator-mirror"
 mirror_move_scratch="$tmp/moving-validator-mirror-scratch"
 copy_runtime "$mirror_move_root"
 /bin/mkdir -p "$mirror_move_scratch"
-(
-  while [ -z "$(/usr/bin/find "$mirror_move_scratch" -name policy-validator-ready \
-    -type f -print -quit 2>/dev/null)" ]; do :; done
-  mirror_program=$( /usr/bin/find "$mirror_move_scratch" \
-    -path '*/policy-validator/control/v1/policy-set.jq' -type f -print -quit )
-  /usr/bin/printf '\n' >>"$mirror_program"
-) &
-mirror_move_pid=$!
 saved_tmpdir=${TMPDIR-}
 export TMPDIR="$mirror_move_scratch"
 evaluator="$mirror_move_root/control/v1/evaluate-duty.sh"
-expect_error moving-validator-mirror E_RELATION "$policy_set" "$request" "$resolved" "$result"
-wait "$mirror_move_pid"
+start_race moving-validator-mirror "$policy_set" "$request" "$resolved" "$result"
+require_marker moving-validator-mirror "$mirror_move_scratch" \
+  policy-validator-ready "$RACE_PID"
+mirror_program=$(/usr/bin/find "$mirror_move_scratch" \
+  -path '*/policy-validator/control/v1/policy-set.jq' -type f -print -quit)
+[ -n "$mirror_program" ] || {
+  if terminate_reap "$RACE_PID" "$RACE_PGID"; then
+    RACE_PID=''; RACE_PGID=''
+    fail 'moving-validator-mirror missing mirrored program'
+  else
+    fail 'moving-validator-mirror cleanup failed after missing program'
+  fi
+}
+/usr/bin/printf '\n' >>"$mirror_program"
+finish_race_error moving-validator-mirror E_RELATION "$RACE_PID"
 if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
 evaluator=$original_evaluator
 
