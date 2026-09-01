@@ -88,6 +88,22 @@ credential, runs no candidate, and performs no network or external write. Sandbo
 credential, risk, kill-switch, evidence, and publisher enforcement remain later
 Control foundation units.
 
+## Inactive risk-gates evaluator
+
+`control/v1/evaluate-risk-gates.sh` checks one public core v2 stage tuple, its
+regenerated duty-separation result, and one caller-supplied decision claim against
+the shipped risk-gates policy. It binds the policy-set, policy, decision,
+evaluator, duty-separation, and selected public-core identities before producing a
+canonical observation. Malformed, stale, ambiguous, rejected, downgraded, and
+unsupported claims are `violated`.
+
+The decision input is only an immutable, identity-bound claim. No qualified
+decision-provenance adapter exists yet, so even an internally matching accept
+claim is `inconclusive` with `decision.provenance-unqualified`; this evaluator has
+no `satisfied` result. It grants no approval, authority, qualification, or
+permission, activates nothing, and performs no candidate, credential, network,
+publish, deploy, or external-write action.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
