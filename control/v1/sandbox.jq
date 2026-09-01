@@ -11,9 +11,9 @@ def content_ref_ok($media):
   exact(["content_id","media_type","sha256"]) and
   (.content_id | id_ok) and .media_type == $media and (.sha256 | sha256_ok);
 
-def document_ref_ok:
+def document_ref_ok($kind; $schema_version):
   exact(["id","kind","schema_version","sha256"]) and
-  .schema_version == 1 and (.id | id_ok) and (.kind | id_ok) and
+  .schema_version == $schema_version and .kind == $kind and (.id | id_ok) and
   (.sha256 | sha256_ok);
 
 def identity_ok:
@@ -52,7 +52,7 @@ def tool_ok:
   exact(["argv","executable","network","resource_ids","sha256","tool_id"]) and
   (.argv | type == "array" and length >= 1 and length <= 32 and
     all(.[];scalar_ok)) and
-  (.executable | path_ok) and (.network | truth_or_unknown) and
+  (.executable | path_ok) and (.network | type == "boolean") and
   (.resource_ids | type == "array" and length <= 16 and all(.[];id_ok)) and
   (.sha256 | sha256_ok) and (.tool_id | id_ok);
 
@@ -65,8 +65,9 @@ def claim_ok:
       "execution_identity","filesystem","isolation","limits","network",
       "policy_set_ref","resources","sensitive_material","stage_result_ref","tools"]) and
     (.declaration_status == "complete" or .declaration_status == "incomplete") and
-    (.duty_evaluation_ref | document_ref_ok) and
-    (.policy_set_ref | document_ref_ok) and (.stage_result_ref | document_ref_ok) and
+    (.duty_evaluation_ref | document_ref_ok("duty_separation_evaluation";1)) and
+    (.policy_set_ref | document_ref_ok("control_policy_set";1)) and
+    (.stage_result_ref | document_ref_ok("stage_result";2)) and
     (.execution_identity | identity_ok) and
     (.effects | exact(["external_writes","target_writes"]) and
       (.external_writes | truth_or_unknown) and (.target_writes | truth_or_unknown)) and
@@ -125,10 +126,26 @@ def duty_ok:
     (.decision_ref | content_ref_ok("application/vnd.ystack.control-decision+json")) and
     (.policy_ref | content_ref_ok("application/vnd.ystack.control-policy+json")) and
     (.policy_set | exact(["id","sha256"]) and (.id | id_ok) and (.sha256 | sha256_ok)) and
-    (.reason_ids | type == "array" and length >= 1 and length <= 64 and all(.[];id_ok)) and
+    (.reason_ids | type == "array" and length >= 1 and length <= 64 and
+      all(.[];id_ok) and . == (sort | unique)) and
     (.stage | exact(["request_ref","resolved_profile_ref","result_ref"]) and
-      all(.[];document_ref_ok)) and
-    (.verdict == "satisfied" or .verdict == "violated" or .verdict == "inconclusive"));
+      (.request_ref | document_ref_ok("stage_request";2)) and
+      (.resolved_profile_ref | document_ref_ok("resolved_profile";2)) and
+      (.result_ref | document_ref_ok("stage_result";2))) and
+    ((.verdict == "satisfied" and .reason_ids == ["duty.satisfied"]) or
+     (.verdict == "inconclusive" and .reason_ids == ["actual.capability-unclassified"]) or
+     (.verdict == "violated" and
+       (.reason_ids | all(. != "duty.satisfied" and . != "actual.capability-unclassified")))));
+
+def duty_binding_ok($set; $set_sha):
+  . as $duty_doc |
+  ([$set.body.sections[] | select(.section_id == "duty-separation")]) as $sections |
+  ($sections | length) == 1 and
+  $duty_doc.body.policy_set == {id:$set.id,sha256:$set_sha} and
+  $duty_doc.body.policy_ref == $sections[0].policy_ref and
+  $duty_doc.body.decision_ref == $sections[0].decision_ref and
+  $duty_doc.body.core_contract == $set.body.core_contract and
+  $duty_doc.id == $duty_doc.body.stage.result_ref.id;
 
 def policy_ok:
   exact(["body","id","kind","schema_version"]) and
@@ -174,6 +191,8 @@ def document_ref($document; $digest):
 ($claim[0]) as $claim_doc |
 (if ($p | policy_ok) and ($set | policy_set_ok) and ($duty_doc | duty_ok) and
     ($claim_doc | claim_ok) then true else error("invalid-input") end) |
+(if ($duty_doc | duty_binding_ok($set;$policy_set_sha))
+ then true else error("duty-binding") end) |
 ([$set.body.sections[] | select(.section_id == "sandbox")]) as $sandbox_sections |
 (if ($sandbox_sections | length) == 1 and
     $sandbox_sections[0].policy_ref == $decision_doc.body.policy_ref and
@@ -186,8 +205,6 @@ def document_ref($document; $digest):
    else ["identity.role-denied"] end) +
  (if $body.policy_set_ref == document_ref($set;$policy_set_sha) then []
    else ["policy-set.reference-mismatch"] end) +
- (if $duty_doc.body.policy_set == {id:$set.id,sha256:$policy_set_sha} then []
-   else ["duty.policy-set-mismatch"] end) +
  (if $body.duty_evaluation_ref == document_ref($duty_doc;$duty_sha) then []
    else ["duty.reference-mismatch"] end) +
  (if $body.stage_result_ref == $duty_doc.body.stage.result_ref then []
@@ -230,7 +247,6 @@ def document_ref($document; $digest):
  (if $body.isolation.candidate_only == "unknown" or
       $body.isolation.disposable == "unknown" or $body.isolation.host_access == "unknown"
    then ["isolation.unknown"] else [] end) +
- (if any($body.tools[];.network == "unknown") then ["tools.network-unknown"] else [] end) +
  (if $body.sensitive_material.exposure == "unknown" then ["sensitive-material.unknown"] else [] end) +
  (if $body.effects.target_writes == "unknown" or $body.effects.external_writes == "unknown"
    then ["effects.unknown"] else [] end)

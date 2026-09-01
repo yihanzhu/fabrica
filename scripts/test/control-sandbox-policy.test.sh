@@ -68,21 +68,24 @@ policy_set="$tmp/policy-set.json"
 policy_set_sha=$(sha256_path "$policy_set")
 
 duty="$tmp/duty.json"
-"$jq_bin" -S -c -n --arg set_sha "$policy_set_sha" '
+"$jq_bin" -S -c -n --arg set_sha "$policy_set_sha" --slurpfile set "$policy_set" '
   def content($id;$sha):
     {content_id:$id,media_type:"application/vnd.ystack.control-decision+json",sha256:$sha};
   def document($kind;$id;$sha): {schema_version:1,kind:$kind,id:$id,sha256:$sha};
-  {schema_version:1,kind:"duty_separation_evaluation",id:"stage.sandbox-test",
-   body:{activation_state:"inactive",core_contract:{semantic_identity:"core.contracts.v2"},
+  {schema_version:1,kind:"duty_separation_evaluation",id:"result.sandbox-test",
+   body:{activation_state:"inactive",core_contract:$set[0].body.core_contract,
      decision_ref:content("control-decision.duty-separation";("b"*64)),
      evaluation_mode:"observation-only",
      policy_ref:(content("control-policy.duty-separation";("2"*64)) |
        .media_type="application/vnd.ystack.control-policy+json"),
      policy_set:{id:"control-policy-set.sandbox-test",sha256:$set_sha},
      reason_ids:["duty.satisfied"],reference_semantics:"identity-only",
-     stage:{request_ref:document("stage_request";"stage.sandbox-test";("3"*64)),
-       resolved_profile_ref:document("resolved_profile";"profile.sandbox-test";("4"*64)),
-       result_ref:document("stage_result";"stage.sandbox-test";("5"*64))},
+     stage:{request_ref:(document("stage_request";"request.sandbox-test";("3"*64)) |
+         .schema_version=2),
+       resolved_profile_ref:(document("resolved_profile";"profile.sandbox-test";("4"*64)) |
+         .schema_version=2),
+       result_ref:(document("stage_result";"result.sandbox-test";("5"*64)) |
+         .schema_version=2)},
      verdict:"satisfied"}}
 ' >"$duty"
 duty_sha=$(sha256_path "$duty")
@@ -90,18 +93,19 @@ duty_sha=$(sha256_path "$duty")
 claim="$tmp/claim.json"
 "$jq_bin" -S -c -n --arg set_sha "$policy_set_sha" --arg duty_sha "$duty_sha" \
   --slurpfile policy "$policy" '
-  def document($kind;$id;$sha): {schema_version:1,kind:$kind,id:$id,sha256:$sha};
+  def document($version;$kind;$id;$sha):
+    {schema_version:$version,kind:$kind,id:$id,sha256:$sha};
   {schema_version:1,kind:"execution_environment_claim",id:"sandbox-claim.example",
    body:{declaration_status:"complete",
-     duty_evaluation_ref:document("duty_separation_evaluation";"stage.sandbox-test";$duty_sha),
+     duty_evaluation_ref:document(1;"duty_separation_evaluation";"result.sandbox-test";$duty_sha),
      effects:{external_writes:false,target_writes:false},environment:$policy[0].body.environment,
      execution_identity:{adapter_instance_id:"instance.verifier",
        execution_boundary_id:"boundary.verifier",principal_id:"principal.verifier",role:"verifier"},
      filesystem:$policy[0].body.filesystem,isolation:$policy[0].body.isolation,
      limits:$policy[0].body.limits,network:$policy[0].body.network,
-     policy_set_ref:document("control_policy_set";"control-policy-set.sandbox-test";$set_sha),
+     policy_set_ref:document(1;"control_policy_set";"control-policy-set.sandbox-test";$set_sha),
      resources:$policy[0].body.resources,sensitive_material:$policy[0].body.sensitive_material,
-     stage_result_ref:document("stage_result";"stage.sandbox-test";("5"*64)),
+     stage_result_ref:document(2;"stage_result";"result.sandbox-test";("5"*64)),
      tools:$policy[0].body.tools}}
 ' >"$claim"
 
@@ -149,6 +153,16 @@ mutate() {
   "$jq_bin" -S -c "$filter" "$source" >"$target"
   /usr/bin/printf '%s\n' "$target"
 }
+expect_duty_binding_error() {
+  local name=$1 filter=$2 moved_duty moved_duty_sha moved_claim
+  moved_duty="$tmp/$name-duty.json"
+  moved_claim="$tmp/$name-claim.json"
+  "$jq_bin" -S -c "$filter" "$duty" >"$moved_duty"
+  moved_duty_sha=$(sha256_path "$moved_duty")
+  "$jq_bin" -S -c --arg sha "$moved_duty_sha" \
+    '.body.duty_evaluation_ref.sha256=$sha' "$claim" >"$moved_claim"
+  expect_error "$name" E_RELATION "$evaluator" "$policy_set" "$moved_duty" "$moved_claim"
+}
 
 expect_verdict canonical-satisfied satisfied "$policy_set" "$duty" "$claim" \
   sandbox.declaration-satisfied
@@ -165,19 +179,40 @@ expect_verdict network-unknown inconclusive "$policy_set" "$duty" \
   "$(mutate "$claim" network-unknown '.body.network.mode="unknown"')" network.unknown
 expect_verdict isolation-unknown inconclusive "$policy_set" "$duty" \
   "$(mutate "$claim" isolation-unknown '.body.isolation.host_access="unknown"')" isolation.unknown
+expect_error tool-network-unknown E_RELATION "$evaluator" "$policy_set" "$duty" \
+  "$(mutate "$claim" tool-network-unknown '.body.tools[0].network="unknown"')"
 expect_verdict sensitive-unknown inconclusive "$policy_set" "$duty" \
   "$(mutate "$claim" sensitive-unknown '.body.sensitive_material.exposure="unknown"')" \
   sensitive-material.unknown
 expect_verdict effects-unknown inconclusive "$policy_set" "$duty" \
   "$(mutate "$claim" effects-unknown '.body.effects.external_writes="unknown"')" effects.unknown
 duty_inconclusive=$(mutate "$duty" duty-inconclusive \
-  '.body.verdict="inconclusive"|.body.reason_ids=["duty.inconclusive"]')
+  '.body.verdict="inconclusive"|.body.reason_ids=["actual.capability-unclassified"]')
 duty_inconclusive_sha=$(sha256_path "$duty_inconclusive")
 duty_inconclusive_claim="$tmp/duty-inconclusive-claim.json"
 "$jq_bin" -S -c --arg duty_sha "$duty_inconclusive_sha" \
   '.body.duty_evaluation_ref.sha256=$duty_sha' "$claim" >"$duty_inconclusive_claim"
 expect_verdict duty-inconclusive inconclusive "$policy_set" "$duty_inconclusive" \
   "$duty_inconclusive_claim" duty.inconclusive
+
+expect_duty_binding_error duty-policy-set-sha \
+  '.body.policy_set.sha256=("0"*64)'
+expect_duty_binding_error duty-policy-set-id \
+  '.body.policy_set.id="control-policy-set.forged"'
+expect_duty_binding_error duty-policy-ref \
+  '.body.policy_ref.sha256=("0"*64)'
+expect_duty_binding_error duty-decision-ref \
+  '.body.decision_ref.sha256=("0"*64)'
+expect_duty_binding_error duty-core-contract \
+  '.body.core_contract.semantic_identity="core.contracts.v1"'
+expect_duty_binding_error duty-result-id \
+  '.id="result.forged"'
+expect_duty_binding_error duty-result-kind \
+  '.body.stage.result_ref.kind="stage_request"'
+expect_duty_binding_error duty-duplicate-reasons \
+  '.body.reason_ids=["duty.satisfied","duty.satisfied"]'
+expect_duty_binding_error duty-verdict-reason \
+  '.body.reason_ids=["duty.forged"]'
 
 expect_verdict role-denied violated "$policy_set" "$duty" \
   "$(mutate "$claim" role-denied '.body.execution_identity.role="producer"')" identity.role-denied
