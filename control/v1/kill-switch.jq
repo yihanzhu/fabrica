@@ -103,10 +103,10 @@ def generic_ref_ok:
   type == "object" and
   (keys | sort) == ["id","sha256"] and (.id | id_ok) and (.sha256 | sha256_ok);
 
-def document_ref_ok:
+def document_ref_ok($kind):
   type == "object" and
   (keys | sort) == ["id","kind","schema_version","sha256"] and
-  .schema_version == 2 and (.id | id_ok) and (.kind | id_ok) and
+  .schema_version == 2 and .kind == $kind and (.id | id_ok) and
   (.sha256 | sha256_ok);
 
 def duty_shape_ok:
@@ -123,12 +123,17 @@ def duty_shape_ok:
     (.core_contract | type == "object") and
     (.stage |
       exact(["request_ref","resolved_profile_ref","result_ref"]) and
-      (.request_ref | document_ref_ok) and
-      (.resolved_profile_ref | document_ref_ok) and
-      (.result_ref | document_ref_ok)) and
+      (.request_ref | document_ref_ok("stage_request")) and
+      (.resolved_profile_ref | document_ref_ok("resolved_profile")) and
+      (.result_ref | document_ref_ok("stage_result"))) and
     (.verdict == "satisfied" or .verdict == "violated" or .verdict == "inconclusive") and
     (.reason_ids | type == "array" and length >= 1 and length <= 64 and
-      all(.[]; id_ok) and . == (sort | unique)));
+      all(.[]; id_ok) and . == (sort | unique)) and
+    (if .verdict == "satisfied" then .reason_ids == ["duty.satisfied"]
+     elif .verdict == "inconclusive" then
+       .reason_ids == ["actual.capability-unclassified"]
+     else (.reason_ids | index("duty.satisfied") == null and
+       index("actual.capability-unclassified") == null) end));
 
 def ref($document; $digest):
   {schema_version:$document.schema_version,kind:$document.kind,id:$document.id,
@@ -144,6 +149,8 @@ def expected_scope_id($scope; $kind):
 ($policy[0]) as $p |
 ($decision[0]) as $decision_doc |
 ($policy_set[0]) as $set |
+($duty_policy[0]) as $duty_policy_doc |
+($duty_decision[0]) as $duty_decision_doc |
 ($state[0]) as $state_doc |
 ($attempt[0]) as $attempt_doc |
 ($duty[0]) as $duty_doc |
@@ -156,6 +163,34 @@ def expected_scope_id($scope; $kind):
 (if $attempt_valid then true else error("invalid attempt") end) |
 (if $state_valid then true else error("invalid state") end) |
 (if $duty_valid then true else error("invalid duty evaluation") end) |
+(if $duty_decision_doc.id == $p.body.duty_decision_ref.content_id and
+    $duty_decision_doc.kind == "duty_separation_decision" and
+    $duty_decision_doc.schema_version == 1 and
+    $duty_decision_sha == $p.body.duty_decision_ref.sha256 and
+    $duty_policy_doc.schema_version == 1 and
+    $duty_policy_doc.kind == "duty_separation_policy" and
+    ($duty_policy_doc.body.core_contract |
+      exact(["generation_id_sha256","package_ref","semantic_identity"]) and
+      (.generation_id_sha256 | sha256_ok) and (.semantic_identity | id_ok) and
+      (.package_ref | content_ref_ok("application/vnd.ystack.core-contract+json"))) and
+    $duty_policy_sha == $duty_decision_doc.body.policy_ref.sha256 and
+    $duty_decision_doc.body.policy_ref.content_id == $duty_policy_doc.id and
+    ($duty_decision_doc.body.policy_ref |
+      content_ref_ok("application/vnd.ystack.control-policy+json")) and
+    $set.body.core_contract.semantic_identity ==
+      $duty_policy_doc.body.core_contract.semantic_identity and
+    $set.body.core_contract.package_ref == $duty_policy_doc.body.core_contract.package_ref and
+    $generation_id_sha == $duty_policy_doc.body.core_contract.generation_id_sha256 and
+    ([ $set.body.sections[] | select(.section_id == "duty-separation") ] | length) == 1 and
+    (([ $set.body.sections[] | select(.section_id == "duty-separation") ][0]) as $duty_section |
+      $duty_section.policy_ref == $duty_decision_doc.body.policy_ref and
+      $duty_section.decision_ref == $p.body.duty_decision_ref) and
+    ([ $set.body.sections[] | select(.section_id == "kill-switch") ] | length) == 1 and
+    (([ $set.body.sections[] | select(.section_id == "kill-switch") ][0]) as $kill_section |
+      $kill_section.policy_ref == $decision_doc.body.policy_ref and
+      $kill_section.decision_ref == {content_id:$decision_doc.id,
+        media_type:"application/vnd.ystack.control-decision+json",sha256:$decision_sha})
+ then true else error("invalid duty decision") end) |
 (if $attempt_valid then $attempt_doc.body.scope else null end) as $scope |
 (if $state_valid and $attempt_valid then
    [$state_doc.body.entries[] |
@@ -184,7 +219,11 @@ def expected_scope_id($scope; $kind):
       then "kill.scope-mismatch." + $kind else empty end)) +
     (if $duty_valid and
         $attempt_doc.body.duty_evaluation_ref == ref($duty_doc;$duty_sha) and
+        $duty_doc.body.policy_set == {id:$set.id,sha256:$policy_set_sha} and
+        $duty_doc.body.policy_ref == $duty_decision_doc.body.policy_ref and
         $duty_doc.body.decision_ref == $p.body.duty_decision_ref and
+        $duty_doc.body.core_contract == $set.body.core_contract and
+        $duty_doc.id == $duty_doc.body.stage.result_ref.id and
         $duty_doc.body.stage.result_ref.id == $scope.attempt_id and
         $duty_doc.body.verdict == "violated"
      then ["kill.duty-violated"] else [] end))
@@ -196,7 +235,11 @@ def expected_scope_id($scope; $kind):
       if ($entries | length) == 0 then "kill.scope-missing." + $kind else empty end)) +
     (if ($duty_valid | not) or
         $attempt_doc.body.duty_evaluation_ref != ref($duty_doc;$duty_sha) or
+        $duty_doc.body.policy_set != {id:$set.id,sha256:$policy_set_sha} or
+        $duty_doc.body.policy_ref != $duty_decision_doc.body.policy_ref or
         $duty_doc.body.decision_ref != $p.body.duty_decision_ref or
+        $duty_doc.body.core_contract != $set.body.core_contract or
+        $duty_doc.id != $duty_doc.body.stage.result_ref.id or
         $duty_doc.body.stage.result_ref.id != $scope.attempt_id
      then ["kill.duty-unverifiable"]
      elif $duty_doc.body.verdict == "inconclusive"

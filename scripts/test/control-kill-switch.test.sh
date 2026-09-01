@@ -9,14 +9,50 @@ evaluator="$root/control/v1/evaluate-kill-switch.sh"
 policy="$root/control/v1/kill-switch-policy.json"
 decision="$root/control/v1/kill-switch-decision.json"
 program="$root/control/v1/kill-switch.jq"
+duty_policy="$root/control/v1/duty-separation-policy.json"
 duty_decision="$root/control/v1/duty-separation-decision.json"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-kill-test.XXXXXX") || exit 1
-cleanup() { /bin/rm -rf -- "$tmp"; }
+RACE_PID=''
+RACE_PGID=''
+TEST_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || exit 1
+[[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 1
+group_alive() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] && kill -0 -- "-$1" 2>/dev/null
+}
+terminate_reap() {
+  local leader=$1 group=$2 attempt_count=0
+  [[ "$leader" =~ ^[1-9][0-9]*$ ]] && [[ "$group" =~ ^[1-9][0-9]*$ ]] &&
+    [ "$group" = "$leader" ] && [ "$group" != "$TEST_PGID" ] || return 1
+  kill -TERM -- "-$group" 2>/dev/null || :
+  while group_alive "$group" && [ "$attempt_count" -lt 100 ]; do
+    attempt_count=$((attempt_count + 1))
+    /bin/sleep 0.01
+  done
+  if group_alive "$group"; then
+    kill -KILL -- "-$group" 2>/dev/null || :
+    attempt_count=0
+    while group_alive "$group" && [ "$attempt_count" -lt 100 ]; do
+      attempt_count=$((attempt_count + 1))
+      /bin/sleep 0.01
+    done
+  fi
+  wait "$leader" 2>/dev/null || :
+  ! group_alive "$group"
+}
+cleanup() {
+  if [ -n "${RACE_PID:-}" ] || [ -n "${RACE_PGID:-}" ]; then
+    terminate_reap "$RACE_PID" "$RACE_PGID" || :
+  fi
+  /bin/rm -rf -- "$tmp"
+}
 trap cleanup EXIT
 fail() { /usr/bin/printf 'not ok - %s\n' "$1" >&2; exit 1; }
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+sha256_text() {
+  /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -43,7 +79,7 @@ bin="$tmp/bin"
 jq_bin="$bin/jq"
 [ "$($jq_bin --version)" = jq-1.6 ] || fail 'jq identity'
 
-for shipped in "$policy" "$decision"; do
+for shipped in "$policy" "$decision" "$duty_policy"; do
   "$jq_bin" -s -S -c 'if length==1 then .[0] else error("root-count") end' \
     "$shipped" >"$tmp/canonical.json" || fail 'shipped json parse'
   /usr/bin/cmp -s "$shipped" "$tmp/canonical.json" || fail 'shipped json canonical'
@@ -51,6 +87,17 @@ done
 policy_sha=$(sha256_path "$policy")
 decision_sha=$(sha256_path "$decision")
 duty_decision_sha=$(sha256_path "$duty_decision")
+duty_policy_sha=$(sha256_path "$duty_policy")
+duty_policy_ref_sha=$("$jq_bin" -er '.body.policy_ref.sha256' "$duty_decision") ||
+  fail 'duty policy identity'
+[ "$duty_policy_sha" = "$duty_policy_ref_sha" ] || fail 'duty policy binding'
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" \
+  "$root/scripts/core-contract.sh") || fail 'selected generation'
+[[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || fail 'selected generation shape'
+generation_id_sha=$(sha256_text "$generation")
+[ "$generation_id_sha" = "$("$jq_bin" -r '.body.core_contract.generation_id_sha256' \
+  "$duty_policy")" ] || fail 'selected generation identity'
 driver_sha=$(sha256_path "$evaluator")
 program_sha=$(sha256_path "$program")
 validator_driver_sha=$(sha256_path "$root/control/v1/validate.sh")
@@ -70,7 +117,8 @@ pass 'canonical shipped identities'
 
 policy_set="$tmp/policy-set.json"
 "$jq_bin" -S -c -n --arg policy_sha "$policy_sha" --arg decision_sha "$decision_sha" \
-  --arg duty_decision_sha "$duty_decision_sha" '
+  --arg duty_policy_sha "$duty_policy_sha" --arg duty_decision_sha "$duty_decision_sha" \
+  --arg generation "$generation" --slurpfile duty_policy "$duty_policy" '
   def ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
   def section($id;$policy;$decision):
     {section_id:$id,
@@ -78,32 +126,32 @@ policy_set="$tmp/policy-set.json"
      decision_ref:ref("control-decision."+$id;"application/vnd.ystack.control-decision+json";$decision)};
   {schema_version:1,kind:"control_policy_set",id:"control-policy-set.test",
    body:{activation_state:"inactive",fail_mode:"closed",policy_version:"v1",
-    core_contract:{semantic_identity:"core.contracts.v2",
-      generation_id:("g-"+("0"*64)),
-      package_ref:ref("core-contract-package.v2";
-        "application/vnd.ystack.core-contract+json";("9"*64))},
+    core_contract:{semantic_identity:$duty_policy[0].body.core_contract.semantic_identity,
+      generation_id:$generation,package_ref:$duty_policy[0].body.core_contract.package_ref},
     sections:[section("credential-policy";("1"*64);("a"*64)),
-      section("duty-separation";("2"*64);$duty_decision_sha),
+      section("duty-separation";$duty_policy_sha;$duty_decision_sha),
       section("evidence-integrity";("3"*64);("c"*64)),
       section("kill-switch";$policy_sha;$decision_sha),
       section("risk-gates";("5"*64);("e"*64)),
       section("sandbox";("6"*64);("f"*64))]}}
 ' >"$policy_set" || fail 'policy set fixture'
+policy_set_sha=$(sha256_path "$policy_set")
 
 duty="$tmp/duty.json"
-"$jq_bin" -S -c -n --arg decision_sha "$duty_decision_sha" '
+"$jq_bin" -S -c -n --arg set_sha "$policy_set_sha" \
+  --arg decision_sha "$duty_decision_sha" \
+  --slurpfile set "$policy_set" --slurpfile duty_decision "$duty_decision" '
   def content($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
   def doc($kind;$id;$digit):
     {schema_version:2,kind:$kind,id:$id,sha256:($digit*64)};
-  {schema_version:1,kind:"duty_separation_evaluation",id:"duty-evaluation.test",
+  {schema_version:1,kind:"duty_separation_evaluation",id:"attempt.test",
    body:{activation_state:"inactive",evaluation_mode:"observation-only",
     reference_semantics:"identity-only",
-    policy_set:{id:"control-policy-set.test",sha256:("1"*64)},
-    policy_ref:content("control-policy.duty-separation";
-      "application/vnd.ystack.control-policy+json";("2"*64)),
-    decision_ref:content("control-decision.duty-separation";
+    policy_set:{id:$set[0].id,sha256:$set_sha},
+    policy_ref:$duty_decision[0].body.policy_ref,
+    decision_ref:content($duty_decision[0].id;
       "application/vnd.ystack.control-decision+json";$decision_sha),
-    core_contract:{semantic_identity:"core.contracts.v2"},
+    core_contract:$set[0].body.core_contract,
     stage:{request_ref:doc("stage_request";"request.test";"3"),
       resolved_profile_ref:doc("resolved_profile";"profile.test";"4"),
       result_ref:doc("stage_result";"attempt.test";"5")},
@@ -124,12 +172,14 @@ state="$tmp/state.json"
 
 make_attempt() {
   local state_input=$1 duty_input=$2 output=$3 revision=${4:-}
-  local state_sha duty_sha state_revision
+  local state_sha duty_sha duty_id state_revision
   state_sha=$(sha256_path "$state_input") || return 1
   duty_sha=$(sha256_path "$duty_input") || return 1
+  duty_id=$("$jq_bin" -er '.id' "$duty_input") || return 1
   state_revision=$("$jq_bin" -r '.body.revision' "$state_input") || return 1
   [ -z "$revision" ] || state_revision=$revision
   "$jq_bin" -S -c -n --arg state_sha "$state_sha" --arg duty_sha "$duty_sha" \
+    --arg duty_id "$duty_id" \
     --argjson revision "$state_revision" '
     {schema_version:1,kind:"kill_switch_attempt",id:"kill-attempt.test",
      body:{activation_state:"inactive",authority_epoch:"epoch.test",
@@ -137,7 +187,7 @@ make_attempt() {
       scope:{attempt_id:"attempt.test",repository_id:"repo.test",
         stage_id:"stage.test",workflow_id:"workflow.test"},
       duty_evaluation_ref:{schema_version:1,kind:"duty_separation_evaluation",
-        id:"duty-evaluation.test",sha256:$duty_sha}}}
+        id:$duty_id,sha256:$duty_sha}}}
   ' >"$output"
 }
 attempt="$tmp/attempt.json"
@@ -262,11 +312,59 @@ make_attempt "$state" "$duty_replay" "$tmp/duty-replay-attempt.json" ||
   fail 'duty replay attempt'
 expect_eval duty-replay inconclusive kill.duty-unverifiable \
   "$state" "$tmp/duty-replay-attempt.json" "$duty_replay"
+duty_stale_set="$tmp/duty-stale-set.json"
+"$jq_bin" -S -c '.body.policy_set.sha256=("9"*64)' "$duty" >"$duty_stale_set"
+make_attempt "$state" "$duty_stale_set" "$tmp/duty-stale-set-attempt.json" ||
+  fail 'duty stale set attempt'
+expect_eval duty-stale-policy-set inconclusive kill.duty-unverifiable \
+  "$state" "$tmp/duty-stale-set-attempt.json" "$duty_stale_set"
+duty_stale_policy="$tmp/duty-stale-policy.json"
+"$jq_bin" -S -c '.body.policy_ref.sha256=("8"*64)' "$duty" >"$duty_stale_policy"
+make_attempt "$state" "$duty_stale_policy" "$tmp/duty-stale-policy-attempt.json" ||
+  fail 'duty stale policy attempt'
+expect_eval duty-stale-policy inconclusive kill.duty-unverifiable \
+  "$state" "$tmp/duty-stale-policy-attempt.json" "$duty_stale_policy"
+duty_stale_core="$tmp/duty-stale-core.json"
+"$jq_bin" -S -c '.body.core_contract.package_ref.sha256=("7"*64)' \
+  "$duty" >"$duty_stale_core"
+make_attempt "$state" "$duty_stale_core" "$tmp/duty-stale-core-attempt.json" ||
+  fail 'duty stale core attempt'
+expect_eval duty-stale-core inconclusive kill.duty-unverifiable \
+  "$state" "$tmp/duty-stale-core-attempt.json" "$duty_stale_core"
+forged_core_set="$tmp/forged-core-set.json"
+"$jq_bin" -S -c '.body.core_contract.semantic_identity="core.contracts.v3" |
+  .body.core_contract.package_ref.sha256=("7"*64)' "$policy_set" >"$forged_core_set"
+forged_core_set_sha=$(sha256_path "$forged_core_set")
+forged_core_duty="$tmp/forged-core-duty.json"
+"$jq_bin" -S -c --arg set_sha "$forged_core_set_sha" \
+  --slurpfile forged_set "$forged_core_set" '
+  .body.policy_set.sha256=$set_sha | .body.core_contract=$forged_set[0].body.core_contract
+' "$duty" >"$forged_core_duty"
+make_attempt "$state" "$forged_core_duty" "$tmp/forged-core-attempt.json" ||
+  fail 'paired forged core attempt'
+expect_error paired-core-forgery E_RELATION "$forged_core_set" "$state" \
+  "$tmp/forged-core-attempt.json" "$forged_core_duty"
+forged_duty="$tmp/forged-duty.json"
+"$jq_bin" -S -c '.body.reason_ids=["duty.forged"]' "$duty" >"$forged_duty"
+make_attempt "$state" "$forged_duty" "$tmp/forged-duty-attempt.json" ||
+  fail 'forged duty attempt'
+expect_error forged-duty E_RELATION "$policy_set" "$state" \
+  "$tmp/forged-duty-attempt.json" "$forged_duty"
+forged_stage="$tmp/forged-stage.json"
+"$jq_bin" -S -c '.body.stage.result_ref.kind="stage_request"' "$duty" >"$forged_stage"
+make_attempt "$state" "$forged_stage" "$tmp/forged-stage-attempt.json" ||
+  fail 'forged stage attempt'
+expect_error forged-duty-stage E_RELATION "$policy_set" "$state" \
+  "$tmp/forged-stage-attempt.json" "$forged_stage"
 
 bad_set="$tmp/bad-set.json"
 "$jq_bin" -S -c '(.body.sections[]|select(.section_id=="kill-switch").decision_ref.sha256)=("0"*64)' \
   "$policy_set" >"$bad_set"
 expect_error policy-binding E_RELATION "$bad_set" "$state" "$attempt" "$duty"
+bad_duty_set="$tmp/bad-duty-set.json"
+"$jq_bin" -S -c '(.body.sections[]|select(.section_id=="duty-separation").policy_ref.sha256)=("0"*64)' \
+  "$policy_set" >"$bad_duty_set"
+expect_error duty-policy-binding E_RELATION "$bad_duty_set" "$state" "$attempt" "$duty"
 noncanonical="$tmp/noncanonical.json"
 /usr/bin/sed 's/,/,&/' "$state" >"$noncanonical"
 expect_error noncanonical-state E_RELATION "$policy_set" "$noncanonical" "$attempt" "$duty"
@@ -275,8 +373,12 @@ expect_error symlink-input E_RUNTIME "$policy_set" "$tmp/state-link.json" "$atte
 
 "$jq_bin" -S -c -n -f "$program" --slurpfile policy "$policy" \
   --slurpfile decision "$decision" --slurpfile policy_set "$policy_set" \
+  --slurpfile duty_policy "$duty_policy" \
+  --slurpfile duty_decision "$duty_decision" \
   --slurpfile state "$state" --slurpfile attempt "$attempt" --slurpfile duty "$duty" \
   --arg policy_sha "$policy_sha" --arg decision_sha "$decision_sha" \
+  --arg duty_policy_sha "$duty_policy_sha" --arg duty_decision_sha "$duty_decision_sha" \
+  --arg generation_id_sha "$generation_id_sha" \
   --arg policy_set_sha "$(sha256_path "$policy_set")" --arg state_sha "$(sha256_path "$state")" \
   --arg attempt_sha "$(sha256_path "$attempt")" --arg duty_sha "$(sha256_path "$duty")" \
   >"$tmp/pure.out" || fail 'pure evaluator status'
@@ -288,7 +390,8 @@ copy_runtime() {
   local destination=$1 name
   /bin/mkdir -p "$destination/control/v1"
   for name in evaluate-kill-switch.sh kill-switch-policy.json kill-switch-decision.json \
-    kill-switch.jq duty-separation-decision.json validate.sh policy-set.jq; do
+    kill-switch.jq duty-separation-policy.json duty-separation-decision.json \
+    validate.sh policy-set.jq; do
     /bin/cp "$root/control/v1/$name" "$destination/control/v1/$name"
   done
   /bin/chmod 0500 "$destination/control/v1/evaluate-kill-switch.sh" \
@@ -299,21 +402,102 @@ make_gate_jq() {
   /usr/bin/printf '%s\n' '#!/bin/bash' \
     'if [ "${1:-}" = --version ]; then /usr/bin/printf "jq-1.6\\n"; exit 0; fi' \
     'for value in "$@"; do' \
-    '  case "$value" in */program.jq) : >"$GATE_MARKER"; while [ ! -f "$GATE_RELEASE" ]; do /bin/sleep 0.01; done; break ;; esac' \
+    '  case "$value" in */program.jq)' \
+    '    if [ -n "${NESTED_PID_FILE:-}" ]; then /bin/sleep 30 & nested=$!; /usr/bin/printf "%s\n" "$nested" >"$NESTED_PID_FILE"; fi' \
+    '    : >"$GATE_MARKER"; while [ ! -f "$GATE_RELEASE" ]; do /bin/sleep 0.01; done; break ;; esac' \
     'done' \
     'exec "$REAL_JQ" "$@"' >"$destination"
   /bin/chmod 0500 "$destination"
   GATE_MARKER=$marker GATE_RELEASE=$release REAL_JQ=$jq_bin :
 }
+start_eval_group() {
+  local name=$1 output=$2 diagnostic=$3 gate leader pgid
+  shift 3
+  gate="$tmp/$name.start-gate"
+  /usr/bin/mkfifo "$gate" || fail "$name start gate"
+  exec 8<>"$gate" || fail "$name start gate open"
+  /bin/rm -f -- "$gate" || fail "$name start gate remove"
+  set -m
+  /bin/bash -c '
+    IFS= read -r token <&8 || exit 125
+    exec 8>&-
+    [ "$token" = go ] || exit 125
+    exec "$@"
+  ' test-supervisor "$@" >"$output" 2>"$diagnostic" &
+  leader=$!
+  set +m
+  pgid=$(/bin/ps -o pgid= -p "$leader" 2>/dev/null | /usr/bin/tr -d ' ') || pgid=''
+  if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$leader" ] ||
+     [ "$pgid" = "$TEST_PGID" ]; then
+    /usr/bin/printf 'abort\n' >&8 || :
+    exec 8>&-
+    wait "$leader" 2>/dev/null || :
+    fail "$name unsafe process group"
+  fi
+  RACE_PID=$leader
+  RACE_PGID=$pgid
+  /usr/bin/printf 'go\n' >&8 || fail "$name gate release"
+  exec 8>&-
+}
 wait_marker() {
-  local marker=$1 pid=$2 attempt_count=0
+  local name=$1 marker=$2 pid=$3 group=$4 attempt_count=0
   while [ "$attempt_count" -lt 500 ]; do
     [ -f "$marker" ] && return 0
-    kill -0 "$pid" 2>/dev/null || return 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+      terminate_reap "$pid" "$group" || :
+      RACE_PID=''
+      RACE_PGID=''
+      fail "$name exited before marker"
+    fi
     attempt_count=$((attempt_count + 1))
     /bin/sleep 0.01
   done
-  return 1
+  terminate_reap "$pid" "$group" || :
+  RACE_PID=''
+  RACE_PGID=''
+  fail "$name marker timeout"
+}
+wait_named_file() {
+  local name=$1 root_path=$2 pattern=$3 pid=$4 group=$5 attempt_count=0 found
+  while [ "$attempt_count" -lt 5000 ]; do
+    found=$(/usr/bin/find "$root_path" -name "$pattern" -type f -print -quit 2>/dev/null)
+    [ -n "$found" ] && return 0
+    if ! kill -0 "$pid" 2>/dev/null; then
+      terminate_reap "$pid" "$group" || :
+      RACE_PID=''
+      RACE_PGID=''
+      fail "$name exited before $pattern"
+    fi
+    attempt_count=$((attempt_count + 1))
+    /bin/sleep 0.001
+  done
+  terminate_reap "$pid" "$group" || :
+  RACE_PID=''
+  RACE_PGID=''
+  fail "$name timeout waiting for $pattern"
+}
+wait_group() {
+  local name=$1 pid=$2 group=$3 attempt_count=0 status=0
+  while kill -0 "$pid" 2>/dev/null && [ "$attempt_count" -lt 1000 ]; do
+    attempt_count=$((attempt_count + 1))
+    /bin/sleep 0.01
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    terminate_reap "$pid" "$group" || :
+    RACE_PID=''
+    RACE_PGID=''
+    fail "$name completion timeout"
+  fi
+  wait "$pid" 2>/dev/null || status=$?
+  if group_alive "$group"; then
+    terminate_reap "$pid" "$group" || :
+    RACE_PID=''
+    RACE_PGID=''
+    fail "$name left descendants"
+  fi
+  RACE_STATUS=$status
+  RACE_PID=''
+  RACE_PGID=''
 }
 
 race_root="$tmp/race-runtime"
@@ -325,17 +509,20 @@ release="$tmp/input.release"
 make_gate_jq "$race_bin/jq" "$marker" "$release"
 race_state="$tmp/race-state.json"
 /bin/cp "$state" "$race_state"
-GATE_MARKER=$marker GATE_RELEASE=$release REAL_JQ=$jq_bin \
+start_eval_group input-race "$tmp/input-race.out" "$tmp/input-race.err" \
+  /usr/bin/env GATE_MARKER="$marker" GATE_RELEASE="$release" REAL_JQ="$jq_bin" \
   PATH="$race_bin:/usr/bin:/bin" "$race_root/control/v1/evaluate-kill-switch.sh" evaluate \
   "$policy_set" "$race_state" "$attempt" "$duty" \
-  >"$tmp/input-race.out" 2>"$tmp/input-race.err" &
-race_pid=$!
-wait_marker "$marker" "$race_pid" || fail 'input race marker'
+  || fail 'input race start'
+race_pid=$RACE_PID
+race_pgid=$RACE_PGID
+wait_marker input-race "$marker" "$race_pid" "$race_pgid"
 "$jq_bin" -S -c '(.body.entries[]|select(.scope_kind=="global").state)="stop"' \
   "$race_state" >"$tmp/race-state-new.json"
 /bin/mv "$tmp/race-state-new.json" "$race_state"
 : >"$release"
-wait "$race_pid" || fail 'input race status'
+wait_group input-race "$race_pid" "$race_pgid"
+[ "$RACE_STATUS" -eq 0 ] || fail 'input race status'
 [ ! -s "$tmp/input-race.err" ] || fail 'input race stderr'
 "$jq_bin" -e '.body.verdict=="satisfied"' "$tmp/input-race.out" >/dev/null ||
   fail 'input snapshot changed'
@@ -348,19 +535,61 @@ source_bin="$tmp/source-bin"
 source_marker="$tmp/source.marker"
 source_release="$tmp/source.release"
 make_gate_jq "$source_bin/jq" "$source_marker" "$source_release"
-GATE_MARKER=$source_marker GATE_RELEASE=$source_release REAL_JQ=$jq_bin \
-  PATH="$source_bin:/usr/bin:/bin" "$source_root/control/v1/evaluate-kill-switch.sh" evaluate \
+start_eval_group source-race "$tmp/source-race.out" "$tmp/source-race.err" \
+  /usr/bin/env GATE_MARKER="$source_marker" GATE_RELEASE="$source_release" \
+  REAL_JQ="$jq_bin" PATH="$source_bin:/usr/bin:/bin" \
+  "$source_root/control/v1/evaluate-kill-switch.sh" evaluate \
   "$policy_set" "$state" "$attempt" "$duty" \
-  >"$tmp/source-race.out" 2>"$tmp/source-race.err" &
-source_pid=$!
-wait_marker "$source_marker" "$source_pid" || fail 'source race marker'
+  || fail 'source race start'
+source_pid=$RACE_PID
+source_pgid=$RACE_PGID
+wait_marker source-race "$source_marker" "$source_pid" "$source_pgid"
 /usr/bin/printf '\n' >>"$source_root/control/v1/kill-switch.jq"
 : >"$source_release"
-source_status=0
-wait "$source_pid" || source_status=$?
-[ "$source_status" -ne 0 ] && [ ! -s "$tmp/source-race.out" ] &&
+wait_group source-race "$source_pid" "$source_pgid"
+[ "$RACE_STATUS" -ne 0 ] && [ ! -s "$tmp/source-race.out" ] &&
   [ "$(/bin/cat "$tmp/source-race.err")" = E_RELATION ] || fail 'source race result'
 pass 'source mutation fails closed'
+
+launch_root="$tmp/launch-runtime"
+copy_runtime "$launch_root"
+launch_scratch="$tmp/launch-scratch"
+/bin/mkdir "$launch_scratch"
+start_eval_group launch-signal "$tmp/launch.out" "$tmp/launch.err" \
+  /usr/bin/env TMPDIR="$launch_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$launch_root/control/v1/evaluate-kill-switch.sh" evaluate \
+  "$policy_set" "$state" "$attempt" "$duty" \
+  || fail 'launch signal start'
+launch_pid=$RACE_PID
+launch_pgid=$RACE_PGID
+wait_named_file launch-signal "$launch_scratch" child-launching "$launch_pid" "$launch_pgid"
+for _ in 1 2 3; do kill -TERM -- "-$launch_pgid" 2>/dev/null || :; done
+wait_group launch-signal "$launch_pid" "$launch_pgid"
+[ "$RACE_STATUS" -eq 143 ] && [ ! -s "$tmp/launch.out" ] &&
+  [ ! -s "$tmp/launch.err" ] || fail 'launch signal result'
+[ -z "$(/usr/bin/find "$launch_scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+  fail 'launch signal scratch cleanup'
+pass 'launch-window repeated group signal is clean'
+
+teardown_root="$tmp/teardown-runtime"
+copy_runtime "$teardown_root"
+teardown_scratch="$tmp/teardown-scratch"
+/bin/mkdir "$teardown_scratch"
+start_eval_group teardown-signal "$tmp/teardown.out" "$tmp/teardown.err" \
+  /usr/bin/env TMPDIR="$teardown_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$teardown_root/control/v1/evaluate-kill-switch.sh" evaluate \
+  "$policy_set" "$state" "$attempt" "$duty" || fail 'teardown signal start'
+teardown_pid=$RACE_PID
+teardown_pgid=$RACE_PGID
+wait_named_file teardown-signal "$teardown_scratch" child-teardown \
+  "$teardown_pid" "$teardown_pgid"
+for _ in 1 2 3; do kill -TERM -- "-$teardown_pgid" 2>/dev/null || :; done
+wait_group teardown-signal "$teardown_pid" "$teardown_pgid"
+[ "$RACE_STATUS" -eq 143 ] && [ ! -s "$tmp/teardown.out" ] &&
+  [ ! -s "$tmp/teardown.err" ] || fail 'teardown signal result'
+[ -z "$(/usr/bin/find "$teardown_scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
+  fail 'teardown signal scratch cleanup'
+pass 'teardown-window repeated group signal is clean'
 
 signal_root="$tmp/signal-runtime"
 copy_runtime "$signal_root"
@@ -368,22 +597,29 @@ signal_bin="$tmp/signal-bin"
 /bin/mkdir "$signal_bin"
 signal_marker="$tmp/signal.marker"
 signal_release="$tmp/signal.release"
+nested_pid_file="$tmp/nested.pid"
 make_gate_jq "$signal_bin/jq" "$signal_marker" "$signal_release"
 signal_scratch="$tmp/signal-scratch"
 /bin/mkdir "$signal_scratch"
-GATE_MARKER=$signal_marker GATE_RELEASE=$signal_release REAL_JQ=$jq_bin TMPDIR=$signal_scratch \
+start_eval_group nested-signal "$tmp/signal.out" "$tmp/signal.err" \
+  /usr/bin/env GATE_MARKER="$signal_marker" GATE_RELEASE="$signal_release" \
+  NESTED_PID_FILE="$nested_pid_file" REAL_JQ="$jq_bin" TMPDIR="$signal_scratch" \
   PATH="$signal_bin:/usr/bin:/bin" "$signal_root/control/v1/evaluate-kill-switch.sh" evaluate \
-  "$policy_set" "$state" "$attempt" "$duty" \
-  >"$tmp/signal.out" 2>"$tmp/signal.err" &
-signal_pid=$!
-wait_marker "$signal_marker" "$signal_pid" || fail 'signal marker'
-kill -TERM "$signal_pid" || fail 'signal delivery'
-signal_status=0
-wait "$signal_pid" || signal_status=$?
-[ "$signal_status" -eq 143 ] && [ ! -s "$tmp/signal.out" ] &&
-  [ ! -s "$tmp/signal.err" ] || fail 'signal result'
+  "$policy_set" "$state" "$attempt" "$duty" || fail 'nested signal start'
+signal_pid=$RACE_PID
+signal_pgid=$RACE_PGID
+wait_marker nested-signal "$signal_marker" "$signal_pid" "$signal_pgid"
+wait_marker nested-child "$nested_pid_file" "$signal_pid" "$signal_pgid"
+nested_pid=$(/bin/cat "$nested_pid_file")
+[[ "$nested_pid" =~ ^[1-9][0-9]*$ ]] || fail 'nested pid shape'
+for _ in 1 2 3; do kill -TERM -- "-$signal_pgid" 2>/dev/null || :; done
+wait_group nested-signal "$signal_pid" "$signal_pgid"
+if [ "$RACE_STATUS" -ne 143 ] || [ -s "$tmp/signal.out" ] ||
+   [ -s "$tmp/signal.err" ] || kill -0 "$nested_pid" 2>/dev/null; then
+  fail 'nested signal result'
+fi
 [ -z "$(/usr/bin/find "$signal_scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
-  fail 'signal scratch cleanup'
-pass 'signal cleanup is bounded and quiet'
+  fail 'nested signal scratch cleanup'
+pass 'signal reaps nested descendants and scratch'
 
 /usr/bin/printf '1..%s\n' "$passes"

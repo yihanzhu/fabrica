@@ -27,6 +27,7 @@ repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) ||
 policy="$source_dir/kill-switch-policy.json"
 decision="$source_dir/kill-switch-decision.json"
 program="$source_dir/kill-switch.jq"
+duty_policy="$source_dir/duty-separation-policy.json"
 duty_decision="$source_dir/duty-separation-decision.json"
 policy_validator="$source_dir/validate.sh"
 validator_program="$source_dir/policy-set.jq"
@@ -35,7 +36,7 @@ for control_dir in "$repo/control" "$source_dir"; do
 done
 [ "$source_dir" = "$repo/control/v1" ] || emit_error E_RUNTIME
 for required in "$source_path" "$policy" "$decision" "$program" \
-  "$duty_decision" "$policy_validator" "$validator_program"; do
+  "$duty_policy" "$duty_decision" "$policy_validator" "$validator_program"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_RUNTIME
 done
 for input in "$@"; do
@@ -47,63 +48,167 @@ case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
   [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+sha256_text() {
+  /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
 scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-kill.XXXXXX" 2>/dev/null) ||
   emit_error E_RUNTIME
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
 ACTIVE_PID=''
 ACTIVE_PGID=''
+CHILD_SEQUENCE=0
+SIGNAL_DEFER=0
 SIGNAL_EXITING=0
+PENDING_SIGNAL_STATUS=0
+SELF_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') ||
+  emit_error E_RUNTIME
+[[ "$SELF_PGID" =~ ^[1-9][0-9]*$ ]] || emit_error E_RUNTIME
 
 cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
 group_alive() {
   [ -n "${1:-}" ] && kill -0 -- "-$1" 2>/dev/null
 }
 terminate_active() {
-  local attempt=0
-  if group_alive "${ACTIVE_PGID:-}"; then
-    kill -TERM -- "-$ACTIVE_PGID" 2>/dev/null || :
-    while group_alive "$ACTIVE_PGID" && [ "$attempt" -lt 100 ]; do
+  local attempt=0 wait_status=0 group=${ACTIVE_PGID:-} leader=${ACTIVE_PID:-}
+  [[ "$group" =~ ^[1-9][0-9]*$ ]] && [[ "$leader" =~ ^[1-9][0-9]*$ ]] ||
+    return 1
+  kill -TERM -- "-$group" 2>/dev/null || :
+  while group_alive "$group" && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01 || :
+  done
+  if group_alive "$group"; then
+    kill -KILL -- "-$group" 2>/dev/null || :
+    attempt=0
+    while group_alive "$group" && [ "$attempt" -lt 100 ]; do
       attempt=$((attempt + 1))
-      /bin/sleep 0.01
+      /bin/sleep 0.01 || :
     done
-    group_alive "$ACTIVE_PGID" && kill -KILL -- "-$ACTIVE_PGID" 2>/dev/null || :
-  elif [ -n "${ACTIVE_PID:-}" ] && kill -0 "$ACTIVE_PID" 2>/dev/null; then
-    kill -TERM "$ACTIVE_PID" 2>/dev/null || :
   fi
-  if [ -n "${ACTIVE_PID:-}" ]; then wait "$ACTIVE_PID" 2>/dev/null || :; fi
+  while :; do
+    wait_status=0
+    wait "$leader" 2>/dev/null || wait_status=$?
+    case "$wait_status" in
+      129|130|143) kill -0 "$leader" 2>/dev/null && continue ;;
+    esac
+    break
+  done
   ACTIVE_PID=''
   ACTIVE_PGID=''
+  ! group_alive "$group"
 }
 signal_exit() {
   local status=${1:-1}
-  [ "${SIGNAL_EXITING:-0}" -eq 0 ] || exit "$status"
-  SIGNAL_EXITING=1
   trap - EXIT HUP INT TERM
-  terminate_active
+  exec >/dev/null 2>&1
+  if [ -n "${ACTIVE_PGID:-}" ] && ! terminate_active; then status=1; fi
   cleanup
   exit "$status"
 }
+handle_signal() {
+  local status=${1:-1}
+  [ "${SIGNAL_EXITING:-0}" -eq 0 ] || return 0
+  [ "${PENDING_SIGNAL_STATUS:-0}" -ne 0 ] || PENDING_SIGNAL_STATUS=$status
+  [ "${SIGNAL_DEFER:-0}" -eq 0 ] || return 0
+  SIGNAL_EXITING=1
+  signal_exit "$PENDING_SIGNAL_STATUS"
+}
+replay_pending_signal() {
+  local pending
+  SIGNAL_DEFER=0
+  pending=${PENDING_SIGNAL_STATUS:-0}
+  PENDING_SIGNAL_STATUS=0
+  if [ "$pending" -ne 0 ]; then
+    SIGNAL_EXITING=1
+    signal_exit "$pending"
+  fi
+}
 run_child() {
-  local status=0 child pgid
+  local status=0 child pgid gate launch_marker teardown_marker wait_status
+  [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
+  CHILD_SEQUENCE=$((CHILD_SEQUENCE + 1))
+  gate="$scratch/child-gate.$CHILD_SEQUENCE"
+  launch_marker="$scratch/child-launching"
+  teardown_marker="$scratch/child-teardown"
+  PENDING_SIGNAL_STATUS=0
+  SIGNAL_DEFER=1
+  /usr/bin/mkfifo "$gate" || { replay_pending_signal; return 125; }
+  exec 9<>"$gate" || { /bin/rm -f -- "$gate"; replay_pending_signal; return 125; }
+  /bin/rm -f -- "$gate" || { exec 9>&-; replay_pending_signal; return 125; }
+  : >"$launch_marker" || { exec 9>&-; replay_pending_signal; return 125; }
+  if [ "${PENDING_SIGNAL_STATUS:-0}" -ne 0 ]; then
+    exec 9>&-
+    /bin/rm -f -- "$launch_marker"
+    replay_pending_signal
+  fi
   set -m
-  "$@" &
+  /bin/bash -c '
+    IFS= read -r token <&9 || exit 125
+    exec 9>&-
+    [ "$token" = go ] || exit 125
+    exec "$@"
+  ' child-supervisor "$@" &
   child=$!
   set +m
   pgid=$(/bin/ps -o pgid= -p "$child" 2>/dev/null | /usr/bin/tr -d ' ') || pgid=''
-  ACTIVE_PID=$child
-  if [[ "$pgid" =~ ^[1-9][0-9]*$ ]] && [ "$pgid" = "$child" ]; then
-    ACTIVE_PGID=$pgid
-  else
-    ACTIVE_PGID=''
+  if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$child" ] ||
+     [ "$pgid" = "$SELF_PGID" ]; then
+    /usr/bin/printf 'abort\n' >&9 || :
+    exec 9>&-
+    /bin/rm -f -- "$launch_marker"
+    while kill -0 "$child" 2>/dev/null; do
+      wait "$child" 2>/dev/null || :
+      kill -0 "$child" 2>/dev/null && /bin/sleep 0.01 || :
+    done
+    wait "$child" 2>/dev/null || :
+    replay_pending_signal
+    return 125
   fi
-  wait "$child" || status=$?
-  if [ -n "$ACTIVE_PGID" ] && group_alive "$ACTIVE_PGID"; then
+  ACTIVE_PID=$child
+  ACTIVE_PGID=$pgid
+  if ! /usr/bin/printf 'go\n' >&9; then
+    exec 9>&-
+    /bin/rm -f -- "$launch_marker"
     terminate_active
+    replay_pending_signal
+    return 125
+  fi
+  exec 9>&-
+  /bin/rm -f -- "$launch_marker" || {
+    terminate_active
+    replay_pending_signal
+    return 125
+  }
+  replay_pending_signal
+  while :; do
+    wait_status=0
+    wait "$child" || wait_status=$?
+    case "$wait_status" in
+      129|130|143) kill -0 "$child" 2>/dev/null && continue ;;
+    esac
+    status=$wait_status
+    break
+  done
+  SIGNAL_DEFER=1
+  : >"$teardown_marker" || {
+    terminate_active
+    replay_pending_signal
+    return 125
+  }
+  if group_alive "$ACTIVE_PGID"; then
+    terminate_active
+    /bin/rm -f -- "$teardown_marker"
+    replay_pending_signal
     return 125
   fi
   ACTIVE_PID=''
   ACTIVE_PGID=''
+  /bin/rm -f -- "$teardown_marker" || {
+    replay_pending_signal
+    return 125
+  }
+  replay_pending_signal
   return "$status"
 }
 snapshot_fixed() {
@@ -145,9 +250,9 @@ canonical_one() {
 }
 
 trap cleanup EXIT
-trap 'signal_exit 129' HUP
-trap 'signal_exit 130' INT
-trap 'signal_exit 143' TERM
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 names=(policy-set state attempt duty)
 index=0
 for input in "$@"; do
@@ -157,8 +262,9 @@ done
 snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
 snapshot_fixed "$program" "$scratch/program.jq"
+snapshot_fixed "$duty_policy" "$scratch/duty-policy.json"
 snapshot_fixed "$duty_decision" "$scratch/duty-decision.json"
-for json_name in policy-set state attempt duty policy decision duty-decision; do
+for json_name in policy-set state attempt duty policy decision duty-policy duty-decision; do
   canonical_one "$scratch/$json_name.json" "$scratch/$json_name.canonical" ||
     emit_error E_RELATION
   /usr/bin/cmp -s "$scratch/$json_name.json" "$scratch/$json_name.canonical" ||
@@ -168,6 +274,7 @@ done
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 decision_sha=$(sha256_path "$scratch/decision.json") || emit_error E_RUNTIME
 program_sha=$(sha256_path "$scratch/program.jq") || emit_error E_RUNTIME
+duty_policy_sha=$(sha256_path "$scratch/duty-policy.json") || emit_error E_RUNTIME
 duty_decision_sha=$(sha256_path "$scratch/duty-decision.json") || emit_error E_RUNTIME
 driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
 validator_driver_sha=$(sha256_path "$policy_validator") || emit_error E_RELATION
@@ -183,11 +290,13 @@ validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
 
 run_child "$jq_bin" -n -e --arg policy_sha "$policy_sha" \
   --arg decision_sha "$decision_sha" --arg program_sha "$program_sha" \
-  --arg driver_sha "$driver_sha" --arg duty_decision_sha "$duty_decision_sha" \
+  --arg driver_sha "$driver_sha" --arg duty_policy_sha "$duty_policy_sha" \
+  --arg duty_decision_sha "$duty_decision_sha" \
   --arg validator_driver_sha "$validator_driver_sha" \
   --arg validator_program_sha "$validator_program_sha" \
   --slurpfile policy "$scratch/policy.json" \
   --slurpfile decision "$scratch/decision.json" \
+  --slurpfile duty_policy "$scratch/duty-policy.json" \
   --slurpfile duty_decision "$scratch/duty-decision.json" '
   $decision[0] == {
     schema_version:1,kind:"kill_switch_decision",id:"control-decision.kill-switch",
@@ -213,6 +322,8 @@ run_child "$jq_bin" -n -e --arg policy_sha "$policy_sha" \
         reference_semantics:"identity-only",
         verdicts:["inconclusive","satisfied","violated"]}}
   } and $policy[0].body.duty_decision_ref == $decision[0].body.duty_decision_ref and
+  $duty_decision[0].body.policy_ref == {content_id:$duty_policy[0].id,
+    media_type:"application/vnd.ystack.control-policy+json",sha256:$duty_policy_sha} and
   $decision_sha != ""
 ' >/dev/null 2>&1 || emit_error E_RELATION
 
@@ -231,10 +342,17 @@ policy_set_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
 state_sha=$(sha256_path "$scratch/state.json") || emit_error E_RUNTIME
 attempt_sha=$(sha256_path "$scratch/attempt.json") || emit_error E_RUNTIME
 duty_sha=$(sha256_path "$scratch/duty.json") || emit_error E_RUNTIME
+run_child "$jq_bin" -er '.body.core_contract.generation_id' \
+  "$scratch/policy-set.json" >"$scratch/generation-id" 2>/dev/null || emit_error E_RELATION
+IFS= read -r generation_id <"$scratch/generation-id" || emit_error E_RELATION
+generation_id_sha=$(sha256_text "$generation_id") || emit_error E_RUNTIME
 run_child "$jq_bin" -e --arg policy_sha "$policy_sha" \
-  --arg decision_sha "$decision_sha" --arg duty_decision_sha "$duty_decision_sha" \
+  --arg decision_sha "$decision_sha" --arg duty_policy_sha "$duty_policy_sha" \
+  --arg duty_decision_sha "$duty_decision_sha" --arg generation_id_sha "$generation_id_sha" \
   --slurpfile policy "$scratch/policy.json" \
-  --slurpfile decision "$scratch/decision.json" '
+  --slurpfile decision "$scratch/decision.json" \
+  --slurpfile duty_policy "$scratch/duty-policy.json" \
+  --slurpfile duty_decision "$scratch/duty-decision.json" '
   ([.body.sections[] | select(.section_id=="kill-switch")]|length)==1 and
   ([.body.sections[] | select(.section_id=="kill-switch")][0]) as $kill |
   $kill.policy_ref=={content_id:$policy[0].id,
@@ -242,24 +360,36 @@ run_child "$jq_bin" -e --arg policy_sha "$policy_sha" \
   $kill.decision_ref=={content_id:$decision[0].id,
     media_type:"application/vnd.ystack.control-decision+json",sha256:$decision_sha} and
   ([.body.sections[] | select(.section_id=="duty-separation")]|length)==1 and
-  ([.body.sections[] | select(.section_id=="duty-separation")][0].decision_ref.sha256)==
-    $duty_decision_sha
+  ([.body.sections[] | select(.section_id=="duty-separation")][0]) as $duty |
+  $duty.policy_ref==$duty_decision[0].body.policy_ref and
+  $duty.decision_ref=={content_id:$duty_decision[0].id,
+    media_type:"application/vnd.ystack.control-decision+json",sha256:$duty_decision_sha} and
+  $duty_decision[0].body.policy_ref=={content_id:$duty_policy[0].id,
+    media_type:"application/vnd.ystack.control-policy+json",sha256:$duty_policy_sha} and
+  .body.core_contract.semantic_identity==$duty_policy[0].body.core_contract.semantic_identity and
+  .body.core_contract.package_ref==$duty_policy[0].body.core_contract.package_ref and
+  $generation_id_sha==$duty_policy[0].body.core_contract.generation_id_sha256
 ' "$scratch/policy-set.json" >/dev/null 2>&1 || emit_error E_RELATION
 
 run_child "$jq_bin" -S -c -n -f "$scratch/program.jq" \
   --slurpfile policy "$scratch/policy.json" \
   --slurpfile decision "$scratch/decision.json" \
   --slurpfile policy_set "$scratch/policy-set.json" \
+  --slurpfile duty_policy "$scratch/duty-policy.json" \
+  --slurpfile duty_decision "$scratch/duty-decision.json" \
   --slurpfile state "$scratch/state.json" \
   --slurpfile attempt "$scratch/attempt.json" \
   --slurpfile duty "$scratch/duty.json" \
   --arg policy_sha "$policy_sha" --arg decision_sha "$decision_sha" \
+  --arg duty_policy_sha "$duty_policy_sha" --arg duty_decision_sha "$duty_decision_sha" \
+  --arg generation_id_sha "$generation_id_sha" \
   --arg policy_set_sha "$policy_set_sha" --arg state_sha "$state_sha" \
   --arg attempt_sha "$attempt_sha" --arg duty_sha "$duty_sha" \
   >"$scratch/evaluation.json" 2>/dev/null || emit_error E_RELATION
 
 for fixed in "$policy:$policy_sha" "$decision:$decision_sha" "$program:$program_sha" \
-  "$source_path:$driver_sha" "$duty_decision:$duty_decision_sha" \
+  "$source_path:$driver_sha" "$duty_policy:$duty_policy_sha" \
+  "$duty_decision:$duty_decision_sha" \
   "$policy_validator:$validator_driver_sha" "$validator_program:$validator_program_sha"; do
   fixed_path=${fixed%:*}
   fixed_sha=${fixed##*:}
