@@ -72,6 +72,19 @@ The package stays inactive and fail-closed. It grants no authority, activates no
 profile, reads no credential, launches no adapter, and performs no external write.
 Later bounded units own each policy body and its enforcement.
 
+## Inactive duty-separation evaluator
+
+`control/v1/evaluate-duty.sh` checks one public core v2 stage tuple against the
+shipped duty-separation ceiling. It binds that policy to the validated policy set
+by exact content identity, keeps publisher dormant, and compares producer, forge,
+verifier, reviewer, requester, performer, and reporter identities.
+
+The canonical result is observation only: `satisfied`, `violated`, or
+`inconclusive`. The evaluator grants no authority, activates nothing, reads no
+credential, runs no candidate, and performs no network or external write. Sandbox,
+credential, risk, kill-switch, evidence, and publisher enforcement remain later
+Control foundation units.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

@@ -171,3 +171,9 @@ scripts/test/portable-adapter-contracts.test.sh
 control/v1/policy-set.jq
 control/v1/validate.sh
 scripts/test/control-policy-set.test.sh
+
+# Inactive duty-separation policy and evaluator
+control/v1/duty-separation-policy.json
+control/v1/duty-separation.jq
+control/v1/evaluate-duty.sh
+scripts/test/control-duty-separation.test.sh

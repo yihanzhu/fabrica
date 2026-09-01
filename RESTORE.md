@@ -330,6 +330,17 @@ The proof validates only the canonical six-section identity bundle. It does not
 evaluate a policy, grant authority, activate a profile, or enforce sandbox,
 credential, risk, kill-switch, or evidence behavior.
 
+Restore the four paths in the manifest's inactive duty-separation block, then run:
+
+```sh
+bash scripts/test/control-duty-separation.test.sh
+```
+
+This checks the exact policy-set link, role and permission ceilings, all three
+identity-separation dimensions, dormant publisher behavior, and canonical
+observation results over public core v2 stage tuples. It does not enforce effective
+sandbox or credential permissions and grants no authority or external write.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
