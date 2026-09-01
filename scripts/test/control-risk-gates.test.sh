@@ -337,9 +337,8 @@ build_case() {
 expect_eval() {
   local name=$1 verdict=$2 reason=$3
   local dir="$tmp/$name" out="$tmp/$name/risk.out"
-  YSTACK_RISK_TEST_RELATION_STAGE=1 PATH="$bin:/usr/bin:/bin" \
-    "$evaluator" evaluate "$policy_set" "$dir/request.json" "$resolved" \
-    "$dir/result.json" "$dir/duty.json" "$dir/claim.json" \
+  PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$dir/request.json" \
+    "$resolved" "$dir/result.json" "$dir/duty.json" "$dir/claim.json" \
     >"$out" 2>"$dir/risk.err" || {
       /bin/cat "$dir/risk.err" >&2
       fail "$name status"
@@ -602,6 +601,32 @@ status=0
   [ "$(/bin/cat "$tmp/relative.err")" = E_RUNTIME ] || fail 'relative jq rejection'
 pass 'relative jq rejection'
 
+strict_bin="$tmp/strict-empty-input-bin"
+/bin/mkdir "$strict_bin"
+/usr/bin/printf '%s\n' '#!/bin/bash' "real_jq='$jq_bin'" \
+  'if [ "${1:-}" = --version ]; then exec "$real_jq" "$@"; fi' \
+  'has_definition=0' \
+  'has_null_input=0' \
+  'for arg in "$@"; do' \
+  '  [ "$arg" = definition ] && has_definition=1' \
+  '  [ "$arg" = -n ] && has_null_input=1' \
+  'done' \
+  'if [ "$has_definition" -eq 1 ] && [ "$has_null_input" -ne 1 ]; then exit 4; fi' \
+  'exec "$real_jq" "$@"' >"$strict_bin/jq"
+/bin/chmod 0555 "$strict_bin/jq"
+PATH="$strict_bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
+  "$tmp/routine/request.json" "$resolved" "$tmp/routine/result.json" \
+  "$tmp/routine/duty.json" "$tmp/routine/claim.json" >"$tmp/strict.out" \
+  2>"$tmp/strict.err" || {
+    /bin/cat "$tmp/strict.err" >&2
+    fail 'strict empty-input jq status'
+  }
+[ ! -s "$tmp/strict.err" ] || fail 'strict empty-input jq stderr'
+"$jq_bin" -e '.body.verdict=="inconclusive" and
+  .body.reason_ids==["decision.provenance-unqualified"]' "$tmp/strict.out" \
+  >/dev/null || fail 'strict empty-input jq result'
+pass 'risk definition check uses explicit null input on strict jq'
+
 copy_runtime() {
   local destination=$1 copy_path
   /bin/mkdir -p "$destination/control/v1" "$destination/scripts" "$destination/core"
@@ -618,7 +643,7 @@ dependency_runtime="$tmp/dependency-runtime"
 copy_runtime "$dependency_runtime"
 /usr/bin/printf '\n' >>"$dependency_runtime/control/v1/duty-separation-decision.json"
 /bin/cp -R "$tmp/routine" "$tmp/dependency-binding"
-expect_error dependency-binding E_DUTY "$dependency_runtime"
+expect_error dependency-binding E_RELATION "$dependency_runtime"
 
 race_runtime="$tmp/race-runtime"
 copy_runtime "$race_runtime"
