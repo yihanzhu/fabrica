@@ -30,12 +30,21 @@ fixture_root=$(CDPATH='' cd -P -- "$fixture_root" && pwd -P) || runner_error E_F
 
 run_tmp=$(/usr/bin/mktemp -d "$fixture_root/scratch/run.XXXXXX") || runner_error
 cleanup() {
+  local deadline
   if [ -n "${run_tmp:-}" ]; then
-    /bin/rm -rf -- "$run_tmp"
+    deadline=$((SECONDS + 3))
+    while { [ -e "$run_tmp" ] || [ -L "$run_tmp" ]; } && [ "$SECONDS" -lt "$deadline" ]; do
+      /bin/rm -rf -- "$run_tmp" 2>/dev/null || :
+      [ ! -e "$run_tmp" ] && [ ! -L "$run_tmp" ] && return 0
+      /bin/sleep 0.01 || :
+    done
+    /bin/rm -rf -- "$run_tmp" 2>/dev/null || return 1
+    [ ! -e "$run_tmp" ] && [ ! -L "$run_tmp" ]
   fi
 }
 ACTIVE_CHILD_GROUP=''
 ACTIVE_CHILD_PID=''
+CHILD_SEQUENCE=0
 SIGNAL_DEFER=0
 SIGNAL_EXITING=0
 PENDING_SIGNAL_STATUS=0
@@ -45,30 +54,41 @@ group_alive() {
 terminate_active_group() {
   local group=${ACTIVE_CHILD_GROUP:-}
   local leader=${ACTIVE_CHILD_PID:-}
-  local tick
+  local wait_status
   if [[ "$group" =~ ^[1-9][0-9]*$ ]]; then
     kill -TERM -- "-$group" 2>/dev/null || :
-    for tick in {1..5}; do
+    for _ in {1..5}; do
       group_alive "$group" || break
-      /bin/sleep 0.02
+      /bin/sleep 0.02 || :
     done
     if group_alive "$group"; then
       kill -KILL -- "-$group" 2>/dev/null || :
     fi
   fi
   if [[ "$leader" =~ ^[1-9][0-9]*$ ]]; then
-    wait "$leader" 2>/dev/null || :
+    while :; do
+      wait_status=0
+      wait "$leader" 2>/dev/null || wait_status=$?
+      case "$wait_status" in
+        129|130|143)
+          kill -0 "$leader" 2>/dev/null && continue
+          break
+          ;;
+        *) break ;;
+      esac
+    done
   fi
   ACTIVE_CHILD_GROUP=''
   ACTIVE_CHILD_PID=''
 }
 signal_exit() {
   local status=${1:-1}
-  trap '' HUP INT TERM
   trap - EXIT
   exec >/dev/null 2>&1
   terminate_active_group
-  cleanup
+  if ! cleanup; then
+    exit 1
+  fi
   exit "$status"
 }
 handle_signal() {
@@ -84,6 +104,10 @@ trap 'handle_signal 129' HUP
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 /bin/mkdir -m 700 "$run_tmp/home"
+child_notify="$run_tmp/child.notify"
+/usr/bin/mkfifo "$child_notify" || runner_error
+exec 4<> "$child_notify" || runner_error
+/bin/rm -f -- "$child_notify" || runner_error
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 sha_text() { /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'; }
@@ -352,7 +376,7 @@ run_child() {
   local diagnostic=$5
   local child_home=$6
   local dependency=${7:-}
-  local pid tick=0 pending_status
+  local pid pending_status child_token notification='' active_marker
   CHILD_STATUS=0
   CHILD_ERROR=''
   /bin/mkdir -m 700 "$child_home"
@@ -360,6 +384,8 @@ run_child() {
     CHILD_ERROR=E_RUNTIME
     return 1
   fi
+  CHILD_SEQUENCE=$((CHILD_SEQUENCE + 1))
+  child_token=$CHILD_SEQUENCE
   PENDING_SIGNAL_STATUS=0
   SIGNAL_DEFER=1
   set -m
@@ -368,13 +394,19 @@ run_child() {
     child_args=("$request" "$jq_bin" "$contract" "$core_fixture_modules")
     [ -z "$dependency" ] || child_args+=("$dependency")
     [ "$mode" = direct ] || child_args=("$mode" "${child_args[@]}")
-    exec /usr/bin/env -i HOME="$child_home" TMPDIR="$child_home" PATH=/usr/bin:/bin \
-      LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-      GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
-      GIT_AUTHOR_NAME=fake GIT_AUTHOR_EMAIL=fake@example.invalid \
-      GIT_COMMITTER_NAME=fake GIT_COMMITTER_EMAIL=fake@example.invalid \
-      GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
-      /bin/bash "$executable" "${child_args[@]}"
+    child_status=0
+    (
+      exec 4>&-
+      exec /usr/bin/env -i HOME="$child_home" TMPDIR="$child_home" PATH=/usr/bin:/bin \
+        LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
+        GIT_AUTHOR_NAME=fake GIT_AUTHOR_EMAIL=fake@example.invalid \
+        GIT_COMMITTER_NAME=fake GIT_COMMITTER_EMAIL=fake@example.invalid \
+        GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+        /bin/bash "$executable" "${child_args[@]}"
+    ) || child_status=$?
+    printf '%s\n' "$child_token" >&4 || :
+    exit "$child_status"
   ) > "$output" 2> "$diagnostic" &
   pid=$!
   ACTIVE_CHILD_GROUP=$pid
@@ -387,15 +419,21 @@ run_child() {
     SIGNAL_EXITING=1
     signal_exit "$pending_status"
   fi
-  while kill -0 "$pid" 2>/dev/null; do
-    tick=$((tick + 1))
-    if [ "$tick" -ge 20 ]; then
-      terminate_active_group
-      CHILD_ERROR=E_TIMEOUT
-      return 1
-    fi
-    /bin/sleep 0.05
+  active_marker="$child_home/.runner-active-group"
+  if ! printf '%s\n' "$pid" > "$active_marker"; then
+    terminate_active_group
+    CHILD_ERROR=E_RUNTIME
+    return 1
+  fi
+  while IFS= read -r -t 1 -u 4 notification; do
+    [ "$notification" = "$child_token" ] && break
+    notification=''
   done
+  if [ "$notification" != "$child_token" ] && kill -0 "$pid" 2>/dev/null; then
+    terminate_active_group
+    CHILD_ERROR=E_TIMEOUT
+    return 1
+  fi
   wait "$pid" || CHILD_STATUS=$?
   if group_alive "${ACTIVE_CHILD_GROUP:-}"; then
     terminate_active_group
