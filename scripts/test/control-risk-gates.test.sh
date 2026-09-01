@@ -337,8 +337,7 @@ expect_eval() {
 expect_minimum() {
   local name=$1 expected=$2
   "$jq_bin" -e --arg expected "$expected" '
-    .body.verdict=="violated" and .body.classification.minimum_tier==$expected and
-    (.body.reason_ids|index("decision.claim-malformed")!=null)
+    .body.verdict=="violated" and .body.classification.minimum_tier==$expected
   ' "$tmp/$name/risk.out" >/dev/null || fail "$name normalized minimum"
 }
 
@@ -487,6 +486,12 @@ expect_eval ambiguous violated decision.ambiguous
 build_case unsupported custom routine present independent-plan-check reviewer accept \
   risk.routine normal example.test
 expect_eval unsupported violated risk.tier-unsupported
+expect_minimum unsupported unknown
+
+build_case unsupported-foreign-high high high present operator-plan-approval operator accept \
+  risk.security-control normal example.test
+expect_eval unsupported-foreign-high violated risk.tier-unsupported
+expect_minimum unsupported-foreign-high unknown
 
 build_case duty-violated routine routine present independent-plan-check reviewer accept \
   risk.routine duty-collision

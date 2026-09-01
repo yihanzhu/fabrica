@@ -181,7 +181,8 @@ content_ref($claim_doc.id;
   $request_doc.body.risk.tier.name == "high" or
   $request_doc.body.risk.tier.name == "bootstrap")) as $core_tier_supported |
 ($request_doc.body.risk.tier.name) as $declared_tier |
-(if $request_doc.body.target_revision.state == "absent" or
+(if ($core_tier_supported | not) then "unknown"
+ elif $request_doc.body.target_revision.state == "absent" or
     $request_doc.body.base.state == "absent" then "bootstrap"
  elif any($request_doc.body.risk.reason_ids[];
           . as $reason | $p.body.forced_high_reason_ids | index($reason) != null)
