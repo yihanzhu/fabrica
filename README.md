@@ -88,6 +88,50 @@ credential, runs no candidate, and performs no network or external write. Sandbo
 credential, risk, kill-switch, evidence, and publisher enforcement remain later
 Control foundation units.
 
+## Inactive risk-gates evaluator
+
+`control/v1/evaluate-risk-gates.sh` checks one public core v2 stage tuple, its
+regenerated duty-separation result, and one caller-supplied decision claim against
+the shipped risk-gates policy. It binds the policy-set, policy, decision,
+evaluator, duty-separation, and selected public-core identities before producing a
+canonical observation. Malformed, stale, ambiguous, rejected, downgraded, and
+unsupported claims are `violated`.
+
+The decision input is only an immutable, identity-bound claim. No qualified
+decision-provenance adapter exists yet, so even an internally matching accept
+claim is `inconclusive` with `decision.provenance-unqualified`; this evaluator has
+no `satisfied` result. It grants no approval, authority, qualification, or
+permission, activates nothing, and performs no candidate, credential, network,
+publish, deploy, or external-write action.
+
+## Inactive kill-switch evaluator
+
+`control/v1/evaluate-kill-switch.sh` checks a caller-supplied stop-state snapshot
+for one attempt across global, repository, workflow, stage, and attempt scopes. It
+binds the policy-set, policy, decision, evaluator, duty-separation result, and
+selected public-core identities before producing a canonical observation. Any
+matching stop wins; stale, replayed, conflicting, or malformed state fails closed.
+
+The evaluator is observation only. A fully cleared snapshot may be `satisfied`,
+but that grants no authority or permission and does not cancel or run anything.
+The package stays inactive, reads no credential, activates no profile, and performs
+no candidate, network, publish, deploy, signal, or external-write action.
+
+## Inactive sandbox-policy evaluator
+
+`control/v1/evaluate-sandbox.sh` checks one execution-environment claim against
+the shipped sandbox ceiling. It binds the policy set, policy, decision, evaluator,
+duty-separation result, and selected public-core identities before producing a
+canonical observation. The ceiling requires a cleared, allowlisted environment;
+fixed roots, resources, tools, and limits; no host access; denied network; and no
+credential, secret, target-write, or external-write exposure.
+
+The result is declaration-only: `satisfied`, `violated`, or `inconclusive`. Even a
+`satisfied` claim does not prove that a real sandbox enforced those properties and
+grants no authority, qualification, or permission. The package stays inactive,
+runs no candidate or adapter, reads no credential, activates no profile, and
+performs no network, publish, deploy, or external-write action.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

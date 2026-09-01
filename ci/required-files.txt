@@ -178,3 +178,24 @@ control/v1/duty-separation-decision.json
 control/v1/duty-separation.jq
 control/v1/evaluate-duty.sh
 scripts/test/control-duty-separation.test.sh
+
+# Inactive risk-gates policy and evaluator
+control/v1/risk-gates-policy.json
+control/v1/risk-gates-decision.json
+control/v1/risk-gates.jq
+control/v1/evaluate-risk-gates.sh
+scripts/test/control-risk-gates.test.sh
+
+# Inactive kill-switch policy and evaluator
+control/v1/kill-switch-policy.json
+control/v1/kill-switch-decision.json
+control/v1/kill-switch.jq
+control/v1/evaluate-kill-switch.sh
+scripts/test/control-kill-switch.test.sh
+
+# Inactive sandbox policy and evaluator
+control/v1/sandbox-policy.json
+control/v1/sandbox-decision.json
+control/v1/sandbox.jq
+control/v1/evaluate-sandbox.sh
+scripts/test/control-sandbox-policy.test.sh
