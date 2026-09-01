@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 077
 
 if [ "${YSTACK_RISK_TEST_BOUNDED:-0}" != 1 ]; then
-  YSTACK_RISK_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 420; exec @ARGV' "$0"
+  YSTACK_RISK_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 240; exec @ARGV' "$0"
 fi
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
@@ -17,8 +17,117 @@ duty_policy="$root/control/v1/duty-separation-policy.json"
 duty_definition="$root/control/v1/duty-separation-decision.json"
 core_wrapper="$root/scripts/core-contract.sh"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-risk-test.XXXXXX")
-cleanup() { /bin/rm -rf -- "$tmp"; }
-trap cleanup EXIT HUP INT TERM
+eval_tmp="$tmp/evaluator-scratch"
+/bin/mkdir -p "$eval_tmp"
+ACTIVE_EVAL_PID=''
+ACTIVE_EVAL_PGID=''
+LAUNCH_COUNTER=0
+
+group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+clear_active() { ACTIVE_EVAL_PID=''; ACTIVE_EVAL_PGID=''; }
+terminate_active() {
+  local attempt=0
+  [ -n "$ACTIVE_EVAL_PID" ] && [ -n "$ACTIVE_EVAL_PGID" ] || return 0
+  [[ "$ACTIVE_EVAL_PID" =~ ^[1-9][0-9]*$ ]] &&
+    [ "$ACTIVE_EVAL_PID" = "$ACTIVE_EVAL_PGID" ] || return 1
+  if kill -0 "$ACTIVE_EVAL_PID" 2>/dev/null; then
+    kill -TERM "$ACTIVE_EVAL_PID" 2>/dev/null || :
+  fi
+  if group_alive "$ACTIVE_EVAL_PGID"; then
+    kill -TERM -- "-$ACTIVE_EVAL_PGID" 2>/dev/null || :
+  fi
+  while group_alive "$ACTIVE_EVAL_PGID" && [ "$attempt" -lt 40 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.025
+  done
+  if group_alive "$ACTIVE_EVAL_PGID"; then
+    kill -KILL -- "-$ACTIVE_EVAL_PGID" 2>/dev/null || :
+  fi
+  if kill -0 "$ACTIVE_EVAL_PID" 2>/dev/null; then
+    kill -KILL "$ACTIVE_EVAL_PID" 2>/dev/null || :
+  fi
+  attempt=0
+  while group_alive "$ACTIVE_EVAL_PGID" && [ "$attempt" -lt 80 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.025
+  done
+  wait "$ACTIVE_EVAL_PID" 2>/dev/null || :
+  group_alive "$ACTIVE_EVAL_PGID" && return 1
+  clear_active
+}
+start_group() {
+  local out=$1 err=$2 attempt=0 ready
+  shift 2
+  LAUNCH_COUNTER=$((LAUNCH_COUNTER + 1))
+  ready="$tmp/launcher-ready-$LAUNCH_COUNTER"
+  /usr/bin/perl -e '
+    use POSIX ();
+    my $ready = shift @ARGV;
+    POSIX::setpgid(0,0) == 0 or die "setpgid";
+    open my $fh, ">", $ready or die "ready";
+    print {$fh} "ready\n";
+    close $fh or die "ready";
+    exec @ARGV;
+  ' "$ready" "$@" >"$out" 2>"$err" &
+  ACTIVE_EVAL_PID=$!
+  ACTIVE_EVAL_PGID=$ACTIVE_EVAL_PID
+  while [ ! -s "$ready" ] && [ "$attempt" -lt 100 ]; do
+    kill -0 "$ACTIVE_EVAL_PID" 2>/dev/null || break
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  if [ ! -s "$ready" ]; then
+    terminate_active || :
+    return 126
+  fi
+  /bin/rm -f -- "$ready"
+}
+wait_group() {
+  local timeout_seconds=$1 ticks=0 max_ticks status=0
+  max_ticks=$((timeout_seconds * 20))
+  while group_alive "$ACTIVE_EVAL_PGID" && [ "$ticks" -lt "$max_ticks" ]; do
+    ticks=$((ticks + 1))
+    /bin/sleep 0.05
+  done
+  if group_alive "$ACTIVE_EVAL_PGID"; then
+    terminate_active || return 125
+    return 124
+  fi
+  wait "$ACTIVE_EVAL_PID" 2>/dev/null || status=$?
+  clear_active
+  return "$status"
+}
+run_bounded() {
+  local timeout_seconds=$1 out=$2 err=$3
+  shift 3
+  start_group "$out" "$err" "$@" || return $?
+  wait_group "$timeout_seconds"
+}
+cleanup() {
+  local status=0
+  terminate_active || status=1
+  /bin/rm -rf -- "$tmp"
+  return "$status"
+}
+on_exit() {
+  local status=$?
+  trap - EXIT HUP INT TERM ALRM
+  cleanup || status=1
+  exit "$status"
+}
+on_alarm() {
+  trap - ALRM
+  terminate_active || :
+  exit 124
+}
+on_signal() {
+  trap - HUP INT TERM
+  terminate_active || :
+  exit 124
+}
+trap on_exit EXIT
+trap on_signal HUP INT TERM
+trap on_alarm ALRM
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
@@ -319,30 +428,39 @@ build_case() {
       scope_sha256:$request_basis_sha}]
   ' "$dir/request.basis" >"$dir/request.json"
   request_sha=$(sha256_path "$dir/request.json")
-  "$jq_bin" -L "$root/scripts/test" -S -c -n \
-    --slurpfile request "$dir/request.json" --slurpfile resolved "$resolved" \
-    --arg request_sha "$request_sha" --arg resolved_sha "$resolved_sha" '
-    import "portable-core-result-truth-fixtures" as result;
-    result::completed_result_doc($request[0];$request_sha;$resolved[0];$resolved_sha) |
-    walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
-  ' >"$dir/result.json"
-  PATH="$bin:/usr/bin:/bin" "$duty_evaluator" evaluate "$policy_set" \
-    "$dir/request.json" "$resolved" "$dir/result.json" >"$dir/duty.json" \
-    2>"$dir/duty.err" || {
+  if [ "${PURE_CASE_BUILD:-0}" = 1 ]; then
+    /bin/cp "$tmp/routine/result.json" "$dir/result.json"
+    /bin/cp "$tmp/routine/duty.json" "$dir/duty.json"
+  else
+    "$jq_bin" -L "$root/scripts/test" -S -c -n \
+      --slurpfile request "$dir/request.json" --slurpfile resolved "$resolved" \
+      --arg request_sha "$request_sha" --arg resolved_sha "$resolved_sha" '
+      import "portable-core-result-truth-fixtures" as result;
+      result::completed_result_doc($request[0];$request_sha;$resolved[0];$resolved_sha) |
+      walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
+    ' >"$dir/result.json"
+    if ! run_bounded 45 "$dir/duty.json" "$dir/duty.err" /usr/bin/env \
+      "TMPDIR=$eval_tmp" "PATH=$bin:/usr/bin:/bin" \
+      "$duty_evaluator" evaluate "$policy_set" \
+      "$dir/request.json" "$resolved" "$dir/result.json"; then
       /bin/cat "$dir/duty.err" >&2
       fail "build duty $name"
-    }
+    fi
+  fi
 }
+
+build_pure_case() { PURE_CASE_BUILD=1 build_case "$@"; }
 
 expect_eval() {
   local name=$1 verdict=$2 reason=$3
   local dir="$tmp/$name" out="$tmp/$name/risk.out"
-  PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$dir/request.json" \
-    "$resolved" "$dir/result.json" "$dir/duty.json" "$dir/claim.json" \
-    >"$out" 2>"$dir/risk.err" || {
+  if ! run_bounded 45 "$out" "$dir/risk.err" /usr/bin/env \
+    "TMPDIR=$eval_tmp" "PATH=$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
+    "$dir/request.json" "$resolved" "$dir/result.json" "$dir/duty.json" \
+    "$dir/claim.json"; then
       /bin/cat "$dir/risk.err" >&2
       fail "$name status"
-    }
+  fi
   [ ! -s "$dir/risk.err" ] || fail "$name stderr"
   "$jq_bin" -e --arg verdict "$verdict" --arg reason "$reason" '
     .kind=="risk_gate_evaluation" and .body.activation_state=="inactive" and
@@ -356,6 +474,55 @@ expect_eval() {
   pass "$name"
 }
 
+expect_pure_eval() {
+  local name=$1 verdict=$2 reason=$3 expected_minimum=${4:-}
+  local dir="$tmp/$name" out="$tmp/$name/risk.out" request_basis
+  local policy_set_digest request_digest result_digest duty_digest claim_digest
+  local request_basis_digest policy_scope_digest requirement_scope_digest
+  policy_set_digest=$(sha256_path "$policy_set")
+  request_digest=$(sha256_path "$dir/request.json")
+  result_digest=$(sha256_path "$dir/result.json")
+  duty_digest=$(sha256_path "$dir/duty.json")
+  claim_digest=$(sha256_path "$dir/claim.json")
+  request_basis=$("$jq_bin" -S -c \
+    '{schema_version,kind,id,body:(.body|del(.gate_decision_refs))}' \
+    "$dir/request.json")
+  request_basis_digest=$(sha256_text "$request_basis")
+  policy_scope_digest=$("$jq_bin" -er '.body.risk.policy_ref.scope_sha256' \
+    "$dir/request.json")
+  requirement_scope_digest=$("$jq_bin" -er \
+    '.body.risk.required_gate_refs[0].scope_sha256' "$dir/request.json")
+  if ! run_bounded 15 "$out" "$dir/risk.err" "$jq_bin" -S -c -n \
+    -f "$root/control/v1/risk-gates.jq" --slurpfile policy "$policy" \
+    --slurpfile decision "$definition" --slurpfile policy_set "$policy_set" \
+    --slurpfile request "$dir/request.json" --slurpfile resolved "$resolved" \
+    --slurpfile result "$dir/result.json" --slurpfile duty_evaluation "$dir/duty.json" \
+    --slurpfile claim "$dir/claim.json" --arg policy_sha "$policy_sha" \
+    --arg decision_sha "$definition_sha" --arg policy_set_sha "$policy_set_digest" \
+    --arg request_sha "$request_digest" --arg resolved_sha "$resolved_sha" \
+    --arg result_sha "$result_digest" --arg duty_sha "$duty_digest" \
+    --arg claim_sha "$claim_digest" --arg request_basis_sha "$request_basis_digest" \
+    --arg policy_scope_sha "$policy_scope_digest" \
+    --arg requirement_scope_sha "$requirement_scope_digest"; then
+    /bin/cat "$dir/risk.err" >&2
+    fail "$name pure status"
+  fi
+  [ ! -s "$dir/risk.err" ] || fail "$name pure stderr"
+  "$jq_bin" -e --arg verdict "$verdict" --arg reason "$reason" \
+    --arg minimum "$expected_minimum" '
+    .kind=="risk_gate_evaluation" and .body.activation_state=="inactive" and
+    .body.authority_effect=="none" and .body.evaluation_mode=="observation-only" and
+    .body.reference_semantics=="identity-only" and .body.verdict==$verdict and
+    (.body.reason_ids|index($reason)!=null) and
+    .body.reason_ids==(.body.reason_ids|sort|unique) and
+    ($minimum=="" or .body.classification.minimum_tier==$minimum) and
+    ((.body|has("grant_ref") or has("qualification_ref") or has("activation"))|not)
+  ' "$out" >/dev/null || fail "$name pure verdict"
+  "$jq_bin" -S -c . "$out" >"$dir/repeat"
+  /usr/bin/cmp -s "$out" "$dir/repeat" || fail "$name pure canonical output"
+  pass "$name"
+}
+
 expect_minimum() {
   local name=$1 expected=$2
   "$jq_bin" -e --arg expected "$expected" '
@@ -366,10 +533,11 @@ expect_minimum() {
 expect_error() {
   local name=$1 expected=$2 runtime=${3:-$root}
   local dir="$tmp/$name" status=0
-  PATH="$bin:/usr/bin:/bin" "$runtime/control/v1/evaluate-risk-gates.sh" evaluate \
+  run_bounded 45 "$dir/error.out" "$dir/error.err" /usr/bin/env \
+    "TMPDIR=$eval_tmp" "PATH=$bin:/usr/bin:/bin" \
+    "$runtime/control/v1/evaluate-risk-gates.sh" evaluate \
     "$policy_set" "$dir/request.json" "$resolved" "$dir/result.json" \
-    "$dir/duty.json" "$dir/claim.json" >"$dir/error.out" 2>"$dir/error.err" ||
-    status=$?
+    "$dir/duty.json" "$dir/claim.json" || status=$?
   [ "$status" -ne 0 ] && [ ! -s "$dir/error.out" ] &&
     [ "$(/bin/cat "$dir/error.err")" = "$expected" ] || fail "$name error"
   pass "$name"
@@ -379,165 +547,154 @@ build_case routine routine routine present independent-plan-check reviewer accep
   risk.routine
 expect_eval routine inconclusive decision.provenance-unqualified
 
-build_case routine-escalated high routine present operator-plan-approval operator accept \
+build_pure_case routine-escalated high routine present operator-plan-approval operator accept \
   risk.routine
-expect_eval routine-escalated inconclusive decision.provenance-unqualified
+expect_pure_eval routine-escalated inconclusive decision.provenance-unqualified
 
 build_case high high high present operator-plan-approval operator accept \
   risk.security-control
 expect_eval high inconclusive decision.provenance-unqualified
 
-build_case backdated-high high high present operator-plan-approval operator accept \
+build_pure_case backdated-high high high present operator-plan-approval operator accept \
   risk.security-control normal core 2000-01-01T00:00:00Z
-expect_eval backdated-high inconclusive decision.provenance-unqualified
+expect_pure_eval backdated-high inconclusive decision.provenance-unqualified
 
 build_case bootstrap bootstrap bootstrap present operator-bootstrap-approval operator accept \
   risk.bootstrap bootstrap
 expect_eval bootstrap inconclusive decision.provenance-unqualified
 
-build_case missing high high absent ignored operator accept risk.security-control
-expect_eval missing violated decision.missing
+build_pure_case missing high high absent ignored operator accept risk.security-control
+expect_pure_eval missing violated decision.missing
 
 build_case rejected high high present operator-plan-approval operator reject \
   risk.security-control
 expect_eval rejected violated decision.rejected
 
-build_case downgrade routine high present independent-plan-check reviewer accept \
+build_pure_case downgrade routine high present independent-plan-check reviewer accept \
   risk.security-control
-expect_eval downgrade violated risk.tier-downgrade
+expect_pure_eval downgrade violated risk.tier-downgrade
 
-build_case invented-role high high present operator-plan-approval reviewer accept \
+build_pure_case invented-role high high present operator-plan-approval reviewer accept \
   risk.security-control
-expect_eval invented-role violated decision.role-denied
+expect_pure_eval invented-role violated decision.role-denied
 
-build_case unbound-actor routine routine present independent-plan-check reviewer accept \
+build_pure_case unbound-actor routine routine present independent-plan-check reviewer accept \
   risk.routine actor-mismatch
-expect_eval unbound-actor violated decision.actor-unbound
+expect_pure_eval unbound-actor violated decision.actor-unbound
 
-build_case invented-kind high high present independent-plan-check operator accept \
+build_pure_case invented-kind high high present independent-plan-check operator accept \
   risk.security-control
-expect_eval invented-kind violated decision.kind-denied
+expect_pure_eval invented-kind violated decision.kind-denied
 
-build_case malformed-claim routine routine present independent-plan-check reviewer accept \
+build_pure_case malformed-claim routine routine present independent-plan-check reviewer accept \
   risk.routine malformed-claim
-expect_eval malformed-claim violated decision.claim-malformed
+expect_pure_eval malformed-claim violated decision.claim-malformed
 
-build_case decision-scalar routine routine present independent-plan-check reviewer accept \
+build_pure_case decision-scalar routine routine present independent-plan-check reviewer accept \
   risk.routine decision-scalar
-expect_eval decision-scalar violated decision.claim-malformed
+expect_pure_eval decision-scalar violated decision.claim-malformed
 
-build_case decision-array routine routine present independent-plan-check reviewer accept \
+build_pure_case decision-array routine routine present independent-plan-check reviewer accept \
   risk.routine decision-array
-expect_eval decision-array violated decision.claim-malformed
+expect_pure_eval decision-array violated decision.claim-malformed
 
-build_case decision-null routine routine present independent-plan-check reviewer accept \
+build_pure_case decision-null routine routine present independent-plan-check reviewer accept \
   risk.routine decision-null
-expect_eval decision-null violated decision.claim-malformed
+expect_pure_eval decision-null violated decision.claim-malformed
 
-build_case value-scalar routine routine present independent-plan-check reviewer accept \
+build_pure_case value-scalar routine routine present independent-plan-check reviewer accept \
   risk.routine value-scalar
-expect_eval value-scalar violated decision.claim-malformed
+expect_pure_eval value-scalar violated decision.claim-malformed
 
-build_case value-array routine routine present independent-plan-check reviewer accept \
+build_pure_case value-array routine routine present independent-plan-check reviewer accept \
   risk.routine value-array
-expect_eval value-array violated decision.claim-malformed
+expect_pure_eval value-array violated decision.claim-malformed
 
-build_case value-null routine routine present independent-plan-check reviewer accept \
+build_pure_case value-null routine routine present independent-plan-check reviewer accept \
   risk.routine value-null
-expect_eval value-null violated decision.claim-malformed
+expect_pure_eval value-null violated decision.claim-malformed
 
-build_case malformed-classification routine routine present independent-plan-check reviewer \
+build_pure_case malformed-classification routine routine present independent-plan-check reviewer \
   accept risk.routine malformed-classification
-expect_eval malformed-classification violated decision.claim-malformed
+expect_pure_eval malformed-classification violated decision.claim-malformed unknown
 expect_minimum malformed-classification unknown
 
-build_case tier-wrong-string routine routine present independent-plan-check reviewer accept \
+build_pure_case tier-wrong-string routine routine present independent-plan-check reviewer accept \
   risk.routine tier-custom
-expect_eval tier-wrong-string violated decision.claim-malformed
+expect_pure_eval tier-wrong-string violated decision.claim-malformed unknown
 expect_minimum tier-wrong-string unknown
 
-build_case tier-empty routine routine present independent-plan-check reviewer accept \
+build_pure_case tier-empty routine routine present independent-plan-check reviewer accept \
   risk.routine tier-empty
-expect_eval tier-empty violated decision.claim-malformed
+expect_pure_eval tier-empty violated decision.claim-malformed unknown
 expect_minimum tier-empty unknown
 
-build_case tier-number routine routine present independent-plan-check reviewer accept \
+build_pure_case tier-number routine routine present independent-plan-check reviewer accept \
   risk.routine tier-number
-expect_eval tier-number violated decision.claim-malformed
+expect_pure_eval tier-number violated decision.claim-malformed unknown
 expect_minimum tier-number unknown
 
-build_case tier-object routine routine present independent-plan-check reviewer accept \
+build_pure_case tier-object routine routine present independent-plan-check reviewer accept \
   risk.routine tier-object
-expect_eval tier-object violated decision.claim-malformed
+expect_pure_eval tier-object violated decision.claim-malformed unknown
 expect_minimum tier-object unknown
 
-build_case tier-null routine routine present independent-plan-check reviewer accept \
+build_pure_case tier-null routine routine present independent-plan-check reviewer accept \
   risk.routine tier-null
-expect_eval tier-null violated decision.claim-malformed
+expect_pure_eval tier-null violated decision.claim-malformed unknown
 expect_minimum tier-null unknown
 
-build_case forced-high-number high high present operator-plan-approval operator accept \
+build_pure_case forced-high-number high high present operator-plan-approval operator accept \
   risk.security-control tier-number-forced
-expect_eval forced-high-number violated decision.claim-malformed
+expect_pure_eval forced-high-number violated decision.claim-malformed unknown
 expect_minimum forced-high-number unknown
 
-build_case forced-high-object high high present operator-plan-approval operator accept \
+build_pure_case forced-high-object high high present operator-plan-approval operator accept \
   risk.security-control tier-object-forced
-expect_eval forced-high-object violated decision.claim-malformed
+expect_pure_eval forced-high-object violated decision.claim-malformed unknown
 expect_minimum forced-high-object unknown
 
-build_case forced-high-null high high present operator-plan-approval operator accept \
+build_pure_case forced-high-null high high present operator-plan-approval operator accept \
   risk.security-control tier-null-forced
-expect_eval forced-high-null violated decision.claim-malformed
+expect_pure_eval forced-high-null violated decision.claim-malformed unknown
 expect_minimum forced-high-null unknown
 
-build_case bootstrap-number bootstrap bootstrap present operator-bootstrap-approval operator \
+build_pure_case bootstrap-number bootstrap bootstrap present operator-bootstrap-approval operator \
   accept risk.bootstrap tier-number-bootstrap
-expect_eval bootstrap-number violated decision.claim-malformed
+expect_pure_eval bootstrap-number violated decision.claim-malformed unknown
 expect_minimum bootstrap-number unknown
 
-build_case bootstrap-object bootstrap bootstrap present operator-bootstrap-approval operator \
+build_pure_case bootstrap-object bootstrap bootstrap present operator-bootstrap-approval operator \
   accept risk.bootstrap tier-object-bootstrap
-expect_eval bootstrap-object violated decision.claim-malformed
+expect_pure_eval bootstrap-object violated decision.claim-malformed unknown
 expect_minimum bootstrap-object unknown
 
-build_case bootstrap-null bootstrap bootstrap present operator-bootstrap-approval operator \
+build_pure_case bootstrap-null bootstrap bootstrap present operator-bootstrap-approval operator \
   accept risk.bootstrap tier-null-bootstrap
-expect_eval bootstrap-null violated decision.claim-malformed
+expect_pure_eval bootstrap-null violated decision.claim-malformed unknown
 expect_minimum bootstrap-null unknown
 
-build_case malformed-time routine routine present independent-plan-check reviewer accept \
+build_pure_case malformed-time routine routine present independent-plan-check reviewer accept \
   risk.routine normal core 2026-99-99T99:99:99Z
-expect_eval malformed-time violated decision.claim-malformed
+expect_pure_eval malformed-time violated decision.claim-malformed
 
-build_case after-request routine routine present independent-plan-check reviewer accept \
+build_pure_case after-request routine routine present independent-plan-check reviewer accept \
   risk.routine normal core 2026-09-01T00:00:01Z
-expect_eval after-request violated decision.after-request
+expect_pure_eval after-request violated decision.after-request
 
-build_case stale routine routine present independent-plan-check reviewer accept risk.routine
+build_pure_case stale routine routine present independent-plan-check reviewer accept risk.routine
 "$jq_bin" -S -c '.body.request_basis_sha256=("0"*64)' "$tmp/stale/claim.json" \
   >"$tmp/stale/claim.changed"
 /bin/mv "$tmp/stale/claim.changed" "$tmp/stale/claim.json"
-expect_eval stale violated decision.stale
+expect_pure_eval stale violated decision.stale
 
-build_case unbound routine routine present independent-plan-check reviewer accept risk.routine
+build_pure_case unbound routine routine present independent-plan-check reviewer accept risk.routine
 "$jq_bin" -S -c '.body.gate_decision_refs[0].decision_record_ref.sha256=("0"*64)' \
   "$tmp/unbound/request.json" >"$tmp/unbound/request.changed"
 /bin/mv "$tmp/unbound/request.changed" "$tmp/unbound/request.json"
-unbound_request_sha=$(sha256_path "$tmp/unbound/request.json")
-"$jq_bin" -L "$root/scripts/test" -S -c -n \
-  --slurpfile request "$tmp/unbound/request.json" --slurpfile resolved "$resolved" \
-  --arg request_sha "$unbound_request_sha" --arg resolved_sha "$resolved_sha" '
-  import "portable-core-result-truth-fixtures" as result;
-  result::completed_result_doc($request[0];$request_sha;$resolved[0];$resolved_sha) |
-  walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
-' >"$tmp/unbound/result.json"
-PATH="$bin:/usr/bin:/bin" "$duty_evaluator" evaluate "$policy_set" \
-  "$tmp/unbound/request.json" "$resolved" "$tmp/unbound/result.json" \
-  >"$tmp/unbound/duty.json" 2>"$tmp/unbound/duty.err" || fail 'unbound duty rebuild'
-expect_eval unbound violated decision.unbound
+expect_pure_eval unbound violated decision.unbound
 
-build_case ambiguous routine routine present independent-plan-check reviewer accept risk.routine
+build_pure_case ambiguous routine routine present independent-plan-check reviewer accept risk.routine
 "$jq_bin" -S -c '.body.gate_decision_refs += [{purpose:"gate-decision",
   decision_record_ref:{content_id:"risk.claim.other",
     media_type:"application/vnd.ystack.risk-gate-decision-claim+json",sha256:("1"*64)},
@@ -545,28 +702,16 @@ build_case ambiguous routine routine present independent-plan-check reviewer acc
   .body.gate_decision_refs |= sort_by(.scope_sha256)' "$tmp/ambiguous/request.json" \
   >"$tmp/ambiguous/request.changed"
 /bin/mv "$tmp/ambiguous/request.changed" "$tmp/ambiguous/request.json"
-ambiguous_request_sha=$(sha256_path "$tmp/ambiguous/request.json")
-"$jq_bin" -L "$root/scripts/test" -S -c -n \
-  --slurpfile request "$tmp/ambiguous/request.json" --slurpfile resolved "$resolved" \
-  --arg request_sha "$ambiguous_request_sha" --arg resolved_sha "$resolved_sha" '
-  import "portable-core-result-truth-fixtures" as result;
-  result::completed_result_doc($request[0];$request_sha;$resolved[0];$resolved_sha) |
-  walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
-' >"$tmp/ambiguous/result.json"
-PATH="$bin:/usr/bin:/bin" "$duty_evaluator" evaluate "$policy_set" \
-  "$tmp/ambiguous/request.json" "$resolved" "$tmp/ambiguous/result.json" \
-  >"$tmp/ambiguous/duty.json" 2>"$tmp/ambiguous/duty.err" ||
-  fail 'ambiguous duty rebuild'
-expect_eval ambiguous violated decision.ambiguous
+expect_pure_eval ambiguous violated decision.ambiguous
 
-build_case unsupported custom routine present independent-plan-check reviewer accept \
+build_pure_case unsupported custom routine present independent-plan-check reviewer accept \
   risk.routine normal example.test
-expect_eval unsupported violated risk.tier-unsupported
+expect_pure_eval unsupported violated risk.tier-unsupported unknown
 expect_minimum unsupported unknown
 
-build_case unsupported-foreign-high high high present operator-plan-approval operator accept \
+build_pure_case unsupported-foreign-high high high present operator-plan-approval operator accept \
   risk.security-control normal example.test
-expect_eval unsupported-foreign-high violated risk.tier-unsupported
+expect_pure_eval unsupported-foreign-high violated risk.tier-unsupported unknown
 expect_minimum unsupported-foreign-high unknown
 
 build_case duty-violated routine routine present independent-plan-check reviewer accept \
@@ -582,9 +727,11 @@ expect_error forged-duty E_DUTY
 link="$tmp/request-link.json"
 /bin/ln -s "$tmp/routine/request.json" "$link"
 status=0
-PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$link" "$resolved" \
-  "$tmp/routine/result.json" "$tmp/routine/duty.json" "$tmp/routine/claim.json" \
-  >"$tmp/link.out" 2>"$tmp/link.err" || status=$?
+run_bounded 10 "$tmp/link.out" "$tmp/link.err" /usr/bin/env \
+  "TMPDIR=$eval_tmp" "PATH=$bin:/usr/bin:/bin" \
+  "$evaluator" evaluate "$policy_set" "$link" "$resolved" \
+  "$tmp/routine/result.json" "$tmp/routine/duty.json" "$tmp/routine/claim.json" ||
+  status=$?
 [ "$status" -ne 0 ] && [ ! -s "$tmp/link.out" ] &&
   [ "$(/bin/cat "$tmp/link.err")" = E_RUNTIME ] || fail 'symlink input rejection'
 pass 'symlink input rejection'
@@ -593,10 +740,12 @@ relative_bin="$tmp/relative-bin"
 /bin/mkdir "$relative_bin"
 /bin/cp "$jq_bin" "$relative_bin/jq"
 status=0
-(cd "$relative_bin" && PATH=".:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
-  "$tmp/routine/request.json" "$resolved" "$tmp/routine/result.json" \
-  "$tmp/routine/duty.json" "$tmp/routine/claim.json") \
-  >"$tmp/relative.out" 2>"$tmp/relative.err" || status=$?
+run_bounded 10 "$tmp/relative.out" "$tmp/relative.err" /usr/bin/env \
+  "TMPDIR=$eval_tmp" /bin/bash -c '
+  cd "$1" && PATH=".:/usr/bin:/bin" exec "$2" evaluate "$3" "$4" "$5" "$6" "$7" "$8"
+' _ "$relative_bin" "$evaluator" "$policy_set" "$tmp/routine/request.json" \
+  "$resolved" "$tmp/routine/result.json" "$tmp/routine/duty.json" \
+  "$tmp/routine/claim.json" || status=$?
 [ "$status" -ne 0 ] && [ ! -s "$tmp/relative.out" ] &&
   [ "$(/bin/cat "$tmp/relative.err")" = E_RUNTIME ] || fail 'relative jq rejection'
 pass 'relative jq rejection'
@@ -614,18 +763,45 @@ strict_bin="$tmp/strict-empty-input-bin"
   'if [ "$has_definition" -eq 1 ] && [ "$has_null_input" -ne 1 ]; then exit 4; fi' \
   'exec "$real_jq" "$@"' >"$strict_bin/jq"
 /bin/chmod 0555 "$strict_bin/jq"
-PATH="$strict_bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
+if ! run_bounded 45 "$tmp/strict.out" "$tmp/strict.err" /usr/bin/env \
+  "TMPDIR=$eval_tmp" "PATH=$strict_bin:/usr/bin:/bin" \
+  "$evaluator" evaluate "$policy_set" \
   "$tmp/routine/request.json" "$resolved" "$tmp/routine/result.json" \
-  "$tmp/routine/duty.json" "$tmp/routine/claim.json" >"$tmp/strict.out" \
-  2>"$tmp/strict.err" || {
+  "$tmp/routine/duty.json" "$tmp/routine/claim.json"; then
     /bin/cat "$tmp/strict.err" >&2
     fail 'strict empty-input jq status'
-  }
+fi
 [ ! -s "$tmp/strict.err" ] || fail 'strict empty-input jq stderr'
 "$jq_bin" -e '.body.verdict=="inconclusive" and
   .body.reason_ids==["decision.provenance-unqualified"]' "$tmp/strict.out" \
   >/dev/null || fail 'strict empty-input jq result'
 pass 'risk definition check uses explicit null input on strict jq'
+
+timeout_helper="$tmp/timeout-helper.sh"
+timeout_scratch="$tmp/forced-timeout-scratch"
+timeout_child_file="$tmp/forced-timeout-child"
+/usr/bin/printf '%s\n' '#!/bin/bash' \
+  'scratch=$1' \
+  'child_file=$2' \
+  '/bin/mkdir -p "$scratch"' \
+  '/bin/bash -c '\''trap "" TERM; /bin/sleep 30'\'' &' \
+  'child=$!' \
+  '/usr/bin/printf "%s\n" "$child" >"$child_file"' \
+  'trap '\''/bin/rm -rf -- "$scratch"; exit 143'\'' TERM' \
+  'wait "$child"' >"$timeout_helper"
+/bin/chmod 0555 "$timeout_helper"
+timeout_status=0
+run_bounded 1 "$tmp/timeout.out" "$tmp/timeout.err" "$timeout_helper" \
+  "$timeout_scratch" "$timeout_child_file" || timeout_status=$?
+[ "$timeout_status" -eq 124 ] && [ -s "$timeout_child_file" ] &&
+  [ ! -e "$timeout_scratch" ] && [ -z "$ACTIVE_EVAL_PID" ] &&
+  [ -z "$ACTIVE_EVAL_PGID" ] || fail 'forced timeout cleanup state'
+timeout_child=$(/bin/cat "$timeout_child_file")
+if [[ ! "$timeout_child" =~ ^[1-9][0-9]*$ ]] ||
+   kill -0 "$timeout_child" 2>/dev/null; then
+  fail 'forced timeout nested survivor'
+fi
+pass 'forced timeout reaps nested process group and scratch'
 
 copy_runtime() {
   local destination=$1 copy_path
@@ -666,64 +842,34 @@ race_trigger="$tmp/race-trigger"
   'done' \
   'exec "$real_jq" "$@"' >"$race_bin/jq"
 /bin/chmod 0555 "$race_bin/jq"
-(
-  status=0
-  TMPDIR="$race_scratch" RISK_TRIGGER="$race_trigger" \
-    PATH="$race_bin:/usr/bin:/bin" \
-    "$race_runtime/control/v1/evaluate-risk-gates.sh" evaluate "$policy_set" \
-    "$tmp/routine/request.json" "$resolved" "$tmp/routine/result.json" \
-    "$tmp/routine/duty.json" "$tmp/routine/claim.json" \
-    >"$tmp/race.out" 2>"$tmp/race.err" || status=$?
-  /usr/bin/printf '%s\n' "$status" >"$tmp/race.status"
-) &
-race_pid=$!
+start_group "$tmp/race.out" "$tmp/race.err" /usr/bin/env \
+  "TMPDIR=$race_scratch" "RISK_TRIGGER=$race_trigger" \
+  "PATH=$race_bin:/usr/bin:/bin" \
+  "$race_runtime/control/v1/evaluate-risk-gates.sh" evaluate "$policy_set" \
+  "$tmp/routine/request.json" "$resolved" "$tmp/routine/result.json" \
+  "$tmp/routine/duty.json" "$tmp/routine/claim.json" || fail 'risk race launch'
 attempt=0
-while [ ! -e "$race_trigger" ] && kill -0 "$race_pid" 2>/dev/null &&
+while [ ! -e "$race_trigger" ] && group_alive "$ACTIVE_EVAL_PGID" &&
   [ "$attempt" -lt 400 ]; do
   attempt=$((attempt + 1))
   /bin/sleep 0.01
 done
 if [ ! -e "$race_trigger" ]; then
-  kill -TERM "$race_pid" 2>/dev/null || :
-  wait "$race_pid" 2>/dev/null || :
+  terminate_active || :
   fail 'risk program race marker'
 fi
 /usr/bin/printf '\n' >>"$race_runtime/control/v1/risk-gates.jq"
-wait "$race_pid"
-[ "$(/bin/cat "$tmp/race.status")" -ne 0 ] && [ ! -s "$tmp/race.out" ] &&
+race_status=0
+wait_group 45 || race_status=$?
+[ "$race_status" -ne 0 ] && [ ! -s "$tmp/race.out" ] &&
   [ "$(/bin/cat "$tmp/race.err")" = E_RELATION ] || fail 'risk program TOCTOU'
 pass 'risk program TOCTOU closes after mirrored execution'
 
-pure_dir="$tmp/routine"
-pure_policy_set_sha=$(sha256_path "$policy_set")
-pure_request_sha=$(sha256_path "$pure_dir/request.json")
-pure_result_sha=$(sha256_path "$pure_dir/result.json")
-pure_duty_sha=$(sha256_path "$pure_dir/duty.json")
-pure_claim_sha=$(sha256_path "$pure_dir/claim.json")
-pure_basis=$("$jq_bin" -S -c \
-  '{schema_version,kind,id,body:(.body|del(.gate_decision_refs))}' \
-  "$pure_dir/request.json")
-pure_basis_sha=$(sha256_text "$pure_basis")
-policy_scope "$pure_dir/request.json" "$tmp/pure-policy-scope"
-pure_policy_scope_sha=$("$jq_bin" -r '.scope_sha256' "$tmp/pure-policy-scope")
-requirement_scope "$pure_dir/request.json" routine "$tmp/pure-requirement-scope"
-pure_requirement_sha=$("$jq_bin" -r '.scope_sha256' "$tmp/pure-requirement-scope")
-"$jq_bin" -S -c -n -f "$root/control/v1/risk-gates.jq" \
-  --slurpfile policy "$policy" --slurpfile decision "$definition" \
-  --slurpfile policy_set "$policy_set" --slurpfile request "$pure_dir/request.json" \
-  --slurpfile resolved "$resolved" --slurpfile result "$pure_dir/result.json" \
-  --slurpfile duty_evaluation "$pure_dir/duty.json" \
-  --slurpfile claim "$pure_dir/claim.json" --arg policy_sha "$policy_sha" \
-  --arg decision_sha "$definition_sha" --arg policy_set_sha "$pure_policy_set_sha" \
-  --arg request_sha "$pure_request_sha" --arg resolved_sha "$resolved_sha" \
-  --arg result_sha "$pure_result_sha" --arg duty_sha "$pure_duty_sha" \
-  --arg claim_sha "$pure_claim_sha" --arg request_basis_sha "$pure_basis_sha" \
-  --arg policy_scope_sha "$pure_policy_scope_sha" \
-  --arg requirement_scope_sha "$pure_requirement_sha" >"$tmp/pure.out"
-"$jq_bin" -e '.body.verdict=="inconclusive" and
-  .body.reason_ids==["decision.provenance-unqualified"]' "$tmp/pure.out" >/dev/null ||
-  fail 'pure evaluator'
-pass 'pure evaluator keeps identity-only claim unqualified'
+[ -z "$ACTIVE_EVAL_PID" ] && [ -z "$ACTIVE_EVAL_PGID" ] &&
+  [ -z "$(/usr/bin/find "$eval_tmp" -mindepth 1 -print -quit)" ] &&
+  [ -z "$(/usr/bin/find "$race_scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'evaluator process or scratch cleanup'
+pass 'all evaluator groups and scratch are gone'
 
 while IFS= read -r risk_output; do
   "$jq_bin" -e '.body.verdict != "satisfied" and
