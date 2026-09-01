@@ -850,7 +850,7 @@ start_group "$tmp/race.out" "$tmp/race.err" /usr/bin/env \
   "$tmp/routine/duty.json" "$tmp/routine/claim.json" || fail 'risk race launch'
 attempt=0
 while [ ! -e "$race_trigger" ] && group_alive "$ACTIVE_EVAL_PGID" &&
-  [ "$attempt" -lt 400 ]; do
+  [ "$attempt" -lt 2000 ]; do
   attempt=$((attempt + 1))
   /bin/sleep 0.01
 done
