@@ -178,8 +178,9 @@ build_case() {
   local name=$1 declared=$2 classification=$3 decision_state=$4 decision_kind=$5
   local decision_role=$6 asserted=$7 reason=$8 mode=${9:-normal}
   local namespace=${10:-core}
+  local decision_time=${11:-2026-08-29T23:59:59Z}
   local dir="$tmp/$name" base_request="$tmp/$name.base-request"
-  local request_basis request_basis_sha claim_sha request_sha
+  local request_basis request_basis_sha claim_sha request_sha actor_json
   /bin/mkdir -p "$dir"
   "$jq_bin" -L "$root/scripts/test" -S -c -n --arg resolved_sha "$resolved_sha" '
     import "portable-core-stage-request-fixtures" as request;
@@ -196,7 +197,12 @@ build_case() {
     /bin/cp "$base_request" "$dir/request.seed"
   fi
   "$jq_bin" -S -c --arg declared "$declared" --arg namespace "$namespace" \
-    --arg reason "$reason" '
+    --arg reason "$reason" --arg decision_role "$decision_role" '
+    (if $decision_role == "operator" then
+       .body.requested_by={role:"operator",implementation_id:"implementation.operator",
+         implementation_version:"v1",adapter_instance_id:"instance.operator",
+         principal_id:"principal.operator",execution_boundary_id:"boundary.operator"}
+     else . end) |
     .body.risk.tier={namespace:$namespace,name:$declared} |
     .body.risk.reason_ids=[$reason] |
     .body.gate_decision_refs=[]
@@ -214,14 +220,35 @@ build_case() {
   if [ "$decision_state" = absent ]; then
     decision_json='{"state":"absent"}'
   else
-    decision_json=$("$jq_bin" -S -c -n --arg kind "$decision_kind" \
-      --arg role "$decision_role" --arg asserted "$asserted" '
-      {state:"present",value:{asserted_decision:$asserted,decision_kind:$kind,
-        decided_by:{role:$role,implementation_id:("implementation."+$role),
-          implementation_version:"v1",adapter_instance_id:("instance."+$role),
-          principal_id:("principal."+$role),execution_boundary_id:("boundary."+$role)},
-        recorded_at:"2026-08-29T23:59:59Z"}}
+    actor_json=$("$jq_bin" -S -c -n --arg role "$decision_role" \
+      --slurpfile request "$dir/request.basis" --slurpfile resolved "$resolved" '
+      if $role == "reviewer" then
+        [$resolved[0].body.bindings[] | select(.binding.role == "reviewer")][0] as $entry |
+        {role:$entry.binding.role,implementation_id:$entry.adapter_implementation.id,
+         implementation_version:$entry.adapter_implementation.version,
+         adapter_instance_id:$entry.binding.adapter_instance_id,
+         principal_id:$entry.binding.principal_id,
+         execution_boundary_id:$entry.binding.execution_boundary_id}
+      elif $role == "operator" then $request[0].body.requested_by
+      else
+        {role:$role,implementation_id:("implementation."+$role),
+         implementation_version:"v1",adapter_instance_id:("instance."+$role),
+         principal_id:("principal."+$role),execution_boundary_id:("boundary."+$role)}
+      end
     ')
+    if [ "$mode" = actor-mismatch ]; then
+      actor_json=$("$jq_bin" -S -c '.principal_id="principal.unbound"' <<<"$actor_json")
+    fi
+    decision_json=$("$jq_bin" -S -c -n --arg kind "$decision_kind" \
+      --arg asserted "$asserted" --arg recorded_at "$decision_time" \
+      --argjson actor "$actor_json" '
+      {state:"present",value:{asserted_decision:$asserted,decision_kind:$kind,
+        decided_by:$actor,
+        recorded_at:$recorded_at}}
+    ')
+    if [ "$mode" = malformed-claim ]; then
+      decision_json=$("$jq_bin" -S -c 'del(.value.decision_kind)' <<<"$decision_json")
+    fi
   fi
   "$jq_bin" -S -c -n --arg id "risk.claim.$name" \
     --arg classification "$classification" --arg reason "$reason" \
@@ -235,6 +262,11 @@ build_case() {
        request_basis_sha256:$request_basis_sha,
        required_gate_refs:[$requirement[0]]}}
   ' >"$dir/claim.json"
+  if [ "$mode" = malformed-classification ]; then
+    "$jq_bin" -S -c 'del(.body.classification.tier)' "$dir/claim.json" \
+      >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  fi
   claim_sha=$(sha256_path "$dir/claim.json")
   "$jq_bin" -S -c --arg id "risk.claim.$name" --arg claim_sha "$claim_sha" \
     --arg request_basis_sha "$request_basis_sha" '
@@ -296,19 +328,23 @@ expect_error() {
 
 build_case routine routine routine present independent-plan-check reviewer accept \
   risk.routine
-expect_eval routine satisfied risk-gates.satisfied
+expect_eval routine inconclusive decision.provenance-unqualified
 
 build_case routine-escalated high routine present operator-plan-approval operator accept \
   risk.routine
-expect_eval routine-escalated satisfied risk-gates.satisfied
+expect_eval routine-escalated inconclusive decision.provenance-unqualified
 
 build_case high high high present operator-plan-approval operator accept \
   risk.security-control
-expect_eval high satisfied risk-gates.satisfied
+expect_eval high inconclusive decision.provenance-unqualified
+
+build_case backdated-high high high present operator-plan-approval operator accept \
+  risk.security-control normal core 2000-01-01T00:00:00Z
+expect_eval backdated-high inconclusive decision.provenance-unqualified
 
 build_case bootstrap bootstrap bootstrap present operator-bootstrap-approval operator accept \
   risk.bootstrap bootstrap
-expect_eval bootstrap satisfied risk-gates.satisfied
+expect_eval bootstrap inconclusive decision.provenance-unqualified
 
 build_case missing high high absent ignored operator accept risk.security-control
 expect_eval missing violated decision.missing
@@ -325,15 +361,28 @@ build_case invented-role high high present operator-plan-approval reviewer accep
   risk.security-control
 expect_eval invented-role violated decision.role-denied
 
+build_case unbound-actor routine routine present independent-plan-check reviewer accept \
+  risk.routine actor-mismatch
+expect_eval unbound-actor violated decision.actor-unbound
+
 build_case invented-kind high high present independent-plan-check operator accept \
   risk.security-control
 expect_eval invented-kind violated decision.kind-denied
 
+build_case malformed-claim routine routine present independent-plan-check reviewer accept \
+  risk.routine malformed-claim
+expect_eval malformed-claim violated decision.claim-malformed
+
+build_case malformed-classification routine routine present independent-plan-check reviewer \
+  accept risk.routine malformed-classification
+expect_eval malformed-classification violated decision.claim-malformed
+
+build_case malformed-time routine routine present independent-plan-check reviewer accept \
+  risk.routine normal core 2026-99-99T99:99:99Z
+expect_eval malformed-time violated decision.claim-malformed
+
 build_case after-request routine routine present independent-plan-check reviewer accept \
-  risk.routine
-"$jq_bin" -S -c '.body.decision.value.recorded_at="2026-09-01T00:00:01Z"' \
-  "$tmp/after-request/claim.json" >"$tmp/after-request/claim.changed"
-/bin/mv "$tmp/after-request/claim.changed" "$tmp/after-request/claim.json"
+  risk.routine normal core 2026-09-01T00:00:01Z
 expect_eval after-request violated decision.after-request
 
 build_case stale routine routine present independent-plan-check reviewer accept risk.routine
@@ -383,7 +432,7 @@ expect_eval ambiguous violated decision.ambiguous
 
 build_case unsupported custom routine present independent-plan-check reviewer accept \
   risk.routine normal example.test
-expect_eval unsupported inconclusive risk.tier-unsupported
+expect_eval unsupported violated risk.tier-unsupported
 
 build_case duty-violated routine routine present independent-plan-check reviewer accept \
   risk.routine duty-collision
@@ -510,9 +559,16 @@ pure_requirement_sha=$("$jq_bin" -r '.scope_sha256' "$tmp/pure-requirement-scope
   --arg claim_sha "$pure_claim_sha" --arg request_basis_sha "$pure_basis_sha" \
   --arg policy_scope_sha "$pure_policy_scope_sha" \
   --arg requirement_scope_sha "$pure_requirement_sha" >"$tmp/pure.out"
-"$jq_bin" -e '.body.verdict=="satisfied" and
-  .body.reason_ids==["risk-gates.satisfied"]' "$tmp/pure.out" >/dev/null ||
+"$jq_bin" -e '.body.verdict=="inconclusive" and
+  .body.reason_ids==["decision.provenance-unqualified"]' "$tmp/pure.out" >/dev/null ||
   fail 'pure evaluator'
-pass 'pure evaluator canonical satisfied path'
+pass 'pure evaluator keeps identity-only claim unqualified'
+
+while IFS= read -r risk_output; do
+  "$jq_bin" -e '.body.verdict != "satisfied" and
+    (.body.reason_ids | index("risk-gates.satisfied") == null)' "$risk_output" \
+    >/dev/null || fail "caller-synthesized satisfied ${risk_output##*/}"
+done < <(/usr/bin/find "$tmp" -type f \( -name risk.out -o -name pure.out \) -print)
+pass 'no caller-authored claim can synthesize satisfied'
 
 /usr/bin/printf 'control risk gates: %s passed\n' "$passes"

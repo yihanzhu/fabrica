@@ -9,7 +9,19 @@ def sha256_ok:
 
 def time_ok:
   type == "string" and
-  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z");
+  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
+  (capture("\\A(?<year>[0-9]{4})-(?<month>[0-9]{2})-(?<day>[0-9]{2})T(?<hour>[0-9]{2}):(?<minute>[0-9]{2}):(?<second>[0-9]{2})Z\\z") as $parts |
+   ($parts.year | tonumber) as $year |
+   ($parts.month | tonumber) as $month |
+   ($parts.day | tonumber) as $day |
+   ($parts.hour | tonumber) as $hour |
+   ($parts.minute | tonumber) as $minute |
+   ($parts.second | tonumber) as $second |
+   ($year % 4 == 0 and ($year % 100 != 0 or $year % 400 == 0)) as $leap |
+   [31,(if $leap then 29 else 28 end),31,30,31,30,31,31,30,31,30,31] as $days |
+   $month >= 1 and $month <= 12 and $day >= 1 and $day <= $days[$month - 1] and
+   $hour >= 0 and $hour <= 23 and $minute >= 0 and $minute <= 59 and
+   $second >= 0 and $second <= 59);
 
 def actor_ok:
   exact(["adapter_instance_id","execution_boundary_id","implementation_id",
@@ -28,6 +40,24 @@ def content_ref($id;$media;$sha):
 def document_ref($document;$digest):
   {schema_version:$document.schema_version,kind:$document.kind,
    id:$document.id,sha256:$digest};
+
+def actor_from_binding($entry):
+  {role:$entry.binding.role,
+   implementation_id:$entry.adapter_implementation.id,
+   implementation_version:$entry.adapter_implementation.version,
+   adapter_instance_id:$entry.binding.adapter_instance_id,
+   principal_id:$entry.binding.principal_id,
+   execution_boundary_id:$entry.binding.execution_boundary_id};
+
+def decision_actor_bound($rule;$request_doc;$resolved_doc;$actor):
+  if $rule.decision_role == "reviewer" then
+    [$resolved_doc.body.bindings[] | select(.binding.role == "reviewer")] as $matches |
+    ($matches | length) == 1 and $actor == actor_from_binding($matches[0])
+  elif $rule.decision_role == "operator" then
+    $request_doc.body.requested_by.role == "operator" and
+    $actor == $request_doc.body.requested_by
+  else false
+  end;
 
 def expected_core:
   {semantic_identity:"core.contracts.v2",
@@ -59,11 +89,12 @@ def policy_ok:
   .kind == "risk_gates_policy" and .id == "control-policy.risk-gates" and
   (.body |
     exact(["activation_state","core_contract","decision_claim_semantics",
-      "duty_separation","evaluation_mode","fail_mode","forced_high_reason_ids",
-      "policy_version","tier_rules"]) and
+      "decision_provenance","duty_separation","evaluation_mode","fail_mode",
+      "forced_high_reason_ids","policy_version","tier_rules"]) and
     .activation_state == "inactive" and
     .core_contract == expected_core and
     .decision_claim_semantics == "immutable-input-claim-only" and
+    .decision_provenance == "unqualified-input-claim" and
     .evaluation_mode == "observation-only" and .fail_mode == "closed" and
     .policy_version == "v1" and .forced_high_reason_ids == expected_high_reasons and
     .tier_rules == expected_tier_rules and
@@ -109,7 +140,10 @@ def claim_shape_ok:
 ($duty_evaluation[0]) as $duty |
 ($claim[0]) as $claim_doc |
 (if ($p | policy_ok) then true else error("invalid shipped risk policy") end) |
-(if ($claim_doc | claim_shape_ok) then true else error("invalid risk decision claim") end) |
+($claim_doc | claim_shape_ok) as $claim_valid |
+($claim_doc.body.classification.tier? // "unknown") as $claimed_tier |
+($claim_doc.body.decision.state? // "invalid") as $claim_decision_state |
+($claim_doc.body.decision.value.asserted_decision? // "invalid") as $claim_assertion |
 
 content_ref($p.id;"application/vnd.ystack.control-policy+json";$policy_sha) as
   $risk_policy_ref |
@@ -148,7 +182,7 @@ content_ref($claim_doc.id;
  elif any($request_doc.body.risk.reason_ids[];
           . as $reason | $p.body.forced_high_reason_ids | index($reason) != null)
  then "high"
- else $claim_doc.body.classification.tier
+ else $claimed_tier
  end) as $minimum_tier |
 ([$p.body.tier_rules[] |
   select(.classification == $minimum_tier and .declared_tier == $declared_tier)]) as
@@ -159,7 +193,8 @@ content_ref($claim_doc.id;
     "application/vnd.ystack.risk-gate-decision-claim+json")]) as
   $risk_decision_refs |
 
-((if $request_doc.body.risk.policy_ref == $expected_policy_scope then []
+((if $claim_valid then [] else ["decision.claim-malformed"] end) +
+ (if $request_doc.body.risk.policy_ref == $expected_policy_scope then []
   else ["risk.policy-ref-mismatch"] end) +
  (if $request_doc.body.risk.required_gate_refs == [$expected_requirement_scope] then []
   else ["risk.requirement-ref-mismatch"] end) +
@@ -172,33 +207,40 @@ content_ref($claim_doc.id;
      $risk_decision_refs[0] == $expected_gate_decision then []
   elif ($risk_decision_refs | length) > 1 then ["decision.ambiguous"]
   else ["decision.unbound"] end) +
- (if $claim_doc.body.classification.reason_ids == $request_doc.body.risk.reason_ids
+ (if $claim_valid and
+     $claim_doc.body.classification.reason_ids == $request_doc.body.risk.reason_ids
   then [] else ["classification.reasons-mismatch"] end) +
- (if $minimum_tier == $claim_doc.body.classification.tier then []
+ (if $claim_valid and $minimum_tier == $claimed_tier then []
   else ["classification.forced-tier-mismatch"] end) +
  (if $core_tier_supported and ($matching_rules | length) == 1 then []
   elif $core_tier_supported then ["risk.tier-downgrade"]
-  else [] end) +
+  else ["risk.tier-unsupported"] end) +
  (if $duty.body.verdict == "violated" then ["duty.violated"] else [] end) +
- (if $claim_doc.body.decision.state == "absent" then ["decision.missing"]
-  elif $claim_doc.body.decision.value.asserted_decision == "reject"
+ (if $claim_decision_state == "absent" then ["decision.missing"]
+  elif $claim_assertion == "reject"
   then ["decision.rejected"]
   else [] end) +
- (if $claim_doc.body.decision.state == "present" and $matching_rule != null then
+ (if $claim_valid and $claim_decision_state == "present" and
+     $matching_rule != null then
     (if $claim_doc.body.decision.value.decision_kind == $matching_rule.decision_kind
      then [] else ["decision.kind-denied"] end) +
     (if $claim_doc.body.decision.value.decided_by.role == $matching_rule.decision_role
      then [] else ["decision.role-denied"] end) +
+    (if decision_actor_bound($matching_rule;$request_doc;$resolved_doc;
+          $claim_doc.body.decision.value.decided_by)
+     then [] else ["decision.actor-unbound"] end) +
     (if $claim_doc.body.decision.value.recorded_at <= $request_doc.body.requested_at
      then [] else ["decision.after-request"] end)
   else [] end) | sort | unique) as $violations |
 
-((if $core_tier_supported then [] else ["risk.tier-unsupported"] end) +
- (if $duty.body.verdict == "inconclusive" then ["duty.inconclusive"] else [] end) |
+((if $duty.body.verdict == "inconclusive" then ["duty.inconclusive"] else [] end) +
+ (if $claim_valid and $claim_decision_state == "present" and
+     $claim_assertion == "accept"
+  then ["decision.provenance-unqualified"] else [] end) |
  sort | unique) as $unknowns |
 (if ($violations | length) > 0 then {verdict:"violated",reasons:$violations}
  elif ($unknowns | length) > 0 then {verdict:"inconclusive",reasons:$unknowns}
- else {verdict:"satisfied",reasons:["risk-gates.satisfied"]} end) as $result |
+ else {verdict:"inconclusive",reasons:["decision.provenance-unqualified"]} end) as $result |
 
 {
   schema_version:1,

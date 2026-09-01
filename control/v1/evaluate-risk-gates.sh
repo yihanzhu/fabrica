@@ -164,6 +164,12 @@ for input in "$@"; do
     "$scratch/${names[$index]}.canonical" || emit_error E_RELATION
   index=$((index + 1))
 done
+"$jq_bin" -e '
+  (keys|sort)==["body","id","kind","schema_version"] and
+  .schema_version==1 and .kind=="risk_gate_decision_claim" and
+  (.id|type=="string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
+  (.body|type=="object")
+' "$scratch/claim.json" >/dev/null 2>&1 || emit_error E_RELATION
 snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
 snapshot_fixed "$program" "$scratch/program.jq"
@@ -211,10 +217,11 @@ validator_program_sha=$(sha256_path "$validator_program") || emit_error E_RUNTIM
         media_type:"application/vnd.ystack.control-policy+json",sha256:$policy_sha},
       semantics:{authority_effect:"none",
         decision_claim_semantics:"immutable-input-claim-only",
+        decision_provenance:"unqualified-input-claim",
         input_contract:"control-policy-set+public-core-stage-run+duty-evaluation+risk-decision-claim.v1",
         output_kind:"risk_gate_evaluation",output_schema_version:1,
         reference_semantics:"identity-only",
-        verdicts:["inconclusive","satisfied","violated"]}}
+        verdicts:["inconclusive","violated"]}}
   }
 ' >/dev/null 2>&1 || emit_error E_RELATION
 
@@ -355,13 +362,12 @@ canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||
       id:$result[0].id,sha256:$result_sha}} and
   (.body.classification|keys|sort)==["declared_tier","minimum_tier"] and
   (.body.classification.minimum_tier as $minimum |
-    ["routine","high","bootstrap"]|index($minimum)!=null) and
-  (.body.verdict=="satisfied" or .body.verdict=="violated" or
-    .body.verdict=="inconclusive") and
+    (["routine","high","bootstrap"]|index($minimum)!=null) or
+    ($minimum=="unknown" and .body.verdict=="violated")) and
+  (.body.verdict=="violated" or .body.verdict=="inconclusive") and
   (.body.reason_ids|type=="array" and length>=1 and all(.[];type=="string") and
     .==(sort|unique)) and
-  (if .body.verdict=="satisfied" then .body.reason_ids==["risk-gates.satisfied"]
-   else (.body.reason_ids|index("risk-gates.satisfied")==null) end) and
+  (.body.reason_ids|index("risk-gates.satisfied")==null) and
   ((.body|has("grant_ref") or has("qualification_ref") or has("activation"))|not)
 ' "$scratch/evaluation.json" >/dev/null 2>&1 || emit_error E_RUNTIME
 
