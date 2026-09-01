@@ -68,12 +68,6 @@ size=$(/usr/bin/wc -c <"$scratch/policy.json" | /usr/bin/tr -d ' ') ||
 PATH="${jq_bin%/*}:/usr/bin:/bin" "$policy_validator" validate \
   "$scratch/policy-set.json" >"$scratch/policy.out" 2>"$scratch/policy.err" ||
   emit_error E_POLICY_SET
-PATH="${jq_bin%/*}:/usr/bin:/bin" "$core_validator" validate-document \
-  "$scratch/resolved.json" >"$scratch/core.out" 2>"$scratch/core.err" || emit_error E_CORE
-PATH="${jq_bin%/*}:/usr/bin:/bin" "$core_validator" validate-stage-run \
-  "$scratch/request.json" "$scratch/resolved.json" "$scratch/result.json" \
-  >"$scratch/run.out" 2>"$scratch/run.err" || emit_error E_CORE
-
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 policy_set_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
 request_sha=$(sha256_path "$scratch/request.json") || emit_error E_RUNTIME
@@ -99,6 +93,14 @@ generation_id_sha=$(sha256_text "$generation_id") || emit_error E_RUNTIME
     sha256:$policy_sha
   })
 ' "$scratch/policy-set.json" >/dev/null 2>&1 || emit_error E_RELATION
+
+PATH="${jq_bin%/*}:/usr/bin:/bin" "$core_validator" validate-document \
+  "$scratch/resolved.json" >"$scratch/core.out" 2>"$scratch/core.err" || emit_error E_CORE
+PATH="${jq_bin%/*}:/usr/bin:/bin" "$core_validator" validate-stage-run \
+  "$scratch/request.json" "$scratch/resolved.json" "$scratch/result.json" \
+  >"$scratch/run.out" 2>"$scratch/run.err" || emit_error E_CORE
+post_core_package_sha=$(sha256_path "$core_validator") || emit_error E_RUNTIME
+[ "$post_core_package_sha" = "$core_package_sha" ] || emit_error E_RELATION
 
 "$jq_bin" -S -c -n -f "$program" \
   --slurpfile policy "$scratch/policy.json" \

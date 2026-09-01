@@ -344,6 +344,22 @@ evaluator="$copy_root/control/v1/evaluate-duty.sh"
 expect_error policy-limit E_LIMIT "$policy_set" "$request" "$resolved" "$result"
 evaluator=$original_evaluator
 
+stale_root="$tmp/stale-core-root"
+stale_sentinel="$tmp/stale-core-ran"
+/bin/mkdir -p "$stale_root/control/v1" "$stale_root/scripts"
+for copy_path in evaluate-duty.sh duty-separation.jq duty-separation-policy.json \
+  validate.sh policy-set.jq; do
+  /bin/cp "$root/control/v1/$copy_path" "$stale_root/control/v1/$copy_path"
+done
+/usr/bin/printf '%s\n' '#!/bin/bash' ": > \"$stale_sentinel\"" 'exit 0' \
+  >"$stale_root/scripts/core-contract.sh"
+/bin/chmod 0755 "$stale_root/scripts/core-contract.sh"
+evaluator="$stale_root/control/v1/evaluate-duty.sh"
+expect_error stale-core-package E_RELATION "$policy_set" "$request" "$resolved" "$result"
+[ ! -e "$stale_sentinel" ] || fail 'stale core executed'
+evaluator=$original_evaluator
+pass 'stale core is rejected before execution'
+
 for required in control/v1/duty-separation-policy.json control/v1/duty-separation.jq \
   control/v1/evaluate-duty.sh scripts/test/control-duty-separation.test.sh; do
   [ "$(/usr/bin/grep -Fxc "$required" "$root/ci/required-files.txt")" -eq 1 ] ||
