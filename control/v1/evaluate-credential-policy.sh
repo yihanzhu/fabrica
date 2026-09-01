@@ -270,10 +270,9 @@ replay_pending_signal() {
   fi
 }
 run_child() {
-  local child child_status=0 gate owned_marker pgid wait_status
+  local child child_status=0 gate pgid wait_status
   [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
   gate="$scratch/child-gate"
-  owned_marker="$scratch/child-owned"
   PENDING_SIGNAL_STATUS=0
   SIGNAL_DEFER=1
   /usr/bin/mkfifo "$gate" || { replay_pending_signal; return 125; }
@@ -312,23 +311,15 @@ run_child() {
   fi
   ACTIVE_PID=$child
   ACTIVE_PGID=$pgid
-  /usr/bin/printf '%s %s\n' "$ACTIVE_PID" "$ACTIVE_PGID" >"$owned_marker" || {
+  /usr/bin/printf 'go\n' >&9 || {
     exec 9>&-
     /bin/rm -f -- "$scratch/child-launching"
     terminate_active || :
     replay_pending_signal
     return 125
   }
-  /usr/bin/printf 'go\n' >&9 || {
-    exec 9>&-
-    /bin/rm -f -- "$scratch/child-launching" "$owned_marker"
-    terminate_active || :
-    replay_pending_signal
-    return 125
-  }
   exec 9>&-
   /bin/rm -f -- "$scratch/child-launching" || {
-    /bin/rm -f -- "$owned_marker"
     terminate_active || :
     replay_pending_signal
     return 125
@@ -351,13 +342,13 @@ run_child() {
   }
   if group_alive "$ACTIVE_PGID"; then
     terminate_active || :
-    /bin/rm -f -- "$scratch/child-teardown" "$owned_marker"
+    /bin/rm -f -- "$scratch/child-teardown"
     replay_pending_signal
     return 125
   fi
   ACTIVE_PID=
   ACTIVE_PGID=
-  /bin/rm -f -- "$scratch/child-teardown" "$owned_marker" || {
+  /bin/rm -f -- "$scratch/child-teardown" || {
     replay_pending_signal
     return 125
   }
@@ -444,13 +435,13 @@ snapshot_nofollow() {
     3) emit_error E_LIMIT ;;
     *) emit_error E_RUNTIME ;;
   esac
-  pin_path "$target" "$limit" || emit_error E_RUNTIME
 }
 snapshot_fixed() {
   local source=$1 target=$2 size
   snapshot_nofollow "$source" "$target" 1048576
   size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
   [ "$size" -le 1048576 ] || emit_error E_LIMIT
+  pin_path "$target" 1048576 || emit_error E_RUNTIME
 }
 snapshot_executable() {
   local source=$1 target=$2 size
@@ -458,6 +449,7 @@ snapshot_executable() {
   size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
   [ "$size" -le 16777216 ] || emit_error E_LIMIT
   /bin/chmod 0500 "$target" || emit_error E_RUNTIME
+  pin_path "$target" 16777216 || emit_error E_RUNTIME
 }
 canonical_json() {
   local raw=$1 canonical=$2 bom

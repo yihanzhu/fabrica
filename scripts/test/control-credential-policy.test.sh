@@ -419,17 +419,17 @@ resume_and_wait_input_race() {
 }
 
 signal_owned_child_group() {
-  local name=$1 scratch_root=$2 attempt=0 marker leader group extra parent descendant
-  local descendant_group
+  local name=$1 scratch_root=$2 attempt=0 marker leader group parent descendant
+  local descendant_group leader_state descendant_state stop_attempt
   marker=
   while [ -z "$marker" ] && [ "$attempt" -lt 5000 ]; do
-    marker=$(/usr/bin/find "$scratch_root" -type f -name child-owned -print -quit \
+    marker=$(/usr/bin/find "$scratch_root" -type f -name duty-ready -print -quit \
       2>/dev/null) || marker=
     if [ -z "$marker" ] && ! /bin/kill -0 "$INPUT_RACE_PID" 2>/dev/null; then
       wait "$INPUT_RACE_PID" 2>/dev/null || :
       INPUT_RACE_PID=
       INPUT_RACE_PGID=
-      fail "$name evaluator exited before child ownership"
+      fail "$name evaluator exited before duty launch"
     fi
     [ -n "$marker" ] || /bin/sleep 0.001
     attempt=$((attempt + 1))
@@ -438,30 +438,46 @@ signal_owned_child_group() {
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
-    fail "$name child ownership timeout"
+    fail "$name duty launch timeout"
   }
-  case "$marker" in "$scratch_root"/*/child-owned) ;; *)
+  case "$marker" in "$scratch_root"/*/duty-ready) ;; *)
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
-    fail "$name child marker escaped scratch"
+    fail "$name duty marker escaped scratch"
   esac
   leader=
   group=
-  extra=
-  IFS=' ' read -r leader group extra <"$marker" || fail "$name child marker read"
+  attempt=0
+  while [ -z "$leader" ] && [ "$attempt" -lt 5000 ] &&
+    /bin/kill -0 "$INPUT_RACE_PID" 2>/dev/null; do
+    leader=$(/bin/ps -axo pid=,ppid=,pgid=,state= |
+      /usr/bin/awk -v parent="$INPUT_RACE_PID" \
+        '$2 == parent && $1 == $3 && $4 !~ /^Z/ {print $1; exit}') || leader=
+    if [ -n "$leader" ]; then
+      group=$(/bin/ps -o pgid= -p "$leader" 2>/dev/null |
+        /usr/bin/tr -d ' ') || group=
+      parent=$(/bin/ps -o ppid= -p "$leader" 2>/dev/null |
+        /usr/bin/tr -d ' ') || parent=
+      if ! /bin/kill -0 "$leader" 2>/dev/null || [ "$group" != "$leader" ] ||
+         [ "$parent" != "$INPUT_RACE_PID" ]; then
+        leader=
+        group=
+      fi
+    fi
+    [ -n "$leader" ] || /bin/sleep 0.001
+    attempt=$((attempt + 1))
+  done
   if [[ ! "$leader" =~ ^[1-9][0-9]*$ ]] ||
-     [[ ! "$group" =~ ^[1-9][0-9]*$ ]] || [ -n "$extra" ] ||
-     [ "$leader" != "$group" ] || [ "$group" = "$INPUT_RACE_PGID" ] ||
-     [ "$group" = "$TEST_PGID" ]; then
+     [[ ! "$group" =~ ^[1-9][0-9]*$ ]] || [ "$leader" != "$group" ] ||
+     [ "$group" = "$INPUT_RACE_PGID" ] || [ "$group" = "$TEST_PGID" ]; then
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
     fail "$name invalid child ownership"
   fi
-  parent=$(/bin/ps -o ppid= -p "$leader" 2>/dev/null | /usr/bin/tr -d ' ') ||
-    parent=
-  [ "$parent" = "$INPUT_RACE_PID" ] || fail "$name child parent mismatch"
+  SIGNAL_CHILD_PID=$leader
+  SIGNAL_CHILD_PGID=$group
   descendant=
   attempt=0
   while [ -z "$descendant" ] && [ "$attempt" -lt 5000 ] &&
@@ -476,6 +492,30 @@ signal_owned_child_group() {
       if ! /bin/kill -0 "$descendant" 2>/dev/null ||
          [ "$descendant_group" != "$group" ]; then
         descendant=
+      elif /bin/kill -STOP -- "-$group" 2>/dev/null; then
+        stop_attempt=0
+        leader_state=
+        descendant_state=
+        while [ "$stop_attempt" -lt 100 ]; do
+          leader_state=$(/bin/ps -o state= -p "$leader" 2>/dev/null |
+            /usr/bin/tr -d ' ') || leader_state=
+          descendant_state=$(/bin/ps -o state= -p "$descendant" 2>/dev/null |
+            /usr/bin/tr -d ' ') || descendant_state=
+          case "$leader_state:$descendant_state" in T*:T*) break ;; esac
+          /bin/sleep 0.01
+          stop_attempt=$((stop_attempt + 1))
+        done
+        descendant_group=$(/bin/ps -o pgid= -p "$descendant" 2>/dev/null |
+          /usr/bin/tr -d ' ') || descendant_group=
+        if ! /bin/kill -0 "$leader" 2>/dev/null ||
+           ! /bin/kill -0 "$descendant" 2>/dev/null ||
+           [ "$descendant_group" != "$group" ] ||
+           [[ "$leader_state" != T* ]] || [[ "$descendant_state" != T* ]]; then
+          /bin/kill -CONT -- "-$group" 2>/dev/null || :
+          descendant=
+        fi
+      else
+        descendant=
       fi
     fi
     [ -n "$descendant" ] || /bin/sleep 0.001
@@ -489,8 +529,6 @@ signal_owned_child_group() {
     INPUT_RACE_PGID=
     fail "$name child group was not live"
   fi
-  SIGNAL_CHILD_PID=$leader
-  SIGNAL_CHILD_PGID=$group
   SIGNAL_DESCENDANT_PID=$descendant
   /bin/kill -TERM "$INPUT_RACE_PID" || fail "$name signal delivery"
 }
