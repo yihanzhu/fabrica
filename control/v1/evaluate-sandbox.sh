@@ -45,20 +45,21 @@ for required in "$source_path" "$policy" "$decision" "$program" \
 done
 jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
 case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
-[ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] || emit_error E_RUNTIME
+physical_regular "$jq_bin" && [ -x "$jq_bin" ] || emit_error E_RUNTIME
+live_jq=$jq_bin
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
   Darwin:*) jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
   Linux:x86_64) jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
   *) emit_error E_RUNTIME ;;
 esac
-[ "$(/usr/bin/shasum -a 256 "$jq_bin" | /usr/bin/awk '{print $1}')" = "$jq_sha" ] ||
+[ "$(/usr/bin/shasum -a 256 "$live_jq" | /usr/bin/awk '{print $1}')" = "$jq_sha" ] ||
   emit_error E_RUNTIME
-[ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
 scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-sandbox-policy.XXXXXX" 2>/dev/null) ||
   emit_error E_RUNTIME
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+/bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
 cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
 signal_exit() { trap - EXIT HUP INT TERM; cleanup; exit 1; }
 trap cleanup EXIT
@@ -71,6 +72,22 @@ snapshot_fixed() {
   size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
   [ "$size" -le 1048576 ] || emit_error E_LIMIT
 }
+snapshot_executable() {
+  local source=$1 target=$2 size
+  /bin/dd if="$source" of="$target" bs=16777217 count=1 2>/dev/null ||
+    emit_error E_RUNTIME
+  size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
+  [ "$size" -le 16777216 ] || emit_error E_LIMIT
+  /bin/chmod 0500 "$target" || emit_error E_RUNTIME
+}
+sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+/bin/mkdir -m 0700 "$scratch/bin" || emit_error E_RUNTIME
+jq_bin="$scratch/bin/jq"
+snapshot_executable "$live_jq" "$jq_bin"
+physical_regular "$jq_bin" && [ -x "$jq_bin" ] &&
+  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
+  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
+
 canonical_json() {
   local raw=$1 canonical=$2 bom roots
   bom=$(/usr/bin/od -An -tx1 -N3 "$raw" 2>/dev/null | /usr/bin/tr -d ' \n') ||
@@ -98,7 +115,6 @@ canonical_json() {
     depth<=32 and members<=4096 and strings_ok
   ' "$raw" >/dev/null 2>&1 || emit_error E_LIMIT
 }
-sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 unchanged() { physical_regular "$1" && /usr/bin/cmp -s "$1" "$2"; }
 
 snapshot_fixed "$source_path" "$scratch/driver.sh"
@@ -191,6 +207,9 @@ if ! unchanged "$source_path" "$scratch/driver.sh" ||
    ! unchanged "$validator_program" "$mirror_validator_program"; then
   emit_error E_RELATION
 fi
+physical_regular "$jq_bin" && [ -x "$jq_bin" ] &&
+  [ "$(sha256_path "$jq_bin")" = "$jq_sha" ] &&
+  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RELATION
 index=0
 while [ "$index" -lt 3 ]; do
   unchanged "${inputs[$index]}" "$scratch/${names[$index]}.json" || emit_error E_RELATION

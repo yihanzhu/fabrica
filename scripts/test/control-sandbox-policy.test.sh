@@ -326,6 +326,95 @@ YSTACK_FAKE_JQ_SENTINEL="$fake_jq_sentinel" PATH="$absolute_fake:$bin:/usr/bin:/
   fail 'untrusted absolute jq identity'
 pass 'jq version spoof cannot replace the fixed interpreter'
 
+jq_race_root="$tmp/jq-race"
+/bin/cp -R "$copy_root" "$jq_race_root"
+jq_before="$tmp/jq-race.before"
+jq_call="$tmp/jq-race.call"
+jq_after="$tmp/jq-race.after"
+jq_finish="$tmp/jq-race.finish"
+/usr/bin/printf '%s\n' '#!/bin/bash' 'set -uo pipefail' \
+  "/usr/bin/printf '%s\\n' ready >'$jq_before'" \
+  "count=0; while [ ! -e '$jq_call' ] && [ \"\$count\" -lt 500 ]; do count=\$((count+1)); /bin/sleep 0.01; done" \
+  "[ -e '$jq_call' ] || exit 1" \
+  '[ "$(jq --version 2>/dev/null)" = jq-1.6 ] || exit 1' \
+  "/usr/bin/printf '%s\\n' used >'$jq_after'" \
+  "count=0; while [ ! -e '$jq_finish' ] && [ \"\$count\" -lt 500 ]; do count=\$((count+1)); /bin/sleep 0.01; done" \
+  "[ -e '$jq_finish' ] || exit 1" 'exit 0' >"$jq_race_root/control/v1/validate.sh"
+/bin/chmod 0755 "$jq_race_root/control/v1/validate.sh"
+jq_race_validator_sha=$(sha256_path "$jq_race_root/control/v1/validate.sh")
+"$jq_bin" -S -c --arg sha "$jq_race_validator_sha" \
+  '.body.evaluator.policy_set_validator.driver_ref.sha256=$sha' \
+  "$jq_race_root/control/v1/sandbox-decision.json" >"$tmp/jq-race-decision.json"
+/bin/mv "$tmp/jq-race-decision.json" "$jq_race_root/control/v1/sandbox-decision.json"
+jq_race_decision_sha=$(sha256_path "$jq_race_root/control/v1/sandbox-decision.json")
+jq_race_set="$tmp/jq-race-set.json"
+"$jq_bin" -S -c --arg sha "$jq_race_decision_sha" \
+  '.body.sections[5].decision_ref.sha256=$sha' "$policy_set" >"$jq_race_set"
+jq_race_set_sha=$(sha256_path "$jq_race_set")
+jq_race_duty="$tmp/jq-race-duty.json"
+"$jq_bin" -S -c --arg sha "$jq_race_set_sha" \
+  '.body.policy_set.sha256=$sha' "$duty" >"$jq_race_duty"
+jq_race_duty_sha=$(sha256_path "$jq_race_duty")
+jq_race_claim="$tmp/jq-race-claim.json"
+"$jq_bin" -S -c --arg set_sha "$jq_race_set_sha" --arg duty_sha "$jq_race_duty_sha" \
+  '.body.policy_set_ref.sha256=$set_sha|.body.duty_evaluation_ref.sha256=$duty_sha' \
+  "$claim" >"$jq_race_claim"
+jq_race_out="$tmp/jq-race.out"
+jq_race_err="$tmp/jq-race.err"
+jq_attack_sentinel="$tmp/jq-attack-ran"
+PATH="$bin:/usr/bin:/bin" /usr/bin/perl -e 'alarm shift; exec @ARGV' 10 \
+  "$jq_race_root/control/v1/evaluate-sandbox.sh" evaluate \
+  "$jq_race_set" "$jq_race_duty" "$jq_race_claim" \
+  >"$jq_race_out" 2>"$jq_race_err" &
+jq_race_pid=$!
+attempt=0
+while [ ! -e "$jq_before" ] && kill -0 "$jq_race_pid" 2>/dev/null &&
+      [ "$attempt" -lt 500 ]; do
+  attempt=$((attempt + 1))
+  /bin/sleep 0.01
+done
+if [ ! -e "$jq_before" ]; then
+  : >"$jq_call"
+  : >"$jq_finish"
+  kill "$jq_race_pid" 2>/dev/null || :
+  wait "$jq_race_pid" 2>/dev/null || :
+  fail 'live jq replacement marker timeout'
+fi
+jq_original="$tmp/jq-original"
+/bin/mv "$bin/jq" "$jq_original"
+/usr/bin/printf '%s\n' '#!/bin/sh' ": > '$jq_attack_sentinel'" \
+  'printf "%s\n" "{\"kind\":\"fabricated\"}"' 'exit 0' >"$bin/jq"
+/bin/chmod 0700 "$bin/jq"
+: >"$jq_call"
+attempt=0
+while [ ! -e "$jq_after" ] && kill -0 "$jq_race_pid" 2>/dev/null &&
+      [ "$attempt" -lt 500 ]; do
+  attempt=$((attempt + 1))
+  /bin/sleep 0.01
+done
+if [ ! -e "$jq_after" ]; then
+  /bin/mv "$bin/jq" "$tmp/jq-attacker"
+  /bin/mv "$jq_original" "$bin/jq"
+  : >"$jq_finish"
+  kill "$jq_race_pid" 2>/dev/null || :
+  wait "$jq_race_pid" 2>/dev/null || :
+  fail 'private jq validator marker timeout'
+fi
+[ ! -e "$jq_attack_sentinel" ] || fail 'caller jq ran during validator'
+/bin/mv "$bin/jq" "$tmp/jq-attacker"
+/bin/mv "$jq_original" "$bin/jq"
+: >"$jq_finish"
+jq_race_status=0
+wait "$jq_race_pid" || jq_race_status=$?
+if [ "$jq_race_status" -ne 0 ] || [ -s "$jq_race_err" ] ||
+   [ -e "$jq_attack_sentinel" ] ||
+   ! "$jq_bin" -e '.kind=="sandbox_policy_evaluation" and .body.verdict=="satisfied" and
+     .body.authority_effect=="none" and .body.qualification_effect=="none"' \
+     "$jq_race_out" >/dev/null; then
+  fail 'private jq replacement result'
+fi
+pass 'post-check caller jq replacement cannot execute or fabricate output'
+
 race_root="$tmp/race"
 /bin/cp -R "$copy_root" "$race_root"
 marker="$tmp/validator.marker"
