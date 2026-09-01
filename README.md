@@ -148,6 +148,21 @@ credential-like environment value, grants no authority or qualification, activat
 no profile, and performs no candidate, adapter, network, publish, deploy, or
 external-write action.
 
+## Inactive evidence-integrity evaluator
+
+`control/v1/evaluate-evidence-integrity.sh` compares caller-supplied evidence
+references with one exact public-core stage tuple. It binds the policy set,
+policy, decision, evaluator, and selected core package before returning a
+canonical `satisfied` or `violated` identity observation. Evidence and prior
+references must keep their canonical order and unique logical identities; one
+prior result digest cannot describe multiple result documents.
+
+The evaluator never reads proof bytes. Matching references do not prove a claim
+or qualify a workflow, and equal proof digests may belong to different logical
+references. The package stays inactive, stores nothing, grants no authority, and
+performs no candidate, credential, network, adapter, publish, deploy, or external
+write.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

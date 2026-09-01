@@ -64,7 +64,7 @@ def policy_ok:
       proof_binding:"content-ref-sha256",
       qualification_binding:"exact-scope-ref-or-absent"});
 
-def presentation_shape_ok:
+def presentation_structure_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and
   .kind == "evidence_integrity_presentation" and (.id | id_ok) and
   (.body |
@@ -78,6 +78,19 @@ def presentation_shape_ok:
       type == "array" and length <= 256 and all(.[];evidence_ref_ok)) and
     (.qualification_ref | presence_ok(scope_ref_ok("qualification"))));
 
+def canonical_presentation_sets:
+  (.body.evidence == (.body.evidence | sort_by(.evidence_id))) and
+  ((.body.evidence | map(.evidence_id) | length) ==
+    (.body.evidence | map(.evidence_id) | unique | length)) and
+  ((.body.evidence | map(.kind) | length) ==
+    (.body.evidence | map(.kind) | unique | length)) and
+  (.body.prior_evidence_refs ==
+    (.body.prior_evidence_refs | sort_by([.stage_result_ref.sha256,.evidence_id]))) and
+  ((.body.prior_evidence_refs |
+      map([.stage_result_ref.sha256,.evidence_id]) | length) ==
+    (.body.prior_evidence_refs |
+      map([.stage_result_ref.sha256,.evidence_id]) | unique | length));
+
 def document_ref($document;$digest):
   {schema_version:$document.schema_version,kind:$document.kind,
    id:$document.id,sha256:$digest};
@@ -88,10 +101,23 @@ def content_ref($id;$media;$digest):
 def normalized_array($value):
   if ($value | type) == "array" then $value else [] end;
 
-def ambiguous_entries($entries;$key_filter):
+def duplicate_scalar_key($entries;$field):
   ($entries | normalized_array(.)) as $items |
-  ($items | map($key_filter)) as $keys |
+  ($items | map(.[$field])) as $keys |
   ($keys | length) != ($keys | unique | length);
+
+def duplicate_prior_key($entries):
+  ($entries | normalized_array(.)) as $items |
+  ($items | map([.stage_result_ref.sha256,.evidence_id])) as $keys |
+  ($keys | length) != ($keys | unique | length);
+
+def prior_document_alias($entries):
+  ($entries | normalized_array(.)) as $items |
+  if all($items[];evidence_ref_ok) then
+    any($items | group_by(.stage_result_ref.sha256)[];
+      ([.[] | [.stage_result_ref.schema_version,.stage_result_ref.kind,
+        .stage_result_ref.id]] | unique | length) > 1)
+  else false end;
 
 ($policy[0]) as $p |
 ($decision[0]) as $definition |
@@ -124,7 +150,8 @@ content_ref($definition.id;"application/vnd.ystack.control-decision+json";
     $evidence_sections[0].decision_ref == $decision_ref
  then true else error("invalid policy-set evidence binding") end) |
 
-((if ($presented | presentation_shape_ok) then []
+((if (($presented | presentation_structure_ok) and
+      ($presented | canonical_presentation_sets)) then []
    else ["evidence.presentation-malformed"] end) +
  (if $presented_body.request_ref? == $expected_request_ref then []
   else ["evidence.request-moved"] end) +
@@ -138,11 +165,10 @@ content_ref($definition.id;"application/vnd.ystack.control-decision+json";
   else ["evidence.prior-stale"] end) +
  (if $presented_body.qualification_ref? == $expected_qualification then []
   else ["evidence.qualification-mismatch"] end) +
- (if ambiguous_entries($presented_evidence;
-       if type == "object" then [.evidence_id?,.kind?] else [null,null] end) or
-     ambiguous_entries($presented_prior;
-       if type == "object" then [.stage_result_ref.sha256?,.evidence_id?]
-       else [null,null] end)
+ (if duplicate_scalar_key($presented_evidence;"evidence_id") or
+     duplicate_scalar_key($presented_evidence;"kind") or
+     duplicate_prior_key($presented_prior) or
+     prior_document_alias($presented_prior)
   then ["evidence.presentation-ambiguous"] else [] end) |
  sort | unique) as $violations |
 (if ($violations | length) == 0 then

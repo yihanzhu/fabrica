@@ -193,13 +193,29 @@ pure_eval() {
     --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" \
     --arg presentation_sha "$(sha256_path "$input")" >"$output"
 }
+pure_eval_tuple() {
+  local request_input=$1 result_input=$2 presentation_input=$3 output=$4
+  local request_digest result_digest
+  request_digest=$(sha256_path "$request_input")
+  result_digest=$(sha256_path "$result_input")
+  "$jq_bin" -S -c -n -f "$program" --slurpfile policy "$policy" \
+    --slurpfile decision "$definition" --slurpfile policy_set "$policy_set" \
+    --slurpfile request "$request_input" --slurpfile resolved "$resolved" \
+    --slurpfile result "$result_input" --slurpfile presentation "$presentation_input" \
+    --arg policy_sha "$policy_sha" --arg decision_sha "$definition_sha" \
+    --arg policy_set_sha "$(sha256_path "$policy_set")" \
+    --arg request_sha "$request_digest" --arg resolved_sha "$resolved_sha" \
+    --arg result_sha "$result_digest" \
+    --arg presentation_sha "$(sha256_path "$presentation_input")" >"$output"
+}
 expect_pure_violation() {
-  local name=$1 filter=$2 reason=$3
+  local name=$1 filter=$2 reason=$3 second_reason=${4:-}
   local input="$tmp/$name.presentation" output="$tmp/$name.pure"
   "$jq_bin" -S -c "$filter" "$presentation" >"$input"
   pure_eval "$input" "$output"
-  "$jq_bin" -e --arg reason "$reason" '
+  "$jq_bin" -e --arg reason "$reason" --arg second "$second_reason" '
     .body.verdict=="violated" and (.body.reason_ids|index($reason)!=null) and
+    ($second=="" or (.body.reason_ids|index($second)!=null)) and
     .body.authority_effect=="none" and .body.storage_effect=="none" and
     ((.body|has("grant_ref") or has("qualification_ref") or has("activation"))|not)
   ' "$output" >/dev/null || fail "$name"
@@ -229,6 +245,103 @@ expect_pure_violation malformed-presentation '.body.evidence=1' \
   evidence.presentation-malformed
 expect_pure_violation ambiguous-presentation '.body.evidence += [.body.evidence[0]]' \
   evidence.presentation-ambiguous
+
+expect_pure_violation duplicate-evidence-id \
+  '.body.evidence += [(.body.evidence[0] | .kind="runtime-alt")]' \
+  evidence.presentation-ambiguous evidence.presentation-malformed
+expect_pure_violation duplicate-evidence-kind \
+  '.body.evidence += [(.body.evidence[0] | .evidence_id="evidence.zzz")]' \
+  evidence.presentation-ambiguous evidence.presentation-malformed
+expect_pure_violation reversed-evidence \
+  '.body.evidence += [(.body.evidence[0] | .evidence_id="evidence.zzz" |
+    .kind="runtime-alt")] | .body.evidence |= reverse' \
+  evidence.presentation-malformed
+expect_pure_violation duplicate-prior-key \
+  '.body.prior_evidence_refs += [.body.prior_evidence_refs[0]]' \
+  evidence.presentation-ambiguous evidence.presentation-malformed
+expect_pure_violation reversed-prior \
+  '.body.prior_evidence_refs += [(.body.prior_evidence_refs[0] |
+    .stage_result_ref.sha256=("9"*64) | .stage_result_ref.id="result.zzz" |
+    .evidence_id="evidence.zzz")] | .body.prior_evidence_refs |= reverse' \
+  evidence.presentation-malformed
+expect_pure_violation prior-document-alias \
+  '.body.prior_evidence_refs += [(.body.prior_evidence_refs[0] |
+    .stage_result_ref.id="result.alias" | .evidence_id="evidence.alias")] |
+    .body.prior_evidence_refs |= sort_by([.stage_result_ref.sha256,.evidence_id])' \
+  evidence.presentation-ambiguous
+
+shared_result="$tmp/shared-proof.result"
+shared_presentation="$tmp/shared-proof.presentation"
+shared_output="$tmp/shared-proof.out"
+"$jq_bin" -S -c '
+  .body.evidence += [(.body.evidence[0] |
+    .evidence_id="evidence.zzz" | .kind="runtime-alt" |
+    .proof_ref.content_id="proof.logical-alt" |
+    .proof_ref.media_type="application/vnd.ystack.alt-proof+json")] |
+  .body.evidence |= sort_by(.evidence_id)
+' "$result" >"$shared_result"
+shared_result_sha=$(sha256_path "$shared_result")
+"$jq_bin" -S -c --slurpfile result "$shared_result" \
+  --arg result_sha "$shared_result_sha" '
+  .body.evidence=$result[0].body.evidence |
+  .body.result_ref={schema_version:$result[0].schema_version,kind:$result[0].kind,
+    id:$result[0].id,sha256:$result_sha}
+' "$presentation" >"$shared_presentation"
+pure_eval_tuple "$request" "$shared_result" "$shared_presentation" "$shared_output"
+"$jq_bin" -e '
+  .body.verdict=="satisfied" and
+  .body.reason_ids==["evidence.integrity-satisfied"] and
+  (.body.evidence_refs|length)==2 and
+  (.body.evidence_refs[0].proof_ref.sha256==.body.evidence_refs[1].proof_ref.sha256) and
+  (.body.evidence_refs[0].proof_ref.content_id!=
+    .body.evidence_refs[1].proof_ref.content_id)
+' "$shared_output" >/dev/null || {
+  /bin/cat "$shared_output" >&2
+  fail 'same proof bytes distinct logical refs'
+}
+pass 'same proof digest under distinct logical refs remains valid'
+
+shared_mismatch="$tmp/shared-proof-mismatch.presentation"
+"$jq_bin" -S -c \
+  '.body.evidence[0].proof_ref.content_id="proof.presentation-only"' \
+  "$shared_presentation" >"$shared_mismatch"
+pure_eval_tuple "$request" "$shared_result" "$shared_mismatch" "$shared_output"
+"$jq_bin" -e '
+  .body.verdict=="violated" and
+  (.body.reason_ids|index("evidence.current-mismatch")!=null)
+' "$shared_output" >/dev/null || fail 'logical ref identity mismatch'
+pass 'changed logical proof identity with retained digest fails closed'
+
+absent_request="$tmp/qualification-absent.request"
+absent_result="$tmp/qualification-absent.result"
+absent_presentation="$tmp/qualification-absent.presentation"
+absent_output="$tmp/qualification-absent.out"
+"$jq_bin" -S -c 'del(.body.qualification_ref)' "$request" >"$absent_request"
+absent_request_sha=$(sha256_path "$absent_request")
+"$jq_bin" -S -c --arg request_sha "$absent_request_sha" \
+  '.body.request_ref.sha256=$request_sha |
+   .body.evidence[0].verdict="inconclusive"' "$result" >"$absent_result"
+absent_result_sha=$(sha256_path "$absent_result")
+"$jq_bin" -S -c --slurpfile request "$absent_request" \
+  --slurpfile result "$absent_result" --arg request_sha "$absent_request_sha" \
+  --arg result_sha "$absent_result_sha" '
+  .body.qualification_ref={state:"absent"} |
+  .body.request_ref={schema_version:$request[0].schema_version,kind:$request[0].kind,
+    id:$request[0].id,sha256:$request_sha} |
+  .body.result_ref={schema_version:$result[0].schema_version,kind:$result[0].kind,
+    id:$result[0].id,sha256:$result_sha} |
+  .body.evidence=$result[0].body.evidence
+' "$presentation" >"$absent_presentation"
+pure_eval_tuple "$absent_request" "$absent_result" "$absent_presentation" \
+  "$absent_output"
+"$jq_bin" -e '
+  .body.verdict=="satisfied" and
+  .body.qualification_observation=={state:"absent"} and
+  .body.qualification_semantics=="identity-only-unqualified" and
+  .body.authority_effect=="none" and .body.storage_effect=="none" and
+  (.body.evidence_refs[0].verdict=="inconclusive")
+' "$absent_output" >/dev/null || fail 'absent qualification identity-only'
+pass 'absent qualification and inconclusive proof remain identity-only'
 
 malformed="$tmp/malformed.full"
 "$jq_bin" -S -c '.body.evidence=1' "$presentation" >"$malformed"
@@ -358,5 +471,18 @@ wait "$signal_pid" || signal_status=$?
   [ -z "$(/usr/bin/find "$signal_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'signal cleanup'
 pass 'signal lifecycle is bounded and removes private scratch'
+
+for required in control/v1/evidence-integrity-policy.json \
+  control/v1/evidence-integrity-decision.json control/v1/evidence-integrity.jq \
+  control/v1/evaluate-evidence-integrity.sh \
+  scripts/test/control-evidence-integrity.test.sh; do
+  [ "$(/usr/bin/grep -Fxc "$required" "$root/ci/required-files.txt")" -eq 1 ] ||
+    fail "manifest $required"
+done
+/usr/bin/grep -Fq 'Inactive evidence-integrity evaluator' "$root/README.md" ||
+  fail 'README docs'
+/usr/bin/grep -Fq 'control-evidence-integrity.test.sh' "$root/RESTORE.md" ||
+  fail 'RESTORE docs'
+pass 'restore manifest and docs'
 
 /usr/bin/printf 'control evidence integrity: %s passed\n' "$passes"
