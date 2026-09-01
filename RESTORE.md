@@ -319,6 +319,17 @@ each cell, and checks the accepted 2×2 matrix plus closed negative protocol cas
 It uses no real adapter or credential and makes no network/host isolation,
 qualification, activation, or external-target-smoke claim.
 
+Restore the three paths in the manifest's inactive control policy-set block, then
+run:
+
+```sh
+bash scripts/test/control-policy-set.test.sh
+```
+
+The proof validates only the canonical six-section identity bundle. It does not
+evaluate a policy, grant authority, activate a profile, or enforce sandbox,
+credential, risk, kill-switch, or evidence behavior.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
