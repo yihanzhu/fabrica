@@ -205,7 +205,27 @@ sha256_path() {
 
 scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-credential-policy.XXXXXX" \
   2>/dev/null) || emit_error E_RUNTIME
+cleanup() {
+  /bin/rm -rf -- "$scratch" >/dev/null 2>&1 &&
+    [ ! -e "$scratch" ] && [ ! -L "$scratch" ]
+}
+EARLY_SIGNAL_EXITING=0
+early_signal_exit() {
+  local exit_status=${1:-1}
+  [ "${EARLY_SIGNAL_EXITING:-0}" -eq 0 ] || return 0
+  EARLY_SIGNAL_EXITING=1
+  exec >/dev/null 2>&1
+  cleanup || :
+  trap - EXIT HUP INT TERM
+  exit "$exit_status"
+}
+trap cleanup EXIT
+trap 'early_signal_exit 129' HUP
+trap 'early_signal_exit 130' INT
+trap 'early_signal_exit 143' TERM
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) ||
+  emit_error E_RUNTIME
+/usr/bin/printf '%s\n' "$$" >"$scratch/input-snapshot-pending" ||
   emit_error E_RUNTIME
 /bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
 ACTIVE_PID=
@@ -216,7 +236,6 @@ PENDING_SIGNAL_STATUS=0
 SELF_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') ||
   emit_error E_RUNTIME
 [[ "$SELF_PGID" =~ ^[1-9][0-9]*$ ]] || emit_error E_RUNTIME
-cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
 group_alive() {
   [ -n "${1:-}" ] && /bin/kill -0 -- "-$1" 2>/dev/null
 }
@@ -244,10 +263,10 @@ terminate_active() {
   ! group_alive "$group"
 }
 signal_exit() {
-  trap - EXIT
   exec >/dev/null 2>&1
   if [ -n "${ACTIVE_PGID:-}" ]; then terminate_active || :; fi
-  cleanup
+  cleanup || :
+  trap - EXIT HUP INT TERM
   exit "${1:-1}"
 }
 handle_signal() {
@@ -355,11 +374,6 @@ run_child() {
   replay_pending_signal
   return "$child_status"
 }
-trap cleanup EXIT
-trap 'handle_signal 129' HUP
-trap 'handle_signal 130' INT
-trap 'handle_signal 143' TERM
-
 snapshot_nofollow() {
   local source=$1 target=$2 limit=$3 copy_status expected_identity
   expected_identity=$(pinned_identity "$source") || emit_error E_RUNTIME
@@ -441,6 +455,14 @@ snapshot_fixed() {
   snapshot_nofollow "$source" "$target" 1048576
   size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
   [ "$size" -le 1048576 ] || emit_error E_LIMIT
+  pin_path "$target" 1048576 || emit_error E_RUNTIME
+}
+snapshot_fixed_executable() {
+  local source=$1 target=$2 size
+  snapshot_nofollow "$source" "$target" 1048576
+  size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || emit_error E_RUNTIME
+  [ "$size" -le 1048576 ] || emit_error E_LIMIT
+  /bin/chmod 0500 "$target" || emit_error E_RUNTIME
   pin_path "$target" 1048576 || emit_error E_RUNTIME
 }
 snapshot_executable() {
@@ -572,15 +594,16 @@ build_runtime_mirror() {
   while IFS= read -r relative; do
     source="$repo/$relative"
     target="$mirror/$relative"
-    snapshot_fixed "$source" "$target"
+    case "$relative" in
+      control/v1/evaluate-duty.sh|control/v1/validate.sh|scripts/core-contract.sh)
+        snapshot_fixed_executable "$source" "$target"
+        ;;
+      *) snapshot_fixed "$source" "$target" ;;
+    esac
   done < <(runtime_paths "$selected")
-  /bin/chmod 0500 "$mirror/control/v1/evaluate-duty.sh" \
-    "$mirror/control/v1/validate.sh" "$mirror/scripts/core-contract.sh" || return 1
   /usr/bin/printf '%s\n' "$mirror"
 }
 
-/usr/bin/printf '%s\n' "$$" >"$scratch/input-snapshot-pending" ||
-  emit_error E_RUNTIME
 snapshot_fixed "$source_path" "$scratch/driver.sh"
 snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
@@ -701,6 +724,11 @@ if [ "$live_runtime_sha" != "$mirror_runtime_sha" ] ||
   emit_error E_RELATION
 fi
 
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+: >"$scratch/runtime-handlers-ready" || emit_error E_RUNTIME
 : >"$scratch/duty-ready"
 duty_status=0
 run_child /usr/bin/env -i LC_ALL=C PATH="${jq_bin%/*}:/usr/bin:/bin" \
@@ -746,6 +774,8 @@ claim_sha=$(sha256_path "$scratch/claim.json") || emit_error E_RUNTIME
   --arg duty_sha "$duty_sha" --arg claim_sha "$claim_sha" \
   >"$scratch/output.json" 2>/dev/null || emit_error E_RELATION
 : >"$scratch/credential-complete"
+/usr/bin/printf '%s\n' "$$" >"$scratch/final-cleanup-pending" ||
+  emit_error E_RUNTIME
 
 if ! unchanged "$source_path" "$scratch/driver.sh" ||
    ! unchanged "$policy" "$scratch/policy.json" ||
@@ -819,7 +849,15 @@ canonical_json "$scratch/output.json" "$scratch/output.canonical"
   (.body.reason_ids|index("credential-policy.satisfied")==null) and
   ((.body|has("grant_ref") or has("activation") or has("credential_ref"))|not)
 ' "$scratch/output.json" >/dev/null 2>&1 || emit_error E_RUNTIME
-
-/bin/cat "$scratch/output.json" || emit_error E_RUNTIME
+: >"$scratch/final-output-validated" || emit_error E_RUNTIME
+exec 7<"$scratch/output.json" || emit_error E_RUNTIME
+if ! cleanup; then
+  exec 7<&-
+  emit_error E_RUNTIME
+fi
 trap - EXIT HUP INT TERM
-cleanup
+/bin/cat <&7 || {
+  exec 7<&-
+  emit_error E_RUNTIME
+}
+exec 7<&-

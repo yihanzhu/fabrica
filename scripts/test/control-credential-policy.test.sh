@@ -120,6 +120,64 @@ for source_path in control/v1/credential-policy.json \
 done
 pass 'canonical definitions and opaque generation identity'
 
+snapshot_fixed_exec_body=$(/usr/bin/awk '
+  /^snapshot_fixed_executable\(\) \{/ {capture=1}
+  capture {print}
+  capture && /^}$/ {exit}
+' "$evaluator")
+mirror_builder=$(/usr/bin/awk '
+  /^build_runtime_mirror\(\) \{/ {capture=1}
+  capture {print}
+  capture && /^}$/ {exit}
+' "$evaluator")
+snapshot_chmod_line=$(/usr/bin/printf '%s\n' "$snapshot_fixed_exec_body" |
+  /usr/bin/awk '/\/bin\/chmod 0500/ {print NR}')
+snapshot_pin_line=$(/usr/bin/printf '%s\n' "$snapshot_fixed_exec_body" |
+  /usr/bin/awk '/pin_path "\$target" 1048576/ {print NR}')
+snapshot_pin_count=$(/usr/bin/printf '%s\n' "$snapshot_fixed_exec_body" |
+  /usr/bin/grep -Fc 'pin_path "$target" 1048576')
+if [ -z "$snapshot_chmod_line" ] || [ -z "$snapshot_pin_line" ] ||
+   [ "$snapshot_chmod_line" -ge "$snapshot_pin_line" ] ||
+   [ "$snapshot_pin_count" -ne 1 ] ||
+   ! /usr/bin/printf '%s\n' "$snapshot_fixed_exec_body" |
+     /usr/bin/grep -Fq 'snapshot_nofollow "$source" "$target" 1048576'; then
+  fail 'fixed executable final-mode pin order'
+fi
+for mirror_executable in control/v1/evaluate-duty.sh control/v1/validate.sh \
+  scripts/core-contract.sh; do
+  /usr/bin/printf '%s\n' "$mirror_builder" |
+    /usr/bin/grep -Fq "$mirror_executable" ||
+    fail "mirror executable missing $mirror_executable"
+done
+/usr/bin/printf '%s\n' "$mirror_builder" |
+  /usr/bin/grep -Fq 'snapshot_fixed_executable "$source" "$target"' ||
+  fail 'mirror executable snapshot path'
+if /usr/bin/printf '%s\n' "$mirror_builder" | /usr/bin/grep -Fq '/bin/chmod'; then
+  fail 'mirror builder mutates mode after snapshot pin'
+fi
+pass 'mirrored executables pin only after final mode'
+
+final_success_body=$(/usr/bin/awk '
+  /^exec 7<"\$scratch\/output.json"/ {capture=1}
+  capture {print}
+' "$evaluator")
+final_open_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
+  /usr/bin/awk '/^exec 7</ {print NR; exit}')
+final_cleanup_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
+  /usr/bin/awk '/^if ! cleanup/ {print NR; exit}')
+final_disarm_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
+  /usr/bin/awk '/^trap - EXIT HUP INT TERM/ {print NR; exit}')
+final_output_line=$(/usr/bin/printf '%s\n' "$final_success_body" |
+  /usr/bin/awk '/^\/bin\/cat <&7/ {print NR; exit}')
+if [ -z "$final_open_line" ] || [ -z "$final_cleanup_line" ] ||
+   [ -z "$final_disarm_line" ] || [ -z "$final_output_line" ] ||
+   [ "$final_open_line" -ge "$final_cleanup_line" ] ||
+   [ "$final_cleanup_line" -ge "$final_disarm_line" ] ||
+   [ "$final_disarm_line" -ge "$final_output_line" ]; then
+  fail 'success cleanup trap order'
+fi
+pass 'success keeps cleanup armed through deletion before output'
+
 policy_set="$tmp/policy-set.json"
 "$jq_bin" -S -c -n --arg credential_policy_sha "$policy_sha" \
   --arg credential_decision_sha "$decision_sha" \
@@ -327,17 +385,18 @@ start_input_race() {
   /bin/rm -f -- "$gate"
 }
 
-stop_at_input_pending() {
-  local name=$1 scratch_root=$2 attempt=0 marker owner state stop_attempt=0
+stop_at_owned_marker() {
+  local name=$1 scratch_root=$2 marker_name=$3 forbidden_marker=${4:-}
+  local attempt=0 marker owner state stop_attempt=0
   marker=
   while [ -z "$marker" ] && [ "$attempt" -lt 5000 ]; do
-    marker=$(/usr/bin/find "$scratch_root" -type f -name input-snapshot-pending \
+    marker=$(/usr/bin/find "$scratch_root" -type f -name "$marker_name" \
       -print -quit 2>/dev/null) || marker=
     if [ -z "$marker" ] && ! /bin/kill -0 "$INPUT_RACE_PID" 2>/dev/null; then
       wait "$INPUT_RACE_PID" 2>/dev/null || :
       INPUT_RACE_PID=
       INPUT_RACE_PGID=
-      fail "$name evaluator exited before input snapshot marker"
+      fail "$name evaluator exited before $marker_name"
     fi
     [ -n "$marker" ] || /bin/sleep 0.001
     attempt=$((attempt + 1))
@@ -346,9 +405,9 @@ stop_at_input_pending() {
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
-    fail "$name input snapshot marker timeout"
+    fail "$name marker timeout: $marker_name"
   }
-  case "$marker" in "$scratch_root"/*/input-snapshot-pending) ;; *)
+  case "$marker" in "$scratch_root"/*/"$marker_name") ;; *)
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
@@ -376,13 +435,18 @@ stop_at_input_pending() {
     INPUT_RACE_PGID=
     fail "$name evaluator group did not stop"
   esac
-  if /usr/bin/find "$scratch_root" -type f -name input-snapshot-ready -print -quit |
-    /usr/bin/grep -q .; then
+  if [ -n "$forbidden_marker" ] &&
+     /usr/bin/find "$scratch_root" -type f -name "$forbidden_marker" -print -quit |
+       /usr/bin/grep -q .; then
     terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
     INPUT_RACE_PID=
     INPUT_RACE_PGID=
-    fail "$name missed guarded input window"
+    fail "$name missed guarded window before $forbidden_marker"
   fi
+}
+
+stop_at_input_pending() {
+  stop_at_owned_marker "$1" "$2" input-snapshot-pending input-snapshot-ready
 }
 
 wait_evaluator_group() {
@@ -532,6 +596,24 @@ signal_owned_child_group() {
   SIGNAL_DESCENDANT_PID=$descendant
   /bin/kill -TERM "$INPUT_RACE_PID" || fail "$name signal delivery"
 }
+
+startup_cleanup_scratch="$tmp/startup-cleanup-scratch"
+/bin/mkdir "$startup_cleanup_scratch"
+start_input_race startup-cleanup "$startup_cleanup_scratch" "$claim"
+stop_at_input_pending startup-cleanup "$startup_cleanup_scratch"
+if /usr/bin/find "$startup_cleanup_scratch" -type f \
+  -name runtime-handlers-ready -print -quit | /usr/bin/grep -q .; then
+  fail 'startup cleanup missed early-handler window'
+fi
+/bin/kill -TERM "$INPUT_RACE_PID" || fail 'startup cleanup signal delivery'
+/bin/kill -CONT -- "-$INPUT_RACE_PGID" || fail 'startup cleanup resume'
+wait_evaluator_group startup-cleanup
+if [ "$INPUT_RACE_STATUS" -ne 143 ] || [ -s "$tmp/startup-cleanup.out" ] ||
+   [ -s "$tmp/startup-cleanup.err" ] ||
+   [ -n "$(/usr/bin/find "$startup_cleanup_scratch" -mindepth 1 -print -quit)" ]; then
+  fail 'startup signal cleanup'
+fi
+pass 'startup signal keeps cleanup armed and removes scratch'
 
 run_driver baseline
 "$jq_bin" -e '.body.verdict=="inconclusive" and
@@ -880,5 +962,20 @@ SIGNAL_CHILD_PID=
 SIGNAL_CHILD_PGID=
 SIGNAL_DESCENDANT_PID=
 pass 'owned live child group is signaled, reaped, and scratch-cleaned'
+
+final_cleanup_scratch="$tmp/final-cleanup-scratch"
+/bin/mkdir "$final_cleanup_scratch"
+start_input_race final-cleanup "$final_cleanup_scratch" "$claim"
+stop_at_owned_marker final-cleanup "$final_cleanup_scratch" final-cleanup-pending \
+  final-output-validated
+/bin/kill -TERM "$INPUT_RACE_PID" || fail 'final cleanup signal delivery'
+/bin/kill -CONT -- "-$INPUT_RACE_PGID" || fail 'final cleanup resume'
+wait_evaluator_group final-cleanup
+if [ "$INPUT_RACE_STATUS" -ne 143 ] || [ -s "$tmp/final-cleanup.out" ] ||
+   [ -s "$tmp/final-cleanup.err" ] ||
+   [ -n "$(/usr/bin/find "$final_cleanup_scratch" -mindepth 1 -print -quit)" ]; then
+  fail 'final signal cleanup'
+fi
+pass 'final signal keeps cleanup armed and removes scratch before output'
 
 /usr/bin/printf 'control credential policy: %s passed\n' "$passes"
