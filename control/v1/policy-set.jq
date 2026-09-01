@@ -4,12 +4,15 @@ def exact($required):
 def id_ok:
   type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
 
+def content_id_ok:
+  id_ok and (contains(":") | not) and (contains("/") | not);
+
 def sha256_ok:
   type == "string" and test("\\A[0-9a-f]{64}\\z");
 
 def content_ref_ok($media_type):
   exact(["content_id","media_type","sha256"]) and
-  (.content_id | id_ok) and .media_type == $media_type and
+  (.content_id | content_id_ok) and .media_type == $media_type and
   (.sha256 | sha256_ok);
 
 def section_shape_ok:

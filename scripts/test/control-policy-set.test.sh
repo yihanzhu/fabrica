@@ -130,8 +130,21 @@ for section_index in 0 1 2 3 4 5; do
       fail "core content ref output $core_ref_count"
   done
 done
-[ "$core_ref_count" -eq 12 ] || fail 'core content ref coverage'
-pass 'all policy and decision refs pass the public core seam'
+core_ref_count=$((core_ref_count + 1))
+core_case="$tmp/core-ref-$core_ref_count-package.json"
+"$jq_bin" -S -c --slurpfile policy "$valid" \
+  '.body.selection_ref.decision_record_ref =
+    $policy[0].body.core_contract.package_ref' \
+  "$core_request" > "$core_case"
+core_out="$tmp/core-ref-$core_ref_count.out"
+core_err="$tmp/core-ref-$core_ref_count.err"
+PATH="$bin:/usr/bin:/bin" /bin/bash "$core_wrapper" \
+  validate-document "$core_case" > "$core_out" 2> "$core_err" ||
+  fail 'core package content ref'
+[ ! -s "$core_out" ] && [ ! -s "$core_err" ] ||
+  fail 'core package content ref output'
+[ "$core_ref_count" -eq 13 ] || fail 'core content ref coverage'
+pass 'all content refs pass the public core seam'
 for field in schema_version kind id body; do
   expect_error "missing-envelope-$field" E_SHAPE "$(mutate "missing-envelope-$field" "del(.$field)")"
 done
@@ -154,6 +167,8 @@ expect_error section-renamed E_RELATION "$(mutate section-renamed '.body.section
 expect_error policy-media E_SHAPE "$(mutate policy-media '.body.sections[0].policy_ref.media_type="application/json"')"
 expect_error decision-media E_SHAPE "$(mutate decision-media '.body.sections[0].decision_ref.media_type="application/json"')"
 expect_error package-media E_SHAPE "$(mutate package-media '.body.core_contract.package_ref.media_type="application/json"')"
+expect_error package-id-colon E_SHAPE "$(mutate package-id-colon '.body.core_contract.package_ref.content_id="core:package"')"
+expect_error package-id-path E_SHAPE "$(mutate package-id-path '.body.core_contract.package_ref.content_id="core/package"')"
 expect_error bad-digest E_SHAPE "$(mutate bad-digest '.body.sections[0].policy_ref.sha256="bad"')"
 expect_error bad-id E_SHAPE "$(mutate bad-id '.id="Bad ID"')"
 expect_error policy-id-link E_RELATION "$(mutate policy-id-link '.body.sections[0].policy_ref.content_id="control-policy.other"')"
