@@ -3,11 +3,18 @@
 set -uo pipefail
 export LC_ALL=C
 umask 077
+relation_stage="initial"
 
 emit_error() {
   case "${1:-}" in
-    E_USAGE|E_RUNTIME|E_LIMIT|E_RELATION|E_DUTY)
+    E_USAGE|E_RUNTIME|E_LIMIT|E_DUTY)
       /usr/bin/printf '%s\n' "$1" >&2
+      ;;
+    E_RELATION)
+      /usr/bin/printf '%s\n' E_RELATION >&2
+      if [ "${YSTACK_RISK_TEST_RELATION_STAGE:-0}" = 1 ]; then
+        /usr/bin/printf 'relation-stage:%s\n' "$relation_stage" >&2
+      fi
       ;;
     *) /usr/bin/printf '%s\n' E_RUNTIME >&2 ;;
   esac
@@ -158,6 +165,7 @@ fixed_files_ok() {
 
 names=(policy-set request resolved result duty-evaluation claim)
 index=0
+relation_stage="input-snapshot"
 for input in "$@"; do
   snapshot_fixed "$input" "$scratch/${names[$index]}.json"
   canonical_json "$scratch/${names[$index]}.json" \
@@ -170,6 +178,7 @@ done
   (.id|type=="string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z")) and
   (.body|type=="object")
 ' "$scratch/claim.json" >/dev/null 2>&1 || emit_error E_RELATION
+relation_stage="shipped-snapshot"
 snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
 snapshot_fixed "$program" "$scratch/program.jq"
@@ -182,6 +191,7 @@ for control_dir in "$repo/control" "$source_dir"; do
 done
 [ "$source_dir" = "$repo/control/v1" ] || emit_error E_RELATION
 
+relation_stage="shipped-identity"
 driver_sha=$(sha256_path "$source_path") || emit_error E_RUNTIME
 program_sha=$(sha256_path "$scratch/program.jq") || emit_error E_RUNTIME
 policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
@@ -241,12 +251,17 @@ validator_program_sha=$(sha256_path "$validator_program") || emit_error E_RUNTIM
       media_type:"text/x-jq",sha256:$duty_program_sha}}
 ' "$duty_decision" >/dev/null 2>&1 || emit_error E_RELATION
 
+relation_stage="runtime-select"
 selected=$(selected_core_generation "$core_driver") || emit_error E_RELATION
+relation_stage="runtime-live-pre"
 live_runtime_sha=$(runtime_closure_sha "$repo" "$selected" live-pre) ||
   emit_error E_RELATION
+relation_stage="runtime-mirror-build"
 mirror_root=$(build_runtime_mirror "$selected") || emit_error E_RELATION
+relation_stage="runtime-mirror-pre"
 mirror_runtime_sha=$(runtime_closure_sha "$mirror_root" "$selected" mirror-pre) ||
   emit_error E_RELATION
+relation_stage="runtime-pre-match"
 [ "$live_runtime_sha" = "$mirror_runtime_sha" ] || emit_error E_RELATION
 
 : >"$scratch/duty-ready"
@@ -256,16 +271,20 @@ PATH="${jq_bin%/*}:/usr/bin:/bin" "$mirror_root/control/v1/evaluate-duty.sh" eva
   "$scratch/result.json" >"$scratch/generated-duty.json" \
   2>"$scratch/generated-duty.err" || duty_status=$?
 : >"$scratch/duty-complete"
+relation_stage="runtime-live-post-duty"
 post_live_runtime_sha=$(runtime_closure_sha "$repo" "$selected" live-post-duty) ||
   emit_error E_RELATION
+relation_stage="runtime-mirror-post-duty"
 post_mirror_runtime_sha=$(runtime_closure_sha \
   "$mirror_root" "$selected" mirror-post-duty) || emit_error E_RELATION
+relation_stage="runtime-post-duty-match"
 [ "$post_live_runtime_sha" = "$live_runtime_sha" ] &&
   [ "$post_mirror_runtime_sha" = "$mirror_runtime_sha" ] || emit_error E_RELATION
 [ "$duty_status" -eq 0 ] || emit_error E_DUTY
 /usr/bin/cmp -s "$scratch/generated-duty.json" "$scratch/duty-evaluation.json" ||
   emit_error E_DUTY
 
+relation_stage="stage-identity"
 policy_set_sha=$(sha256_path "$scratch/policy-set.json") || emit_error E_RUNTIME
 request_sha=$(sha256_path "$scratch/request.json") || emit_error E_RUNTIME
 resolved_sha=$(sha256_path "$scratch/resolved.json") || emit_error E_RUNTIME
@@ -295,6 +314,7 @@ requirement_descriptor=$("$jq_bin" -S -c -n --arg policy_sha "$policy_sha" \
 ') || emit_error E_RELATION
 requirement_scope_sha=$(sha256_text "$requirement_descriptor") || emit_error E_RUNTIME
 
+relation_stage="risk-evaluation"
 : >"$scratch/risk-ready"
 "$jq_bin" -S -c -n -f "$scratch/program.jq" \
   --slurpfile policy "$scratch/policy.json" \
@@ -314,11 +334,15 @@ requirement_scope_sha=$(sha256_text "$requirement_descriptor") || emit_error E_R
   --arg requirement_scope_sha "$requirement_scope_sha" \
   >"$scratch/evaluation.json" 2>/dev/null || emit_error E_RUNTIME
 : >"$scratch/risk-complete"
+relation_stage="runtime-post"
 fixed_files_ok || emit_error E_RELATION
+relation_stage="runtime-live-post-risk"
 final_live_runtime_sha=$(runtime_closure_sha "$repo" "$selected" live-post-risk) ||
   emit_error E_RELATION
+relation_stage="runtime-mirror-post-risk"
 final_mirror_runtime_sha=$(runtime_closure_sha \
   "$mirror_root" "$selected" mirror-post-risk) || emit_error E_RELATION
+relation_stage="runtime-post-risk-match"
 [ "$final_live_runtime_sha" = "$live_runtime_sha" ] &&
   [ "$final_mirror_runtime_sha" = "$mirror_runtime_sha" ] || emit_error E_RELATION
 canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||

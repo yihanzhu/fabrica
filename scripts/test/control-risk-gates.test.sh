@@ -337,8 +337,9 @@ build_case() {
 expect_eval() {
   local name=$1 verdict=$2 reason=$3
   local dir="$tmp/$name" out="$tmp/$name/risk.out"
-  PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$dir/request.json" \
-    "$resolved" "$dir/result.json" "$dir/duty.json" "$dir/claim.json" \
+  YSTACK_RISK_TEST_RELATION_STAGE=1 PATH="$bin:/usr/bin:/bin" \
+    "$evaluator" evaluate "$policy_set" "$dir/request.json" "$resolved" \
+    "$dir/result.json" "$dir/duty.json" "$dir/claim.json" \
     >"$out" 2>"$dir/risk.err" || {
       /bin/cat "$dir/risk.err" >&2
       fail "$name status"
