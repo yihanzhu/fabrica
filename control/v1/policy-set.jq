@@ -51,9 +51,9 @@ def relations_ok:
     test("\\Acore\\.contracts\\.v[1-9][0-9]*\\z")) and
   ($body.sections | map(.section_id)) == expected_sections and
   ($body.sections | all(.[];
-    .policy_ref.content_id == ("control-policy:" + .section_id))) and
+    .policy_ref.content_id == ("control-policy." + .section_id))) and
   ($body.sections | all(.[];
-    .decision_ref.content_id == ("control-decision:" + .section_id))) and
+    .decision_ref.content_id == ("control-decision." + .section_id))) and
   ($body.sections | map(.policy_ref.sha256) | unique | length) == 6 and
   ($body.sections | map(.decision_ref.content_id) | unique | length) == 6 and
   ($body.sections | map(.decision_ref.sha256) | unique | length) == 6;

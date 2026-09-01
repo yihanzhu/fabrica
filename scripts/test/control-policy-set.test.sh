@@ -59,8 +59,8 @@ valid="$tmp/valid.json"
     elif $character=="5" then "e" else "f" end;
   def section($id;$character):
     {section_id:$id,
-     policy_ref:ref("control-policy:"+$id;"application/vnd.ystack.control-policy+json";$character),
-     decision_ref:ref("control-decision:"+$id;"application/vnd.ystack.control-decision+json";
+     policy_ref:ref("control-policy."+$id;"application/vnd.ystack.control-policy+json";$character),
+     decision_ref:ref("control-decision."+$id;"application/vnd.ystack.control-decision+json";
        decision_character($character))};
   {schema_version:1,kind:"control_policy_set",id:"control-policy-set.example",
    body:{policy_version:"v1",activation_state:"inactive",fail_mode:"closed",
@@ -101,6 +101,17 @@ mutate() {
 }
 
 expect_pass canonical-valid "$valid"
+core_generation=g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e
+core_modules="$root/core/v2/generations/$core_generation/modules"
+[ -f "$core_modules/schema.jq" ] || fail 'core schema seam'
+"$jq_bin" -L "$core_modules" -e '
+  import "schema" as schema;
+  (.body.sections | length) == 6 and
+  all(.body.sections[];
+    (.policy_ref | schema::content_ref_ok) and
+    (.decision_ref | schema::content_ref_ok))
+' "$valid" >/dev/null || fail 'core content refs'
+pass 'policy and decision refs satisfy core content-ref contract'
 for field in schema_version kind id body; do
   expect_error "missing-envelope-$field" E_SHAPE "$(mutate "missing-envelope-$field" "del(.$field)")"
 done
@@ -116,7 +127,7 @@ for field in section_id policy_ref decision_ref; do
 done
 
 expect_error section-missing E_RELATION "$(mutate section-missing '.body.sections |= .[:-1]')"
-expect_error section-extra E_RELATION "$(mutate section-extra '.body.sections += [(.body.sections[0] | .section_id="other" | .policy_ref.content_id="control-policy:other" | .policy_ref.sha256=("8"*64) | .decision_ref.content_id="control-decision:other" | .decision_ref.sha256=("8"*64))]')"
+expect_error section-extra E_RELATION "$(mutate section-extra '.body.sections += [(.body.sections[0] | .section_id="other" | .policy_ref.content_id="control-policy.other" | .policy_ref.sha256=("8"*64) | .decision_ref.content_id="control-decision.other" | .decision_ref.sha256=("8"*64))]')"
 expect_error section-duplicate E_RELATION "$(mutate section-duplicate '.body.sections[1]=.body.sections[0]')"
 expect_error section-reordered E_RELATION "$(mutate section-reordered '.body.sections[0:2] |= reverse')"
 expect_error section-renamed E_RELATION "$(mutate section-renamed '.body.sections[0].section_id="renamed"')"
@@ -125,8 +136,8 @@ expect_error decision-media E_SHAPE "$(mutate decision-media '.body.sections[0].
 expect_error package-media E_SHAPE "$(mutate package-media '.body.core_contract.package_ref.media_type="application/json"')"
 expect_error bad-digest E_SHAPE "$(mutate bad-digest '.body.sections[0].policy_ref.sha256="bad"')"
 expect_error bad-id E_SHAPE "$(mutate bad-id '.id="Bad ID"')"
-expect_error policy-id-link E_RELATION "$(mutate policy-id-link '.body.sections[0].policy_ref.content_id="control-policy:other"')"
-expect_error decision-id-link E_RELATION "$(mutate decision-id-link '.body.sections[0].decision_ref.content_id="control-decision:other"')"
+expect_error policy-id-link E_RELATION "$(mutate policy-id-link '.body.sections[0].policy_ref.content_id="control-policy.other"')"
+expect_error decision-id-link E_RELATION "$(mutate decision-id-link '.body.sections[0].decision_ref.content_id="control-decision.other"')"
 expect_error core-identity E_RELATION "$(mutate core-identity '.body.core_contract.semantic_identity="other.contract"')"
 expect_error core-generation E_SHAPE "$(mutate core-generation '.body.core_contract.generation_id="g-bad"')"
 expect_error core-generation-number E_SHAPE "$(mutate core-generation-number '.body.core_contract.generation_id=1')"
