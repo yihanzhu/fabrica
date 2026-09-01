@@ -117,6 +117,21 @@ but that grants no authority or permission and does not cancel or run anything.
 The package stays inactive, reads no credential, activates no profile, and performs
 no candidate, network, publish, deploy, signal, or external-write action.
 
+## Inactive sandbox-policy evaluator
+
+`control/v1/evaluate-sandbox.sh` checks one execution-environment claim against
+the shipped sandbox ceiling. It binds the policy set, policy, decision, evaluator,
+duty-separation result, and selected public-core identities before producing a
+canonical observation. The ceiling requires a cleared, allowlisted environment;
+fixed roots, resources, tools, and limits; no host access; denied network; and no
+credential, secret, target-write, or external-write exposure.
+
+The result is declaration-only: `satisfied`, `violated`, or `inconclusive`. Even a
+`satisfied` claim does not prove that a real sandbox enforced those properties and
+grants no authority, qualification, or permission. The package stays inactive,
+runs no candidate or adapter, reads no credential, activates no profile, and
+performs no network, publish, deploy, or external-write action.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

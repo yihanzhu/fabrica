@@ -366,6 +366,19 @@ output, and bounded child-process cleanup. The evaluator is inactive and
 observation only. It does not send a signal, cancel or run a candidate, grant
 authority, use a credential, activate a profile, or perform an external write.
 
+Restore the five paths in the manifest's inactive sandbox-policy block, then run:
+
+```sh
+bash scripts/test/control-sandbox-policy.test.sh
+```
+
+This checks exact identity closure, the complete allowlisted declaration, unknown
+and violated inputs, duty failure, stale links, malformed input, deterministic
+output, snapshotted jq execution, and postflight mutation detection. The result is
+inactive and declaration-only. It does not enforce or qualify a real sandbox, run
+a candidate or adapter, use a credential, activate a profile, or perform a network
+or external-write action.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
