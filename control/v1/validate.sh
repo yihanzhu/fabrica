@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -uo pipefail
 export LC_ALL=C
 umask 077
