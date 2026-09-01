@@ -379,12 +379,34 @@ pass 'late target commit recheck'
 
 signal_out="$tmp/signal.out"
 signal_err="$tmp/signal.err"
+set -m
 PATH="$bin:/usr/bin:/bin" "$runner" "$inventory" "$fixture" > "$signal_out" 2> "$signal_err" &
 signal_pid=$!
+signal_groups=$(jobs -p)
+set +m
+signal_group_count=$(/usr/bin/printf '%s\n' "$signal_groups" |
+  /usr/bin/awk 'NF { count++ } END { print count + 0 }')
+signal_group=$signal_groups
+if [ "$signal_group_count" -ne 1 ] || ! [[ "$signal_group" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$signal_group" != "$signal_pid" ]; then
+  /bin/kill "$signal_pid" 2>/dev/null || :
+  wait "$signal_pid" 2>/dev/null || :
+  fail 'isolated signal process group'
+fi
 signal_marker=''
+signal_child_group=''
 for _ in {1..6000}; do
-  signal_marker=$(/usr/bin/find "$fixture/scratch" -name 'request-payload.1' -type f -print -quit)
-  [ -z "$signal_marker" ] || break
+  signal_marker=$(/usr/bin/find "$fixture/scratch" -path '*/timeout.home/.runner-active-group' \
+    -type f -print -quit)
+  if [ -n "$signal_marker" ]; then
+    signal_child_group=''
+    IFS= read -r signal_child_group < "$signal_marker" || :
+    if [[ "$signal_child_group" =~ ^[1-9][0-9]*$ ]] &&
+       kill -0 -- "-$signal_child_group" 2>/dev/null; then
+      break
+    fi
+    signal_marker=''
+  fi
   /bin/kill -0 "$signal_pid" 2>/dev/null || break
   /bin/sleep 0.02
 done
@@ -396,7 +418,7 @@ fi
 signal_sent=0
 for _ in {1..200}; do
   /bin/kill -0 "$signal_pid" 2>/dev/null || break
-  /bin/kill -TERM "$signal_pid" 2>/dev/null || break
+  kill -TERM -- "-$signal_group" 2>/dev/null || break
   signal_sent=$((signal_sent + 1))
   /bin/sleep 0.005
 done
@@ -405,6 +427,7 @@ wait "$signal_pid" || signal_status=$?
 /bin/sleep 2.2
 signal_stdout_bytes=$(/usr/bin/wc -c < "$signal_out" | /usr/bin/tr -d ' ')
 signal_stderr_bytes=$(/usr/bin/wc -c < "$signal_err" | /usr/bin/tr -d ' ')
+signal_stderr_sha256=$(sha_file "$signal_err")
 signal_stdout_class=empty
 signal_stderr_class=empty
 [ "$signal_stdout_bytes" -eq 0 ] || signal_stdout_class=other
@@ -412,6 +435,14 @@ if [ "$signal_stderr_bytes" -ne 0 ]; then
   if /usr/bin/grep -Eq '(^|[[:space:]])(Terminated|Killed|Hangup|Interrupt|Done)(:|[[:space:]]|$)' \
       "$signal_err"; then
     signal_stderr_class=job-control
+  elif /usr/bin/grep -Eq 'warning: run_pending_traps: bad value in trap_list\[[0-9]+\]: 0x[[:xdigit:]]+' \
+      "$signal_err"; then
+    signal_stderr_class=bash-trap-table
+  elif /usr/bin/grep -Eq '(^|[[:space:]])E_[A-Z_]+([[:space:]]|$)' "$signal_err"; then
+    signal_stderr_class=typed-error
+  elif /usr/bin/grep -Eq '(line [0-9]+:|unbound variable|not a child|syntax error)' \
+      "$signal_err"; then
+    signal_stderr_class=shell-runtime
   else
     signal_stderr_class=other
   fi
@@ -422,12 +453,13 @@ if /usr/bin/find "$fixture/scratch" \( -name timeout-survived -o -name descendan
     -print -quit | /usr/bin/grep -q .; then
   signal_survivor=present
 fi
-if [ "$signal_sent" -le 0 ] || [ "$signal_status" -ne 143 ] ||
+if [ "$signal_sent" -lt 2 ] || [ "$signal_status" -ne 143 ] ||
    [ "$signal_stdout_bytes" -ne 0 ] || [ "$signal_stderr_bytes" -ne 0 ] ||
    [ "$signal_scratch_count" -ne 0 ] || [ "$signal_survivor" != absent ]; then
-  /usr/bin/printf 'signal-debug status=%s sent=%s stdout_bytes=%s stdout_class=%s stderr_bytes=%s stderr_class=%s scratch_entries=%s survivor=%s\n' \
+  /usr/bin/printf 'signal-debug status=%s sent=%s stdout_bytes=%s stdout_class=%s stderr_bytes=%s stderr_sha256=%s stderr_class=%s scratch_entries=%s survivor=%s\n' \
     "$signal_status" "$signal_sent" "$signal_stdout_bytes" "$signal_stdout_class" \
-    "$signal_stderr_bytes" "$signal_stderr_class" "$signal_scratch_count" "$signal_survivor" >&2
+    "$signal_stderr_bytes" "$signal_stderr_sha256" "$signal_stderr_class" \
+    "$signal_scratch_count" "$signal_survivor" >&2
   fail 'signal group cleanup'
 fi
 pass 'TERM stops adapter group and cleans scratch'
