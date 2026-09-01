@@ -104,6 +104,19 @@ no `satisfied` result. It grants no approval, authority, qualification, or
 permission, activates nothing, and performs no candidate, credential, network,
 publish, deploy, or external-write action.
 
+## Inactive kill-switch evaluator
+
+`control/v1/evaluate-kill-switch.sh` checks a caller-supplied stop-state snapshot
+for one attempt across global, repository, workflow, stage, and attempt scopes. It
+binds the policy-set, policy, decision, evaluator, duty-separation result, and
+selected public-core identities before producing a canonical observation. Any
+matching stop wins; stale, replayed, conflicting, or malformed state fails closed.
+
+The evaluator is observation only. A fully cleared snapshot may be `satisfied`,
+but that grants no authority or permission and does not cancel or run anything.
+The package stays inactive, reads no credential, activates no profile, and performs
+no candidate, network, publish, deploy, signal, or external-write action.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
