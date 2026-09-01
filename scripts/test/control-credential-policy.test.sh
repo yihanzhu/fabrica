@@ -19,7 +19,41 @@ duty_decision="$root/control/v1/duty-separation-decision.json"
 core_wrapper="$root/scripts/core-contract.sh"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-credential-test.XXXXXX")
 tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
-cleanup() { /bin/rm -rf -- "$tmp"; }
+INPUT_RACE_PID=
+INPUT_RACE_PGID=
+INPUT_RACE_STATUS=
+TEST_PGID=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || exit 1
+[[ "$TEST_PGID" =~ ^[1-9][0-9]*$ ]] || exit 1
+group_alive() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$1" 2>/dev/null
+}
+terminate_input_race() {
+  local leader=$1 group=$2 attempt=0
+  [[ "$leader" =~ ^[1-9][0-9]*$ ]] && [[ "$group" =~ ^[1-9][0-9]*$ ]] &&
+    [ "$leader" = "$group" ] && [ "$group" != "$TEST_PGID" ] || return 1
+  /bin/kill -TERM -- "-$group" 2>/dev/null || :
+  /bin/kill -CONT -- "-$group" 2>/dev/null || :
+  while group_alive "$group" && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1))
+    /bin/sleep 0.01
+  done
+  if group_alive "$group"; then
+    /bin/kill -KILL -- "-$group" 2>/dev/null || :
+    attempt=0
+    while group_alive "$group" && [ "$attempt" -lt 100 ]; do
+      attempt=$((attempt + 1))
+      /bin/sleep 0.01
+    done
+  fi
+  wait "$leader" 2>/dev/null || :
+  ! group_alive "$group"
+}
+cleanup() {
+  if [ -n "${INPUT_RACE_PID:-}" ] || [ -n "${INPUT_RACE_PGID:-}" ]; then
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+  fi
+  /bin/rm -rf -- "$tmp"
+}
 trap cleanup EXIT HUP INT TERM
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
@@ -234,6 +268,144 @@ mutate_claim() {
   /usr/bin/printf '%s\n' "$destination"
 }
 
+start_input_race() {
+  local name=$1 scratch_root=$2 claim_path=$3 gate leader pgid attempt=0
+  gate="$tmp/$name.launch.gate"
+  INPUT_RACE_OUT="$tmp/$name.out"
+  INPUT_RACE_ERR="$tmp/$name.err"
+  /usr/bin/mkfifo "$gate" || fail "$name launch gate"
+  exec 8<>"$gate" || fail "$name launch gate open"
+  set -m
+  /bin/bash -c '
+    IFS= read -r token <&8 || exit 125
+    exec 8>&-
+    [ "$token" = go ] || exit 125
+    race_tmp=$1
+    race_path=$2
+    shift 2
+    TMPDIR=$race_tmp PATH=$race_path exec "$@"
+  ' input-race "$scratch_root" "$bin:/usr/bin:/bin" "$evaluator" evaluate \
+    "$policy_set" "$request" "$resolved" "$result" "$duty" "$claim_path" \
+    >"$INPUT_RACE_OUT" 2>"$INPUT_RACE_ERR" &
+  leader=$!
+  set +m
+  pgid=
+  while [ -z "$pgid" ] && /bin/kill -0 "$leader" 2>/dev/null &&
+    [ "$attempt" -lt 100 ]; do
+    pgid=$(/bin/ps -o pgid= -p "$leader" 2>/dev/null |
+      /usr/bin/tr -d ' ') || pgid=
+    [ -n "$pgid" ] || /bin/sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  if [[ ! "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$leader" ] ||
+     [ "$pgid" = "$TEST_PGID" ]; then
+    /usr/bin/printf 'abort\n' >&8 || :
+    exec 8>&-
+    /bin/rm -f -- "$gate"
+    /bin/kill -KILL "$leader" 2>/dev/null || :
+    wait "$leader" 2>/dev/null || :
+    fail "$name unsafe evaluator process group"
+  fi
+  INPUT_RACE_PID=$leader
+  INPUT_RACE_PGID=$pgid
+  /usr/bin/printf 'go\n' >&8 || {
+    exec 8>&-
+    /bin/rm -f -- "$gate"
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name launch release"
+  }
+  exec 8>&-
+  /bin/rm -f -- "$gate"
+}
+
+stop_at_input_pending() {
+  local name=$1 scratch_root=$2 attempt=0 marker owner state stop_attempt=0
+  marker=
+  while [ -z "$marker" ] && [ "$attempt" -lt 5000 ]; do
+    marker=$(/usr/bin/find "$scratch_root" -type f -name input-snapshot-pending \
+      -print -quit 2>/dev/null) || marker=
+    if [ -z "$marker" ] && ! /bin/kill -0 "$INPUT_RACE_PID" 2>/dev/null; then
+      wait "$INPUT_RACE_PID" 2>/dev/null || :
+      INPUT_RACE_PID=
+      INPUT_RACE_PGID=
+      fail "$name evaluator exited before input snapshot marker"
+    fi
+    [ -n "$marker" ] || /bin/sleep 0.001
+    attempt=$((attempt + 1))
+  done
+  [ -n "$marker" ] || {
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name input snapshot marker timeout"
+  }
+  case "$marker" in "$scratch_root"/*/input-snapshot-pending) ;; *)
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name marker escaped scratch"
+  esac
+  owner=$(/bin/cat "$marker")
+  [ "$owner" = "$INPUT_RACE_PID" ] || {
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name marker owner mismatch"
+  }
+  /bin/kill -STOP -- "-$INPUT_RACE_PGID" || fail "$name stop evaluator group"
+  state=
+  while [ "$stop_attempt" -lt 100 ]; do
+    state=$(/bin/ps -o state= -p "$INPUT_RACE_PID" 2>/dev/null |
+      /usr/bin/tr -d ' ') || state=
+    case "$state" in T*) break ;; esac
+    /bin/sleep 0.01
+    stop_attempt=$((stop_attempt + 1))
+  done
+  case "$state" in T*) ;; *)
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name evaluator group did not stop"
+  esac
+  if /usr/bin/find "$scratch_root" -type f -name input-snapshot-ready -print -quit |
+    /usr/bin/grep -q .; then
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name missed guarded input window"
+  fi
+}
+
+resume_and_wait_input_race() {
+  local name=$1 attempt=0 state status=0
+  /bin/kill -CONT -- "-$INPUT_RACE_PGID" || fail "$name resume evaluator group"
+  while [ "$attempt" -lt 1000 ]; do
+    state=$(/bin/ps -o state= -p "$INPUT_RACE_PID" 2>/dev/null |
+      /usr/bin/tr -d ' ') || state=
+    case "$state" in ''|Z*) break ;; esac
+    /bin/sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  if [ "$attempt" -ge 1000 ]; then
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name evaluator completion timeout"
+  fi
+  wait "$INPUT_RACE_PID" 2>/dev/null || status=$?
+  if group_alive "$INPUT_RACE_PGID"; then
+    terminate_input_race "$INPUT_RACE_PID" "$INPUT_RACE_PGID" || :
+    INPUT_RACE_PID=
+    INPUT_RACE_PGID=
+    fail "$name evaluator left descendants"
+  fi
+  INPUT_RACE_STATUS=$status
+  INPUT_RACE_PID=
+  INPUT_RACE_PGID=
+}
+
 run_driver baseline
 "$jq_bin" -e '.body.verdict=="inconclusive" and
   .body.reason_ids==["claim.provenance-unqualified"] and
@@ -395,35 +567,25 @@ swap_target="$tmp/synthetic-sensitive.json"
 /usr/bin/printf '%s\n' '{"synthetic_secret":"must-not-be-read"}' >"$swap_target"
 swap_scratch="$tmp/swap-scratch"
 /bin/mkdir "$swap_scratch"
-(
-  swap_status=0
-  TMPDIR="$swap_scratch" PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate \
-    "$policy_set" "$request" "$resolved" "$result" "$duty" "$swap_claim" \
-    >"$tmp/swap.out" 2>"$tmp/swap.err" || swap_status=$?
-  /usr/bin/printf '%s\n' "$swap_status" >"$tmp/swap.status"
-) &
-swap_pid=$!
-swap_marker=
-swap_attempt=0
-while [ -z "$swap_marker" ] && /bin/kill -0 "$swap_pid" 2>/dev/null &&
-  [ "$swap_attempt" -lt 1000 ]; do
-  swap_marker=$(/usr/bin/find "$swap_scratch" -type f -name input-snapshot-ready \
-    -print -quit 2>/dev/null)
-  [ -n "$swap_marker" ] || /bin/sleep 0.01
-  swap_attempt=$((swap_attempt + 1))
-done
-[ -n "$swap_marker" ] || fail 'path-swap marker'
+start_input_race path-swap "$swap_scratch" "$swap_claim"
+stop_at_input_pending path-swap "$swap_scratch"
 /bin/mv "$swap_claim" "$swap_backup"
 /bin/cp "$swap_target" "$swap_claim"
-/bin/sleep 0.2
+if [ -L "$swap_claim" ] || ! /usr/bin/cmp -s "$swap_target" "$swap_claim"; then
+  fail 'path-swap replacement'
+fi
+resume_and_wait_input_race path-swap
 /bin/mv "$swap_claim" "$swap_replacement"
 /bin/mv "$swap_backup" "$swap_claim"
-wait "$swap_pid"
-[ "$(/bin/cat "$tmp/swap.status")" -ne 0 ] && [ ! -s "$tmp/swap.out" ] &&
-  [ "$(/bin/cat "$tmp/swap.err")" = E_RUNTIME ] || fail 'transient path swap'
+if [ "$INPUT_RACE_STATUS" -eq 0 ] || [ -s "$tmp/path-swap.out" ] ||
+   [ "$(/bin/cat "$tmp/path-swap.err")" != E_RUNTIME ] ||
+   ! /usr/bin/cmp -s "$claim" "$swap_claim" ||
+   ! /usr/bin/cmp -s "$swap_target" "$swap_replacement"; then
+  fail 'transient path swap'
+fi
 [ -z "$(/usr/bin/find "$swap_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'path-swap scratch cleanup'
-pass 'transient regular-file replacement is rejected before read'
+pass 'gated regular-file replacement is rejected before read and fully restored'
 
 inplace_claim="$tmp/inplace-claim.json"
 inplace_backup="$tmp/inplace-claim.backup"
@@ -431,34 +593,22 @@ inplace_backup="$tmp/inplace-claim.backup"
 /bin/cp "$claim" "$inplace_backup"
 inplace_scratch="$tmp/inplace-scratch"
 /bin/mkdir "$inplace_scratch"
-(
-  inplace_status=0
-  TMPDIR="$inplace_scratch" PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate \
-    "$policy_set" "$request" "$resolved" "$result" "$duty" "$inplace_claim" \
-    >"$tmp/inplace.out" 2>"$tmp/inplace.err" || inplace_status=$?
-  /usr/bin/printf '%s\n' "$inplace_status" >"$tmp/inplace.status"
-) &
-inplace_pid=$!
-inplace_marker=
-inplace_attempt=0
-while [ -z "$inplace_marker" ] && /bin/kill -0 "$inplace_pid" 2>/dev/null &&
-  [ "$inplace_attempt" -lt 1000 ]; do
-  inplace_marker=$(/usr/bin/find "$inplace_scratch" -type f \
-    -name input-snapshot-ready -print -quit 2>/dev/null)
-  [ -n "$inplace_marker" ] || /bin/sleep 0.01
-  inplace_attempt=$((inplace_attempt + 1))
-done
-[ -n "$inplace_marker" ] || fail 'same-inode marker'
+start_input_race same-inode "$inplace_scratch" "$inplace_claim"
+stop_at_input_pending same-inode "$inplace_scratch"
 /usr/bin/printf '%s\n' '{"synthetic_secret":"must-not-be-read"}' >"$inplace_claim"
-/bin/sleep 0.2
+if /usr/bin/cmp -s "$inplace_backup" "$inplace_claim"; then
+  fail 'same-inode mutation did not change bytes'
+fi
+resume_and_wait_input_race same-inode
 /bin/cp "$inplace_backup" "$inplace_claim"
-wait "$inplace_pid"
-[ "$(/bin/cat "$tmp/inplace.status")" -ne 0 ] && [ ! -s "$tmp/inplace.out" ] &&
-  [ "$(/bin/cat "$tmp/inplace.err")" = E_RUNTIME ] ||
+if [ "$INPUT_RACE_STATUS" -eq 0 ] || [ -s "$tmp/same-inode.out" ] ||
+   [ "$(/bin/cat "$tmp/same-inode.err")" != E_RUNTIME ] ||
+   ! /usr/bin/cmp -s "$inplace_backup" "$inplace_claim"; then
   fail 'same-inode content replacement'
+fi
 [ -z "$(/usr/bin/find "$inplace_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'same-inode scratch cleanup'
-pass 'same-inode content replacement is rejected before semantic use'
+pass 'gated same-inode mutation is rejected before read and fully restored'
 
 parent_swap_dir="$tmp/parent-swap"
 parent_swap_backup="$tmp/parent-swap.original"
@@ -467,41 +617,24 @@ parent_swap_replacement="$tmp/parent-swap.replacement"
 /bin/cp "$claim" "$parent_swap_dir/claim.json"
 parent_swap_scratch="$tmp/parent-swap-scratch"
 /bin/mkdir "$parent_swap_scratch"
-(
-  parent_swap_status=0
-  TMPDIR="$parent_swap_scratch" PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate \
-    "$policy_set" "$request" "$resolved" "$result" "$duty" \
-    "$parent_swap_dir/claim.json" >"$tmp/parent-swap.out" \
-    2>"$tmp/parent-swap.err" || parent_swap_status=$?
-  /usr/bin/printf '%s\n' "$parent_swap_status" >"$tmp/parent-swap.status"
-) &
-parent_swap_pid=$!
-parent_swap_marker=
-parent_swap_attempt=0
-while [ -z "$parent_swap_marker" ] &&
-  /bin/kill -0 "$parent_swap_pid" 2>/dev/null &&
-  [ "$parent_swap_attempt" -lt 1000 ]; do
-  parent_swap_marker=$(/usr/bin/find "$parent_swap_scratch" -type f \
-    -name input-snapshot-ready -print -quit 2>/dev/null)
-  [ -n "$parent_swap_marker" ] || /bin/sleep 0.01
-  parent_swap_attempt=$((parent_swap_attempt + 1))
-done
-[ -n "$parent_swap_marker" ] || fail 'parent-swap marker'
+start_input_race parent-swap "$parent_swap_scratch" "$parent_swap_dir/claim.json"
+stop_at_input_pending parent-swap "$parent_swap_scratch"
 /bin/mv "$parent_swap_dir" "$parent_swap_backup"
 /bin/mkdir "$parent_swap_dir"
 /usr/bin/printf '%s\n' '{"synthetic_secret":"must-not-be-read"}' \
   >"$parent_swap_dir/claim.json"
-/bin/sleep 0.2
+resume_and_wait_input_race parent-swap
 /bin/mv "$parent_swap_dir" "$parent_swap_replacement"
 /bin/mv "$parent_swap_backup" "$parent_swap_dir"
-wait "$parent_swap_pid"
-[ "$(/bin/cat "$tmp/parent-swap.status")" -ne 0 ] &&
-  [ ! -s "$tmp/parent-swap.out" ] &&
-  [ "$(/bin/cat "$tmp/parent-swap.err")" = E_RUNTIME ] ||
+if [ "$INPUT_RACE_STATUS" -eq 0 ] || [ -s "$tmp/parent-swap.out" ] ||
+   [ "$(/bin/cat "$tmp/parent-swap.err")" != E_RUNTIME ] ||
+   ! /usr/bin/cmp -s "$claim" "$parent_swap_dir/claim.json" ||
+   ! /usr/bin/grep -Fq synthetic_secret "$parent_swap_replacement/claim.json"; then
   fail 'transient parent replacement'
+fi
 [ -z "$(/usr/bin/find "$parent_swap_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'parent-swap scratch cleanup'
-pass 'transient parent-directory replacement is rejected before read'
+pass 'gated parent-directory replacement is rejected before read and fully restored'
 
 link="$tmp/claim-link.json"
 /bin/ln -s "$claim" "$link"

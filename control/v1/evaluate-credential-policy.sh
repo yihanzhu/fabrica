@@ -578,6 +578,8 @@ build_runtime_mirror() {
   /usr/bin/printf '%s\n' "$mirror"
 }
 
+/usr/bin/printf '%s\n' "$$" >"$scratch/input-snapshot-pending" ||
+  emit_error E_RUNTIME
 snapshot_fixed "$source_path" "$scratch/driver.sh"
 snapshot_fixed "$policy" "$scratch/policy.json"
 snapshot_fixed "$decision" "$scratch/decision.json"
