@@ -266,6 +266,26 @@ build_case() {
     "$jq_bin" -S -c 'del(.body.classification.tier)' "$dir/claim.json" \
       >"$dir/claim.changed"
     /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = tier-custom ]; then
+    "$jq_bin" -S -c '.body.classification.tier="custom"' "$dir/claim.json" \
+      >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = tier-empty ]; then
+    "$jq_bin" -S -c '.body.classification.tier=""' "$dir/claim.json" \
+      >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = tier-number ]; then
+    "$jq_bin" -S -c '.body.classification.tier=1' "$dir/claim.json" \
+      >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = tier-object ]; then
+    "$jq_bin" -S -c '.body.classification.tier={value:"routine"}' "$dir/claim.json" \
+      >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
+  elif [ "$mode" = tier-null ]; then
+    "$jq_bin" -S -c '.body.classification.tier=null' "$dir/claim.json" \
+      >"$dir/claim.changed"
+    /bin/mv "$dir/claim.changed" "$dir/claim.json"
   fi
   claim_sha=$(sha256_path "$dir/claim.json")
   "$jq_bin" -S -c --arg id "risk.claim.$name" --arg claim_sha "$claim_sha" \
@@ -312,6 +332,14 @@ expect_eval() {
   "$jq_bin" -S -c . "$out" >"$dir/repeat"
   /usr/bin/cmp -s "$out" "$dir/repeat" || fail "$name canonical output"
   pass "$name"
+}
+
+expect_minimum() {
+  local name=$1 expected=$2
+  "$jq_bin" -e --arg expected "$expected" '
+    .body.verdict=="violated" and .body.classification.minimum_tier==$expected and
+    (.body.reason_ids|index("decision.claim-malformed")!=null)
+  ' "$tmp/$name/risk.out" >/dev/null || fail "$name normalized minimum"
 }
 
 expect_error() {
@@ -376,6 +404,32 @@ expect_eval malformed-claim violated decision.claim-malformed
 build_case malformed-classification routine routine present independent-plan-check reviewer \
   accept risk.routine malformed-classification
 expect_eval malformed-classification violated decision.claim-malformed
+expect_minimum malformed-classification unknown
+
+build_case tier-wrong-string routine routine present independent-plan-check reviewer accept \
+  risk.routine tier-custom
+expect_eval tier-wrong-string violated decision.claim-malformed
+expect_minimum tier-wrong-string unknown
+
+build_case tier-empty routine routine present independent-plan-check reviewer accept \
+  risk.routine tier-empty
+expect_eval tier-empty violated decision.claim-malformed
+expect_minimum tier-empty unknown
+
+build_case tier-number routine routine present independent-plan-check reviewer accept \
+  risk.routine tier-number
+expect_eval tier-number violated decision.claim-malformed
+expect_minimum tier-number unknown
+
+build_case tier-object routine routine present independent-plan-check reviewer accept \
+  risk.routine tier-object
+expect_eval tier-object violated decision.claim-malformed
+expect_minimum tier-object unknown
+
+build_case tier-null routine routine present independent-plan-check reviewer accept \
+  risk.routine tier-null
+expect_eval tier-null violated decision.claim-malformed
+expect_minimum tier-null unknown
 
 build_case malformed-time routine routine present independent-plan-check reviewer accept \
   risk.routine normal core 2026-99-99T99:99:99Z

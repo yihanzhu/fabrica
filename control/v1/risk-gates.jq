@@ -141,7 +141,11 @@ def claim_shape_ok:
 ($claim[0]) as $claim_doc |
 (if ($p | policy_ok) then true else error("invalid shipped risk policy") end) |
 ($claim_doc | claim_shape_ok) as $claim_valid |
-($claim_doc.body.classification.tier? // "unknown") as $claimed_tier |
+(($claim_doc.body.classification.tier? // null) as $candidate_tier |
+  if ($candidate_tier | type) == "string" and
+     ($candidate_tier == "routine" or $candidate_tier == "high" or
+      $candidate_tier == "bootstrap")
+  then $candidate_tier else "unknown" end) as $claimed_tier |
 ($claim_doc.body.decision.state? // "invalid") as $claim_decision_state |
 ($claim_doc.body.decision.value.asserted_decision? // "invalid") as $claim_assertion |
 
