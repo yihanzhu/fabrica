@@ -342,6 +342,30 @@ ceilings, all three identity-separation dimensions, dormant publisher behavior, 
 canonical observation results. It does not enforce effective sandbox or credential
 permissions and grants no authority or external write.
 
+Restore the five paths in the manifest's inactive risk-gates block, then run:
+
+```sh
+bash scripts/test/control-risk-gates.test.sh
+```
+
+This checks the exact policy, decision, evaluator, duty-separation, policy-set, and
+public-core identity closure; tier downgrade and malformed-input handling; and
+canonical `violated` or `inconclusive` observations. Decision input is an
+unqualified immutable claim, so an accept claim cannot produce `satisfied` or grant
+approval, authority, qualification, activation, permission, or an external effect.
+
+Restore the five paths in the manifest's inactive kill-switch block, then run:
+
+```sh
+bash scripts/test/control-kill-switch.test.sh
+```
+
+This checks exact identity closure, all five stop scopes, cleared and missing
+state, rollback, replay, ambiguity, duty failure, malformed input, deterministic
+output, and bounded child-process cleanup. The evaluator is inactive and
+observation only. It does not send a signal, cancel or run a candidate, grant
+authority, use a credential, activate a profile, or perform an external write.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
