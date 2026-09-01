@@ -510,8 +510,10 @@ replace_identity_case() {
     2>"$tmp/$name.err" &
   process=$!
   suffix=driver.sh
-  case "$target_kind" in private-driver|live-jq) suffix=bin/jq ;; esac
-  [ "$target_kind" != private-jq ] || suffix=worker.out
+  case "$target_kind" in
+    private-driver) suffix=bin/jq ;;
+    live-jq|private-jq) suffix=evaluation.json ;;
+  esac
   observed=$(slice_until_path "$process" "$scratch_root" "$suffix") || {
     /bin/kill -KILL "$process" 2>/dev/null || :
     wait "$process" 2>/dev/null || :
@@ -521,7 +523,7 @@ replace_identity_case() {
     origin) target="$runtime/control/v1/evaluate-evidence-integrity.sh" ;;
     private-driver) target="${observed%/bin/jq}/driver.sh" ;;
     live-jq) target="$live_bin/jq" ;;
-    private-jq) target="${observed%/worker.out}/bin/jq" ;;
+    private-jq) target="${observed%/evaluation.json}/bin/jq" ;;
     *) fail "$name target" ;;
   esac
   /bin/cp "$target" "$target.next"
@@ -542,7 +544,7 @@ replace_identity_case() {
 replace_identity_case origin-driver-swap origin
 replace_identity_case executing-driver-swap private-driver
 replace_identity_case live-jq-swap live-jq
-replace_identity_case private-jq-swap private-jq E_RUNTIME
+replace_identity_case private-jq-swap private-jq
 
 program_runtime="$tmp/program-race-runtime"
 program_scratch="$tmp/program-race-scratch"
