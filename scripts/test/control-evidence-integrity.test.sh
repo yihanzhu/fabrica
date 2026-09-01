@@ -162,11 +162,16 @@ presentation="$tmp/presentation.json"
 ' >"$presentation"
 
 run_eval() {
-  local name=$1 input=${2:-$presentation} runtime=${3:-$root}
+  local name=$1 input=${2:-$presentation} runtime=${3:-$root} run_status=0
   local out="$tmp/$name.out" err="$tmp/$name.err"
   PATH="$bin:/usr/bin:/bin" "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
     "$policy_set" "$request" "$resolved" "$result" "$input" >"$out" 2>"$err" ||
+    run_status=$?
+  if [ "$run_status" -ne 0 ]; then
+    /usr/bin/printf 'diagnostic %s status=%s stderr=' "$name" "$run_status" >&2
+    /bin/cat "$err" >&2
     fail "$name status"
+  fi
   [ ! -s "$err" ] || fail "$name stderr"
   "$jq_bin" -S -c . "$out" >"$tmp/$name.canonical"
   /usr/bin/cmp -s "$out" "$tmp/$name.canonical" || fail "$name canonical"
