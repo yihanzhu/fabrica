@@ -226,6 +226,18 @@ expect_pure_violation() {
   ' "$output" >/dev/null || fail "$name"
   pass "$name"
 }
+expect_full_malformed_element() {
+  local name=$1 filter=$2 mismatch_reason=$3 input="$tmp/$1.presentation"
+  "$jq_bin" -S -c "$filter" "$presentation" >"$input"
+  run_eval "$name" "$input"
+  "$jq_bin" -e --arg mismatch "$mismatch_reason" '
+    .body.verdict=="violated" and
+    .body.reason_ids==(["evidence.presentation-malformed",$mismatch]|sort) and
+    (.body.reason_ids|index("evidence.presentation-ambiguous")==null) and
+    .body.authority_effect=="none" and .body.storage_effect=="none"
+  ' "$tmp/$name.out" >/dev/null || fail "$name reasons"
+  pass "$name"
+}
 
 run_eval valid
 "$jq_bin" -e '.body.verdict=="satisfied" and
@@ -274,6 +286,19 @@ expect_pure_violation prior-document-alias \
     .stage_result_ref.id="result.alias" | .evidence_id="evidence.alias")] |
     .body.prior_evidence_refs |= sort_by([.stage_result_ref.sha256,.evidence_id])' \
   evidence.presentation-ambiguous
+
+expect_full_malformed_element current-scalar '.body.evidence=[1]' \
+  evidence.current-mismatch
+expect_full_malformed_element current-null '.body.evidence=[null]' \
+  evidence.current-mismatch
+expect_full_malformed_element current-array '.body.evidence=[[]]' \
+  evidence.current-mismatch
+expect_full_malformed_element prior-scalar '.body.prior_evidence_refs=[1]' \
+  evidence.prior-stale
+expect_full_malformed_element prior-null '.body.prior_evidence_refs=[null]' \
+  evidence.prior-stale
+expect_full_malformed_element prior-array '.body.prior_evidence_refs=[[]]' \
+  evidence.prior-stale
 
 shared_result="$tmp/shared-proof.result"
 shared_presentation="$tmp/shared-proof.presentation"
@@ -370,6 +395,25 @@ link="$tmp/presentation-link.json"
 /bin/ln -s "$presentation" "$link"
 expect_error symlink-input E_RUNTIME "$policy_set" "$request" "$resolved" "$result" "$link"
 
+/usr/bin/printf '{' >"$tmp/invalid.json"
+expect_error invalid-json E_PARSE "$policy_set" "$request" "$resolved" "$result" \
+  "$tmp/invalid.json"
+/usr/bin/printf '{}\n{}\n' >"$tmp/multi-root.json"
+expect_error multi-root E_PARSE "$policy_set" "$request" "$resolved" "$result" \
+  "$tmp/multi-root.json"
+"$jq_bin" . "$presentation" >"$tmp/noncanonical.json"
+expect_error noncanonical E_CANONICAL "$policy_set" "$request" "$resolved" "$result" \
+  "$tmp/noncanonical.json"
+/usr/bin/perl -e 'print "["x33,"0","]"x33,"\n"' >"$tmp/deep.json"
+expect_error depth-limit E_LIMIT "$policy_set" "$request" "$resolved" "$result" \
+  "$tmp/deep.json"
+"$jq_bin" -S -c '.id=("x"*8193)' "$presentation" >"$tmp/string-limit.json"
+expect_error string-limit E_LIMIT "$policy_set" "$request" "$resolved" "$result" \
+  "$tmp/string-limit.json"
+/usr/bin/perl -e 'print "{\"x\":\"","x"x1048576,"\"}\n"' >"$tmp/oversize.json"
+expect_error byte-limit E_LIMIT "$policy_set" "$request" "$resolved" "$result" \
+  "$tmp/oversize.json"
+
 relative_bin="$tmp/relative-bin"
 /bin/mkdir "$relative_bin"
 /bin/cp "$jq_bin" "$relative_bin/jq"
@@ -381,29 +425,24 @@ status=0
   [ "$(/bin/cat "$tmp/relative.err")" = E_RUNTIME ] || fail 'relative jq rejection'
 pass 'relative jq interpreter rejected'
 
+wrapper_bin="$tmp/wrapper-bin"
+/bin/mkdir "$wrapper_bin"
+/usr/bin/printf '%s\n' '#!/bin/bash' \
+  'if [ "${1:-}" = --version ]; then echo jq-1.6; exit 0; fi' \
+  'exec /usr/bin/jq "$@"' >"$wrapper_bin/jq"
+/bin/chmod 0555 "$wrapper_bin/jq"
+unbound_status=0
+PATH="$wrapper_bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
+  "$request" "$resolved" "$result" "$presentation" >"$tmp/unbound-jq.out" \
+  2>"$tmp/unbound-jq.err" || unbound_status=$?
+[ "$unbound_status" -ne 0 ] && [ ! -s "$tmp/unbound-jq.out" ] &&
+  [ "$(/bin/cat "$tmp/unbound-jq.err")" = E_RUNTIME ] || fail 'unbound jq result'
+pass 'only official jq 1.6 bytes are accepted'
+
 /usr/bin/grep -Fq \
   '"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha"' \
   "$evaluator" || fail 'decision envelope null-input mode'
-strict_bin="$tmp/strict-bin"
-/bin/mkdir "$strict_bin"
-/usr/bin/printf '%s\n' '#!/bin/bash' "real_jq='$jq_bin'" \
-  'if [ "${1:-}" = --version ]; then exec "$real_jq" "$@"; fi' \
-  'saw_definition=0; saw_null_input=0' \
-  'for arg in "$@"; do' \
-  '  [ "$arg" = definition ] && saw_definition=1' \
-  '  [ "$arg" = -n ] && saw_null_input=1' \
-  'done' \
-  '[ "$saw_definition" -eq 0 ] || [ "$saw_null_input" -eq 1 ] || exit 97' \
-  'exec "$real_jq" "$@"' >"$strict_bin/jq"
-/bin/chmod 0555 "$strict_bin/jq"
-PATH="$strict_bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
-  "$request" "$resolved" "$result" "$presentation" >"$tmp/strict.out" \
-  2>"$tmp/strict.err" || fail 'strict decision evaluator status'
-if [ -s "$tmp/strict.err" ] ||
-   ! /usr/bin/cmp -s "$tmp/valid.out" "$tmp/strict.out"; then
-  fail 'strict decision evaluator output'
-fi
-pass 'decision envelope executes explicitly on null input'
+pass 'decision envelope explicitly uses null input'
 
 copy_runtime() {
   local destination=$1 path
@@ -433,91 +472,195 @@ mutated_decision_set="$tmp/mutated-decision-policy-set.json"
 expect_error mutated-decision E_RELATION "$mutated_decision_set" "$request" \
   "$resolved" "$result" "$presentation" "$mutated_decision_runtime"
 
-wait_marker() {
-  local marker=$1 pid=$2 attempt=0
-  while [ ! -e "$marker" ] && kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 400 ]; do
-    attempt=$((attempt + 1))
-    /bin/sleep 0.01
-  done
-  [ -e "$marker" ]
-}
 wait_exit() {
-  local pid=$1 attempt=0
-  while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 500 ]; do
+  local pid=$1 limit=${2:-500} attempt=0
+  while kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt "$limit" ]; do
     attempt=$((attempt + 1))
     /bin/sleep 0.01
   done
   ! kill -0 "$pid" 2>/dev/null
 }
-make_delaying_jq() {
-  local destination=$1 marker=$2 delay=$3
-  /usr/bin/printf '%s\n' '#!/bin/bash' "real_jq='$jq_bin'" "marker='$marker'" \
-    "delay='$delay'" \
-    'if [ "${1:-}" = --version ]; then exec "$real_jq" "$@"; fi' \
-    'for arg in "$@"; do' \
-    '  case "$arg" in' \
-    '    */program.jq) if [ ! -e "$marker" ]; then : >"$marker"; /bin/sleep "$delay"; fi ;;' \
-    '  esac' \
-    'done' \
-    'exec "$real_jq" "$@"' >"$destination"
-  /bin/chmod 0555 "$destination"
+slice_until_path() {
+  local pid=$1 search_root=$2 suffix=$3 attempt=0 found
+  /bin/kill -STOP "$pid" 2>/dev/null || return 1
+  while [ "$attempt" -lt 800 ]; do
+    found=$(/usr/bin/find "$search_root" -type f -path "*/$suffix" -print -quit \
+      2>/dev/null) || found=
+    if [ -n "$found" ]; then /usr/bin/printf '%s\n' "$found"; return 0; fi
+    kill -0 "$pid" 2>/dev/null || return 1
+    /bin/kill -CONT "$pid" 2>/dev/null || return 1
+    /bin/sleep 0.005
+    /bin/kill -STOP "$pid" 2>/dev/null || return 1
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
-race_runtime="$tmp/race-runtime"
-copy_runtime "$race_runtime"
-race_bin="$tmp/race-bin"
-race_marker="$tmp/race-marker"
-/bin/mkdir "$race_bin"
-make_delaying_jq "$race_bin/jq" "$race_marker" 1
-(
-  race_status=0
-  PATH="$race_bin:/usr/bin:/bin" \
-    "$race_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate "$policy_set" \
-    "$request" "$resolved" "$result" "$presentation" >"$tmp/race.out" \
-    2>"$tmp/race.err" || race_status=$?
-  /usr/bin/printf '%s\n' "$race_status" >"$tmp/race.status"
-) &
-race_pid=$!
-wait_marker "$race_marker" "$race_pid" || {
-  kill -TERM "$race_pid" 2>/dev/null || :
-  wait "$race_pid" 2>/dev/null || :
-  fail 'TOCTOU marker'
+replace_identity_case() {
+  local name=$1 target_kind=$2 expected=${3:-E_RELATION}
+  local runtime="$tmp/$1-runtime" live_bin="$tmp/$1-bin"
+  local scratch_root="$tmp/$1-scratch" process target observed suffix case_status=0
+  copy_runtime "$runtime"
+  /bin/mkdir "$live_bin" "$scratch_root"
+  /bin/cp "$jq_bin" "$live_bin/jq"
+  /bin/chmod 0555 "$live_bin/jq"
+  TMPDIR="$scratch_root" PATH="$live_bin:/usr/bin:/bin" \
+    "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate "$policy_set" \
+    "$request" "$resolved" "$result" "$presentation" >"$tmp/$name.out" \
+    2>"$tmp/$name.err" &
+  process=$!
+  suffix=driver.sh
+  case "$target_kind" in private-driver|live-jq) suffix=bin/jq ;; esac
+  [ "$target_kind" != private-jq ] || suffix=worker.out
+  observed=$(slice_until_path "$process" "$scratch_root" "$suffix") || {
+    /bin/kill -KILL "$process" 2>/dev/null || :
+    wait "$process" 2>/dev/null || :
+    fail "$name observed path"
+  }
+  case "$target_kind" in
+    origin) target="$runtime/control/v1/evaluate-evidence-integrity.sh" ;;
+    private-driver) target="${observed%/bin/jq}/driver.sh" ;;
+    live-jq) target="$live_bin/jq" ;;
+    private-jq) target="${observed%/worker.out}/bin/jq" ;;
+    *) fail "$name target" ;;
+  esac
+  /bin/cp "$target" "$target.next"
+  /bin/chmod 0500 "$target.next"
+  /bin/mv "$target.next" "$target"
+  /bin/kill -CONT "$process" 2>/dev/null || :
+  wait "$process" || case_status=$?
+  if [ "$case_status" -eq 0 ] || [ -s "$tmp/$name.out" ] ||
+     [ "$(/bin/cat "$tmp/$name.err")" != "$expected" ] ||
+     [ -n "$(/usr/bin/find "$scratch_root" -mindepth 1 -print -quit)" ]; then
+    /usr/bin/printf 'diagnostic %s status=%s stderr=' "$name" "$case_status" >&2
+    /bin/cat "$tmp/$name.err" >&2
+    fail "$name result"
+  fi
+  pass "$name"
 }
-/usr/bin/printf '\n' >>"$race_runtime/control/v1/evidence-integrity.jq"
-wait "$race_pid"
-[ "$(/bin/cat "$tmp/race.status")" -ne 0 ] && [ ! -s "$tmp/race.out" ] &&
-  [ "$(/bin/cat "$tmp/race.err")" = E_RELATION ] || fail 'TOCTOU closure'
-pass 'program mutation closes after snapshot execution'
 
-signal_runtime="$tmp/signal-runtime"
-copy_runtime "$signal_runtime"
-signal_bin="$tmp/signal-bin"
+replace_identity_case origin-driver-swap origin
+replace_identity_case executing-driver-swap private-driver
+replace_identity_case live-jq-swap live-jq
+replace_identity_case private-jq-swap private-jq E_RUNTIME
+
+program_runtime="$tmp/program-race-runtime"
+program_scratch="$tmp/program-race-scratch"
+copy_runtime "$program_runtime"
+/bin/mkdir "$program_scratch"
+TMPDIR="$program_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$program_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate "$policy_set" \
+  "$request" "$resolved" "$result" "$presentation" >"$tmp/program-race.out" \
+  2>"$tmp/program-race.err" &
+program_pid=$!
+program_snapshot=
+program_attempt=0
+while [ -z "$program_snapshot" ] && [ "$program_attempt" -lt 800 ]; do
+  program_snapshot=$(/usr/bin/find "$program_scratch" -type f -name program.jq \
+    -print -quit 2>/dev/null) || program_snapshot=
+  [ -z "$program_snapshot" ] || break
+  kill -0 "$program_pid" 2>/dev/null || break
+  program_attempt=$((program_attempt + 1))
+  /bin/sleep 0.005
+done
+[ -n "$program_snapshot" ] || fail 'program race snapshot'
+/usr/bin/printf '\n' >>"$program_runtime/control/v1/evidence-integrity.jq"
+program_status=0
+wait "$program_pid" || program_status=$?
+[ "$program_status" -ne 0 ] && [ ! -s "$tmp/program-race.out" ] &&
+  [ "$(/bin/cat "$tmp/program-race.err")" = E_RELATION ] || fail 'program race'
+pass 'live program mutation closes after no-follow snapshot'
+
+find_owned_leader() {
+  /bin/ps -axo pid=,ppid=,pgid= 2>/dev/null | /usr/bin/awk -v parent="$1" \
+    '$2==parent && $1==$3 {print $1; exit}'
+}
 signal_scratch="$tmp/signal-scratch"
-signal_marker="$tmp/signal-marker"
-/bin/mkdir "$signal_bin" "$signal_scratch"
-make_delaying_jq "$signal_bin/jq" "$signal_marker" 2
-TMPDIR="$signal_scratch" PATH="$signal_bin:/usr/bin:/bin" \
-  "$signal_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate "$policy_set" \
-  "$request" "$resolved" "$result" "$presentation" >"$tmp/signal.out" \
-  2>"$tmp/signal.err" &
+/bin/mkdir "$signal_scratch"
+TMPDIR="$signal_scratch" PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate \
+  "$policy_set" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/signal.out" 2>"$tmp/signal.err" &
 signal_pid=$!
-wait_marker "$signal_marker" "$signal_pid" || {
-  kill -TERM "$signal_pid" 2>/dev/null || :
-  wait "$signal_pid" 2>/dev/null || :
-  fail 'signal marker'
-}
-kill -TERM "$signal_pid"
-wait_exit "$signal_pid" || {
-  kill -KILL "$signal_pid" 2>/dev/null || :
-  wait "$signal_pid" 2>/dev/null || :
-  fail 'signal bounded exit'
-}
+signal_leader=
+signal_attempt=0
+while [ -z "$signal_leader" ] && [ "$signal_attempt" -lt 800 ]; do
+  signal_leader=$(find_owned_leader "$signal_pid") || signal_leader=
+  [ -z "$signal_leader" ] || break
+  kill -0 "$signal_pid" 2>/dev/null || break
+  signal_attempt=$((signal_attempt + 1))
+  /bin/sleep 0.005
+done
+[[ "$signal_leader" =~ ^[1-9][0-9]*$ ]] || fail 'owned child leader'
+/bin/kill -STOP -- "-$signal_leader"
+/bin/kill -TERM "$signal_pid"
+wait_exit "$signal_pid" 500 || fail 'signal bounded exit'
 signal_status=0
 wait "$signal_pid" || signal_status=$?
-[ "$signal_status" -ne 0 ] && [ ! -s "$tmp/signal.out" ] &&
+signal_live=$(/bin/ps -axo pgid=,state= 2>/dev/null | /usr/bin/awk \
+  -v group="$signal_leader" '$1==group && $2!~/^Z/ {count++} END {print count+0}')
+[ "$signal_status" -ne 0 ] && [ "$signal_live" -eq 0 ] &&
+  [ ! -s "$tmp/signal.out" ] &&
   [ -z "$(/usr/bin/find "$signal_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'signal cleanup'
-pass 'signal lifecycle is bounded and removes private scratch'
+pass 'signal kills and reaps the stopped owned child group'
+
+/usr/bin/grep -Fq 'ulimit -f 2048' "$evaluator" || fail 'child output cap'
+/usr/bin/grep -Fq '[ "$attempt" -lt 1000 ]' "$evaluator" || fail 'child deadline'
+pass 'child runtime and output are bounded'
+
+bind_modified_driver() {
+  local runtime=$1 output_set=$2 driver_digest decision_digest
+  driver_digest=$(sha256_path "$runtime/control/v1/evaluate-evidence-integrity.sh")
+  "$jq_bin" -S -c --arg digest "$driver_digest" \
+    '.body.evaluator.driver_ref.sha256=$digest' \
+    "$runtime/control/v1/evidence-integrity-decision.json" >"$runtime/decision.next"
+  /bin/mv "$runtime/decision.next" \
+    "$runtime/control/v1/evidence-integrity-decision.json"
+  decision_digest=$(sha256_path "$runtime/control/v1/evidence-integrity-decision.json")
+  "$jq_bin" -S -c --arg digest "$decision_digest" '
+    .body.sections[] |= if .section_id=="evidence-integrity"
+      then .decision_ref.sha256=$digest else . end
+  ' "$policy_set" >"$output_set"
+}
+
+output_runtime="$tmp/output-swap-runtime"
+output_scratch="$tmp/output-swap-scratch"
+copy_runtime "$output_runtime"
+/usr/bin/perl -0777 -pi -e '
+  s{  pin_path "\$scratch/worker\.out" \|\| emit_supervisor_failure E_RUNTIME}{
+    /bin/mv "\$scratch/worker.out" "\$scratch/worker.saved" || exit 1;
+    /bin/ln -s "\$scratch/worker.saved" "\$scratch/worker.out" || exit 1;
+    pin_path "\$scratch/worker.out" || emit_supervisor_failure E_RUNTIME
+  }
+' "$output_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$output_runtime" "$tmp/output-swap-set.json"
+/bin/mkdir "$output_scratch"
+output_status=0
+TMPDIR="$output_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$output_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/output-swap-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/output-swap.out" 2>"$tmp/output-swap.err" || output_status=$?
+[ "$output_status" -ne 0 ] && [ ! -s "$tmp/output-swap.out" ] &&
+  [ "$(/bin/cat "$tmp/output-swap.err")" = E_RUNTIME ] &&
+  [ -z "$(/usr/bin/find "$output_scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'output symlink swap'
+pass 'output path replacement is rejected before cleanup and emission'
+
+cleanup_runtime="$tmp/cleanup-failure-runtime"
+cleanup_scratch="$tmp/cleanup-failure-scratch"
+copy_runtime "$cleanup_runtime"
+/usr/bin/perl -0777 -pi -e 's/cleanup\(\) \{\n/cleanup() {\n  return 1;\n/' \
+  "$cleanup_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$cleanup_runtime" "$tmp/cleanup-failure-set.json"
+/bin/mkdir "$cleanup_scratch"
+cleanup_status=0
+TMPDIR="$cleanup_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$cleanup_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/cleanup-failure-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/cleanup-failure.out" 2>"$tmp/cleanup-failure.err" || cleanup_status=$?
+[ "$cleanup_status" -ne 0 ] && [ ! -s "$tmp/cleanup-failure.out" ] ||
+  fail 'cleanup failure output'
+pass 'cleanup failure remains non-success and emits no stdout'
 
 for required in control/v1/evidence-integrity-policy.json \
   control/v1/evidence-integrity-decision.json control/v1/evidence-integrity.jq \

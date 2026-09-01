@@ -103,13 +103,18 @@ def normalized_array($value):
 
 def duplicate_scalar_key($entries;$field):
   ($entries | normalized_array(.)) as $items |
-  ($items | map(.[$field])) as $keys |
-  ($keys | length) != ($keys | unique | length);
+  if all($items[];type=="object") then
+    ($items | map(.[$field])) as $keys |
+    ($keys | length) != ($keys | unique | length)
+  else false end;
 
 def duplicate_prior_key($entries):
   ($entries | normalized_array(.)) as $items |
-  ($items | map([.stage_result_ref.sha256,.evidence_id])) as $keys |
-  ($keys | length) != ($keys | unique | length);
+  if all($items[];
+       type=="object" and (.stage_result_ref? | type)=="object") then
+    ($items | map([.stage_result_ref.sha256,.evidence_id])) as $keys |
+    ($keys | length) != ($keys | unique | length)
+  else false end;
 
 def prior_document_alias($entries):
   ($entries | normalized_array(.)) as $items |

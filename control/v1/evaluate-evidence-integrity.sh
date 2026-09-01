@@ -6,7 +6,7 @@ umask 077
 
 emit_error() {
   case "${1:-}" in
-    E_USAGE|E_RUNTIME|E_LIMIT|E_RELATION|E_POLICY_SET|E_CORE)
+    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_POLICY_SET|E_CORE)
       /usr/bin/printf '%s\n' "$1" >&2
       ;;
     *) /usr/bin/printf '%s\n' E_RUNTIME >&2 ;;
@@ -14,15 +14,410 @@ emit_error() {
   exit 1
 }
 
+physical_regular() {
+  local candidate=$1 parent physical
+  case "$candidate" in /*) ;; *) return 1 ;; esac
+  [ -f "$candidate" ] && [ ! -L "$candidate" ] || return 1
+  parent=${candidate%/*}
+  [ -n "$parent" ] || parent=/
+  physical=$(CDPATH='' cd -P -- "$parent" 2>/dev/null && pwd -P) || return 1
+  [ "$candidate" = "$physical/${candidate##*/}" ]
+}
+
+path_identity() {
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($path,$limit)=@ARGV;
+      my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+      exit 2 unless defined($parent) && defined($name);
+      my $physical=abs_path($parent);
+      exit 2 unless defined($physical) && $physical eq $parent;
+      my @parent=lstat($parent);
+      exit 2 unless @parent && S_ISDIR($parent[2]);
+      chdir($parent) or exit 2;
+      my @cwd=stat("."); my @leaf=lstat($name);
+      exit 2 unless @cwd && @leaf && S_ISREG($leaf[2]);
+      sysopen(my $input,$name,O_RDONLY|O_NOFOLLOW) or exit 2;
+      binmode($input); my @opened=stat($input);
+      exit 2 unless @opened && S_ISREG($opened[2]) &&
+        $leaf[0]==$opened[0] && $leaf[1]==$opened[1] &&
+        $leaf[7]==$opened[7] && $leaf[9]==$opened[9] && $leaf[10]==$opened[10];
+      my $sha=Digest::SHA->new(256); my $total=0;
+      while (1) {
+        my $read=sysread($input,my $buffer,65536);
+        exit 2 unless defined $read; last if $read==0;
+        $total += $read; exit 3 if $total > $limit; $sha->add($buffer);
+      }
+      my @after=stat($input); my @path_after=lstat($name);
+      my @parent_after=lstat($parent); my $after_physical=abs_path($parent);
+      exit 2 unless @after && @path_after && @parent_after &&
+        defined($after_physical) && $after_physical eq $parent &&
+        S_ISREG($path_after[2]) && S_ISDIR($parent_after[2]) &&
+        $opened[0]==$after[0] && $opened[1]==$after[1] &&
+        $opened[7]==$after[7] && $opened[9]==$after[9] &&
+        $opened[10]==$after[10] &&
+        $after[0]==$path_after[0] && $after[1]==$path_after[1] &&
+        $cwd[0]==$parent_after[0] && $cwd[1]==$parent_after[1];
+      print $parent[0],":",$parent[1],":",$leaf[0],":",$leaf[1],":",
+        $leaf[7],":",$leaf[9],":",$leaf[10],":",$sha->hexdigest,"\n";
+    ' "$1" "$2"
+}
+
+path_matches_identity() {
+  local actual
+  actual=$(path_identity "$1" "$3") || return 1
+  [ "$actual" = "$2" ]
+}
+
+snapshot_nofollow() {
+  local source=$1 expected=$2 target=$3 limit=$4 copy_status=0
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($source,$expected,$target,$limit)=@ARGV;
+      my ($p_dev,$p_ino,$f_dev,$f_ino,$size,$mtime,$ctime,$digest)=
+        split(/:/,$expected,8);
+      my ($parent,$name)=$source =~ m{\A(.+)/([^/]+)\z};
+      exit 2 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      my @parent=lstat($parent);
+      exit 2 unless @parent && S_ISDIR($parent[2]) &&
+        $parent[0]==$p_dev && $parent[1]==$p_ino;
+      chdir($parent) or exit 2;
+      my @cwd=stat("."); my @leaf=lstat($name);
+      exit 2 unless @cwd && @leaf && S_ISREG($leaf[2]) &&
+        $leaf[0]==$f_dev && $leaf[1]==$f_ino && $leaf[7]==$size &&
+        $leaf[9]==$mtime && $leaf[10]==$ctime;
+      sysopen(my $input,$name,O_RDONLY|O_NOFOLLOW) or exit 2;
+      binmode($input); my @opened=stat($input);
+      exit 2 unless @opened && S_ISREG($opened[2]) &&
+        $opened[0]==$f_dev && $opened[1]==$f_ino && $opened[7]==$size &&
+        $opened[9]==$mtime && $opened[10]==$ctime;
+      sysopen(my $output,$target,O_WRONLY|O_CREAT|O_EXCL,0600) or exit 2;
+      binmode($output); my $sha=Digest::SHA->new(256); my $total=0;
+      while (1) {
+        my $read=sysread($input,my $buffer,65536);
+        exit 2 unless defined $read; last if $read==0;
+        $total += $read; exit 3 if $total > $limit; $sha->add($buffer);
+        my $offset=0;
+        while ($offset < $read) {
+          my $written=syswrite($output,$buffer,$read-$offset,$offset);
+          exit 2 unless defined($written) && $written>0; $offset += $written;
+        }
+      }
+      close($output) or exit 2;
+      my @after=stat($input); my @path_after=lstat($name);
+      my @parent_after=lstat($parent);
+      exit 2 unless @after && @path_after && @parent_after &&
+        S_ISREG($path_after[2]) && S_ISDIR($parent_after[2]) &&
+        $opened[0]==$after[0] && $opened[1]==$after[1] &&
+        $opened[7]==$after[7] && $opened[9]==$after[9] &&
+        $opened[10]==$after[10] && $after[0]==$path_after[0] &&
+        $after[1]==$path_after[1] && $cwd[0]==$parent_after[0] &&
+        $cwd[1]==$parent_after[1] && $sha->hexdigest eq $digest;
+    ' "$source" "$expected" "$target" "$limit" || copy_status=$?
+  case "$copy_status" in 0) ;; 3) emit_error E_LIMIT ;; *) return 1 ;; esac
+}
+
+capture_identity_text() {
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($path,$expected)=@ARGV;
+      my ($p_dev,$p_ino,$f_dev,$f_ino,$size,$mtime,$ctime,$digest)=
+        split(/:/,$expected,8);
+      exit 2 if $size > 1048576;
+      my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+      exit 2 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      my @parent=lstat($parent);
+      exit 2 unless @parent && S_ISDIR($parent[2]) &&
+        $parent[0]==$p_dev && $parent[1]==$p_ino;
+      chdir($parent) or exit 2;
+      my @cwd=stat("."); my @leaf=lstat($name);
+      exit 2 unless @cwd && @leaf && S_ISREG($leaf[2]) &&
+        $leaf[0]==$f_dev && $leaf[1]==$f_ino && $leaf[7]==$size &&
+        $leaf[9]==$mtime && $leaf[10]==$ctime;
+      sysopen(my $input,$name,O_RDONLY|O_NOFOLLOW) or exit 2;
+      binmode($input); my @opened=stat($input);
+      exit 2 unless @opened && S_ISREG($opened[2]) &&
+        $opened[0]==$f_dev && $opened[1]==$f_ino && $opened[7]==$size &&
+        $opened[9]==$mtime && $opened[10]==$ctime;
+      my $sha=Digest::SHA->new(256); my $text=""; my $total=0;
+      while (1) {
+        my $read=sysread($input,my $buffer,65536);
+        exit 2 unless defined $read; last if $read==0;
+        $total += $read; exit 2 if $total > 1048576;
+        $sha->add($buffer); $text .= $buffer;
+      }
+      my @after=stat($input); my @path_after=lstat($name);
+      my @parent_after=lstat($parent);
+      exit 2 unless $total==$size && $sha->hexdigest eq $digest &&
+        @after && @path_after && @parent_after && S_ISREG($path_after[2]) &&
+        S_ISDIR($parent_after[2]) && $opened[0]==$after[0] &&
+        $opened[1]==$after[1] && $opened[7]==$after[7] &&
+        $opened[9]==$after[9] && $opened[10]==$after[10] &&
+        $after[0]==$path_after[0] && $after[1]==$path_after[1] &&
+        $cwd[0]==$parent_after[0] && $cwd[1]==$parent_after[1];
+      print $text;
+    ' "$1" "$2"
+}
+
+PINNED_PATHS=()
+PINNED_IDENTITIES=()
+pin_path() {
+  local path=$1 limit=${2:-1048576} identity index=0 identity_status=0
+  identity=$(path_identity "$path" "$limit") || identity_status=$?
+  case "$identity_status" in
+    0) ;;
+    3) emit_error E_LIMIT ;;
+    *) return 1 ;;
+  esac
+  while [ "$index" -lt "${#PINNED_PATHS[@]}" ]; do
+    if [ "${PINNED_PATHS[$index]}" = "$path" ]; then
+      [ "${PINNED_IDENTITIES[$index]}" = "$identity" ]
+      return
+    fi
+    index=$((index + 1))
+  done
+  PINNED_PATHS[${#PINNED_PATHS[@]}]=$path
+  PINNED_IDENTITIES[${#PINNED_IDENTITIES[@]}]=$identity
+}
+pinned_identity() {
+  local path=$1 index=0
+  while [ "$index" -lt "${#PINNED_PATHS[@]}" ]; do
+    if [ "${PINNED_PATHS[$index]}" = "$path" ]; then
+      /usr/bin/printf '%s\n' "${PINNED_IDENTITIES[$index]}"; return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+verify_all_pins() {
+  local index=0 limit
+  while [ "$index" -lt "${#PINNED_PATHS[@]}" ]; do
+    limit=1048576
+    [ "${PINNED_PATHS[$index]}" != "${YSTACK_EVIDENCE_LIVE_JQ:-}" ] || limit=16777216
+    [ "${PINNED_PATHS[$index]}" != "${YSTACK_EVIDENCE_PRIVATE_JQ:-}" ] || limit=16777216
+    path_matches_identity "${PINNED_PATHS[$index]}" \
+      "${PINNED_IDENTITIES[$index]}" "$limit" || return 1
+    index=$((index + 1))
+  done
+}
+sha256_path() {
+  local identity
+  pin_path "$1" || return 1
+  identity=$(pinned_identity "$1") || return 1
+  /usr/bin/printf '%s\n' "${identity##*:}"
+}
+
+scratch=${YSTACK_EVIDENCE_SCRATCH:-}
+ACTIVE_PID=
+ACTIVE_PGID=
+cleanup() {
+  [ -z "${scratch:-}" ] && return 0
+  case "$scratch" in /*/ystack-evidence.??????) ;; *) return 1 ;; esac
+  /bin/rm -rf -- "$scratch" >/dev/null 2>&1 &&
+    [ ! -e "$scratch" ] && [ ! -L "$scratch" ]
+}
+group_live_count() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  /bin/ps -axo pgid=,state= 2>/dev/null | /usr/bin/awk -v group="$1" '
+    $1==group && $2!~/^Z/ {count+=1} END {print count+0}'
+}
+leader_state() {
+  /bin/ps -o state= -p "$1" 2>/dev/null | /usr/bin/tr -d ' '
+}
+terminate_active() {
+  local group=${ACTIVE_PGID:-} leader=${ACTIVE_PID:-} state count attempt=0
+  [[ "$group" =~ ^[1-9][0-9]*$ ]] && [[ "$leader" =~ ^[1-9][0-9]*$ ]] ||
+    return 1
+  /bin/kill -TERM -- "-$group" 2>/dev/null || :
+  state=$(leader_state "$leader") || state=
+  while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1)); /bin/sleep 0.01
+    state=$(leader_state "$leader") || state=
+  done
+  count=$(group_live_count "$group") || return 1
+  if { [ -n "$state" ] && [[ "$state" != Z* ]]; } || [ "$count" -gt 0 ]; then
+    /bin/kill -KILL -- "-$group" 2>/dev/null || :
+  fi
+  wait "$leader" 2>/dev/null || :
+  state=$(leader_state "$leader") || state=
+  [ -z "$state" ] || return 1
+  attempt=0; count=$(group_live_count "$group") || return 1
+  while [ "$count" -gt 0 ] && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1)); /bin/sleep 0.01
+    count=$(group_live_count "$group") || return 1
+  done
+  [ "$count" -eq 0 ] || return 1
+  ACTIVE_PID=; ACTIVE_PGID=
+}
+signal_exit() {
+  local status=${1:-1}
+  exec >/dev/null 2>&1
+  if [ -n "${ACTIVE_PGID:-}" ]; then terminate_active || status=125; fi
+  cleanup || status=125
+  trap - EXIT HUP INT TERM
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'signal_exit 129' HUP
+trap 'signal_exit 130' INT
+trap 'signal_exit 143' TERM
+
+run_child() {
+  local child pgid state attempt=0 child_status=0 count self_pgid
+  [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
+  self_pgid=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || return 125
+  set -m
+  /bin/bash -c 'ulimit -f 2048; exec "$@"' evidence-child "$@" &
+  child=$!
+  set +m
+  pgid=$(/bin/ps -o pgid= -p "$child" 2>/dev/null | /usr/bin/tr -d ' ') || pgid=
+  if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$child" ] ||
+     [ "$pgid" = "$self_pgid" ]; then
+    wait "$child" 2>/dev/null || :; return 125
+  fi
+  ACTIVE_PID=$child; ACTIVE_PGID=$pgid
+  state=$(leader_state "$child") || state=
+  while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 1000 ]; do
+    attempt=$((attempt + 1)); /bin/sleep 0.01
+    state=$(leader_state "$child") || state=
+  done
+  if [ -n "$state" ] && [[ "$state" != Z* ]]; then
+    terminate_active || :; return 124
+  fi
+  wait "$child" || child_status=$?
+  count=$(group_live_count "$pgid") || return 125
+  if [ "$count" -ne 0 ]; then
+    ACTIVE_PID=$child; ACTIVE_PGID=$pgid
+    terminate_active || :; return 125
+  fi
+  ACTIVE_PID=; ACTIVE_PGID=
+  return "$child_status"
+}
+
+emit_supervisor_failure() {
+  local token=${1:-E_RUNTIME}
+  case "$token" in
+    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_POLICY_SET|E_CORE) ;;
+    *) token=E_RUNTIME ;;
+  esac
+  if cleanup; then trap - EXIT HUP INT TERM; /usr/bin/printf '%s\n' "$token" >&2; fi
+  exit 1
+}
+
 [ "$#" -eq 6 ] && [ "$1" = evaluate ] || emit_error E_USAGE
-shift
+stage=${YSTACK_EVIDENCE_STAGE:-bootstrap}
+if [ "$stage" = bootstrap ]; then
+  normalized_args=(evaluate)
+  for input in "${@:2}"; do
+    case "$input" in /*) ;; *) input="$(pwd -P)/$input" ;; esac
+    input_parent=$(CDPATH='' cd -P -- "${input%/*}" 2>/dev/null && pwd -P) ||
+      emit_error E_RUNTIME
+    input="$input_parent/${input##*/}"
+    physical_regular "$input" || emit_error E_RUNTIME
+    normalized_args+=("$input")
+  done
+  origin=${BASH_SOURCE[0]}
+  case "$origin" in /*) ;; *) origin="$(pwd -P)/$origin" ;; esac
+  origin_dir=$(CDPATH='' cd -P -- "${origin%/*}" 2>/dev/null && pwd -P) ||
+    emit_error E_RUNTIME
+  origin="$origin_dir/${origin##*/}"
+  [ "$origin" = "$origin_dir/evaluate-evidence-integrity.sh" ] || emit_error E_RUNTIME
+  origin_identity=$(path_identity "$origin" 1048576) || emit_error E_RUNTIME
+  live_jq=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
+  case "$live_jq" in /*) ;; *) emit_error E_RUNTIME ;; esac
+  live_jq_parent=$(CDPATH='' cd -P -- "${live_jq%/*}" 2>/dev/null && pwd -P) ||
+    emit_error E_RUNTIME
+  live_jq="$live_jq_parent/${live_jq##*/}"
+  physical_regular "$live_jq" || emit_error E_RUNTIME
+  live_jq_identity=$(path_identity "$live_jq" 16777216) || emit_error E_RUNTIME
+  platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
+  case "$platform" in
+    Darwin:*) expected_jq=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
+    Linux:x86_64) expected_jq=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
+    *) emit_error E_RUNTIME ;;
+  esac
+  [ "${live_jq_identity##*:}" = "$expected_jq" ] || emit_error E_RUNTIME
+  scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence.XXXXXX" 2>/dev/null) ||
+    emit_error E_RUNTIME
+  scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+  /bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
+  /bin/mkdir -m 0700 "$scratch/bin" || emit_error E_RUNTIME
+  private_driver="$scratch/driver.sh"
+  private_jq="$scratch/bin/jq"
+  snapshot_nofollow "$origin" "$origin_identity" "$private_driver" 1048576 ||
+    emit_error E_RUNTIME
+  /bin/chmod 0500 "$private_driver" || emit_error E_RUNTIME
+  private_driver_identity=$(path_identity "$private_driver" 1048576) ||
+    emit_error E_RUNTIME
+  snapshot_nofollow "$live_jq" "$live_jq_identity" "$private_jq" 16777216 ||
+    emit_error E_RUNTIME
+  /bin/chmod 0500 "$private_jq" || emit_error E_RUNTIME
+  private_jq_identity=$(path_identity "$private_jq" 16777216) || emit_error E_RUNTIME
+  exec /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
+    YSTACK_EVIDENCE_STAGE=supervisor YSTACK_EVIDENCE_SCRATCH="$scratch" \
+    YSTACK_EVIDENCE_ORIGIN="$origin" \
+    YSTACK_EVIDENCE_ORIGIN_ID="$origin_identity" \
+    YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="$private_driver_identity" \
+    YSTACK_EVIDENCE_LIVE_JQ="$live_jq" \
+    YSTACK_EVIDENCE_LIVE_JQ_ID="$live_jq_identity" \
+    YSTACK_EVIDENCE_PRIVATE_JQ="$private_jq" \
+    YSTACK_EVIDENCE_PRIVATE_JQ_ID="$private_jq_identity" \
+    /bin/bash "$private_driver" "${normalized_args[@]}"
+fi
+
 source_path=${BASH_SOURCE[0]}
 case "$source_path" in /*) ;; *) source_path="$(pwd -P)/$source_path" ;; esac
-source_dir=$(CDPATH='' cd -P -- "${source_path%/*}" 2>/dev/null && pwd -P) ||
+origin=${YSTACK_EVIDENCE_ORIGIN:-}
+jq_bin=${YSTACK_EVIDENCE_PRIVATE_JQ:-}
+[ "$source_path" = "$scratch/driver.sh" ] && [ "$jq_bin" = "$scratch/bin/jq" ] ||
   emit_error E_RUNTIME
-source_path="$source_dir/${source_path##*/}"
-[ "$source_path" = "$source_dir/evaluate-evidence-integrity.sh" ] ||
+PINNED_PATHS=("$origin" "$source_path" "${YSTACK_EVIDENCE_LIVE_JQ:-}" "$jq_bin")
+PINNED_IDENTITIES=("${YSTACK_EVIDENCE_ORIGIN_ID:-}" \
+  "${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}" "${YSTACK_EVIDENCE_LIVE_JQ_ID:-}" \
+  "${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}")
+verify_all_pins || emit_error E_RELATION
+
+if [ "$stage" = supervisor ]; then
+  worker_status=0
+  run_child /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
+    YSTACK_EVIDENCE_STAGE=worker YSTACK_EVIDENCE_SCRATCH="$scratch" \
+    YSTACK_EVIDENCE_ORIGIN="$origin" \
+    YSTACK_EVIDENCE_ORIGIN_ID="${YSTACK_EVIDENCE_ORIGIN_ID:-}" \
+    YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}" \
+    YSTACK_EVIDENCE_LIVE_JQ="${YSTACK_EVIDENCE_LIVE_JQ:-}" \
+    YSTACK_EVIDENCE_LIVE_JQ_ID="${YSTACK_EVIDENCE_LIVE_JQ_ID:-}" \
+    YSTACK_EVIDENCE_PRIVATE_JQ="$jq_bin" \
+    YSTACK_EVIDENCE_PRIVATE_JQ_ID="${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}" \
+    /bin/bash "$source_path" "$@" >"$scratch/worker.out" 2>"$scratch/worker.err" ||
+    worker_status=$?
+  pin_path "$scratch/worker.err" || emit_supervisor_failure E_RUNTIME
+  error_identity=$(pinned_identity "$scratch/worker.err") || emit_supervisor_failure E_RUNTIME
+  error_text=$(capture_identity_text "$scratch/worker.err" "$error_identity") ||
+    emit_supervisor_failure E_RUNTIME
+  if [ "$worker_status" -ne 0 ]; then emit_supervisor_failure "$error_text"; fi
+  [ -z "$error_text" ] || emit_supervisor_failure E_RUNTIME
+  pin_path "$scratch/worker.out" || emit_supervisor_failure E_RUNTIME
+  output_identity=$(pinned_identity "$scratch/worker.out") || emit_supervisor_failure E_RUNTIME
+  output_text=$(capture_identity_text "$scratch/worker.out" "$output_identity") ||
+    emit_supervisor_failure E_RUNTIME
+  verify_all_pins || emit_supervisor_failure E_RELATION
+  if ! cleanup; then exit 1; fi
+  trap - EXIT HUP INT TERM
+  /usr/bin/printf '%s\n' "$output_text" || exit 1
+  exit 0
+fi
+[ "$stage" = worker ] || emit_error E_RUNTIME
+trap - EXIT HUP INT TERM
+
+shift
+source_dir=$(CDPATH='' cd -P -- "${origin%/*}" 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
+[ "$origin" = "$source_dir/evaluate-evidence-integrity.sh" ] || emit_error E_RUNTIME
 repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) ||
   emit_error E_RUNTIME
 policy="$source_dir/evidence-integrity-policy.json"
@@ -31,19 +426,11 @@ program="$source_dir/evidence-integrity.jq"
 policy_validator="$source_dir/validate.sh"
 validator_program="$source_dir/policy-set.jq"
 core_driver="$repo/scripts/core-contract.sh"
-for required in "$source_path" "$policy" "$decision" "$program" \
-  "$policy_validator" "$validator_program" "$core_driver"; do
-  [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_RUNTIME
+for required in "$source_path" "$origin" "$policy" "$decision" "$program" \
+  "$policy_validator" "$validator_program" "$core_driver" "$@"; do
+  pin_path "$required" || emit_error E_RUNTIME
 done
-for input in "$@"; do
-  [ -f "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
-done
-jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
-case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
-[ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
-  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
-sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 sha256_text() {
   /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
 }
@@ -59,28 +446,47 @@ selected_core_generation() {
   /usr/bin/printf '%s\n' "$selected"
 }
 
-scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence.XXXXXX" 2>/dev/null) ||
-  emit_error E_RUNTIME
-scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) ||
-  emit_error E_RUNTIME
-cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
-signal_exit() { trap - EXIT HUP INT TERM; cleanup; exit 1; }
-trap cleanup EXIT
-trap signal_exit HUP INT TERM
-
 snapshot_fixed() {
-  local source=$1 target=$2 size
-  /bin/dd if="$source" of="$target" bs=1048577 count=1 2>/dev/null ||
-    emit_error E_RUNTIME
-  size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') ||
-    emit_error E_RUNTIME
-  [ "$size" -le 1048576 ] || emit_error E_LIMIT
+  local source=$1 target=$2 expected
+  pin_path "$source" || emit_error E_RUNTIME
+  expected=$(pinned_identity "$source") || emit_error E_RUNTIME
+  snapshot_nofollow "$source" "$expected" "$target" 1048576 || emit_error E_RUNTIME
+  pin_path "$target" || emit_error E_RUNTIME
+}
+snapshot_executable() {
+  local source=$1 target=$2 expected
+  pin_path "$source" || emit_error E_RUNTIME
+  expected=$(pinned_identity "$source") || emit_error E_RUNTIME
+  snapshot_nofollow "$source" "$expected" "$target" 1048576 || emit_error E_RUNTIME
+  /bin/chmod 0500 "$target" || emit_error E_RUNTIME
+  pin_path "$target" || emit_error E_RUNTIME
 }
 canonical_json() {
-  local input=$1 canonical=$2
-  "$jq_bin" -s -S -c 'if length==1 then .[0] else error("root-count") end' \
-    "$input" >"$canonical" 2>/dev/null || return 1
-  /usr/bin/cmp -s "$input" "$canonical"
+  local input=$1 canonical=$2 bom
+  bom=$(/usr/bin/od -An -tx1 -N3 "$input" 2>/dev/null | /usr/bin/tr -d ' \n') ||
+    emit_error E_RUNTIME
+  [ "$bom" != efbbbf ] || emit_error E_PARSE
+  "$jq_bin" -e 'true' "$input" </dev/null >/dev/null 2>&1 || emit_error E_PARSE
+  "$jq_bin" -s -e 'length==1' "$input" </dev/null >/dev/null 2>&1 ||
+    emit_error E_PARSE
+  "$jq_bin" -S -c . "$input" >"$canonical" 2>/dev/null || emit_error E_PARSE
+  /usr/bin/cmp -s "$input" "$canonical" || emit_error E_CANONICAL
+  "$jq_bin" -e '
+    def depth:
+      if type=="array" then if length==0 then 1 else 1+([.[]|depth]|max) end
+      elif type=="object" then if length==0 then 1 else 1+([.[]|depth]|max) end
+      else 1 end;
+    def members:
+      if type=="array" then length+([.[]|members]|add//0)
+      elif type=="object" then (keys_unsorted|length)+([.[]|members]|add//0)
+      else 0 end;
+    def strings_ok:
+      if type=="array" then all(.[];strings_ok)
+      elif type=="object" then
+        all(keys_unsorted[];utf8bytelength<=8192) and all(.[];strings_ok)
+      elif type=="string" then utf8bytelength<=8192 else true end;
+    depth<=32 and members<=4096 and strings_ok
+  ' "$input" >/dev/null 2>&1 || emit_error E_LIMIT
 }
 validator_pair_ok() {
   local pair_dir=$1 driver=$2 validator_jq=$3 expected_driver=$4 expected_program=$5
@@ -96,15 +502,15 @@ validator_pair_ok() {
     [ "$(sha256_path "$validator_jq")" = "$expected_program" ]
 }
 build_validator_mirror() {
-  local mirror="$scratch/policy-validator/control/v1" source target size
+  local mirror="$scratch/policy-validator/control/v1" source target
   /bin/mkdir -p "$mirror" || return 1
   for source in "$policy_validator" "$validator_program"; do
     target="$mirror/${source##*/}"
-    /bin/dd if="$source" of="$target" bs=1048577 count=1 2>/dev/null || return 1
-    size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || return 1
-    [ "$size" -le 1048576 ] || return 1
+    case "$source" in
+      "$policy_validator") snapshot_executable "$source" "$target" ;;
+      *) snapshot_fixed "$source" "$target" ;;
+    esac
   done
-  /bin/chmod 0500 "$mirror/validate.sh" || return 1
   /usr/bin/printf '%s\n' "$mirror"
 }
 core_closure_sha() {
@@ -165,7 +571,7 @@ core_closure_sha() {
   sha256_text "$descriptor"
 }
 build_core_mirror() {
-  local selected=$1 mirror="$scratch/core-package" relative source target size
+  local selected=$1 mirror="$scratch/core-package" relative source target
   local -a paths
   /bin/mkdir -p "$mirror/scripts" "$mirror/core/v2/generations/$selected/modules" ||
     return 1
@@ -183,12 +589,28 @@ build_core_mirror() {
   for relative in "${paths[@]}"; do
     source="$repo/$relative"
     target="$mirror/$relative"
-    /bin/dd if="$source" of="$target" bs=1048577 count=1 2>/dev/null || return 1
-    size=$(/usr/bin/wc -c <"$target" | /usr/bin/tr -d ' ') || return 1
-    [ "$size" -le 1048576 ] || return 1
+    case "$relative" in
+      scripts/core-contract.sh) snapshot_executable "$source" "$target" ;;
+      *) snapshot_fixed "$source" "$target" ;;
+    esac
   done
-  /bin/chmod 0500 "$mirror/scripts/core-contract.sh" || return 1
   /usr/bin/printf '%s\n' "$mirror"
+}
+pin_core_package() {
+  local root=$1 selected=$2 relative
+  local -a paths
+  paths=(
+    scripts/core-contract.sh
+    core/v2/generation-registry.json
+    "core/v2/generations/$selected/contracts.jq"
+    "core/v2/generations/$selected/core-ingress.sh"
+    "core/v2/generations/$selected/modules/profile_graph.jq"
+    "core/v2/generations/$selected/modules/result_facts.jq"
+    "core/v2/generations/$selected/modules/result_truth.jq"
+    "core/v2/generations/$selected/modules/schema.jq"
+    "core/v2/generations/$selected/modules/stage_request.jq"
+  )
+  for relative in "${paths[@]}"; do pin_path "$root/$relative" || return 1; done
 }
 fixed_files_ok() {
   [ "$(sha256_path "$source_path")" = "$driver_sha" ] &&
@@ -266,6 +688,8 @@ validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
 mirror_validator_dir=$(build_validator_mirror) || emit_error E_RELATION
 mirror_policy_validator="$mirror_validator_dir/validate.sh"
 mirror_validator_program="$mirror_validator_dir/policy-set.jq"
+pin_path "$mirror_policy_validator" || emit_error E_RELATION
+pin_path "$mirror_validator_program" || emit_error E_RELATION
 validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
   "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha" ||
   emit_error E_RELATION
@@ -283,10 +707,12 @@ fi
 
 selected=$(selected_core_generation "$core_driver") || emit_error E_RELATION
 selected_sha=$(sha256_text "$selected") || emit_error E_RUNTIME
+pin_core_package "$repo" "$selected" || emit_error E_RELATION
 live_core_sha=$(core_closure_sha "$repo" "$core_driver" "$selected" live-pre) ||
   emit_error E_RELATION
 mirror_root=$(build_core_mirror "$selected") || emit_error E_RELATION
 mirror_core_driver="$mirror_root/scripts/core-contract.sh"
+pin_core_package "$mirror_root" "$selected" || emit_error E_RELATION
 mirror_core_sha=$(core_closure_sha "$mirror_root" "$mirror_core_driver" "$selected" mirror-pre) ||
   emit_error E_RELATION
 [ "$mirror_core_sha" = "$live_core_sha" ] || emit_error E_RELATION
@@ -407,6 +833,6 @@ canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||
     has("credential") or has("network") or has("candidate_execution"))|not)
 ' "$scratch/evaluation.json" >/dev/null 2>&1 || emit_error E_RUNTIME
 
+pin_path "$scratch/evaluation.json" || emit_error E_RUNTIME
+verify_all_pins || emit_error E_RELATION
 /bin/cat "$scratch/evaluation.json" || emit_error E_RUNTIME
-trap - EXIT HUP INT TERM
-cleanup
