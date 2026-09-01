@@ -413,6 +413,20 @@ make_gate_jq() {
   /bin/chmod 0500 "$destination"
   GATE_MARKER=$marker GATE_RELEASE=$release REAL_JQ=$jq_bin :
 }
+make_stubborn_jq() {
+  local destination=$1
+  /usr/bin/printf '%s\n' '#!/bin/bash' \
+    'if [ "${1:-}" = --version ]; then /usr/bin/printf "jq-1.6\n"; exit 0; fi' \
+    '/bin/bash -c '\''trap "" TERM; : >"$1"; exec /bin/sleep 30'\'' stubborn "$STUBBORN_READY_FILE" & nested=$!' \
+    'attempt=0' \
+    'while [ ! -f "$STUBBORN_READY_FILE" ] && [ "$attempt" -lt 5000 ]; do attempt=$((attempt + 1)); /bin/sleep 0.001; done' \
+    '[ -f "$STUBBORN_READY_FILE" ] || exit 125' \
+    '/usr/bin/printf "%s\n" "$nested" >"$NESTED_PID_FILE"' \
+    '/usr/bin/printf "%s\n" "$$" >"$INNER_LEADER_FILE"' \
+    '/bin/ps -o pgid= -p $$ | /usr/bin/tr -d " " >"$INNER_PGID_FILE"' \
+    'exec "$REAL_JQ" "$@"' >"$destination"
+  /bin/chmod 0500 "$destination"
+}
 start_eval_group() {
   local name=$1 output=$2 diagnostic=$3 gate leader pgid
   shift 3
@@ -576,20 +590,52 @@ pass 'launch-window repeated group signal is clean'
 
 teardown_root="$tmp/teardown-runtime"
 copy_runtime "$teardown_root"
+teardown_bin="$tmp/teardown-bin"
+/bin/mkdir "$teardown_bin"
+teardown_nested_pid_file="$tmp/teardown-nested.pid"
+teardown_inner_leader_file="$tmp/teardown-inner.leader"
+teardown_inner_pgid_file="$tmp/teardown-inner.pgid"
+teardown_ready_file="$tmp/teardown-stubborn.ready"
+make_stubborn_jq "$teardown_bin/jq"
 teardown_scratch="$tmp/teardown-scratch"
 /bin/mkdir "$teardown_scratch"
 start_eval_group teardown-signal "$tmp/teardown.out" "$tmp/teardown.err" \
-  /usr/bin/env TMPDIR="$teardown_scratch" PATH="$bin:/usr/bin:/bin" \
+  /usr/bin/env TMPDIR="$teardown_scratch" PATH="$teardown_bin:/usr/bin:/bin" \
+  REAL_JQ="$jq_bin" STUBBORN_READY_FILE="$teardown_ready_file" \
+  NESTED_PID_FILE="$teardown_nested_pid_file" \
+  INNER_LEADER_FILE="$teardown_inner_leader_file" \
+  INNER_PGID_FILE="$teardown_inner_pgid_file" \
   "$teardown_root/control/v1/evaluate-kill-switch.sh" evaluate \
   "$policy_set" "$state" "$attempt" "$duty" || fail 'teardown signal start'
 teardown_pid=$RACE_PID
 teardown_pgid=$RACE_PGID
 wait_named_file teardown-signal "$teardown_scratch" child-teardown \
   "$teardown_pid" "$teardown_pgid"
+wait_marker teardown-nested "$teardown_nested_pid_file" "$teardown_pid" "$teardown_pgid"
+wait_marker teardown-inner-leader "$teardown_inner_leader_file" \
+  "$teardown_pid" "$teardown_pgid"
+wait_marker teardown-inner-group "$teardown_inner_pgid_file" \
+  "$teardown_pid" "$teardown_pgid"
+teardown_nested_pid=$(/bin/cat "$teardown_nested_pid_file")
+teardown_inner_leader=$(/bin/cat "$teardown_inner_leader_file")
+teardown_inner_pgid=$(/bin/cat "$teardown_inner_pgid_file")
+if ! [[ "$teardown_nested_pid" =~ ^[1-9][0-9]*$ ]] ||
+   ! [[ "$teardown_inner_leader" =~ ^[1-9][0-9]*$ ]] ||
+   ! [[ "$teardown_inner_pgid" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$teardown_inner_leader" != "$teardown_inner_pgid" ] ||
+   [ "$teardown_inner_pgid" = "$TEST_PGID" ] ||
+   [ "$teardown_inner_pgid" = "$teardown_pgid" ] ||
+   ! kill -0 "$teardown_nested_pid" 2>/dev/null ||
+   ! group_alive "$teardown_inner_pgid"; then
+  fail 'teardown cleanup ownership'
+fi
 for _ in 1 2 3; do kill -TERM -- "-$teardown_pgid" 2>/dev/null || :; done
 wait_group teardown-signal "$teardown_pid" "$teardown_pgid"
-[ "$RACE_STATUS" -eq 143 ] && [ ! -s "$tmp/teardown.out" ] &&
-  [ ! -s "$tmp/teardown.err" ] || fail 'teardown signal result'
+if [ "$RACE_STATUS" -ne 143 ] || [ -s "$tmp/teardown.out" ] ||
+   [ -s "$tmp/teardown.err" ] || kill -0 "$teardown_nested_pid" 2>/dev/null ||
+   group_alive "$teardown_inner_pgid"; then
+  fail 'teardown signal result'
+fi
 [ -z "$(/usr/bin/find "$teardown_scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
   fail 'teardown signal scratch cleanup'
 pass 'teardown-window repeated group signal is clean'
