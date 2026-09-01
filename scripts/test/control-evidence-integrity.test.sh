@@ -170,6 +170,11 @@ run_eval() {
   if [ "$run_status" -ne 0 ]; then
     /usr/bin/printf 'diagnostic %s status=%s stderr=' "$name" "$run_status" >&2
     /bin/cat "$err" >&2
+    PS4='+${LINENO}: ' PATH="$bin:/usr/bin:/bin" /bin/bash -x \
+      "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+      "$policy_set" "$request" "$resolved" "$result" "$input" \
+      >"$tmp/$name.trace.out" 2>"$tmp/$name.trace.err" || :
+    /usr/bin/tail -120 "$tmp/$name.trace.err" >&2
     fail "$name status"
   fi
   [ ! -s "$err" ] || fail "$name stderr"
