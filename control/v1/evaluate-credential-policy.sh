@@ -451,13 +451,13 @@ snapshot_executable() {
   /bin/chmod 0500 "$target" || emit_error E_RUNTIME
 }
 canonical_json() {
-  local raw=$1 canonical=$2 bom roots
+  local raw=$1 canonical=$2 bom
   bom=$(/usr/bin/od -An -tx1 -N3 "$raw" 2>/dev/null | /usr/bin/tr -d ' \n') ||
     emit_error E_RUNTIME
   [ "$bom" != efbbbf ] || emit_error E_PARSE
-  "$jq_bin" . "$raw" >/dev/null 2>&1 || emit_error E_PARSE
-  roots=$("$jq_bin" -s 'length' "$raw" 2>/dev/null) || emit_error E_PARSE
-  [ "$roots" -eq 1 ] || emit_error E_PARSE
+  "$jq_bin" -e 'true' "$raw" </dev/null >/dev/null 2>&1 || emit_error E_PARSE
+  "$jq_bin" -s -e 'length == 1' "$raw" </dev/null >/dev/null 2>&1 ||
+    emit_error E_PARSE
   "$jq_bin" -S -c . "$raw" >"$canonical" 2>/dev/null || emit_error E_PARSE
   /usr/bin/cmp -s "$raw" "$canonical" || emit_error E_CANONICAL
   "$jq_bin" -e '

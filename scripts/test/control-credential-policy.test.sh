@@ -362,6 +362,9 @@ pass 'noncanonical input is rejected'
 
 malformed_json="$tmp/malformed.json"
 /usr/bin/printf '{' >"$malformed_json"
+[ "$(/usr/bin/wc -c <"$malformed_json" | /usr/bin/tr -d ' ')" -eq 1 ] &&
+  [ "$(/usr/bin/od -An -tx1 "$malformed_json" | /usr/bin/tr -d ' \n')" = 7b ] ||
+  fail 'malformed JSON fixture bytes'
 parse_status=0
 PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$request" \
   "$resolved" "$result" "$duty" "$malformed_json" >"$tmp/parse.out" \
