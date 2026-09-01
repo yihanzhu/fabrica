@@ -70,7 +70,7 @@ group_alive() {
   [ -n "${1:-}" ] && kill -0 -- "-$1" 2>/dev/null
 }
 terminate_active() {
-  local attempt=0 wait_status=0 group=${ACTIVE_PGID:-} leader=${ACTIVE_PID:-}
+  local attempt=0 group=${ACTIVE_PGID:-} leader=${ACTIVE_PID:-}
   [[ "$group" =~ ^[1-9][0-9]*$ ]] && [[ "$leader" =~ ^[1-9][0-9]*$ ]] ||
     return 1
   kill -TERM -- "-$group" 2>/dev/null || :
@@ -86,23 +86,17 @@ terminate_active() {
       /bin/sleep 0.01 || :
     done
   fi
-  while :; do
-    wait_status=0
-    wait "$leader" 2>/dev/null || wait_status=$?
-    case "$wait_status" in
-      129|130|143) kill -0 "$leader" 2>/dev/null && continue ;;
-    esac
-    break
-  done
+  group_alive "$group" && return 1
+  wait "$leader" 2>/dev/null || :
   ACTIVE_PID=''
   ACTIVE_PGID=''
   ! group_alive "$group"
 }
 signal_exit() {
   local status=${1:-1}
-  trap - EXIT HUP INT TERM
+  trap - EXIT
   exec >/dev/null 2>&1
-  if [ -n "${ACTIVE_PGID:-}" ] && ! terminate_active; then status=1; fi
+  if [ -n "${ACTIVE_PGID:-}" ]; then terminate_active || :; fi
   cleanup
   exit "$status"
 }

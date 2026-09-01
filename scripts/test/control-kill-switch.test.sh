@@ -403,7 +403,10 @@ make_gate_jq() {
     'if [ "${1:-}" = --version ]; then /usr/bin/printf "jq-1.6\\n"; exit 0; fi' \
     'for value in "$@"; do' \
     '  case "$value" in */program.jq)' \
+    '    if [ "${TERM_RESIST_NESTED:-0}" = 1 ]; then trap "" TERM; fi' \
     '    if [ -n "${NESTED_PID_FILE:-}" ]; then /bin/sleep 30 & nested=$!; /usr/bin/printf "%s\n" "$nested" >"$NESTED_PID_FILE"; fi' \
+    '    if [ -n "${INNER_LEADER_FILE:-}" ]; then /usr/bin/printf "%s\n" "$$" >"$INNER_LEADER_FILE"; fi' \
+    '    if [ -n "${INNER_PGID_FILE:-}" ]; then /bin/ps -o pgid= -p $$ | /usr/bin/tr -d " " >"$INNER_PGID_FILE"; fi' \
     '    : >"$GATE_MARKER"; while [ ! -f "$GATE_RELEASE" ]; do /bin/sleep 0.01; done; break ;; esac' \
     'done' \
     'exec "$REAL_JQ" "$@"' >"$destination"
@@ -598,24 +601,43 @@ signal_bin="$tmp/signal-bin"
 signal_marker="$tmp/signal.marker"
 signal_release="$tmp/signal.release"
 nested_pid_file="$tmp/nested.pid"
+inner_leader_file="$tmp/inner.leader"
+inner_pgid_file="$tmp/inner.pgid"
 make_gate_jq "$signal_bin/jq" "$signal_marker" "$signal_release"
 signal_scratch="$tmp/signal-scratch"
 /bin/mkdir "$signal_scratch"
 start_eval_group nested-signal "$tmp/signal.out" "$tmp/signal.err" \
   /usr/bin/env GATE_MARKER="$signal_marker" GATE_RELEASE="$signal_release" \
-  NESTED_PID_FILE="$nested_pid_file" REAL_JQ="$jq_bin" TMPDIR="$signal_scratch" \
+  NESTED_PID_FILE="$nested_pid_file" INNER_LEADER_FILE="$inner_leader_file" \
+  INNER_PGID_FILE="$inner_pgid_file" \
+  TERM_RESIST_NESTED=1 REAL_JQ="$jq_bin" TMPDIR="$signal_scratch" \
   PATH="$signal_bin:/usr/bin:/bin" "$signal_root/control/v1/evaluate-kill-switch.sh" evaluate \
   "$policy_set" "$state" "$attempt" "$duty" || fail 'nested signal start'
 signal_pid=$RACE_PID
 signal_pgid=$RACE_PGID
 wait_marker nested-signal "$signal_marker" "$signal_pid" "$signal_pgid"
 wait_marker nested-child "$nested_pid_file" "$signal_pid" "$signal_pgid"
+wait_marker inner-leader "$inner_leader_file" "$signal_pid" "$signal_pgid"
+wait_marker inner-group "$inner_pgid_file" "$signal_pid" "$signal_pgid"
 nested_pid=$(/bin/cat "$nested_pid_file")
+inner_leader=$(/bin/cat "$inner_leader_file")
+inner_pgid=$(/bin/cat "$inner_pgid_file")
 [[ "$nested_pid" =~ ^[1-9][0-9]*$ ]] || fail 'nested pid shape'
-for _ in 1 2 3; do kill -TERM -- "-$signal_pgid" 2>/dev/null || :; done
+[[ "$inner_leader" =~ ^[1-9][0-9]*$ ]] && [ "$inner_leader" = "$inner_pgid" ] &&
+  [[ "$inner_pgid" =~ ^[1-9][0-9]*$ ]] && [ "$inner_pgid" != "$TEST_PGID" ] &&
+  [ "$inner_pgid" != "$signal_pgid" ] || fail 'inner pgid shape'
+kill -TERM -- "-$signal_pgid" 2>/dev/null || fail 'first cleanup signal'
+/bin/sleep 0.2
+if ! kill -0 "$signal_pid" 2>/dev/null || ! kill -0 "$nested_pid" 2>/dev/null ||
+   ! group_alive "$inner_pgid"; then
+  fail 'cleanup window was not held'
+fi
+for _ in 1 2; do kill -TERM -- "-$signal_pgid" 2>/dev/null || :; done
 wait_group nested-signal "$signal_pid" "$signal_pgid"
 if [ "$RACE_STATUS" -ne 143 ] || [ -s "$tmp/signal.out" ] ||
-   [ -s "$tmp/signal.err" ] || kill -0 "$nested_pid" 2>/dev/null; then
+   [ -s "$tmp/signal.err" ] || kill -0 "$inner_leader" 2>/dev/null ||
+   kill -0 "$nested_pid" 2>/dev/null ||
+   group_alive "$inner_pgid"; then
   fail 'nested signal result'
 fi
 [ -z "$(/usr/bin/find "$signal_scratch" -mindepth 1 -maxdepth 1 -print -quit)" ] ||
