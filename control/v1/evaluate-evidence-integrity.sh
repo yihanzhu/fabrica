@@ -229,7 +229,7 @@ policy_sha=$(sha256_path "$scratch/policy.json") || emit_error E_RUNTIME
 decision_sha=$(sha256_path "$scratch/decision.json") || emit_error E_RUNTIME
 validator_driver_sha=$(sha256_path "$policy_validator") || emit_error E_RUNTIME
 validator_program_sha=$(sha256_path "$validator_program") || emit_error E_RUNTIME
-"$jq_bin" -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha" \
+"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha" \
   --arg program_sha "$program_sha" --arg validator_driver_sha "$validator_driver_sha" \
   --arg validator_program_sha "$validator_program_sha" \
   --slurpfile policy "$scratch/policy.json" \

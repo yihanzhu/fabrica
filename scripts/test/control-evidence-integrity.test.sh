@@ -170,11 +170,6 @@ run_eval() {
   if [ "$run_status" -ne 0 ]; then
     /usr/bin/printf 'diagnostic %s status=%s stderr=' "$name" "$run_status" >&2
     /bin/cat "$err" >&2
-    PS4='+${LINENO}: ' PATH="$bin:/usr/bin:/bin" /bin/bash -x \
-      "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
-      "$policy_set" "$request" "$resolved" "$result" "$input" \
-      >"$tmp/$name.trace.out" 2>"$tmp/$name.trace.err" || :
-    /usr/bin/tail -120 "$tmp/$name.trace.err" >&2
     fail "$name status"
   fi
   [ ! -s "$err" ] || fail "$name stderr"
@@ -386,6 +381,30 @@ status=0
   [ "$(/bin/cat "$tmp/relative.err")" = E_RUNTIME ] || fail 'relative jq rejection'
 pass 'relative jq interpreter rejected'
 
+/usr/bin/grep -Fq \
+  '"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha"' \
+  "$evaluator" || fail 'decision envelope null-input mode'
+strict_bin="$tmp/strict-bin"
+/bin/mkdir "$strict_bin"
+/usr/bin/printf '%s\n' '#!/bin/bash' "real_jq='$jq_bin'" \
+  'if [ "${1:-}" = --version ]; then exec "$real_jq" "$@"; fi' \
+  'saw_definition=0; saw_null_input=0' \
+  'for arg in "$@"; do' \
+  '  [ "$arg" = definition ] && saw_definition=1' \
+  '  [ "$arg" = -n ] && saw_null_input=1' \
+  'done' \
+  '[ "$saw_definition" -eq 0 ] || [ "$saw_null_input" -eq 1 ] || exit 97' \
+  'exec "$real_jq" "$@"' >"$strict_bin/jq"
+/bin/chmod 0555 "$strict_bin/jq"
+PATH="$strict_bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
+  "$request" "$resolved" "$result" "$presentation" >"$tmp/strict.out" \
+  2>"$tmp/strict.err" || fail 'strict decision evaluator status'
+if [ -s "$tmp/strict.err" ] ||
+   ! /usr/bin/cmp -s "$tmp/valid.out" "$tmp/strict.out"; then
+  fail 'strict decision evaluator output'
+fi
+pass 'decision envelope executes explicitly on null input'
+
 copy_runtime() {
   local destination=$1 path
   /bin/mkdir -p "$destination/control/v1" "$destination/scripts" "$destination/core"
@@ -396,6 +415,24 @@ copy_runtime() {
   /bin/cp "$root/scripts/core-contract.sh" "$destination/scripts/core-contract.sh"
   /bin/cp -R "$root/core/v2" "$destination/core/v2"
 }
+
+mutated_decision_runtime="$tmp/mutated-decision-runtime"
+copy_runtime "$mutated_decision_runtime"
+"$jq_bin" -S -c '.body.semantics.authority_effect="unexpected"' \
+  "$mutated_decision_runtime/control/v1/evidence-integrity-decision.json" \
+  >"$mutated_decision_runtime/decision.next"
+/bin/mv "$mutated_decision_runtime/decision.next" \
+  "$mutated_decision_runtime/control/v1/evidence-integrity-decision.json"
+mutated_decision_sha=$(sha256_path \
+  "$mutated_decision_runtime/control/v1/evidence-integrity-decision.json")
+mutated_decision_set="$tmp/mutated-decision-policy-set.json"
+"$jq_bin" -S -c --arg digest "$mutated_decision_sha" '
+  .body.sections[] |= if .section_id=="evidence-integrity"
+    then .decision_ref.sha256=$digest else . end
+' "$policy_set" >"$mutated_decision_set"
+expect_error mutated-decision E_RELATION "$mutated_decision_set" "$request" \
+  "$resolved" "$result" "$presentation" "$mutated_decision_runtime"
+
 wait_marker() {
   local marker=$1 pid=$2 attempt=0
   while [ ! -e "$marker" ] && kill -0 "$pid" 2>/dev/null && [ "$attempt" -lt 400 ]; do
