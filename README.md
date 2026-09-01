@@ -76,8 +76,10 @@ Later bounded units own each policy body and its enforcement.
 
 `control/v1/evaluate-duty.sh` checks one public core v2 stage tuple against the
 shipped duty-separation ceiling. It binds that policy to the validated policy set
-by exact content identity, keeps publisher dormant, and compares producer, forge,
-verifier, reviewer, requester, performer, and reporter identities.
+by exact content identity. Its shipped decision binds the policy, evaluator driver,
+evaluator program, and complete selected public-core package closure. It keeps
+publisher dormant and compares producer, forge, verifier, reviewer, requester,
+performer, and reporter identities.
 
 The canonical result is observation only: `satisfied`, `violated`, or
 `inconclusive`. The evaluator grants no authority, activates nothing, reads no

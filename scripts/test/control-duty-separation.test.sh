@@ -7,6 +7,7 @@ umask 077
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 evaluator="$root/control/v1/evaluate-duty.sh"
 policy="$root/control/v1/duty-separation-policy.json"
+decision="$root/control/v1/duty-separation-decision.json"
 core_wrapper="$root/scripts/core-contract.sh"
 core_registry="$root/core/v2/generation-registry.json"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-duty-test.XXXXXX")
@@ -15,6 +16,9 @@ fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+sha256_text() {
+  /usr/bin/printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+}
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -39,18 +43,62 @@ bin="$tmp/bin"
 /bin/chmod 0555 "$bin/jq"
 jq_bin="$bin/jq"
 [ "$($jq_bin --version)" = jq-1.6 ] || fail 'jq identity'
-generation=$("$jq_bin" -er 'if length==1 then .[0].generation_id else empty end' \
-  "$core_registry") || fail 'selected generation'
-core_package_sha=$(sha256_path "$core_wrapper")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$core_wrapper") ||
+  fail 'selected generation'
+[[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || fail 'selected generation shape'
+"$jq_bin" -e --arg generation "$generation" \
+  '[.[]|select(.generation_id==$generation and .semantic_identity=="core.contracts.v2")]|length==1' \
+  "$core_registry" >/dev/null || fail 'selected registry entry'
+core_package_sha=$("$jq_bin" -er '.body.core_contract.package_ref.sha256' "$policy")
 
 canonical="$tmp/policy-canonical.json"
 "$jq_bin" -S -c . "$policy" >"$canonical"
 /usr/bin/cmp -s "$policy" "$canonical" || fail 'canonical shipped policy'
 policy_sha=$(sha256_path "$policy")
+"$jq_bin" -S -c . "$decision" >"$tmp/decision-canonical.json"
+/usr/bin/cmp -s "$decision" "$tmp/decision-canonical.json" || fail 'canonical decision'
+decision_sha=$(sha256_path "$decision")
+
+closure_members="$tmp/core-closure-members.tsv"
+closure_paths=(
+  scripts/core-contract.sh core/v2/generation-registry.json
+  "core/v2/generations/$generation/contracts.jq"
+  "core/v2/generations/$generation/core-ingress.sh"
+  "core/v2/generations/$generation/modules/profile_graph.jq"
+  "core/v2/generations/$generation/modules/result_facts.jq"
+  "core/v2/generations/$generation/modules/result_truth.jq"
+  "core/v2/generations/$generation/modules/schema.jq"
+  "core/v2/generations/$generation/modules/stage_request.jq"
+)
+: >"$closure_members"
+for closure_path in "${closure_paths[@]}"; do
+  /usr/bin/printf '%s\t%s\n' "$closure_path" "$(sha256_path "$root/$closure_path")" \
+    >>"$closure_members"
+done
+generation_sha=$(sha256_text "$generation")
+closure_descriptor=$("$jq_bin" -Rn -S -c --arg generation_sha "$generation_sha" '
+  [inputs|split("\t")|{path:.[0],sha256:.[1]}] as $members |
+  {schema_version:1,kind:"core_contract_package_closure",
+   semantic_identity:"core.contracts.v2",selected_generation_id_sha256:$generation_sha,
+   members:$members}
+' <"$closure_members")
+[ "$(sha256_text "$closure_descriptor")" = "$core_package_sha" ] || fail 'core closure identity'
+[ "$generation_sha" = "$("$jq_bin" -r '.body.core_contract.generation_id_sha256' "$policy")" ] ||
+  fail 'generation identity'
+generation_newline_sha=$(/usr/bin/printf '%s\n' "$generation" |
+  /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+[ "$generation_newline_sha" != "$generation_sha" ] || fail 'generation newline distinction'
+for source_path in control/v1/duty-separation-policy.json \
+  control/v1/duty-separation-decision.json control/v1/duty-separation.jq \
+  control/v1/evaluate-duty.sh scripts/test/control-duty-separation.test.sh; do
+  ! /usr/bin/grep -Fq "$generation" "$root/$source_path" || fail "raw generation $source_path"
+done
+pass 'opaque generation and full package closure identities'
 
 policy_set="$tmp/policy-set.json"
-"$jq_bin" -S -c -n --arg duty_sha "$policy_sha" --arg generation "$generation" \
-  --arg core_package_sha "$core_package_sha" '
+"$jq_bin" -S -c -n --arg duty_sha "$policy_sha" --arg decision_sha "$decision_sha" \
+  --arg generation "$generation" --arg core_package_sha "$core_package_sha" '
   def ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
   def section($id;$policy_sha;$decision_sha):
     {section_id:$id,
@@ -65,7 +113,7 @@ policy_set="$tmp/policy-set.json"
        package_ref:ref("core-contract-package.v2";
          "application/vnd.ystack.core-contract+json";$core_package_sha)},
      sections:[section("credential-policy";("1"*64);("a"*64)),
-       section("duty-separation";$duty_sha;("b"*64)),
+       section("duty-separation";$duty_sha;$decision_sha),
        section("evidence-integrity";("3"*64);("c"*64)),
        section("kill-switch";("4"*64);("d"*64)),
        section("risk-gates";("5"*64);("e"*64)),
@@ -157,9 +205,11 @@ expect_pure() {
   resolved_input_sha=$(sha256_path "$resolved_input")
   result_input_sha=$(sha256_path "$result_input")
   "$jq_bin" -S -c -n -f "$root/control/v1/duty-separation.jq" \
-    --slurpfile policy "$policy" --slurpfile policy_set "$policy_set" \
+    --slurpfile policy "$policy" --slurpfile decision "$decision" \
+    --slurpfile policy_set "$policy_set" \
     --slurpfile request "$req" --slurpfile resolved "$resolved_input" \
     --slurpfile result "$result_input" --arg policy_set_sha "$policy_set_sha" \
+    --arg decision_sha "$decision_sha" \
     --arg request_sha "$req_sha" --arg resolved_sha "$resolved_input_sha" \
     --arg result_sha "$result_input_sha" >"$out" || fail "pure $name status"
   "$jq_bin" -e --arg expected "$expected" --arg reason "$reason" '
@@ -174,12 +224,26 @@ sync_result() {
   "$jq_bin" -S -c --arg digest "$digest" '.body.request_ref.sha256=$digest' \
     "$result" >"$output"
 }
+copy_runtime() {
+  local destination=$1 copy_path
+  /bin/mkdir -p "$destination/control/v1" "$destination/scripts" "$destination/core"
+  for copy_path in evaluate-duty.sh duty-separation.jq duty-separation-policy.json \
+    duty-separation-decision.json validate.sh policy-set.jq; do
+    /bin/cp "$root/control/v1/$copy_path" "$destination/control/v1/$copy_path"
+  done
+  /bin/cp "$root/scripts/core-contract.sh" "$destination/scripts/core-contract.sh"
+  /bin/cp -R "$root/core/v2" "$destination/core/v2"
+}
 
 expect_eval satisfied satisfied duty.satisfied "$policy_set" "$request" "$resolved" "$result"
 result_sha=$(sha256_path "$result")
 "$jq_bin" -e --arg policy_set_sha "$policy_set_sha" --arg request_sha "$request_sha" \
-  --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" '
+  --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" \
+  --arg policy_sha "$policy_sha" --arg decision_sha "$decision_sha" '
   .body.policy_set.sha256==$policy_set_sha and
+  .body.policy_ref.sha256==$policy_sha and .body.decision_ref=={
+    content_id:"control-decision.duty-separation",
+    media_type:"application/vnd.ystack.control-decision+json",sha256:$decision_sha} and
   .body.stage.request_ref.sha256==$request_sha and
   .body.stage.resolved_profile_ref.sha256==$resolved_sha and
   .body.stage.result_ref.sha256==$result_sha
@@ -302,6 +366,10 @@ bad_policy_set="$tmp/bad-policy-set.json"
 "$jq_bin" -S -c '(.body.sections[] | select(.section_id=="duty-separation") |
   .policy_ref.sha256)=("7"*64)' "$policy_set" >"$bad_policy_set"
 expect_error policy-identity E_RELATION "$bad_policy_set" "$request" "$resolved" "$result"
+bad_decision_ref="$tmp/bad-decision-ref.json"
+"$jq_bin" -S -c '(.body.sections[] | select(.section_id=="duty-separation") |
+  .decision_ref.sha256)=("7"*64)' "$policy_set" >"$bad_decision_ref"
+expect_error decision-identity E_RELATION "$bad_decision_ref" "$request" "$resolved" "$result"
 bad_generation="$tmp/bad-generation.json"
 "$jq_bin" -S -c '.body.core_contract.generation_id=("g-"+("8"*64))' \
   "$policy_set" >"$bad_generation"
@@ -333,7 +401,8 @@ large="$tmp/large.json"
 expect_error input-limit E_LIMIT "$policy_set" "$large" "$resolved" "$result"
 copy_root="$tmp/policy-limit-root"
 /bin/mkdir -p "$copy_root/control/v1" "$copy_root/scripts"
-for copy_path in evaluate-duty.sh duty-separation.jq duty-separation-policy.json validate.sh; do
+for copy_path in evaluate-duty.sh duty-separation.jq duty-separation-policy.json \
+  duty-separation-decision.json validate.sh; do
   /bin/cp "$root/control/v1/$copy_path" "$copy_root/control/v1/$copy_path"
 done
 /bin/cp "$root/scripts/core-contract.sh" "$copy_root/scripts/core-contract.sh"
@@ -344,23 +413,170 @@ evaluator="$copy_root/control/v1/evaluate-duty.sh"
 expect_error policy-limit E_LIMIT "$policy_set" "$request" "$resolved" "$result"
 evaluator=$original_evaluator
 
-stale_root="$tmp/stale-core-root"
-stale_sentinel="$tmp/stale-core-ran"
-/bin/mkdir -p "$stale_root/control/v1" "$stale_root/scripts"
-for copy_path in evaluate-duty.sh duty-separation.jq duty-separation-policy.json \
-  validate.sh policy-set.jq; do
-  /bin/cp "$root/control/v1/$copy_path" "$stale_root/control/v1/$copy_path"
-done
-/usr/bin/printf '%s\n' '#!/bin/bash' ": > \"$stale_sentinel\"" 'exit 0' \
-  >"$stale_root/scripts/core-contract.sh"
-/bin/chmod 0755 "$stale_root/scripts/core-contract.sh"
-evaluator="$stale_root/control/v1/evaluate-duty.sh"
-expect_error stale-core-package E_RELATION "$policy_set" "$request" "$resolved" "$result"
-[ ! -e "$stale_sentinel" ] || fail 'stale core executed'
+decision_limit_root="$tmp/decision-limit-root"
+/bin/cp -R "$copy_root" "$decision_limit_root"
+/bin/cp "$decision" "$decision_limit_root/control/v1/duty-separation-decision.json"
+/usr/bin/awk 'BEGIN { for (i=0;i<1048577;i++) printf " " }' \
+  >>"$decision_limit_root/control/v1/duty-separation-decision.json"
+evaluator="$decision_limit_root/control/v1/evaluate-duty.sh"
+expect_error decision-limit E_LIMIT "$policy_set" "$request" "$resolved" "$result"
 evaluator=$original_evaluator
-pass 'stale core is rejected before execution'
 
-for required in control/v1/duty-separation-policy.json control/v1/duty-separation.jq \
+runtime_root="$tmp/runtime-happy"
+copy_runtime "$runtime_root"
+evaluator="$runtime_root/control/v1/evaluate-duty.sh"
+expect_eval copied-runtime satisfied duty.satisfied "$policy_set" "$request" "$resolved" "$result"
+evaluator=$original_evaluator
+
+for stale_kind in wrapper ingress module registry; do
+  stale_root="$tmp/stale-$stale_kind"
+  stale_sentinel="$tmp/stale-$stale_kind-ran"
+  copy_runtime "$stale_root"
+  case "$stale_kind" in
+    wrapper)
+      /usr/bin/printf '\n: > "%s"\n' "$stale_sentinel" \
+        >>"$stale_root/scripts/core-contract.sh"
+      ;;
+    ingress)
+      /usr/bin/printf '\n: > "%s"\n' "$stale_sentinel" \
+        >>"$stale_root/core/v2/generations/$generation/core-ingress.sh"
+      ;;
+    module)
+      /usr/bin/printf '\n' \
+        >>"$stale_root/core/v2/generations/$generation/modules/schema.jq"
+      ;;
+    registry)
+      "$jq_bin" -S -c '.[0].concern += ".stale"' \
+        "$stale_root/core/v2/generation-registry.json" >"$stale_root/registry.next"
+      /bin/mv "$stale_root/registry.next" "$stale_root/core/v2/generation-registry.json"
+      ;;
+  esac
+  evaluator="$stale_root/control/v1/evaluate-duty.sh"
+  expect_error "stale-core-$stale_kind" E_RELATION \
+    "$policy_set" "$request" "$resolved" "$result"
+  [ ! -e "$stale_sentinel" ] || fail "stale $stale_kind executed"
+done
+evaluator=$original_evaluator
+pass 'stale core closure is rejected before execution'
+
+moving_root="$tmp/moving-core"
+moving_scratch="$tmp/moving-scratch"
+copy_runtime "$moving_root"
+/bin/mkdir -p "$moving_scratch"
+moving_sentinel="$tmp/moving-live-ingress-ran"
+moving_target="$moving_root/core/v2/generations/$generation/core-ingress.sh"
+(
+  while [ -z "$(/usr/bin/find "$moving_scratch" -name core-closure-mirror.json \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /usr/bin/printf '\n: > "%s"\n' "$moving_sentinel" >>"$moving_target"
+) &
+moving_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$moving_scratch"
+evaluator="$moving_root/control/v1/evaluate-duty.sh"
+expect_error moving-core-postflight E_RELATION "$policy_set" "$request" "$resolved" "$result"
+wait "$moving_pid"
+[ ! -e "$moving_sentinel" ] || fail 'moving live ingress executed'
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
+evaluator=$original_evaluator
+
+failure_root="$tmp/moving-core-failure"
+failure_scratch="$tmp/moving-failure-scratch"
+copy_runtime "$failure_root"
+/bin/mkdir -p "$failure_scratch"
+(
+  while [ -z "$(/usr/bin/find "$failure_scratch" -name core-closure-mirror.json \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /usr/bin/printf '\n' \
+    >>"$failure_root/core/v2/generations/$generation/modules/schema.jq"
+) &
+failure_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$failure_scratch"
+evaluator="$failure_root/control/v1/evaluate-duty.sh"
+expect_error moving-core-beats-core-error E_RELATION \
+  "$policy_set" "$bad_request" "$resolved" "$bad_request_result"
+wait "$failure_pid"
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
+evaluator=$original_evaluator
+
+swap_root="$tmp/swap-restore-core"
+swap_scratch="$tmp/swap-restore-scratch"
+swap_sentinel="$tmp/swap-live-ingress-ran"
+copy_runtime "$swap_root"
+/bin/mkdir -p "$swap_scratch"
+swap_target="$swap_root/core/v2/generations/$generation/core-ingress.sh"
+/bin/cp "$swap_target" "$tmp/swap-ingress.saved"
+(
+  while [ -z "$(/usr/bin/find "$swap_scratch" -name core-closure-mirror.json \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /usr/bin/printf '\n: > "%s"\n' "$swap_sentinel" >>"$swap_target"
+  while [ -z "$(/usr/bin/find "$swap_scratch" -name run.out \
+    -type f -print -quit 2>/dev/null)" ]; do :; done
+  /bin/cp "$tmp/swap-ingress.saved" "$swap_target"
+) &
+swap_pid=$!
+saved_tmpdir=${TMPDIR-}
+export TMPDIR="$swap_scratch"
+evaluator="$swap_root/control/v1/evaluate-duty.sh"
+expect_eval live-swap-restore satisfied duty.satisfied \
+  "$policy_set" "$request" "$resolved" "$result"
+wait "$swap_pid"
+[ ! -e "$swap_sentinel" ] || fail 'swap-restore live ingress executed'
+if [ -n "$saved_tmpdir" ]; then export TMPDIR="$saved_tmpdir"; else unset TMPDIR; fi
+evaluator=$original_evaluator
+
+scripts_victim="$tmp/scripts-link-victim"
+scripts_sibling="$tmp/scripts-link-sibling"
+scripts_sentinel="$tmp/scripts-link-ingress-ran"
+copy_runtime "$scripts_victim"
+copy_runtime "$scripts_sibling"
+/usr/bin/printf '\n: > "%s"\n' "$scripts_sentinel" \
+  >>"$scripts_sibling/core/v2/generations/$generation/core-ingress.sh"
+/bin/rm -rf "$scripts_victim/scripts"
+/bin/ln -s "$scripts_sibling/scripts" "$scripts_victim/scripts"
+evaluator="$scripts_victim/control/v1/evaluate-duty.sh"
+expect_error symlinked-scripts-root E_RELATION "$policy_set" "$request" "$resolved" "$result"
+[ ! -e "$scripts_sentinel" ] || fail 'symlinked scripts core executed'
+evaluator=$original_evaluator
+
+for unsafe_kind in extra symlink; do
+  unsafe_root="$tmp/unsafe-$unsafe_kind"
+  copy_runtime "$unsafe_root"
+  if [ "$unsafe_kind" = extra ]; then
+    : >"$unsafe_root/core/v2/generations/$generation/unknown"
+  else
+    /bin/rm -f "$unsafe_root/core/v2/generations/$generation/modules/schema.jq"
+    /bin/ln -s result_truth.jq \
+      "$unsafe_root/core/v2/generations/$generation/modules/schema.jq"
+  fi
+  evaluator="$unsafe_root/control/v1/evaluate-duty.sh"
+  expect_error "unsafe-core-$unsafe_kind" E_RELATION \
+    "$policy_set" "$request" "$resolved" "$result"
+done
+evaluator=$original_evaluator
+
+for stale_kind in decision program driver; do
+  stale_root="$tmp/stale-$stale_kind"
+  copy_runtime "$stale_root"
+  case "$stale_kind" in
+    decision)
+      "$jq_bin" -S -c '.body.extra=true' \
+        "$stale_root/control/v1/duty-separation-decision.json" >"$stale_root/decision.next"
+      /bin/mv "$stale_root/decision.next" \
+        "$stale_root/control/v1/duty-separation-decision.json"
+      ;;
+    program) /usr/bin/printf '\n' >>"$stale_root/control/v1/duty-separation.jq" ;;
+    driver) /usr/bin/printf '\n' >>"$stale_root/control/v1/evaluate-duty.sh" ;;
+  esac
+  evaluator="$stale_root/control/v1/evaluate-duty.sh"
+  expect_error "stale-$stale_kind" E_RELATION \
+    "$policy_set" "$request" "$resolved" "$result"
+done
+evaluator=$original_evaluator
+
+for required in control/v1/duty-separation-policy.json \
+  control/v1/duty-separation-decision.json control/v1/duty-separation.jq \
   control/v1/evaluate-duty.sh scripts/test/control-duty-separation.test.sh; do
   [ "$(/usr/bin/grep -Fxc "$required" "$root/ci/required-files.txt")" -eq 1 ] ||
     fail "manifest $required"

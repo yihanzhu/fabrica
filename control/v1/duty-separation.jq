@@ -48,7 +48,7 @@ def policy_ok:
       generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
       package_ref:{content_id:"core-contract-package.v2",
         media_type:"application/vnd.ystack.core-contract+json",
-        sha256:"bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3"}
+        sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"}
     } and
     .protected_roles == expected_roles and .dormant_roles == expected_dormant and
     .identity_dimensions == expected_dimensions and
@@ -85,6 +85,7 @@ def document_ref($document; $digest):
    id:$document.id,sha256:$digest};
 
 ($policy[0]) as $p |
+($decision[0]) as $decision_doc |
 ($policy_set[0]) as $set |
 ($request[0]) as $request_doc |
 ($resolved[0]) as $resolved_doc |
@@ -177,7 +178,6 @@ def document_ref($document; $digest):
 (if ($violations | length) > 0 then {verdict:"violated",reasons:$violations}
  elif ($unknowns | length) > 0 then {verdict:"inconclusive",reasons:$unknowns}
  else {verdict:"satisfied",reasons:["duty.satisfied"]} end) as $decision |
-([$set.body.sections[] | select(.section_id == "duty-separation")][0]) as $section |
 {
   schema_version:1,
   kind:"duty_separation_evaluation",
@@ -187,8 +187,9 @@ def document_ref($document; $digest):
     evaluation_mode:"observation-only",
     reference_semantics:"identity-only",
     policy_set:{id:$set.id,sha256:$policy_set_sha},
-    policy_ref:$section.policy_ref,
-    decision_ref:$section.decision_ref,
+    policy_ref:$decision_doc.body.policy_ref,
+    decision_ref:{content_id:$decision_doc.id,
+      media_type:"application/vnd.ystack.control-decision+json",sha256:$decision_sha},
     core_contract:$set.body.core_contract,
     stage:{request_ref:document_ref($request_doc;$request_sha),
       resolved_profile_ref:document_ref($resolved_doc;$resolved_sha),
