@@ -132,6 +132,22 @@ grants no authority, qualification, or permission. The package stays inactive,
 runs no candidate or adapter, reads no credential, activates no profile, and
 performs no network, publish, deploy, or external-write action.
 
+## Inactive credential-policy evaluator
+
+`control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
+against the shipped credential ceiling. It binds the policy set, policy, decision,
+duty-separation result, evaluator, and selected public-core identities before
+producing a canonical observation. The ceiling permits only brokered,
+single-stage model inference for producer or reviewer roles, with no credential
+material exposed to the execution boundary. Candidate write or execution
+permissions are incompatible with credential access.
+
+The result is `violated` or `inconclusive`; an unqualified input claim can never
+produce `satisfied`. The package stays inactive, reads no credential material or
+credential-like environment value, grants no authority or qualification, activates
+no profile, and performs no candidate, adapter, network, publish, deploy, or
+external-write action.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
