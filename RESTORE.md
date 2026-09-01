@@ -379,6 +379,21 @@ inactive and declaration-only. It does not enforce or qualify a real sandbox, ru
 a candidate or adapter, use a credential, activate a profile, or perform a network
 or external-write action.
 
+Restore the five paths in the manifest's inactive credential-policy block, then
+run:
+
+```sh
+bash scripts/test/control-credential-policy.test.sh
+```
+
+This checks exact identity closure, the brokered single-stage model-inference
+ceiling, protected-role and incompatible-permission handling, incomplete and
+malformed claims, stale links, deterministic output, bounded child cleanup, and
+postflight mutation detection. The evaluator is inactive and observation only. It
+does not read credential material or credential-like environment values, qualify a
+claim, grant authority, activate a profile, run a candidate or adapter, or perform
+a network or external-write action.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
