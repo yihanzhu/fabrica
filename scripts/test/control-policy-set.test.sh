@@ -219,6 +219,26 @@ ambient_err="$tmp/ambient.err"
 [ ! -s "$ambient_out" ] && [ ! -s "$ambient_err" ] || fail 'ambient independence'
 pass 'ambient cwd and environment independence'
 
+relative_cwd="$tmp/relative-cwd"
+relative_sentinel="$tmp/relative-jq-ran"
+/bin/mkdir -m 700 "$relative_cwd"
+/usr/bin/printf '%s\n' \
+  '#!/bin/sh' \
+  ': > "${YSTACK_FAKE_JQ_SENTINEL:?}"' \
+  'if [ "${1:-}" = --version ]; then printf "%s\n" jq-1.6; fi' \
+  'exit 0' > "$relative_cwd/jq"
+/bin/chmod 0700 "$relative_cwd/jq"
+relative_out="$tmp/relative-path.out"
+relative_err="$tmp/relative-path.err"
+relative_status=0
+(cd "$relative_cwd" && YSTACK_FAKE_JQ_SENTINEL="$relative_sentinel" \
+  PATH=".:$bin:/usr/bin:/bin" "$validator" validate "$valid" \
+    > "$relative_out" 2> "$relative_err") || relative_status=$?
+[ "$relative_status" -ne 0 ] && [ ! -s "$relative_out" ] &&
+  [ "$(/bin/cat "$relative_err")" = E_RUNTIME ] &&
+  [ ! -e "$relative_sentinel" ] || fail 'relative jq path'
+pass 'relative jq path is rejected before execution'
+
 for required in control/v1/policy-set.jq control/v1/validate.sh scripts/test/control-policy-set.test.sh; do
   [ "$(/usr/bin/grep -Fxc "$required" "$root/ci/required-files.txt")" -eq 1 ] ||
     fail "manifest $required"

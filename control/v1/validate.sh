@@ -29,6 +29,7 @@ policy_program="$source_dir/policy-set.jq"
 [ -f "$policy_program" ] && [ ! -L "$policy_program" ] || emit_error E_RUNTIME
 [ -f "$input" ] && [ ! -L "$input" ] || emit_error E_RUNTIME
 jq_bin=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
+case "$jq_bin" in /*) ;; *) emit_error E_RUNTIME ;; esac
 [ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_RUNTIME
 
