@@ -342,6 +342,18 @@ ceilings, all three identity-separation dimensions, dormant publisher behavior, 
 canonical observation results. It does not enforce effective sandbox or credential
 permissions and grants no authority or external write.
 
+Restore the five paths in the manifest's inactive risk-gates block, then run:
+
+```sh
+bash scripts/test/control-risk-gates.test.sh
+```
+
+This checks the exact policy, decision, evaluator, duty-separation, policy-set, and
+public-core identity closure; tier downgrade and malformed-input handling; and
+canonical `violated` or `inconclusive` observations. Decision input is an
+unqualified immutable claim, so an accept claim cannot produce `satisfied` or grant
+approval, authority, qualification, activation, permission, or an external effect.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
