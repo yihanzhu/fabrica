@@ -229,6 +229,17 @@ pass
 ' "$manifest" >/dev/null || fail manifest-empty-surface
 pass
 
+"${jq_command[@]}" -e '
+  .body.package_ref == {
+    location:{kind:"path",value:"adapters/github-actions-ci/v1/normalize.jq"},
+    mode:"100644",object_id:"692ad34601fbf3cca00c1661da258f1545a31688",
+    object_type:"blob",revision:{
+      commit_id:"23f782ab32a2bc7b0d05ab0eb64039b835d77fb0",
+      hash_algorithm:"sha1",repository_id:"ystack.control-plane"}
+  }
+' "$manifest" >/dev/null || fail package-source-mapping
+pass
+
 package_commit="$("${jq_command[@]}" -r '.body.package_ref.revision.commit_id' "$manifest")"
 package_path="$("${jq_command[@]}" -r '.body.package_ref.location.value' "$manifest")"
 package_oid="$("${jq_command[@]}" -r '.body.package_ref.object_id' "$manifest")"
