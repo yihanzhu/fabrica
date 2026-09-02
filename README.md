@@ -230,6 +230,20 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive dormant publisher normalizer payload
+
+`adapters/dormant-publisher/v1/normalize.jq` validates one bounded publisher
+decision claim against caller-supplied repository, change-request, head, base,
+tree, allowed-path, CI, review, decision-record, time, and execution-boundary
+bindings. It returns only a canonical dormant, stale, or inconclusive observation.
+A permit claim remains unqualified data; it never becomes approval or authority.
+
+This stage intentionally ships no adapter manifest. A later assembly PR can bind
+the durable main payload as the default profile's deterministic publisher with no
+capabilities, permissions, or tools. The payload is not the temporary construction
+publisher gate and cannot call it. It uses no credential or network, performs no
+merge or external write, and activates no profile.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

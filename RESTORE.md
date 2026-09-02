@@ -464,6 +464,21 @@ durable main commit and add default-set wiring. The pure jq payload is offline a
 unqualified. It does not call GitHub, use a credential, change a repository or
 request, grant authority or qualification, or activate a profile.
 
+Restore the two paths in the manifest's inactive dormant publisher normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-dormant-publisher-adapter.test.sh
+```
+
+This checks exact repository, change-request, candidate, path, evidence, decision,
+time, and boundary bindings. Permit, deny, and inconclusive claims all remain inert;
+malformed input is rejected and moved input becomes stale. This stage has no adapter
+manifest. A later assembly PR can bind its durable main payload with empty
+capability, permission, and tool sets. It is separate from the temporary
+construction publisher gate and performs no credential, network, merge, external
+write, authority, qualification, or profile activation.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
