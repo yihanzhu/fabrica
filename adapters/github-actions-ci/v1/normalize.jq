@@ -5,8 +5,15 @@ def exact_fields($required; $optional):
   all($required[]; . as $key | $value | has($key));
 def id_ok:
   type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
+def content_id_ok:
+  id_ok and (contains(":") | not) and (contains("/") | not);
+def media_type_ok:
+  type == "string" and utf8bytelength <= 127 and
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
 def provider_id_ok:
   type == "string" and test("\\A[1-9][0-9]{0,19}\\z");
+def run_attempt_ok:
+  type == "number" and . == floor and . >= 1 and . <= 1000000;
 def sha256_ok:
   type == "string" and test("\\A[0-9a-f]{64}\\z");
 def time_ok:
@@ -27,29 +34,30 @@ def revision_ok:
    else (.commit_id | test("\\A[0-9a-f]{64}\\z")) end);
 def content_ref_ok:
   exact_fields(["content_id","media_type","sha256"];[]) and
-  (.content_id | id_ok and (contains(":") or contains("/") | not)) and
-  (.media_type | type == "string" and
-   test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z")) and
+  (.content_id | content_id_ok) and (.media_type | media_type_ok) and
   (.sha256 | sha256_ok);
 def job_identity_ok:
   exact_fields(["job_id","check_run_id"];[]) and
   (.job_id | provider_id_ok) and (.check_run_id | provider_id_ok);
 def job_key: [(.job_id | length),.job_id,(.check_run_id | length),.check_run_id];
 def ordered_unique:
-  map(job_key) as $keys |
-  $keys == ($keys | sort) and ($keys | length) == ($keys | unique | length);
+  . as $items | ($items | map(job_key)) as $keys |
+  $keys == ($keys | sort) and ($keys | length) == ($keys | unique | length) and
+  (($items | map(.job_id) | unique | length) == ($items | length)) and
+  (($items | map(.check_run_id) | unique | length) == ($items | length));
 def expected_jobs_ok:
   type == "array" and length >= 1 and length <= 128 and
   all(.[]; job_identity_ok) and ordered_unique;
 def trust_context_ok:
   exact_fields(
     ["expected_repository_id","expected_check_suite_id","expected_workflow_id",
-     "expected_run_id","expected_github_app_id","expected_head","expected_base",
-     "expected_jobs","observation_time","instruction_ref","config_ref",
-     "execution_boundary_id"];
+     "expected_run_id","expected_run_attempt","expected_github_app_id",
+     "expected_head","expected_base","expected_jobs","observation_time",
+     "instruction_ref","config_ref","execution_boundary_id"];
     []) and
   all([.expected_repository_id,.expected_check_suite_id,.expected_workflow_id,
        .expected_run_id,.expected_github_app_id][]; provider_id_ok) and
+  (.expected_run_attempt | run_attempt_ok) and
   (.expected_head | revision_ok) and (.expected_base | revision_ok) and
   .expected_head.repository_id == .expected_base.repository_id and
   (.expected_jobs | expected_jobs_ok) and (.observation_time | time_ok) and
@@ -67,21 +75,27 @@ def conclusion_ok:
 def status_conclusion_ok:
   if .status == "completed" then (.conclusion | conclusion_ok)
   else .conclusion == null end;
-def job_time_ok($observed):
+def job_time_ok($snapshot):
+  (if $snapshot.status == "completed" then $snapshot.completed_at
+   else $snapshot.observed_at end) as $upper |
+  (.created_at | time_ok) and $snapshot.created_at <= .created_at and
+  .created_at <= $upper and
   if (.status | queued_status) then .started_at == null and .completed_at == null
   elif .status == "in_progress" then
-    (.started_at | time_ok) and .started_at <= $observed and .completed_at == null
+    (.started_at | time_ok) and .created_at <= .started_at and
+    .started_at <= $upper and .completed_at == null
   else
     (.started_at | time_ok) and (.completed_at | time_ok) and
-    .started_at <= .completed_at and .completed_at <= $observed
+    .created_at <= .started_at and .started_at <= .completed_at and
+    .completed_at <= $upper
   end;
-def job_ok($observed):
+def job_ok($snapshot):
   exact_fields(
-    ["job_id","check_run_id","status","conclusion","started_at","completed_at",
-     "payload_sha256","provider_data"];
+    ["job_id","check_run_id","status","conclusion","created_at","started_at",
+     "completed_at","payload_sha256","provider_data"];
     []) and (.job_id | provider_id_ok) and (.check_run_id | provider_id_ok) and
   (.status | status_ok) and status_conclusion_ok and
-  job_time_ok($observed) and (.payload_sha256 | sha256_ok) and
+  job_time_ok($snapshot) and (.payload_sha256 | sha256_ok) and
   (.provider_data | provider_data_ok);
 def run_time_ok:
   (.created_at | time_ok) and (.updated_at | time_ok) and
@@ -98,19 +112,20 @@ def run_time_ok:
 def count_ok: type == "number" and . == floor and . >= 0 and . <= 128;
 def jobs_ok($snapshot):
   type == "array" and length <= 128 and
-  all(.[]; job_ok($snapshot.observed_at)) and ordered_unique and
+  all(.[]; job_ok($snapshot)) and ordered_unique and
   $snapshot.reported_job_count == length + $snapshot.hidden_job_count and
   (if $snapshot.complete then $snapshot.hidden_job_count == 0 else true end);
 def snapshot_ok:
   . as $snapshot |
   exact_fields(
-    ["repository_id","check_suite_id","workflow_id","run_id","github_app_id",
-     "head","base","observed_at","complete","reported_job_count",
+    ["repository_id","check_suite_id","workflow_id","run_id","run_attempt",
+     "github_app_id","head","base","observed_at","complete","reported_job_count",
      "hidden_job_count","status","conclusion","created_at","updated_at",
      "started_at","completed_at","jobs","payload_sha256","provider_data"];
     []) and
   all([.repository_id,.check_suite_id,.workflow_id,.run_id,.github_app_id][];
       provider_id_ok) and
+  (.run_attempt | run_attempt_ok) and
   (.head | revision_ok) and (.base | revision_ok) and
   .head.repository_id == .base.repository_id and (.observed_at | time_ok) and
   (.complete | type == "boolean") and (.reported_job_count | count_ok) and
@@ -126,7 +141,8 @@ def children_agree($snapshot):
   ($snapshot.jobs) as $jobs |
   if ($snapshot.status | queued_status) then all($jobs[]; .status | queued_status)
   elif $snapshot.status == "in_progress" then
-    all($jobs[]; .status | status_ok) and any($jobs[]; .status != "completed")
+    all($jobs[]; .status | status_ok) and
+    (if $snapshot.complete then any($jobs[]; .status != "completed") else true end)
   elif $snapshot.complete == false then all($jobs[]; .status == "completed")
   elif $snapshot.conclusion == "success" then
     any($jobs[]; .conclusion == "success") and
@@ -149,6 +165,7 @@ def stale_bindings($context; $snapshot):
     if $snapshot.observed_at != $context.observation_time then "observation-time" else empty end,
     if $snapshot.repository_id != $context.expected_repository_id then "repository" else empty end,
     if $snapshot.run_id != $context.expected_run_id then "run" else empty end,
+    if $snapshot.run_attempt != $context.expected_run_attempt then "run-attempt" else empty end,
     if $snapshot.workflow_id != $context.expected_workflow_id then "workflow" else empty end
   ];
 def normalized($context; $snapshot; $stale):
@@ -201,6 +218,13 @@ else
       state:$normalized[0],
       observed_at:$snapshot.observed_at,
       subject:{head:$snapshot.head,base:$snapshot.base},
+      provenance:{
+        repository_id:$snapshot.repository_id,
+        workflow_id:$snapshot.workflow_id,
+        run_id:$snapshot.run_id,
+        run_attempt:$snapshot.run_attempt,
+        check_suite_id:$snapshot.check_suite_id
+      },
       source_sha256:$snapshot.payload_sha256,
       facts:($snapshot.jobs | map({
         fact_id:("ci.job." + .job_id + ".check." + .check_run_id),

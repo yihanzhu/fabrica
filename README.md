@@ -234,7 +234,7 @@ activate a profile.
 
 `adapters/github-actions-ci/v1/normalize.jq` validates one untrusted GitHub
 Actions workflow and check snapshot against caller-supplied repository, suite,
-workflow, run, job, check, app, head, base, time, instruction, config, and
+workflow, run, attempt, job, check, app, head, base, time, instruction, config, and
 execution-boundary bindings. It returns a canonical generic observation for
 queued, running, passed, failed, cancelled, timed out, action-required, stale,
 or inconclusive state. Provider names, text, and details stay opaque data.
