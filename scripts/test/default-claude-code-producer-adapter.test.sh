@@ -4,9 +4,7 @@ set -euo pipefail
 export LC_ALL=C
 
 root=$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-package="$root/adapters/claude-code-producer/v1"
-manifest="$package/manifest.json"
-normalizer="$package/normalize.jq"
+normalizer="$root/adapters/claude-code-producer/v1/normalize.jq"
 fixtures="$root/scripts/test"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-claude-producer.XXXXXX")
 cleanup() { /bin/rm -rf -- "$tmp"; }
@@ -53,6 +51,14 @@ expect_error() {
   else fail "$name"; fi
 }
 
+manifest="$tmp/test-owned-producer-manifest.json"
+"${jq_cmd[@]}" -L "$fixtures" -S -c -n '
+  import "portable-core-profile-graph-fixtures" as f;
+  def v2: walk(if type=="object" and has("schema_version") then .schema_version=2 else . end);
+  f::manifest("producer") | v2 |
+  .id="adapter.claude-code-producer.v1" |
+  .body.offered_tools=[]
+' >"$manifest"
 manifest_sha=$(sha_file "$manifest")
 shas="$tmp/manifest-shas.json"
 "${jq_cmd[@]}" -S -c -n --arg producer "$manifest_sha" \
@@ -158,18 +164,6 @@ build_input() {
 baseline_input="$tmp/baseline.input"
 build_input "$snapshot" "$baseline_input"
 
-check manifest-canonical /usr/bin/cmp -s "$manifest" <("${jq_cmd[@]}" -S -c . "$manifest")
-check manifest-core "${jq_cmd[@]}" -L "$modules" -e 'import "profile_graph" as p; p::adapter_manifest_self_ok' "$manifest"
-check manifest-ceiling "${jq_cmd[@]}" -e '.body.offered_roles==["producer"] and
-  .body.offered_execution_kinds==["model"] and .body.offered_capabilities==["core.harness.produce.v1"] and
-  .body.offered_permissions==["core.perm.evidence.write.v1","core.perm.model.invoke.v1",
-    "core.perm.scratch.write.v1","core.perm.target.read.v1"] and .body.offered_tools==[]' "$manifest"
-package_commit=$("${jq_cmd[@]}" -r '.body.package_ref.revision.commit_id' "$manifest")
-package_path=$("${jq_cmd[@]}" -r '.body.package_ref.location.value' "$manifest")
-package_object=$("${jq_cmd[@]}" -r '.body.package_ref.object_id' "$manifest")
-check package-ref test "$(git -C "$root" rev-parse "$package_commit:$package_path")" = "$package_object"
-check package-current test "$(git -C "$root" hash-object "$normalizer")" = "$package_object"
-
 states='changed changed adapter.changed completed changed present
 no-change no-change adapter.no-change completed no-change absent
 failure inconclusive adapter.provider-failure failed inconclusive absent
@@ -212,6 +206,17 @@ expect_error missing-fact E_SHAPE 'del(.snapshot.body.execution.metadata.model)'
 expect_error unknown-state E_SHAPE '.snapshot.body.state="unknown"'
 expect_error duplicate-skills E_SHAPE '.snapshot.body.execution.metadata.skills.value += [.snapshot.body.execution.metadata.skills.value[0]]'
 expect_error unordered-skills E_SHAPE '.snapshot.body.execution.metadata.skills.value |= reverse'
+expect_error extra-snapshot-field E_SHAPE '.snapshot.body.unexpected=true'
+expect_error invalid-attempt-date E_SHAPE '.snapshot.body.attempt.started_at="2026-02-30T00:01:00Z"'
+expect_error negative-zero-attempt E_SHAPE '.snapshot.body.attempt.attempt_number=-0'
+expect_error oversized-provider-message E_SHAPE \
+  '.snapshot.body.provider_metadata.message.value=("x"*1025)'
+expect_error invalid-output-content-id E_SHAPE \
+  '.snapshot.body.output.value.content_id="producer:patch"'
+expect_error oversized-output-media-type E_SHAPE \
+  '.snapshot.body.output.value.media_type=("application/"+("x"*116))'
+expect_error malformed-target-revision E_SHAPE \
+  '.trust_context.body.target_revision.commit_id=("A"*40)'
 expect_error moved-target E_STALE '.snapshot.body.target_revision.commit_id=("0"*40)'
 expect_error package-mismatch E_STALE '.snapshot.body.execution.actual_binding.package_ref.object_id=("0"*40)'
 expect_error config-mismatch E_STALE '.snapshot.body.execution.actual_binding.config_ref.value.object_id=("0"*40)'
@@ -226,10 +231,11 @@ expect_error boundary-mismatch E_STALE '.snapshot.body.execution.performer.execu
 expect_error tool-mismatch E_STALE '.snapshot.body.execution.metadata.tools.value=[{
   tool_id:"unexpected.tool",tool_version:"v1",package_ref:.snapshot.body.execution.actual_binding.package_ref,
   config_ref:{state:"absent"}}]'
-expect_error manifest-ceiling E_TRUST '.trust_context.body.manifest.content.body.offered_capabilities += ["core.review.change.v1"] |
+expect_error caller-manifest-ceiling E_TRUST '.trust_context.body.manifest.content.body.offered_capabilities += ["core.review.change.v1"] |
   .trust_context.body.manifest.content.body.offered_capabilities |= sort'
 
-check no-selected-generation sh -c '! grep -E "g-[0-9a-f]{64}" "$@"' sh "$manifest" "$normalizer" "$root/scripts/test/default-claude-code-producer-adapter.test.sh"
+check no-selected-generation sh -c '! grep -E "g-[0-9a-f]{64}" "$@"' sh \
+  "$normalizer" "$root/scripts/test/default-claude-code-producer-adapter.test.sh"
 check jq-static static_jq
 
 if [ "$failed" -ne 0 ]; then

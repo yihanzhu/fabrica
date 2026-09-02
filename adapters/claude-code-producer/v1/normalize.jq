@@ -1,7 +1,68 @@
-import "schema" as schema;
 import "profile_graph" as profile;
 import "stage_request" as request;
 import "result_facts" as facts;
+
+def exact_fields($required; $optional):
+  . as $value |
+  type == "object" and
+  ((keys_unsorted - ($required + $optional)) | length) == 0 and
+  all($required[]; . as $key | $value | has($key));
+
+def id_ok:
+  type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
+def int_ok:
+  type == "number" and . == floor and . >= 0 and . <= 2147483647 and
+  tostring != "-0";
+def sha256_ok:
+  type == "string" and test("\\A[0-9a-f]{64}\\z");
+def short_text_ok:
+  type == "string" and utf8bytelength >= 1 and utf8bytelength <= 1024;
+def media_type_ok:
+  type == "string" and length <= 127 and
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
+
+def time_ok:
+  type == "string" and
+  test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
+  (capture("\\A(?<year>[0-9]{4})-(?<month>[0-9]{2})-(?<day>[0-9]{2})T(?<hour>[0-9]{2}):(?<minute>[0-9]{2}):(?<second>[0-9]{2})Z\\z") as $parts |
+   ($parts.year | tonumber) as $year |
+   ($parts.month | tonumber) as $month |
+   ($parts.day | tonumber) as $day |
+   ($parts.hour | tonumber) as $hour |
+   ($parts.minute | tonumber) as $minute |
+   ($parts.second | tonumber) as $second |
+   ($year % 4 == 0 and ($year % 100 != 0 or $year % 400 == 0)) as $leap |
+   [31,(if $leap then 29 else 28 end),31,30,31,30,31,31,30,31,30,31] as $days |
+   $month >= 1 and $month <= 12 and
+   $day >= 1 and $day <= $days[$month - 1] and
+   $hour >= 0 and $hour <= 23 and
+   $minute >= 0 and $minute <= 59 and
+   $second >= 0 and $second <= 59);
+
+def git_revision_ref_ok:
+  exact_fields(["repository_id","hash_algorithm","commit_id"];[]) and
+  (.repository_id | id_ok) and
+  (.hash_algorithm == "sha1" or .hash_algorithm == "sha256") and
+  (if .hash_algorithm == "sha1"
+   then (.commit_id | type == "string" and test("\\A[0-9a-f]{40}\\z"))
+   else (.commit_id | type == "string" and test("\\A[0-9a-f]{64}\\z"))
+   end);
+
+def content_ref_ok:
+  exact_fields(["content_id","media_type","sha256"];[]) and
+  (.content_id | id_ok and (contains(":") | not) and (contains("/") | not)) and
+  (.media_type | media_type_ok) and
+  (.sha256 | sha256_ok);
+
+def document_ref_kind_ok($kind):
+  exact_fields(["schema_version","kind","id","sha256"];[]) and
+  .schema_version == 2 and .kind == $kind and
+  (.id | id_ok) and (.sha256 | sha256_ok);
+
+def present_ok(value_ok):
+  (exact_fields(["state"];[]) and .state == "absent") or
+  (exact_fields(["state","value"];[]) and .state == "present" and
+   (.value | value_ok));
 
 def present($value): {state:"present",value:$value};
 def absent: {state:"absent"};
@@ -15,34 +76,34 @@ def document_ref($pair):
   };
 
 def trust_shape:
-  schema::exact_fields(["body","id","kind","schema_version"];[]) and
+  exact_fields(["body","id","kind","schema_version"];[]) and
   .schema_version == 1 and .kind == "adapter_trust_context" and
-  (.id | schema::id_ok) and
+  (.id | id_ok) and
   (.body |
-   schema::exact_fields(
+   exact_fields(
      ["binding_id","manifest","request","resolved_profile","snapshot_ref",
       "target_revision"];[]) and
-   (.binding_id | schema::id_ok) and
+   (.binding_id | id_ok) and
    (.manifest | profile::document_pair_ok("adapter_manifest")) and
    (.request | profile::document_pair_ok("stage_request")) and
    (.resolved_profile | profile::document_pair_ok("resolved_profile")) and
-   (.snapshot_ref | schema::content_ref_ok) and
+   (.snapshot_ref | content_ref_ok) and
    .snapshot_ref.media_type == "application/json" and
-   (.target_revision | schema::git_revision_ref_ok));
+   (.target_revision | git_revision_ref_ok));
 
 def attempt_shape:
-  schema::exact_fields(
+  exact_fields(
     ["attempt_id","attempt_number","finished_at","recorded_at","started_at"];[]) and
-  (.attempt_id | schema::id_ok) and
-  (.attempt_number | schema::int_ok) and .attempt_number >= 1 and
-  (.started_at | schema::time_ok) and
-  (.finished_at | schema::time_ok) and
-  (.recorded_at | schema::time_ok) and
+  (.attempt_id | id_ok) and
+  (.attempt_number | int_ok) and .attempt_number >= 1 and
+  (.started_at | time_ok) and
+  (.finished_at | time_ok) and
+  (.recorded_at | time_ok) and
   .started_at <= .finished_at and .finished_at <= .recorded_at;
 
 def provider_metadata_shape:
-  schema::exact_fields(["message"];[]) and
-  (.message | schema::present_ok(schema::short_text_ok));
+  exact_fields(["message"];[]) and
+  (.message | present_ok(short_text_ok));
 
 def source_state_ok:
   . == "changed" or . == "no-change" or . == "failure" or
@@ -50,29 +111,29 @@ def source_state_ok:
   . == "inconclusive";
 
 def snapshot_shape:
-  schema::exact_fields(["body","id","kind","schema_version"];[]) and
+  exact_fields(["body","id","kind","schema_version"];[]) and
   .schema_version == 1 and .kind == "claude_code_producer_snapshot" and
-  (.id | schema::id_ok) and
+  (.id | id_ok) and
   (.body |
-   schema::exact_fields(
+   exact_fields(
      ["attempt","execution","observed_at","output","provider_metadata",
       "request_ref","resolved_profile_ref","state","target_revision"];[]) and
    (.attempt | attempt_shape) and
    (.execution | facts::execution_shape_ok) and
-   (.observed_at | schema::time_ok) and
-   (.output | schema::present_ok(schema::content_ref_ok)) and
+   (.observed_at | time_ok) and
+   (.output | present_ok(content_ref_ok)) and
    (.provider_metadata | provider_metadata_shape) and
-   (.request_ref | schema::document_ref_kind_ok("stage_request")) and
+   (.request_ref | document_ref_kind_ok("stage_request")) and
    (.resolved_profile_ref |
-    schema::document_ref_kind_ok("resolved_profile")) and
+    document_ref_kind_ok("resolved_profile")) and
    (.state | source_state_ok) and
-   (.target_revision | schema::git_revision_ref_ok) and
+   (.target_revision | git_revision_ref_ok) and
    .attempt.recorded_at <= .observed_at and
    (if .state == "changed" then .output.state == "present"
     else .output.state == "absent" end));
 
 def input_shape:
-  schema::exact_fields(["snapshot","trust_context"];[]) and
+  exact_fields(["snapshot","trust_context"];[]) and
   (.trust_context | trust_shape) and
   (.snapshot | snapshot_shape);
 
