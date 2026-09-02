@@ -330,6 +330,18 @@ The proof validates only the canonical six-section identity bundle. It does not
 evaluate a policy, grant authority, activate a profile, or enforce sandbox,
 credential, risk, kill-switch, or evidence behavior.
 
+Restore the two paths in the manifest's inactive Control foundation roll-up block,
+then run:
+
+```sh
+bash scripts/test/control-foundation-rollup.test.sh
+```
+
+This recomputes the six policy and six decision file identities, their common core
+generation and package closure, and the inactive fail-closed boundary. It adds no
+aggregator runtime and makes no enforcement, qualification, authority, activation,
+or external-effect claim.
+
 Restore the five paths in the manifest's inactive duty-separation block, then run:
 
 ```sh

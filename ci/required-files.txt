@@ -213,3 +213,7 @@ control/v1/evidence-integrity-decision.json
 control/v1/evidence-integrity.jq
 control/v1/evaluate-evidence-integrity.sh
 scripts/test/control-evidence-integrity.test.sh
+
+# Inactive Control foundation policy roll-up
+control/v1/control-policy-set.json
+scripts/test/control-foundation-rollup.test.sh
