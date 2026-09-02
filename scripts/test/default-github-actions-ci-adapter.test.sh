@@ -143,6 +143,7 @@ for spec in \
   'action-required|action-required|.snapshot.conclusion="action_required"|.snapshot.jobs[0].conclusion="action_required"' \
   'provider-stale|stale|.snapshot.conclusion="stale"|.snapshot.jobs[0].conclusion="stale"' \
   'neutral|inconclusive|.snapshot.conclusion="neutral"|.snapshot.jobs[0].conclusion="neutral"' \
+  'job-start-boundary|passed|.snapshot.started_at="2026-09-02T10:00:40Z"|.snapshot.jobs[0].started_at=.snapshot.started_at' \
   'attempt-min|passed|.trust_context.expected_run_attempt=1|.snapshot.run_attempt=1' \
   'attempt-max|passed|.trust_context.expected_run_attempt=1000000|.snapshot.run_attempt=1000000' \
   'media-type-127|passed|.trust_context.instruction_ref.media_type=("application/"+("x"*115))|.trust_context.config_ref.media_type=("application/"+("y"*115))'; do
@@ -209,6 +210,8 @@ for spec in \
   'reversed-job-time|.snapshot.jobs[0].completed_at="2026-09-02T10:00:00Z"' \
   'job-created-before-run|.snapshot.jobs[0].created_at="2026-09-02T09:59:59Z"' \
   'job-start-before-create|.snapshot.jobs[0].created_at="2026-09-02T10:01:30Z"' \
+  'job-before-run-start|.snapshot.jobs[0].started_at="2026-09-02T10:00:40Z"|.snapshot.jobs[0].completed_at="2026-09-02T10:00:50Z"' \
+  'running-job-before-run-start|.snapshot.status="in_progress"|.snapshot.conclusion=null|.snapshot.completed_at=null|.snapshot.jobs[0].status="in_progress"|.snapshot.jobs[0].conclusion=null|.snapshot.jobs[0].started_at="2026-09-02T10:00:40Z"|.snapshot.jobs[0].completed_at=null|.snapshot.jobs[1].status="queued"|.snapshot.jobs[1].conclusion=null|.snapshot.jobs[1].started_at=null|.snapshot.jobs[1].completed_at=null' \
   'job-complete-after-run|.snapshot.jobs[0].completed_at="2026-09-02T10:04:01Z"' \
   'job-complete-after-observed|.snapshot.complete=false|.snapshot.reported_job_count=3|.snapshot.hidden_job_count=1|.snapshot.status="in_progress"|.snapshot.conclusion=null|.snapshot.completed_at=null|.snapshot.jobs[0].completed_at="2026-09-02T10:05:01Z"' \
   'queued-with-start|.snapshot.status="queued"|.snapshot.conclusion=null|.snapshot.completed_at=null' \

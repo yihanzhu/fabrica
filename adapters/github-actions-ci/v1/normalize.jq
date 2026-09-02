@@ -82,11 +82,13 @@ def job_time_ok($snapshot):
   .created_at <= $upper and
   if (.status | queued_status) then .started_at == null and .completed_at == null
   elif .status == "in_progress" then
-    (.started_at | time_ok) and .created_at <= .started_at and
+    (.started_at | time_ok) and $snapshot.started_at <= .started_at and
+    .created_at <= .started_at and
     .started_at <= $upper and .completed_at == null
   else
     (.started_at | time_ok) and (.completed_at | time_ok) and
-    .created_at <= .started_at and .started_at <= .completed_at and
+    $snapshot.started_at <= .started_at and .created_at <= .started_at and
+    .started_at <= .completed_at and
     .completed_at <= $upper
   end;
 def job_ok($snapshot):
