@@ -242,8 +242,8 @@ or inconclusive state. Provider names, text, and details stay opaque data.
 This PR lands only the immutable normalizer payload. A later assembly PR can add
 its manifest and default-set wiring after this payload has a durable commit on
 main. The payload is offline and unqualified. It does not call GitHub or a CLI,
- use a credential, rerun or cancel work, dispatch a workflow, change a repository,
- grant authority or qualification, or activate a profile.
+use a credential, rerun or cancel work, dispatch a workflow, change a repository,
+grant authority or qualification, or activate a profile.
 
 ## Inactive deterministic verifier normalizer payload
 

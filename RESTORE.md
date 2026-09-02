@@ -476,8 +476,8 @@ normalization, opaque provider data, and fail-closed malformed, contradictory,
 incomplete, or stale input. This stage intentionally has no adapter manifest. A
 later assembly PR can bind the payload through a durable main commit and add
 default-set wiring. The pure jq payload is offline and unqualified. It does not
- call GitHub, use a credential, rerun, cancel, or dispatch work, change a
- repository, grant authority or qualification, or activate a profile.
+call GitHub, use a credential, rerun, cancel, or dispatch work, change a
+repository, grant authority or qualification, or activate a profile.
 
 Restore the two paths in the manifest's inactive deterministic verifier normalizer
 payload block, then run:
