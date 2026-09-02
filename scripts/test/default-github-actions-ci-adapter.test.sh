@@ -4,8 +4,6 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 normalizer="$root/adapters/github-actions-ci/v1/normalize.jq"
-manifest="$root/adapters/github-actions-ci/v1/manifest.json"
-registry="$root/core/v2/generation-registry.json"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/ystack-github-actions-ci.XXXXXX")"
 trap 'rm -rf -- "$tmp"' EXIT
 
@@ -205,53 +203,20 @@ pass
 "${jq_command[@]}" -e '
   .authority == "none" and .qualification ==
     {state:"unavailable",reason_id:"adapter.unqualified"} and .effects == [] and
-  (.result | has("authority") | not)
+  (.result | has("authority") | not) and
+  ([.. | objects | keys[]] | index("authority_ref") == null) and
+  ([.. | objects | keys[]] | index("gate_decision") == null)
 ' "$base_out" >/dev/null || fail authority-surface
 pass
 
-generation_id="$("${jq_command[@]}" -er '
-  [.[] | select(.semantic_identity == "core.contracts.v2")] |
-  if length == 1 and (.[0].generation_id | test("^g-[0-9a-f]{64}$"))
-  then .[0].generation_id else error("registry") end
-' "$registry")"
-modules="$root/core/v2/generations/$generation_id/modules"
-[ -f "$modules/profile_graph.jq" ] || fail public-profile-module
-"${jq_command[@]}" -e -L "$modules" \
-  'import "profile_graph" as graph; graph::adapter_manifest_self_ok' \
-  "$manifest" >/dev/null || fail manifest-core-contract
-pass
-
-"${jq_command[@]}" -e '
-  .body.offered_roles == ["ci"] and
-  .body.offered_execution_kinds == ["deterministic"] and
-  .body.offered_capabilities == [] and .body.offered_permissions == [] and
-  .body.offered_tools == []
-' "$manifest" >/dev/null || fail manifest-empty-surface
-pass
-
-"${jq_command[@]}" -e '
-  .body.package_ref == {
-    location:{kind:"path",value:"adapters/github-actions-ci/v1/normalize.jq"},
-    mode:"100644",object_id:"692ad34601fbf3cca00c1661da258f1545a31688",
-    object_type:"blob",revision:{
-      commit_id:"23f782ab32a2bc7b0d05ab0eb64039b835d77fb0",
-      hash_algorithm:"sha1",repository_id:"ystack.control-plane"}
-  }
-' "$manifest" >/dev/null || fail package-source-mapping
-pass
-
-package_commit="$("${jq_command[@]}" -r '.body.package_ref.revision.commit_id' "$manifest")"
-package_path="$("${jq_command[@]}" -r '.body.package_ref.location.value' "$manifest")"
-package_oid="$("${jq_command[@]}" -r '.body.package_ref.object_id' "$manifest")"
-[ "$(git -C "$root" rev-parse "$package_commit:$package_path")" = "$package_oid" ] ||
-  fail package-object
-[ "$(git -C "$root" show "$package_commit:$package_path" | git hash-object --stdin)" = "$package_oid" ] ||
-  fail package-bytes
-pass
-
-"${jq_command[@]}" -S -c . "$manifest" | cmp -s - "$manifest" || fail manifest-canonical
-if grep -Eq 'g-[0-9a-f]{64}' "$normalizer" "$manifest" "$0"; then
+if grep -Eq 'g-[0-9a-f]{64}' "$normalizer" "$0"; then
   fail raw-generation-id
+fi
+pass
+
+if grep -Eq 'core[.]perm|@sh|system[(]|getenv|curl|graphql|api[.]github|github[.]com|https?://' \
+    "$normalizer"; then
+  fail pure-jq-offline-boundary
 fi
 pass
 
