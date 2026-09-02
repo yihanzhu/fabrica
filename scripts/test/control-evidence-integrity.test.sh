@@ -5,7 +5,7 @@ export LC_ALL=C
 umask 077
 
 if [ "${YSTACK_EVIDENCE_TEST_BOUNDED:-0}" != 1 ]; then
-  YSTACK_EVIDENCE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 240; exec @ARGV' "$0"
+  YSTACK_EVIDENCE_TEST_BOUNDED=1 exec /usr/bin/perl -e 'alarm 360; exec @ARGV' "$0"
 fi
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
@@ -56,6 +56,15 @@ test_directory_identity() {
       print $parent[0],":",$parent[1],":",$dir[0],":",$dir[1],"\n";
     ' "$1"
 }
+test_payload_sha() {
+  local identity=${2:-}
+  [ -n "$identity" ] || identity=$(test_path_identity "$1")
+  [ -n "$identity" ] || return 1
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin /bin/bash -c '
+    source "$1" || exit 1
+    payload_sha_from_identity "$1" "$2"
+  ' payload-hash "$1" "$identity"
+}
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -93,6 +102,9 @@ generation=$(/usr/bin/sed -n \
 [[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || fail 'selected generation shape'
 policy_sha=$(sha256_path "$policy")
 definition_sha=$(sha256_path "$definition")
+launcher_sha=$(sha256_path "$evaluator")
+launcher_identity=$(test_path_identity "$evaluator")
+payload_sha=$(test_payload_sha "$evaluator" "$launcher_identity")
 core_package_sha=$("$jq_bin" -er '.body.core_contract.package_ref.sha256' "$policy")
 for canonical_source in "$policy" "$definition"; do
   "$jq_bin" -S -c . "$canonical_source" >"$tmp/canonical"
@@ -106,6 +118,20 @@ for source_path in control/v1/evidence-integrity-policy.json \
     fail "raw generation $source_path"
 done
 pass 'canonical definitions and opaque core generation'
+"$jq_bin" -e --arg launcher "$launcher_sha" --arg payload "$payload_sha" '
+  .body.evaluator.trusted_launcher_ref=={
+    content_id:"control-evaluator-launcher.evidence-integrity.v1",
+    media_type:"text/x-shellscript",sha256:$launcher} and
+  .body.evaluator.evaluation_payload_ref=={
+    content_id:"control-evaluator-payload.evidence-integrity.v1",
+    media_type:"text/x-shellscript-fragment",sha256:$payload} and
+  .body.semantics.launcher_attestation=="trusted-boundary-not-self-attested"
+' "$definition" >/dev/null || fail 'launcher and payload identity contract'
+if ! /usr/bin/grep -Fq 'self-attest bytes that Bash already loaded' "$root/README.md" ||
+   ! /usr/bin/grep -Fq 'launcher is not self-attested.' "$root/RESTORE.md"; then
+  fail 'launcher boundary docs'
+fi
+pass 'trusted launcher and exact evaluation payload are distinct identities'
 
 policy_set="$tmp/policy-set.json"
 "$jq_bin" -S -c -n --arg policy_sha "$policy_sha" \
@@ -556,7 +582,7 @@ YSTACK_EVIDENCE_SCRATCH="$inherited_scratch" PATH="$bin:/usr/bin:/bin" \
 pass 'bootstrap ignores inherited scratch cleanup authority'
 
 /usr/bin/grep -Fq \
-  '"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha"' \
+  '"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg launcher_sha "$launcher_sha"' \
   "$evaluator" || fail 'decision envelope null-input mode'
 pass 'decision envelope explicitly uses null input'
 
@@ -661,6 +687,7 @@ direct_origin="$direct_runtime/control/v1/evaluate-evidence-integrity.sh"
 /bin/chmod 0500 "$direct_scratch/bin/jq"
 direct_origin_id=$(test_path_identity "$direct_origin")
 direct_driver_id=$(test_path_identity "$direct_scratch/driver.sh")
+direct_payload_sha=$(test_payload_sha "$direct_scratch/driver.sh" "$direct_driver_id")
 direct_live_id=$(test_path_identity "$direct_live")
 direct_jq_id=$(test_path_identity "$direct_scratch/bin/jq")
 direct_worker_id=$(test_directory_identity "$direct_worker")
@@ -671,7 +698,8 @@ direct_status=0
    worker_entry "$@"' direct-worker \
   "$direct_origin" "$direct_worker" "$direct_worker_id" "$direct_origin" \
   "$direct_origin_id" "$direct_scratch/driver.sh" "$direct_driver_id" \
-  "$direct_live" "$direct_live_id" "$direct_scratch/bin/jq" "$direct_jq_id" \
+  "$direct_payload_sha" "$direct_live" "$direct_live_id" \
+  "$direct_scratch/bin/jq" "$direct_jq_id" \
   evaluate "$direct_input_parent/policy-set.json" "$direct_input_parent/request.json" \
   "$direct_input_parent/resolved.json" "$direct_input_parent/result.json" \
   "$direct_input_parent/presentation.json" \
@@ -836,15 +864,16 @@ signal_live=$(/bin/ps -axo pgid=,state= 2>/dev/null | /usr/bin/awk \
   fail 'signal cleanup'
 pass 'signal kills and reaps the stopped owned child group'
 
-/usr/bin/grep -Fq 'ulimit -f 2048' "$evaluator" || fail 'child output cap'
-/usr/bin/grep -Fq '[ "$attempt" -lt 1000 ]' "$evaluator" || fail 'child deadline'
-pass 'child runtime and output are bounded'
-
 bind_modified_driver() {
-  local runtime=$1 output_set=$2 driver_digest decision_digest
+  local runtime=$1 output_set=$2 driver_digest payload_digest decision_digest
+  runtime=$(CDPATH='' cd -P -- "$runtime" && pwd -P)
   driver_digest=$(sha256_path "$runtime/control/v1/evaluate-evidence-integrity.sh")
-  "$jq_bin" -S -c --arg digest "$driver_digest" \
-    '.body.evaluator.driver_ref.sha256=$digest' \
+  payload_digest=$(test_payload_sha \
+    "$runtime/control/v1/evaluate-evidence-integrity.sh")
+  "$jq_bin" -S -c --arg launcher "$driver_digest" --arg payload "$payload_digest" '
+    .body.evaluator.trusted_launcher_ref.sha256=$launcher |
+    .body.evaluator.evaluation_payload_ref.sha256=$payload
+  ' \
     "$runtime/control/v1/evidence-integrity-decision.json" >"$runtime/decision.next"
   /bin/mv "$runtime/decision.next" \
     "$runtime/control/v1/evidence-integrity-decision.json"
@@ -854,6 +883,52 @@ bind_modified_driver() {
       then .decision_ref.sha256=$digest else . end
   ' "$policy_set" >"$output_set"
 }
+
+core_stall_runtime="$tmp/core-stall-runtime"
+core_stall_scratch="$tmp/core-stall-scratch"
+core_stall_helper="$tmp/core-stall-helper.sh"
+core_stall_marker="$tmp/core-stall.pid"
+copy_runtime "$core_stall_runtime"
+/usr/bin/printf '%s\n' '#!/bin/bash' 'set -u' \
+  'root=$2' \
+  '/bin/mkdir "$root/stalled-core" || exit 1' \
+  "/usr/bin/printf '%s\\n' \"\$\$\" >\"$core_stall_marker\"" \
+  '/bin/kill -STOP "$$"' \
+  'while :; do /bin/sleep 1; done' >"$core_stall_helper"
+/bin/chmod 0500 "$core_stall_helper"
+CORE_STALL_HELPER="$core_stall_helper" /usr/bin/perl -0777 -pi -e '
+  my $helper=$ENV{"CORE_STALL_HELPER"};
+  s{"\$mirror_core_driver" --accounted-validation}{"$helper" --accounted-validation}
+    or exit 2;
+' "$core_stall_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$core_stall_runtime" "$tmp/core-stall-set.json"
+/bin/mkdir "$core_stall_scratch"
+TMPDIR="$core_stall_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$core_stall_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/core-stall-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/core-stall.out" 2>"$tmp/core-stall.err" &
+core_stall_parent=$!
+core_stall_attempt=0
+while [ ! -s "$core_stall_marker" ] && kill -0 "$core_stall_parent" 2>/dev/null &&
+      [ "$core_stall_attempt" -lt 1200 ]; do
+  core_stall_attempt=$((core_stall_attempt + 1)); /bin/sleep 0.005
+done
+[ -s "$core_stall_marker" ] || fail 'nested core stall marker'
+core_stall_pid=$(/bin/cat "$core_stall_marker")
+[[ "$core_stall_pid" =~ ^[1-9][0-9]*$ ]] || fail 'nested core stall pid'
+/bin/kill -TERM "$core_stall_parent"
+wait_exit "$core_stall_parent" 500 || fail 'nested core bounded exit'
+core_stall_status=0
+wait "$core_stall_parent" || core_stall_status=$?
+[ "$core_stall_status" -ne 0 ] && ! kill -0 "$core_stall_pid" 2>/dev/null &&
+  [ ! -s "$tmp/core-stall.out" ] && [ ! -s "$tmp/core-stall.err" ] &&
+  [ -z "$(/usr/bin/find "$core_stall_scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'nested core signal cleanup'
+pass 'stopped nested core is killed and worker-owned scratch is removed'
+
+/usr/bin/grep -Fq 'ulimit -f 2048' "$evaluator" || fail 'child output cap'
+/usr/bin/grep -Fq '[ "$attempt" -lt 1000 ]' "$evaluator" || fail 'child deadline'
+pass 'child runtime and output are bounded'
 
 launch_runtime="$tmp/launch-signal-runtime"
 launch_scratch="$tmp/launch-signal-scratch"
@@ -901,10 +976,10 @@ output_runtime="$tmp/output-swap-runtime"
 output_scratch="$tmp/output-swap-scratch"
 copy_runtime "$output_runtime"
 /usr/bin/perl -0777 -pi -e '
-  s{pin_path "\$scratch/evaluation\.json" \|\| emit_error E_RUNTIME}{
+  s{capture_path_matches "\$scratch/evaluation\.json" "\$evaluation_capture_key" \|\|}{
     /bin/mv "\$scratch/evaluation.json" "\$scratch/evaluation.saved" || exit 1;
     /bin/ln -s "\$scratch/evaluation.saved" "\$scratch/evaluation.json" || exit 1;
-    pin_path "\$scratch/evaluation.json" || emit_error E_RUNTIME
+    capture_path_matches "\$scratch/evaluation.json" "\$evaluation_capture_key" ||
   } or exit 2
 ' "$output_runtime/control/v1/evaluate-evidence-integrity.sh"
 bind_modified_driver "$output_runtime" "$tmp/output-swap-set.json"
@@ -919,6 +994,47 @@ TMPDIR="$output_scratch" PATH="$bin:/usr/bin:/bin" \
   [ -z "$(/usr/bin/find "$output_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'output symlink swap'
 pass 'output path replacement is rejected before cleanup and emission'
+
+post_capture_runtime="$tmp/post-capture-runtime"
+post_capture_scratch="$tmp/post-capture-scratch"
+post_capture_ready="$tmp/post-capture.ready"
+post_capture_go="$tmp/post-capture.go"
+copy_runtime "$post_capture_runtime"
+POST_CAPTURE_READY="$post_capture_ready" POST_CAPTURE_GO="$post_capture_go" \
+  /usr/bin/perl -0777 -pi -e '
+    my $ready=$ENV{"POST_CAPTURE_READY"}; my $go=$ENV{"POST_CAPTURE_GO"};
+    my $replacement = qq{    worker_status=\$?\n} .
+      qq{  /usr/bin/printf "ready\\n" >"$ready" || exit 1\n} .
+      qq{  while [ ! -e "$go" ]; do /bin/sleep 0.01; done\n} .
+      qq{  if [ -n};
+    s{    worker_status=\$\?\n  if \[ -n}{$replacement} or exit 2;
+  ' "$post_capture_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$post_capture_runtime" "$tmp/post-capture-set.json"
+/bin/mkdir "$post_capture_scratch"
+TMPDIR="$post_capture_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$post_capture_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/post-capture-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/post-capture.out" 2>"$tmp/post-capture.err" &
+post_capture_pid=$!
+post_capture_attempt=0
+while [ ! -e "$post_capture_ready" ] && kill -0 "$post_capture_pid" 2>/dev/null &&
+      [ "$post_capture_attempt" -lt 1200 ]; do
+  post_capture_attempt=$((post_capture_attempt + 1)); /bin/sleep 0.005
+done
+[ -e "$post_capture_ready" ] || fail 'post-capture replacement ready'
+post_capture_root=$(/usr/bin/find "$post_capture_scratch" -mindepth 1 -maxdepth 1 \
+  -type d -name 'ystack-evidence.??????' -print -quit)
+[ -n "$post_capture_root" ] || fail 'post-capture replacement root'
+/bin/mv "$post_capture_root/io/worker.out" "$post_capture_root/io/worker.saved"
+/usr/bin/printf '{"forged":true}\n' >"$post_capture_root/io/worker.out"
+: >"$post_capture_go"
+post_capture_status=0
+wait "$post_capture_pid" || post_capture_status=$?
+[ "$post_capture_status" -ne 0 ] && [ ! -s "$tmp/post-capture.out" ] &&
+  [ "$(/bin/cat "$tmp/post-capture.err")" = E_RUNTIME ] &&
+  [ -z "$(/usr/bin/find "$post_capture_scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'post-capture replacement result'
+pass 'post-creation output replacement is rejected before consumption'
 
 cleanup_runtime="$tmp/cleanup-failure-runtime"
 cleanup_scratch="$tmp/cleanup-failure-scratch"
@@ -960,8 +1076,8 @@ capture_swap_case() {
     my $ready=$ENV{"CAPTURE_READY"}; my $go=$ENV{"CAPTURE_GO"};
     my $replacement = qq{  /usr/bin/printf "ready\\n" >"$ready" || exit 1\n} .
       qq{  while [ ! -e "$go" ]; do /bin/sleep 0.01; done\n} .
-      qq{  run_child scratch_capture};
-    s{  run_child scratch_capture}{$replacement} or exit 2;
+      qq{  run_child scratch_capture_prepared};
+    s{  run_child scratch_capture_prepared}{$replacement} or exit 2;
   ' "$runtime/control/v1/evaluate-evidence-integrity.sh"
   bind_modified_driver "$runtime" "$tmp/capture-$1-set.json"
   TMPDIR="$parent" PATH="$bin:/usr/bin:/bin" \
@@ -983,6 +1099,7 @@ capture_swap_case() {
       /bin/ln -s "$outside" "$scratch_path/io"
       ;;
     leaf)
+      /bin/mv "$scratch_path/io/worker.out" "$scratch_path/io/worker.out.saved"
       /bin/ln -s "$outside/sentinel" "$scratch_path/io/worker.out"
       ;;
     *) fail "capture $mode mode" ;;
