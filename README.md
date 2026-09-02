@@ -63,14 +63,25 @@ and an external-target smoke remain required.
 
 ## Inactive control policy-set validator
 
-`control/v1/` defines a canonical identity bundle for six later Control foundation
-policies: duty separation, sandbox, credentials, risk gates, kill switch, and
-immutable evidence. Its validator checks exact immutable policy and decision refs;
-it does not contain or evaluate those policies.
+`control/v1/` defines the canonical shape and order for six Control foundation
+policies: credentials, duty separation, immutable evidence, kill switch, risk
+gates, and sandbox. Its validator checks the set shape and relations. It does not
+contain or evaluate those policies.
 
 The package stays inactive and fail-closed. It grants no authority, activates no
 profile, reads no credential, launches no adapter, and performs no external write.
 Later bounded units own each policy body and its enforcement.
+
+## Inactive Control foundation roll-up
+
+`control/v1/control-policy-set.json` pins the six shipped policy and decision files
+in the required order. It also pins their shared core contract generation and
+package. The focused test recomputes all twelve file digests and the core package
+closure rather than trusting the refs in the set.
+
+This is a static, repo-only identity bundle. It adds no aggregator runtime and
+makes no enforcement, qualification, approval, authority, activation, or external
+effect claim. The set stays inactive and fails closed.
 
 ## Inactive duty-separation evaluator
 
@@ -103,6 +114,74 @@ claim is `inconclusive` with `decision.provenance-unqualified`; this evaluator h
 no `satisfied` result. It grants no approval, authority, qualification, or
 permission, activates nothing, and performs no candidate, credential, network,
 publish, deploy, or external-write action.
+
+## Inactive kill-switch evaluator
+
+`control/v1/evaluate-kill-switch.sh` checks a caller-supplied stop-state snapshot
+for one attempt across global, repository, workflow, stage, and attempt scopes. It
+binds the policy-set, policy, decision, evaluator, duty-separation result, and
+selected public-core identities before producing a canonical observation. Any
+matching stop wins; stale, replayed, conflicting, or malformed state fails closed.
+
+The evaluator is observation only. A fully cleared snapshot may be `satisfied`,
+but that grants no authority or permission and does not cancel or run anything.
+The package stays inactive, reads no credential, activates no profile, and performs
+no candidate, network, publish, deploy, signal, or external-write action.
+
+## Inactive sandbox-policy evaluator
+
+`control/v1/evaluate-sandbox.sh` checks one execution-environment claim against
+the shipped sandbox ceiling. It binds the policy set, policy, decision, evaluator,
+duty-separation result, and selected public-core identities before producing a
+canonical observation. The ceiling requires a cleared, allowlisted environment;
+fixed roots, resources, tools, and limits; no host access; denied network; and no
+credential, secret, target-write, or external-write exposure.
+
+The result is declaration-only: `satisfied`, `violated`, or `inconclusive`. Even a
+`satisfied` claim does not prove that a real sandbox enforced those properties and
+grants no authority, qualification, or permission. The package stays inactive,
+runs no candidate or adapter, reads no credential, activates no profile, and
+performs no network, publish, deploy, or external-write action.
+
+## Inactive credential-policy evaluator
+
+`control/v1/evaluate-credential-policy.sh` checks one credential-boundary claim
+against the shipped credential ceiling. It binds the policy set, policy, decision,
+duty-separation result, evaluator, and selected public-core identities before
+producing a canonical observation. The ceiling permits only brokered,
+single-stage model inference for producer or reviewer roles, with no credential
+material exposed to the execution boundary. Candidate write or execution
+permissions are incompatible with credential access.
+
+The result is `violated` or `inconclusive`; an unqualified input claim can never
+produce `satisfied`. The package stays inactive, reads no credential material or
+credential-like environment value, grants no authority or qualification, activates
+no profile, and performs no candidate, adapter, network, publish, deploy, or
+external-write action.
+
+## Inactive evidence-integrity evaluator
+
+`control/v1/evaluate-evidence-integrity.sh` compares caller-supplied evidence
+references with one exact public-core stage tuple. It binds the policy set,
+policy, decision, evaluator, and selected core package before returning a
+canonical `satisfied` or `violated` identity observation. Evidence and prior
+references must keep their canonical order and unique logical identities; one
+prior result digest cannot describe multiple result documents.
+
+The launcher is an explicit trusted shell boundary; it does not claim to
+self-attest bytes that Bash already loaded. The decision separately binds the
+exact marked evaluation payload. The launcher extracts those fragments from a
+private no-follow snapshot, verifies their content identity, and gives only the
+verified bytes to the worker. Scratch producers return full final descriptor
+identities over an inherited, unlinked channel; consumers bind every read to
+those identities. Public-core validation uses its accounted mode
+with a fixed budget, an anchored receipt descriptor, and a worker-owned root.
+
+The evaluator never reads proof bytes. Matching references do not prove a claim
+or qualify a workflow, and equal proof digests may belong to different logical
+references. The package stays inactive, stores nothing, grants no authority, and
+performs no candidate, credential, network, adapter, publish, deploy, or external
+write.
 
 ## The current default team
 

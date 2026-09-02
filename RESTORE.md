@@ -330,6 +330,18 @@ The proof validates only the canonical six-section identity bundle. It does not
 evaluate a policy, grant authority, activate a profile, or enforce sandbox,
 credential, risk, kill-switch, or evidence behavior.
 
+Restore the two paths in the manifest's inactive Control foundation roll-up block,
+then run:
+
+```sh
+bash scripts/test/control-foundation-rollup.test.sh
+```
+
+This recomputes the six policy and six decision file identities, their common core
+generation and package closure, and the inactive fail-closed boundary. It adds no
+aggregator runtime and makes no enforcement, qualification, authority, activation,
+or external-effect claim.
+
 Restore the five paths in the manifest's inactive duty-separation block, then run:
 
 ```sh
@@ -353,6 +365,62 @@ public-core identity closure; tier downgrade and malformed-input handling; and
 canonical `violated` or `inconclusive` observations. Decision input is an
 unqualified immutable claim, so an accept claim cannot produce `satisfied` or grant
 approval, authority, qualification, activation, permission, or an external effect.
+
+Restore the five paths in the manifest's inactive kill-switch block, then run:
+
+```sh
+bash scripts/test/control-kill-switch.test.sh
+```
+
+This checks exact identity closure, all five stop scopes, cleared and missing
+state, rollback, replay, ambiguity, duty failure, malformed input, deterministic
+output, and bounded child-process cleanup. The evaluator is inactive and
+observation only. It does not send a signal, cancel or run a candidate, grant
+authority, use a credential, activate a profile, or perform an external write.
+
+Restore the five paths in the manifest's inactive sandbox-policy block, then run:
+
+```sh
+bash scripts/test/control-sandbox-policy.test.sh
+```
+
+This checks exact identity closure, the complete allowlisted declaration, unknown
+and violated inputs, duty failure, stale links, malformed input, deterministic
+output, snapshotted jq execution, and postflight mutation detection. The result is
+inactive and declaration-only. It does not enforce or qualify a real sandbox, run
+a candidate or adapter, use a credential, activate a profile, or perform a network
+or external-write action.
+
+Restore the five paths in the manifest's inactive credential-policy block, then
+run:
+
+```sh
+bash scripts/test/control-credential-policy.test.sh
+```
+
+This checks exact identity closure, the brokered single-stage model-inference
+ceiling, protected-role and incompatible-permission handling, incomplete and
+malformed claims, stale links, deterministic output, bounded child cleanup, and
+postflight mutation detection. The evaluator is inactive and observation only. It
+does not read credential material or credential-like environment values, qualify a
+claim, grant authority, activate a profile, run a candidate or adapter, or perform
+a network or external-write action.
+
+Restore the five paths in the manifest's inactive evidence-integrity block, then
+run:
+
+```sh
+bash scripts/test/control-evidence-integrity.test.sh
+```
+
+This checks exact policy-set and public-core closure, stage and qualification
+identity binding, canonical evidence/prior sets, stale or aliased references, and
+deterministic observation output. It also checks the explicit trusted-launcher
+boundary, exact marked-payload identity, producer-final scratch identities,
+accounted core receipt and cleanup, and nested Bash environment isolation. The
+launcher is not self-attested. It does not read proof bytes, establish proof
+truth, qualify a workflow, store evidence, grant authority, activate a profile,
+run a candidate or adapter, or perform a network or external-write action.
 
 ---
 
