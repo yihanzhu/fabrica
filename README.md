@@ -230,6 +230,21 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive deterministic verifier normalizer payload
+
+`adapters/deterministic-verifier/v1/normalize.jq` validates an already-supplied
+portable-core v2 verifier request, resolved profile, adapter contract, and stage
+result. It reuses the core's request, profile, and result relations, then returns
+one canonical observation. It does not interpret provider or CI status as verifier
+evidence. GitHub Actions remains a separate CI observation boundary.
+
+This payload is offline and unqualified. It does not execute a candidate or tool,
+read proof bytes, enforce a sandbox, use a credential or network, write evidence,
+grant authority or qualification, or activate a profile. A later assembly PR may
+add its manifest and inactive default-set binding only after the payload has a
+durable commit on main. A runnable verifier still requires a separately qualified
+sandbox launcher and fixed verification implementation.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
