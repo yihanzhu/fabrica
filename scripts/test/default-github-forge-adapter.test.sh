@@ -137,12 +137,14 @@ check manifest-public-forge-policy "${jq_command[@]}" -L "$modules" -e -n \
   '
 
 package_ref_ok() {
-  local commit path object mode
+  local repository commit path object mode
+  repository=$("${jq_command[@]}" -r '.body.package_ref.revision.repository_id' "$manifest")
   commit=$("${jq_command[@]}" -r '.body.package_ref.revision.commit_id' "$manifest")
   path=$("${jq_command[@]}" -r '.body.package_ref.location.value' "$manifest")
   object=$("${jq_command[@]}" -r '.body.package_ref.object_id' "$manifest")
   mode=$("${jq_command[@]}" -r '.body.package_ref.mode' "$manifest")
-  /usr/bin/git -C "$root" merge-base --is-ancestor "$commit" HEAD &&
+  [ "$repository" = "ystack.control-plane" ] &&
+    /usr/bin/git -C "$root" merge-base --is-ancestor "$commit" HEAD &&
     [ "$(/usr/bin/git -C "$root" rev-parse "$commit:$path")" = "$object" ] &&
     [ "$(/usr/bin/git -C "$root" hash-object "$normalizer")" = "$object" ] &&
     [ "$(/usr/bin/git -C "$root" ls-tree "$commit" -- "$path" | /usr/bin/awk '{print $1}')" = "$mode" ]
