@@ -229,7 +229,6 @@ scripts/test/orchestrator-state-scanner.test.sh
 orchestrator/v1/reconciliation-plan.jq
 scripts/test/orchestrator-reconciliation-plan.test.sh
 
-# Inactive default GitHub forge observation adapter
-adapters/github-forge/v1/manifest.json
+# Inactive GitHub forge normalizer payload
 adapters/github-forge/v1/normalize.jq
 scripts/test/default-github-forge-adapter.test.sh

@@ -450,16 +450,17 @@ duplicate, unsorted, and oversized inputs. The jq filter remains inactive and
 planning only. It does not dispatch, schedule, execute recovery, write state, use
 a credential or network, activate a profile, publish, or touch a target.
 
-Restore the three paths in the manifest's inactive default GitHub forge adapter
+Restore the two paths in the manifest's inactive GitHub forge normalizer payload
 block, then run:
 
 ```sh
 bash scripts/test/default-github-forge-adapter.test.sh
 ```
 
-This checks the public-core manifest and immutable package reference, exact
-caller bindings, deterministic state normalization, opaque provider data, and
-fail-closed malformed or stale input. The pure jq package is offline and
+This checks exact caller bindings, deterministic state normalization, opaque
+provider data, and fail-closed malformed or stale input. This stage intentionally
+has no adapter manifest. A later assembly PR can bind the payload through a
+durable main commit and add default-set wiring. The pure jq payload is offline and
 unqualified. It does not call GitHub, use a credential, change a repository or
 request, grant authority or qualification, or activate a profile.
 

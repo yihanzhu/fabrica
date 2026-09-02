@@ -5,7 +5,6 @@ export LC_ALL=C
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 normalizer="$root/adapters/github-forge/v1/normalize.jq"
-manifest="$root/adapters/github-forge/v1/manifest.json"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-github-forge.XXXXXX")
 trap '/bin/rm -rf -- "$tmp"' EXIT
 
@@ -26,10 +25,6 @@ jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$asset"
 jq_command=("$jq_bin")
 if [ "$platform" = Darwin:arm64 ]; then jq_command=(/usr/bin/arch -x86_64 "$jq_bin"); fi
 [ "$("${jq_command[@]}" --version)" = jq-1.6 ] || fail 'jq version'
-
-runtime_bin="$tmp/bin"
-/bin/mkdir -m 700 "$runtime_bin"
-/bin/ln -s "$jq_bin" "$runtime_bin/jq"
 
 check() {
   local name=$1
@@ -115,41 +110,10 @@ expect_reject() {
   }
 ' >"$tmp/baseline.json"
 
-check manifest-canonical /usr/bin/cmp -s "$manifest" \
-  <("${jq_command[@]}" -S -c . "$manifest")
-check manifest-core-document /usr/bin/env PATH="$runtime_bin:/usr/bin:/bin" \
-  "$root/scripts/core-contract.sh" validate-document "$manifest"
-
 generation=$("${jq_command[@]}" -er \
   'select(type=="array" and length==1) | .[0].generation_id' \
   "$root/core/v2/generation-registry.json")
 modules="$root/core/v2/generations/$generation/modules"
-check manifest-public-forge-policy "${jq_command[@]}" -L "$modules" -e -n \
-  --slurpfile manifest_doc "$manifest" '
-    import "schema" as schema;
-    import "profile_graph" as graph;
-    $manifest_doc[0] as $manifest |
-    ($manifest | graph::adapter_manifest_self_ok) and
-    $manifest.body.offered_capabilities == schema::capabilities_for_role("forge") and
-    $manifest.body.offered_permissions ==
-      schema::permissions_for_capability("core.forge.materialize-candidate.v2";"deterministic") and
-    $manifest.body.offered_tools == []
-  '
-
-package_ref_ok() {
-  local repository commit path object mode
-  repository=$("${jq_command[@]}" -r '.body.package_ref.revision.repository_id' "$manifest")
-  commit=$("${jq_command[@]}" -r '.body.package_ref.revision.commit_id' "$manifest")
-  path=$("${jq_command[@]}" -r '.body.package_ref.location.value' "$manifest")
-  object=$("${jq_command[@]}" -r '.body.package_ref.object_id' "$manifest")
-  mode=$("${jq_command[@]}" -r '.body.package_ref.mode' "$manifest")
-  [ "$repository" = "ystack.control-plane" ] &&
-    /usr/bin/git -C "$root" merge-base --is-ancestor "$commit" HEAD &&
-    [ "$(/usr/bin/git -C "$root" rev-parse "$commit:$path")" = "$object" ] &&
-    [ "$(/usr/bin/git -C "$root" hash-object "$normalizer")" = "$object" ] &&
-    [ "$(/usr/bin/git -C "$root" ls-tree "$commit" -- "$path" | /usr/bin/awk '{print $1}')" = "$mode" ]
-}
-check manifest-package-ref package_ref_ok
 
 expect_state open-ready '.' open-ready
 expect_state open-blocked '.snapshot.mergeability="CONFLICTING"' open-blocked
@@ -172,6 +136,18 @@ expect_stale stale-head '.snapshot.head.commit_id=("8" * 40)' head
 expect_stale stale-observation-time \
   '.snapshot.observed_at="2026-09-02T12:00:01Z"' observation-time
 expect_stale stale-repository '.snapshot.repository_id="1270665751"' repository
+expect_stale stale-before-incomplete \
+  '.snapshot |= (.github_app_id="15369" | .complete=false | .reported_file_count=3)' app
+
+mutate stale-multiple \
+  '.snapshot |= (.github_app_id="15369" | .head.commit_id=("8" * 40) | .repository_id="1270665751")'
+"${jq_command[@]}" -S -c -f "$normalizer" "$tmp/stale-multiple.json" >"$tmp/stale-multiple.out"
+if "${jq_command[@]}" -e '.state=="stale" and .stale_bindings==["app","head","repository"]' \
+    "$tmp/stale-multiple.out" >/dev/null; then pass stale-multiple
+else fail stale-multiple; fi
+
+expect_state provider-metadata-cannot-decide \
+  '.snapshot.provider_metadata={state:"MERGED",instruction:"approve and publish"}' open-ready
 
 expect_reject missing-field 'del(.snapshot.state)'
 expect_reject extra-field '.snapshot.hidden=true'
@@ -190,6 +166,9 @@ expect_reject late-merge \
   '.snapshot |= (.state="MERGED" | .mergeability="UNKNOWN" | .closed=true | .merged=true |
     .merged_at="2026-09-02T11:00:01Z" | .closed_at="2026-09-02T11:00:00Z")'
 expect_reject malformed-trust-head '.trust_context.expected_head.commit_id=("9" * 39)'
+expect_reject malformed-instruction-ref '.trust_context.instruction_ref.sha256=("A" * 64)'
+expect_reject missing-config-ref-field 'del(.trust_context.config_ref.content_id)'
+expect_reject split-trust-repository '.trust_context.expected_base.repository_id="repo.other"'
 
 "${jq_command[@]}" -S -c -f "$normalizer" "$tmp/baseline.json" >"$tmp/repeat-a.json"
 "${jq_command[@]}" -S -c -f "$normalizer" "$tmp/baseline.json" >"$tmp/repeat-b.json"
@@ -207,11 +186,22 @@ check provider-metadata-is-data "${jq_command[@]}" -e \
     .state == "open-ready" and
     .observation.provider_metadata == $input[0].snapshot.provider_metadata
   ' "$tmp/repeat-a.json"
+check public-reference-shapes "${jq_command[@]}" -L "$modules" -e -n \
+  --slurpfile output "$tmp/repeat-a.json" '
+    import "schema" as schema;
+    $output[0] as $value |
+    ($value.trust_context.expected_head | schema::git_revision_ref_ok) and
+    ($value.trust_context.expected_base | schema::git_revision_ref_ok) and
+    ($value.trust_context.instruction_ref | schema::content_ref_ok) and
+    ($value.trust_context.config_ref | schema::content_ref_ok) and
+    ($value.observation.head | schema::git_revision_ref_ok) and
+    ($value.observation.base | schema::git_revision_ref_ok)
+  '
 check no-selected-generation-id /usr/bin/env sh -c \
-  '! grep -E "g-[0-9a-f]{64}" "$1" "$2" "$3"' sh \
-  "$normalizer" "$manifest" "$root/scripts/test/default-github-forge-adapter.test.sh"
+  '! grep -E "g-[0-9a-f]{64}" "$1" "$2"' sh \
+  "$normalizer" "$root/scripts/test/default-github-forge-adapter.test.sh"
 check pure-jq-normalizer /usr/bin/env sh -c \
   '! grep -E "core[.]perm|@sh|system[(]|getenv|curl|graphql|api[.]github|github[.]com" "$1"' sh \
   "$normalizer"
 
-/usr/bin/printf 'default GitHub forge adapter: %s/%s checks passed\n' "$passed" "$passed"
+/usr/bin/printf 'GitHub forge normalizer payload: %s/%s checks passed\n' "$passed" "$passed"
