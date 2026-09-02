@@ -245,6 +245,29 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
+## Inactive local Git candidate materializer
+
+`adapters/local-git-materializer/v1/` implements the existing portable-core v2
+`core.forge.materialize-candidate.v2` capability without a Git forge. It reads one
+exact, sanitized bare source repository and one contract-bound patch. It imports
+reachable objects into a caller-disposable bare repository, applies the patch to a
+scratch-only index, and returns a canonical receipt and validated stage result.
+
+The fixed `materialize` command accepts only caller-named physical source,
+candidate, and scratch boundaries. It rejects worktrees, alternates, shallow or
+partial repositories, replace or graft state, active hooks and filters, remote
+configuration, unsafe paths, binary patches, symlinks, and submodules. It never
+checks out a worktree or runs a transport command. Tests cover both SHA-1 and
+SHA-256 object formats with disposable local fixtures.
+
+This PR lands only the inactive package payload. A later assembly PR may add a
+manifest whose package reference points to this payload's durable commit on main.
+GitHub and later GitLab change-request normalizers remain separate observation
+inputs; they do not claim this materialization capability. The package is not
+qualified, selected, installed, or activated. It reads no credential, contacts no
+provider or real target during construction, and cannot push, publish, merge, or
+grant authority.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

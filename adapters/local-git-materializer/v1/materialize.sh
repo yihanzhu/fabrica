@@ -1,0 +1,376 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016
+set -euo pipefail
+
+emit_error() {
+  printf '%s\n' "${1:-E_RUNTIME}" >&2
+  exit 1
+}
+
+[ "$#" -eq 6 ] || emit_error E_USAGE
+script_path=${BASH_SOURCE[0]}
+case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac
+if [ "$1" = materialize ]; then
+  exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
+    /bin/bash "$script_path" __materialize_clean "$2" "$3" "$4" "$5" "$6"
+fi
+[ "$1" = __materialize_clean ] || emit_error E_USAGE
+export LC_ALL=C
+umask 077
+input_path=$2
+source_repository_id=$3
+source_git_dir=$4
+candidate_root=$5
+scratch_root=$6
+
+case "$script_path:$input_path:$source_git_dir:$candidate_root:$scratch_root" in
+  /*:/*:/*:/*:/*) ;;
+  *) emit_error E_USAGE ;;
+esac
+[ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_PACKAGE
+script_dir=$(CDPATH='' cd -P -- "${script_path%/*}" && pwd -P) || emit_error E_PACKAGE
+repo_root=$(CDPATH='' cd -P -- "$script_dir/../../.." && pwd -P) || emit_error E_PACKAGE
+protocol="$script_dir/protocol.jq"
+core="$repo_root/scripts/core-contract.sh"
+registry="$repo_root/core/v2/generation-registry.json"
+for required in "$protocol" "$core" "$registry"; do
+  [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_PACKAGE
+done
+
+jq_bin=$(command -v jq 2>/dev/null) || emit_error E_DEPENDENCY
+[ -f "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
+  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_DEPENDENCY
+generation=$($jq_bin -r '.[-1].generation_id' "$registry") || emit_error E_PACKAGE
+modules="$repo_root/core/v2/generations/$generation/modules"
+[ -d "$modules" ] && [ ! -L "$modules" ] || emit_error E_PACKAGE
+
+case "$source_repository_id" in
+  ''|*[!a-z0-9._:-]* ) emit_error E_REPOSITORY ;;
+esac
+[ "${#source_repository_id}" -le 128 ] || emit_error E_REPOSITORY
+
+physical_dir() {
+  local path=$1 actual
+  [ -d "$path" ] && [ ! -L "$path" ] || return 1
+  actual=$(CDPATH='' cd -P -- "$path" && pwd -P) || return 1
+  [ "$actual" = "$path" ]
+}
+
+directory_mode() {
+  case "$(uname -s)" in
+    Darwin) /usr/bin/stat -f '%Lp' "$1" ;;
+    *) /usr/bin/stat -c '%a' "$1" ;;
+  esac
+}
+
+directory_owner() {
+  case "$(uname -s)" in
+    Darwin) /usr/bin/stat -f '%u' "$1" ;;
+    *) /usr/bin/stat -c '%u' "$1" ;;
+  esac
+}
+
+empty_private_dir() {
+  physical_dir "$1" &&
+    [ "$(directory_mode "$1")" = 700 ] &&
+    [ "$(directory_owner "$1")" = "$(id -u)" ] &&
+    [ -z "$(find "$1" -mindepth 1 -print -quit)" ]
+}
+
+overlaps() {
+  case "$1/" in "$2/"*) return 0 ;; esac
+  case "$2/" in "$1/"*) return 0 ;; esac
+  return 1
+}
+
+[ -f "$input_path" ] && [ ! -L "$input_path" ] || emit_error E_INPUT
+physical_dir "$source_git_dir" || emit_error E_SOURCE_GIT
+empty_private_dir "$candidate_root" || emit_error E_CANDIDATE_ROOT
+empty_private_dir "$scratch_root" || emit_error E_SCRATCH_ROOT
+if overlaps "$source_git_dir" "$candidate_root" ||
+   overlaps "$source_git_dir" "$scratch_root" ||
+   overlaps "$candidate_root" "$scratch_root"; then
+  emit_error E_BOUNDARY
+fi
+
+run_root="$scratch_root/run"
+staging_repo="$candidate_root/.staging.git"
+final_repo="$candidate_root/repository.git"
+success=0
+cleanup() {
+  /bin/rm -rf -- "$run_root" 2>/dev/null || :
+  if [ "$success" -ne 1 ]; then
+    /bin/rm -rf -- "$staging_repo" "$final_repo" 2>/dev/null || :
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+/bin/mkdir -m 700 "$run_root" || emit_error E_SCRATCH_ROOT
+/bin/mkdir -m 500 "$run_root/no-hooks" || emit_error E_SCRATCH_ROOT
+
+input_snapshot="$run_root/input.json"
+/bin/cp "$input_path" "$input_snapshot" || emit_error E_INPUT
+/bin/chmod 0400 "$input_snapshot" || emit_error E_INPUT
+input_canonical="$run_root/input.canonical"
+"$jq_bin" -S -c . "$input_snapshot" > "$input_canonical" 2>/dev/null || emit_error E_INPUT
+/usr/bin/cmp -s "$input_snapshot" "$input_canonical" || emit_error E_INPUT
+"$jq_bin" -L "$modules" -e --arg command validate-input -f "$protocol" \
+  "$input_snapshot" >/dev/null 2>&1 || emit_error E_CONTRACT
+
+sha_file() {
+  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
+}
+
+snapshot_pair() {
+  local selector=$1 output=$2 expected actual
+  "$jq_bin" -S -c "$selector.content" "$input_snapshot" > "$output" 2>/dev/null ||
+    return 1
+  expected=$("$jq_bin" -r "$selector.sha256" "$input_snapshot") || return 1
+  actual=$(sha_file "$output") || return 1
+  [ "$actual" = "$expected" ]
+}
+
+profile_file="$run_root/profile.json"
+resolved_file="$run_root/resolved-profile.json"
+request_file="$run_root/stage-request.json"
+snapshot_pair '.profile' "$profile_file" || emit_error E_DIGEST
+snapshot_pair '.resolved_profile' "$resolved_file" || emit_error E_DIGEST
+snapshot_pair '.stage_request' "$request_file" || emit_error E_DIGEST
+manifest_files=()
+manifest_count=$("$jq_bin" '.manifests | length' "$input_snapshot") || emit_error E_INPUT
+manifest_index=0
+while [ "$manifest_index" -lt "$manifest_count" ]; do
+  manifest_file="$run_root/manifest.$manifest_index.json"
+  snapshot_pair ".manifests[$manifest_index]" "$manifest_file" || emit_error E_DIGEST
+  manifest_files+=("$manifest_file")
+  manifest_index=$((manifest_index + 1))
+done
+
+"$core" validate-profile-set "$profile_file" "$resolved_file" \
+  "${manifest_files[@]}" >/dev/null 2>&1 || emit_error E_CORE_PROFILE
+"$core" validate-document "$request_file" >/dev/null 2>&1 || emit_error E_CORE_REQUEST
+
+contract_file="$run_root/materialization-contract.json"
+patch_file="$run_root/producer.patch"
+"$jq_bin" -j -L "$modules" --arg command contract -f "$protocol" \
+  "$input_snapshot" > "$contract_file" 2>/dev/null || emit_error E_CONTRACT
+"$jq_bin" -j -L "$modules" --arg command patch -f "$protocol" \
+  "$input_snapshot" > "$patch_file" 2>/dev/null || emit_error E_PATCH
+contract_sha=$(sha_file "$contract_file")
+patch_sha=$(sha_file "$patch_file")
+expected_contract_sha=$("$jq_bin" -r '
+  .stage_request.content.body.operation.arguments.materialization_contract.input_id as $id |
+  .payloads[] | select(.input_id == $id) | .sha256
+' "$input_snapshot") || emit_error E_DIGEST
+expected_patch_sha=$("$jq_bin" -r \
+  '.payloads[] | select(.input_id == "input.producer-patch") | .sha256' \
+  "$input_snapshot") || emit_error E_DIGEST
+[ "$contract_sha" = "$expected_contract_sha" ] &&
+  [ "$patch_sha" = "$expected_patch_sha" ] || emit_error E_DIGEST
+contract_canonical="$run_root/materialization-contract.canonical"
+"$jq_bin" -S -c . "$contract_file" > "$contract_canonical" 2>/dev/null || emit_error E_CONTRACT
+/usr/bin/cmp -s "$contract_file" "$contract_canonical" || emit_error E_CONTRACT
+
+patch_bytes=$(wc -c < "$patch_file" | /usr/bin/tr -d ' ')
+max_patch_bytes=$("$jq_bin" -r '.max_patch_bytes' "$contract_file") || emit_error E_CONTRACT
+[ "$patch_bytes" -gt 0 ] && [ "$patch_bytes" -le "$max_patch_bytes" ] || emit_error E_PATCH_LIMIT
+patch_without_nul=$(LC_ALL=C /usr/bin/tr -d '\000' < "$patch_file" | wc -c | /usr/bin/tr -d ' ')
+[ "$patch_without_nul" = "$patch_bytes" ] || emit_error E_BINARY_PATCH
+if /usr/bin/grep -aEq '^(GIT binary patch|Binary files .+ differ)$' "$patch_file"; then
+  emit_error E_BINARY_PATCH
+fi
+
+source_commit=$("$jq_bin" -r '.stage_request.content.body.target_revision.value.commit_id' \
+  "$input_snapshot") || emit_error E_SOURCE_IDENTITY
+source_algorithm=$("$jq_bin" -r '.stage_request.content.body.target_revision.value.hash_algorithm' \
+  "$input_snapshot") || emit_error E_SOURCE_IDENTITY
+request_repository_id=$("$jq_bin" -r '.stage_request.content.body.target_repository_id' \
+  "$input_snapshot") || emit_error E_SOURCE_IDENTITY
+source_input_id=$("$jq_bin" -r \
+  '.stage_request.content.body.operation.arguments.source_tree_input_id' \
+  "$input_snapshot") || emit_error E_SOURCE_IDENTITY
+source_tree=$("$jq_bin" -r --arg id "$source_input_id" '
+  .stage_request.content.body.inputs[] | select(.input_id == $id) |
+  .value.value.value.object_id
+' "$input_snapshot") || emit_error E_SOURCE_IDENTITY
+[ "$request_repository_id" = "$source_repository_id" ] || emit_error E_SOURCE_IDENTITY
+
+git_env=(/usr/bin/env -i HOME="$run_root" TMPDIR="$run_root" PATH=/usr/bin:/bin LC_ALL=C
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1
+  GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath
+  GIT_CONFIG_VALUE_0="$run_root/no-hooks")
+
+git_dir() {
+  local directory=$1
+  shift
+  "${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
+}
+
+source_config="$run_root/source-config"
+git_dir "$source_git_dir" config --local --name-only --list --no-includes \
+  > "$source_config" 2>/dev/null || emit_error E_SOURCE_GIT
+while IFS= read -r config_key; do
+  case "$config_key" in
+    core.repositoryformatversion|core.filemode|core.bare|core.logallrefupdates|core.ignorecase|core.precomposeunicode|extensions.objectformat) ;;
+    '') ;;
+    *) emit_error E_SOURCE_CONFIG ;;
+  esac
+done < "$source_config"
+[ "$(git_dir "$source_git_dir" rev-parse --is-bare-repository 2>/dev/null)" = true ] ||
+  emit_error E_SOURCE_WORKTREE
+[ ! -e "$source_git_dir/commondir" ] && [ ! -e "$source_git_dir/shallow" ] &&
+  [ ! -e "$source_git_dir/info/grafts" ] &&
+  [ ! -e "$source_git_dir/objects/info/alternates" ] &&
+  [ ! -d "$source_git_dir/refs/replace" ] &&
+  [ -z "$(find "$source_git_dir" -type l -print -quit)" ] &&
+  [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
+  emit_error E_SOURCE_GIT
+if find "$source_git_dir/hooks" -type f ! -name '*.sample' -print -quit 2>/dev/null |
+   /usr/bin/grep -q .; then
+  emit_error E_SOURCE_HOOK
+fi
+actual_algorithm=$(git_dir "$source_git_dir" rev-parse --show-object-format 2>/dev/null) ||
+  emit_error E_SOURCE_GIT
+[ "$actual_algorithm" = "$source_algorithm" ] || emit_error E_SOURCE_IDENTITY
+git_dir "$source_git_dir" cat-file -e "$source_commit^{commit}" >/dev/null 2>&1 ||
+  emit_error E_SOURCE_IDENTITY
+actual_source_tree=$(git_dir "$source_git_dir" rev-parse "$source_commit^{tree}" 2>/dev/null) ||
+  emit_error E_SOURCE_IDENTITY
+[ "$actual_source_tree" = "$source_tree" ] || emit_error E_SOURCE_IDENTITY
+
+safe_repo_path() {
+  local value=$1 component lowered bytes
+  [ -n "$value" ] || return 1
+  case "$value" in /*|*\\*) return 1 ;; esac
+  bytes=$(printf '%s' "$value" | wc -c | /usr/bin/tr -d ' ')
+  [ "$bytes" -le 4096 ] || return 1
+  if printf '%s' "$value" | LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then return 1; fi
+  old_ifs=$IFS
+  IFS=/
+  read -r -a path_components <<< "$value"
+  IFS=$old_ifs
+  for component in "${path_components[@]}"; do
+    [ -n "$component" ] && [ "$component" != . ] && [ "$component" != .. ] || return 1
+    lowered=$(printf '%s' "$component" | /usr/bin/tr '[:upper:]' '[:lower:]')
+    [ "$lowered" != .git ] || return 1
+    case "$component" in *.|*' ') return 1 ;; esac
+  done
+}
+
+scan_tree() {
+  local repository=$1 tree=$2 output=$3 entry metadata mode type object path
+  : > "$output"
+  while IFS= read -r -d '' entry; do
+    metadata=${entry%%$'\t'*}
+    path=${entry#*$'\t'}
+    read -r mode type object <<< "$metadata"
+    [ -n "$object" ] || return 1
+    case "$mode:$type" in 100644:blob|100755:blob) ;; *) return 1 ;; esac
+    safe_repo_path "$path" || return 1
+    printf '%s\n' "$path" >> "$output"
+  done < <(git_dir "$repository" ls-tree -rz -r "$tree")
+}
+
+source_paths="$run_root/source-paths"
+scan_tree "$source_git_dir" "$source_tree" "$source_paths" || emit_error E_SOURCE_TREE
+
+"${git_env[@]}" /usr/bin/git init --bare --object-format="$source_algorithm" \
+  "$staging_repo" >/dev/null 2>&1 || emit_error E_CANDIDATE_GIT
+source_pack="$run_root/source.pack"
+printf '%s\n' "$source_commit" |
+  git_dir "$source_git_dir" pack-objects --quiet --stdout --revs > "$source_pack" ||
+  emit_error E_SOURCE_GIT
+git_dir "$staging_repo" index-pack --stdin --fix-thin < "$source_pack" >/dev/null 2>&1 ||
+  emit_error E_CANDIDATE_GIT
+git_dir "$staging_repo" cat-file -e "$source_commit^{commit}" >/dev/null 2>&1 ||
+  emit_error E_CANDIDATE_GIT
+
+index_file="$run_root/index"
+GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" read-tree "$source_tree" ||
+  emit_error E_CANDIDATE_GIT
+GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached --check \
+  --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
+GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached \
+  --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
+candidate_tree=$(GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" write-tree 2>/dev/null) ||
+  emit_error E_CANDIDATE_GIT
+candidate_paths="$run_root/candidate-paths"
+scan_tree "$staging_repo" "$candidate_tree" "$candidate_paths" || emit_error E_CANDIDATE_TREE
+
+changed_paths="$run_root/changed-paths"
+: > "$changed_paths"
+while IFS= read -r -d '' changed_path; do
+  safe_repo_path "$changed_path" || emit_error E_PATCH_PATH
+  printf '%s\n' "$changed_path" >> "$changed_paths"
+done < <(git_dir "$staging_repo" diff-tree -r --name-only -z "$source_tree" "$candidate_tree")
+LC_ALL=C /usr/bin/sort -u "$changed_paths" -o "$changed_paths"
+changed_count=$(wc -l < "$changed_paths" | /usr/bin/tr -d ' ')
+max_changed=$("$jq_bin" -r '.max_changed_paths' "$contract_file") || emit_error E_CONTRACT
+[ "$changed_count" -le "$max_changed" ] || emit_error E_PATCH_LIMIT
+while IFS= read -r changed_path; do
+  "$jq_bin" -e --arg path "$changed_path" '.allowed_paths | index($path) != null' \
+    "$contract_file" >/dev/null || emit_error E_PATCH_SCOPE
+done < "$changed_paths"
+changed_paths_json="$run_root/changed-paths.json"
+"$jq_bin" -Rsc 'split("\n") | map(select(length > 0))' "$changed_paths" |
+  "$jq_bin" -S -c . > "$changed_paths_json" || emit_error E_RUNTIME
+changed_paths_sha=$(sha_file "$changed_paths_json")
+
+commit_time=$("$jq_bin" -r '.attempt.started_at' "$input_snapshot") || emit_error E_INPUT
+candidate_commit=$(printf '%s\n' 'ystack local candidate' |
+  "${git_env[@]}" GIT_AUTHOR_NAME='ystack local materializer' \
+  GIT_AUTHOR_EMAIL='materializer@example.invalid' GIT_COMMITTER_NAME='ystack local materializer' \
+  GIT_COMMITTER_EMAIL='materializer@example.invalid' GIT_AUTHOR_DATE="$commit_time" \
+  GIT_COMMITTER_DATE="$commit_time" /usr/bin/git --no-replace-objects \
+  --git-dir="$staging_repo" commit-tree "$candidate_tree" -p "$source_commit") ||
+  emit_error E_CANDIDATE_GIT
+git_dir "$staging_repo" update-ref refs/heads/candidate "$candidate_commit" ||
+  emit_error E_CANDIDATE_GIT
+[ "$(git_dir "$staging_repo" rev-parse "$candidate_commit^" 2>/dev/null)" = "$source_commit" ] &&
+  [ "$(git_dir "$staging_repo" rev-parse "$candidate_commit^{tree}" 2>/dev/null)" = "$candidate_tree" ] &&
+  [ "$(git_dir "$staging_repo" rev-parse --is-bare-repository 2>/dev/null)" = true ] ||
+  emit_error E_CANDIDATE_GIT
+git_dir "$staging_repo" fsck --strict --no-progress >/dev/null 2>&1 || emit_error E_CANDIDATE_GIT
+
+receipt_file="$run_root/receipt.json"
+"$jq_bin" -S -c -L "$modules" --arg command receipt \
+  --arg source_repository_id "$source_repository_id" \
+  --arg source_hash_algorithm "$source_algorithm" --arg source_commit "$source_commit" \
+  --arg source_tree "$source_tree" --arg candidate_commit "$candidate_commit" \
+  --arg candidate_tree "$candidate_tree" --arg changed_path_count "$changed_count" \
+  --arg changed_paths_sha256 "$changed_paths_sha" -f "$protocol" "$input_snapshot" \
+  > "$receipt_file" 2>/dev/null || emit_error E_RECEIPT
+receipt_sha=$(sha_file "$receipt_file")
+outcome=changed
+[ "$candidate_tree" != "$source_tree" ] || outcome=no-change
+result_file="$run_root/stage-result.json"
+"$jq_bin" -S -c -L "$modules" --arg command stage-result \
+  --arg receipt_sha256 "$receipt_sha" --arg outcome "$outcome" \
+  -f "$protocol" "$input_snapshot" > "$result_file" 2>/dev/null || emit_error E_RESULT
+"$core" validate-stage-run "$request_file" "$resolved_file" "$result_file" \
+  >/dev/null 2>&1 || emit_error E_CORE_RESULT
+
+/bin/mv "$staging_repo" "$final_repo" || emit_error E_CANDIDATE_ROOT
+response_file="$run_root/response.json"
+"$jq_bin" -S -c -n --slurpfile result "$result_file" --rawfile receipt "$receipt_file" \
+  --arg receipt_sha "$receipt_sha" '
+  {
+    schema_version:1,
+    kind:"local_git_materialization_response",
+    stage_result:$result[0],
+    payloads:[{
+      content_id:"candidate.materialization.receipt",
+      media_type:"application/json",
+      sha256:$receipt_sha,
+      data:$receipt
+    }],
+    authority:"none",
+    qualification:{state:"unavailable",reason_id:"adapter.unqualified"},
+    effects:["caller-disposable-candidate-repository"]
+  }
+' > "$response_file" || emit_error E_RESULT
+success=1
+/bin/cat "$response_file"

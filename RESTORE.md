@@ -479,6 +479,28 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive local Git materializer block,
+then run:
+
+```sh
+bash scripts/test/local-git-materializer-adapter.test.sh
+```
+
+This builds disposable SHA-1 and SHA-256 source repositories, validates a complete
+portable-core v2 profile and stage request, and proves that a contract-bound patch
+becomes a deterministic bare child commit and path-free receipt. The negative
+matrix rejects moved identities, unsafe directories and paths, hooks, filters,
+remotes, worktrees, alternates, shallow or partial repositories, replace state,
+binary patches, symlinks, and submodules. It also checks that the source stays
+unchanged and scratch is removed.
+
+This payload has no adapter manifest. A later assembly PR may bind the directory
+tree through the payload's durable main commit. It is an inactive, local-only
+materializer, not a GitHub or GitLab operation. Restoring it does not qualify an
+adapter, select or activate a profile, read a credential, contact a provider or
+real target during construction, or permit push, publish, merge, or another
+external write.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
