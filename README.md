@@ -245,6 +245,25 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
+## Inactive Claude Code producer normalizer payload
+
+`adapters/claude-code-producer/v1/normalize.jq` validates one untrusted producer
+snapshot against a caller-supplied core request, resolved profile, manifest,
+target, package, config, prompt, skills, tools, model, effort, and execution
+boundary. It returns a canonical observation for changed, unchanged, stale,
+failed, timed out, degraded, or inconclusive work. Provider text stays data.
+Before constructing the trust context, the caller must canonicalize the snapshot,
+verify its SHA-256, and supply that verified content-and-digest pair. The
+normalizer requires the untrusted snapshot to equal the pair, binds the expected
+attempt ID and number, and requires `text/x-diff` output for a changed git patch.
+
+This payload ships no adapter manifest. Its focused test owns a synthetic
+manifest only to prove the caller-manifest and binding checks stay closed. A
+later assembly PR can bind the durable main payload into the default profile.
+The payload is inactive and unqualified. It does not call Claude Code, invoke a
+model, use a credential or network, write a target, publish, or activate a
+profile.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

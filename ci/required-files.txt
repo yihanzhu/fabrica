@@ -236,3 +236,7 @@ scripts/test/default-github-forge-adapter.test.sh
 # Inactive GitHub Actions CI normalizer payload
 adapters/github-actions-ci/v1/normalize.jq
 scripts/test/default-github-actions-ci-adapter.test.sh
+
+# Inactive Claude Code producer normalizer payload
+adapters/claude-code-producer/v1/normalize.jq
+scripts/test/default-claude-code-producer-adapter.test.sh
