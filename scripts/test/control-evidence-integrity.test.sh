@@ -17,6 +17,9 @@ core_wrapper="$root/scripts/core-contract.sh"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence-test.XXXXXX")
 cleanup() { /bin/rm -rf -- "$tmp"; }
 trap cleanup EXIT HUP INT TERM
+# Accounted Linux paths can exceed 7s; 4000 x 5ms leaves a 20s CI margin
+# inside the suite's 360s hard cap for markers reached after that work.
+late_marker_attempts=4000
 fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
@@ -910,7 +913,7 @@ TMPDIR="$core_stall_scratch" PATH="$bin:/usr/bin:/bin" \
 core_stall_parent=$!
 core_stall_attempt=0
 while [ ! -s "$core_stall_marker" ] && kill -0 "$core_stall_parent" 2>/dev/null &&
-      [ "$core_stall_attempt" -lt 1200 ]; do
+      [ "$core_stall_attempt" -lt "$late_marker_attempts" ]; do
   core_stall_attempt=$((core_stall_attempt + 1)); /bin/sleep 0.005
 done
 [ -s "$core_stall_marker" ] || fail 'nested core stall marker'
@@ -1018,7 +1021,7 @@ TMPDIR="$post_capture_scratch" PATH="$bin:/usr/bin:/bin" \
 post_capture_pid=$!
 post_capture_attempt=0
 while [ ! -e "$post_capture_ready" ] && kill -0 "$post_capture_pid" 2>/dev/null &&
-      [ "$post_capture_attempt" -lt 1200 ]; do
+      [ "$post_capture_attempt" -lt "$late_marker_attempts" ]; do
   post_capture_attempt=$((post_capture_attempt + 1)); /bin/sleep 0.005
 done
 [ -e "$post_capture_ready" ] || fail 'post-capture replacement ready'
@@ -1184,7 +1187,7 @@ TMPDIR="$scratch_swap_parent" PATH="$bin:/usr/bin:/bin" \
 scratch_swap_pid=$!
 scratch_swap_attempt=0
 while [ ! -e "$scratch_swap_ready" ] && kill -0 "$scratch_swap_pid" 2>/dev/null &&
-      [ "$scratch_swap_attempt" -lt 1200 ]; do
+      [ "$scratch_swap_attempt" -lt "$late_marker_attempts" ]; do
   scratch_swap_attempt=$((scratch_swap_attempt + 1)); /bin/sleep 0.005
 done
 [ -e "$scratch_swap_ready" ] || fail 'scratch swap ready'
