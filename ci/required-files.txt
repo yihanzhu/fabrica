@@ -237,6 +237,10 @@ scripts/test/default-github-forge-adapter.test.sh
 adapters/github-actions-ci/v1/normalize.jq
 scripts/test/default-github-actions-ci-adapter.test.sh
 
+# Inactive Claude Code producer normalizer payload
+adapters/claude-code-producer/v1/normalize.jq
+scripts/test/default-claude-code-producer-adapter.test.sh
+
 # Inactive deterministic verifier normalizer payload
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
