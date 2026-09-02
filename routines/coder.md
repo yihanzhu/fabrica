@@ -360,9 +360,10 @@ active claim authorizes only this spawn when the plan tuple below also matches.
      install happens to be. Different versions of the same tool report different findings
      and codes for the same code (e.g. shellcheck SC2317 vs SC2329), so a different local
      version can be "clean locally" yet land CI-red. Read the pinned version from the CI
-     config itself (in ystack, `SHELLCHECK_VERSION` in `.github/workflows/ci.yml`) and lint
-     with that exact release, fetching it from the tool's GitHub releases if your local
-     version differs.
+     config and install it the same way CI does (npm, pip, a setup action, or whatever the
+     workflow uses) so your local run matches. In ystack itself the pin is `SHELLCHECK_VERSION`
+     in `.github/workflows/ci.yml`, and the matching static binary comes from the shellcheck
+     GitHub releases.
 10. Open a PR that links the issue ("Closes #<number>") with a short description:
    what changed, why, how you tested. Add and verify exactly one round label:
    `round-0`. If that fails, add and verify `needs-human`, then remove `ready` if present

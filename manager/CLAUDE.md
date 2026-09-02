@@ -872,8 +872,8 @@ chooses the session model; you cannot verify your own tier, so do not guess at i
 
 - **You never merge. The operator does.** This is policy: outside the
   named construction overlay, every agent is forbidden to merge, whatever its harness. The
-  `no-merge-guard` hook is only defense-in-depth for known Claude Bash merge and
-  direct-main-push commands. When a PR is
+  `no-merge-guard` hook exists only in the ystack repo itself, as defense-in-depth for known
+  Claude Bash merge and direct-main-push commands; a target repo has no such hook. When a PR is
   CI-green and an authenticated review matches the immediately re-queried current
   head/base, apply **`merge-ready`** and hand it to the operator — that label means
   "reviewed clean at this head/base", nothing more. Either moving voids it; clear the
