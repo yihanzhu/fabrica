@@ -19,7 +19,7 @@ sha256_path() {
 }
 
 sha256_line() {
-  /usr/bin/printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
+  builtin printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
     /usr/bin/awk '{print $1}'
 }
 
@@ -129,7 +129,7 @@ snapshot_file "$source_dir/scan-state.sh" "$runtime/bootstrap.sh" 1048576 0400 |
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
 snapshot_file "$self" "$runtime/launcher.sh" 1048576 0400 || emit_error E_RUNTIME
 launcher_sha=$(sha256_path "$runtime/launcher.sh") || emit_error E_RUNTIME
-snapshot_expected daaf761762722730d61e882f97794478afd5a157bab5e556be4e7169dbc4cc04 \
+snapshot_expected 3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a \
   "$source_dir/state-scanner-driver.sh" "$runtime/driver.sh" 0400 ||
   emit_error E_STALE
 snapshot_expected 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
@@ -168,7 +168,7 @@ snapshot_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
 
 "$runtime/jq" -S -c -n \
   --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
-  --arg driver_sha daaf761762722730d61e882f97794478afd5a157bab5e556be4e7169dbc4cc04 \
+  --arg driver_sha 3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a \
   --arg program_sha 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
   --arg jq_sha "$jq_sha" --arg bash_sha "$bash_sha" \
   --arg host_os "$host_os" --arg host_arch "$host_arch" \
@@ -280,7 +280,7 @@ verify_private_core || emit_error E_STALE
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
 [ "$(sha256_path "$runtime/driver.sh")" = \
-    daaf761762722730d61e882f97794478afd5a157bab5e556be4e7169dbc4cc04 ] &&
+    3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a ] &&
 [ "$(sha256_path "$runtime/program.jq")" = \
     8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 ] &&
 [ "$(sha256_path "$runtime/jq")" = "$jq_sha" ] &&

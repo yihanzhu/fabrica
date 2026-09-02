@@ -18,7 +18,7 @@ sha256_path() {
 }
 
 sha256_line() {
-  /usr/bin/printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
+  builtin printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
     /usr/bin/awk '{print $1}'
 }
 

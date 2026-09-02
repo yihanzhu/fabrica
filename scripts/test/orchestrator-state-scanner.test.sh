@@ -12,8 +12,8 @@ trap cleanup EXIT
 
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 sha_line() {
-  /usr/bin/printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
-  /usr/bin/awk '{print $1}'
+  builtin printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
+    /usr/bin/awk '{print $1}'
 }
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
@@ -94,7 +94,7 @@ expect_class() {
       .body.evaluator.content.body.program_ref.sha256 ==
         "8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80" and
       .body.evaluator.content.body.driver_ref.sha256 ==
-        "daaf761762722730d61e882f97794478afd5a157bab5e556be4e7169dbc4cc04" and
+        "3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a" and
       .body.evaluator.content.body.runtime.host_architecture == $host_arch and
       .body.evaluator.content.body.runtime.execution_mode == $execution_mode and
       (.body.evaluator.content.body.core_closure | length) == 9 and
@@ -268,6 +268,70 @@ pending="$tmp/pending.json"
 make_snapshot "$pending" absent absent 2026-08-30T00:20:00Z 2 "$commit_one"
 expect_class pending "$pending" "$commit_one" pending dispatch-stage scanner.no-attempt
 baseline_output=$("$scanner" scan repo.example "$commit_one" "$pending")
+
+hash_helpers_builtin=true
+for hash_script in \
+  "$root/orchestrator/v1/state-scanner-driver.sh" \
+  "$root/orchestrator/v1/state-scanner-launcher.sh"; do
+  hash_body=$(/usr/bin/sed -n '/^sha256_line() {$/,/^}$/p' "$hash_script")
+  if [[ "$hash_body" != *"builtin printf '%s\n' \"\$1\""* ]] ||
+     [[ "$hash_body" == *'/usr/bin/printf'* ]]; then
+    hash_helpers_builtin=false
+  fi
+done
+if [ "$hash_helpers_builtin" = true ]; then
+  pass
+else
+  fail 'document hashing must stream through builtin printf'
+fi
+
+large_request="$tmp/request-large.json"
+"$jq_bin" -S -c '
+  def digest($n): (("0" * 64) + ($n | tostring))[-64:];
+  def long_id($prefix;$n):
+    ($n | tostring) as $suffix |
+    $prefix + ("x" * (128 - ($prefix | length) - ($suffix | length))) + $suffix;
+  def media_type: "application/" + ("x" * 115);
+  def content($prefix;$n):
+    {content_id:long_id($prefix;$n),media_type:media_type,sha256:digest($n)};
+  def gate($n): {
+    purpose:"gate-requirement",
+    decision_record_ref:content("decision.";$n),
+    subject_ref:{
+      type:"artifact",
+      value:{type:"content",value:content("subject.";$n)}
+    },
+    scope_sha256:digest($n)
+  };
+  def evidence($n): {
+    stage_result_ref:{
+      schema_version:2,
+      kind:"stage_result",
+      id:long_id("result.";$n),
+      sha256:digest($n)
+    },
+    evidence_id:long_id("evidence.";$n)
+  };
+  .body.risk.required_gate_refs=[range(0;256) | gate(.)] |
+  .body.prior_evidence_refs=[range(0;256) | evidence(.)]
+' "$request" >"$large_request"
+large_request_sha=$(sha_file "$large_request")
+large_snapshot="$tmp/snapshot-large.json"
+"$jq_bin" -S -c --slurpfile request "$large_request" \
+  --arg request_sha "$large_request_sha" '
+    .body.items[0].request={content:$request[0],sha256:$request_sha}
+  ' "$pending" >"$large_snapshot"
+large_request_size=$(/usr/bin/wc -c <"$large_request" | /usr/bin/tr -d ' ')
+large_snapshot_size=$(/usr/bin/wc -c <"$large_snapshot" | /usr/bin/tr -d ' ')
+if [ "$large_request_size" -gt 131072 ] &&
+   [ "$large_snapshot_size" -gt "$large_request_size" ] &&
+   [ "$large_snapshot_size" -le 1048576 ]; then
+  expect_class large-valid-request "$large_snapshot" "$commit_one" \
+    pending dispatch-stage scanner.no-attempt
+else
+  fail 'large valid request did not cross the per-argument threshold'
+fi
+
 malicious_path="$tmp/malicious-path"
 /bin/mkdir "$malicious_path"
 {
