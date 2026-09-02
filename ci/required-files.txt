@@ -206,3 +206,10 @@ control/v1/credential-policy-decision.json
 control/v1/credential-policy.jq
 control/v1/evaluate-credential-policy.sh
 scripts/test/control-credential-policy.test.sh
+
+# Inactive evidence integrity policy and evaluator
+control/v1/evidence-integrity-policy.json
+control/v1/evidence-integrity-decision.json
+control/v1/evidence-integrity.jq
+control/v1/evaluate-evidence-integrity.sh
+scripts/test/control-evidence-integrity.test.sh

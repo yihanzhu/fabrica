@@ -394,6 +394,22 @@ does not read credential material or credential-like environment values, qualify
 claim, grant authority, activate a profile, run a candidate or adapter, or perform
 a network or external-write action.
 
+Restore the five paths in the manifest's inactive evidence-integrity block, then
+run:
+
+```sh
+bash scripts/test/control-evidence-integrity.test.sh
+```
+
+This checks exact policy-set and public-core closure, stage and qualification
+identity binding, canonical evidence/prior sets, stale or aliased references, and
+deterministic observation output. It also checks the explicit trusted-launcher
+boundary, exact marked-payload identity, producer-final scratch identities,
+accounted core receipt and cleanup, and nested Bash environment isolation. The
+launcher is not self-attested. It does not read proof bytes, establish proof
+truth, qualify a workflow, store evidence, grant authority, activate a profile,
+run a candidate or adapter, or perform a network or external-write action.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
