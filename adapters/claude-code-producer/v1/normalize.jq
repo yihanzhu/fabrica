@@ -75,20 +75,31 @@ def document_ref($pair):
     sha256:$pair.sha256
   };
 
+def snapshot_ref($pair):
+  {
+    content_id:"claude-code-snapshot",
+    media_type:"application/json",
+    sha256:$pair.sha256
+  };
+
 def trust_shape:
   exact_fields(["body","id","kind","schema_version"];[]) and
   .schema_version == 1 and .kind == "adapter_trust_context" and
   (.id | id_ok) and
   (.body |
    exact_fields(
-     ["binding_id","manifest","request","resolved_profile","snapshot_ref",
-      "target_revision"];[]) and
+     ["binding_id","expected_attempt_id","expected_attempt_number","manifest",
+      "request","resolved_profile","target_revision","verified_snapshot"];[]) and
    (.binding_id | id_ok) and
+   (.expected_attempt_id | id_ok) and
+   (.expected_attempt_number | int_ok) and .expected_attempt_number >= 1 and
    (.manifest | profile::document_pair_ok("adapter_manifest")) and
    (.request | profile::document_pair_ok("stage_request")) and
    (.resolved_profile | profile::document_pair_ok("resolved_profile")) and
-   (.snapshot_ref | content_ref_ok) and
-   .snapshot_ref.media_type == "application/json" and
+   (.verified_snapshot |
+    exact_fields(["content","sha256"];[]) and
+    (.content | type == "object") and
+    (.sha256 | sha256_ok)) and
    (.target_revision | git_revision_ref_ok));
 
 def attempt_shape:
@@ -135,6 +146,7 @@ def snapshot_shape:
 def input_shape:
   exact_fields(["snapshot","trust_context"];[]) and
   (.trust_context | trust_shape) and
+  (.trust_context.body.verified_snapshot.content | snapshot_shape) and
   (.snapshot | snapshot_shape);
 
 def selected_resolved_binding($trust):
@@ -203,13 +215,17 @@ def metadata_complete($metadata):
 
 def snapshot_relations($trust; $snapshot):
   selected_resolved_binding($trust)[0].binding as $binding |
+  $trust.body.request.content.body.operation.arguments.artifact_kind as $artifact_kind |
   request::expected_execution_projection(
     $trust.body.request.content.body;
     $trust.body.resolved_profile.content.body) as $expected |
+  $snapshot == $trust.body.verified_snapshot.content and
   $snapshot.body.request_ref == document_ref($trust.body.request) and
   $snapshot.body.resolved_profile_ref ==
     document_ref($trust.body.resolved_profile) and
   $snapshot.body.target_revision == $trust.body.target_revision and
+  $snapshot.body.attempt.attempt_id == $trust.body.expected_attempt_id and
+  $snapshot.body.attempt.attempt_number == $trust.body.expected_attempt_number and
   $trust.body.request.content.body.requested_at <=
     $snapshot.body.attempt.started_at and
   $expected != null and
@@ -217,6 +233,10 @@ def snapshot_relations($trust; $snapshot):
   $snapshot.body.execution.performer == $expected.performer and
   $snapshot.body.execution.environment == $expected.environment and
   $snapshot.body.execution.used_capability == $expected.used_capability and
+  (if $snapshot.body.state == "changed" and $artifact_kind == "git-patch" then
+     $snapshot.body.output.state == "present" and
+     $snapshot.body.output.value.media_type == "text/x-diff"
+   else true end) and
   metadata_relations($snapshot.body.execution.metadata;$binding);
 
 def result_status($source_state):
@@ -271,12 +291,14 @@ def observation($trust; $snapshot):
     state:$state,
     reason_id:reason_id($snapshot;$state),
     trust_context:{
-      snapshot_ref:$trust.body.snapshot_ref,
+      snapshot_ref:snapshot_ref($trust.body.verified_snapshot),
       request_ref:document_ref($trust.body.request),
       resolved_profile_ref:document_ref($trust.body.resolved_profile),
       manifest_ref:document_ref($trust.body.manifest),
       target_revision:$trust.body.target_revision,
-      binding_id:$trust.body.binding_id
+      binding_id:$trust.body.binding_id,
+      expected_attempt_id:$trust.body.expected_attempt_id,
+      expected_attempt_number:$trust.body.expected_attempt_number
     },
     observation:{
       observed_at:$snapshot.body.observed_at,

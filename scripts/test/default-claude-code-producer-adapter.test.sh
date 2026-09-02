@@ -44,6 +44,16 @@ static_jq() {
 }
 expect_error() {
   local name=$1 code=$2 filter=$3
+  local raw="$tmp/$name.raw" candidate="$tmp/$name.input"
+  local out="$tmp/$name.out" err="$tmp/$name.err"
+  "${jq_cmd[@]}" -S -c "$filter" "$baseline_input" >"$raw"
+  refresh_verified_snapshot "$raw" "$candidate"
+  if normalize "$candidate" >"$out" 2>"$err"; then fail "$name"
+  elif [ ! -s "$out" ] && /usr/bin/grep -Fq "$code" "$err"; then pass
+  else fail "$name"; fi
+}
+expect_raw_error() {
+  local name=$1 code=$2 filter=$3
   local candidate="$tmp/$name.input" out="$tmp/$name.out" err="$tmp/$name.err"
   "${jq_cmd[@]}" -S -c "$filter" "$baseline_input" >"$candidate"
   if normalize "$candidate" >"$out" 2>"$err"; then fail "$name"
@@ -106,7 +116,11 @@ request_file="$tmp/request.json"
 "${jq_cmd[@]}" -L "$fixtures" -S -c -n --arg resolved_sha "$resolved_sha" '
   import "portable-core-stage-request-fixtures" as f;
   def v2: walk(if type=="object" and has("schema_version") then .schema_version=2 else . end);
-  f::request_doc("producer";$resolved_sha) | v2
+  f::request_doc("producer";$resolved_sha) | v2 |
+  .body.operation.arguments={
+    artifact_kind:"git-patch",
+    allowed_delta:f::delivered("allowed-delta";"output";f::sha("3"))
+  }
 ' >"$request_file"
 request_sha=$(sha_file "$request_file")
 
@@ -148,18 +162,32 @@ trust="$tmp/trust.json"
   --slurpfile manifest "$manifest" --arg request_sha "$request_sha" --arg resolved_sha "$resolved_sha" \
   --arg manifest_sha "$manifest_sha" '
   {schema_version:1,kind:"adapter_trust_context",id:"trust.example",body:{
-    binding_id:"binding.producer",manifest:{content:$manifest[0],sha256:$manifest_sha},
+    binding_id:"binding.producer",expected_attempt_id:"attempt.example",
+    expected_attempt_number:1,manifest:{content:$manifest[0],sha256:$manifest_sha},
     request:{content:$request[0],sha256:$request_sha},
     resolved_profile:{content:$resolved[0],sha256:$resolved_sha},
-    snapshot_ref:{content_id:"claude-code-snapshot",media_type:"application/json",sha256:("0"*64)},
     target_revision:$request[0].body.target_revision.value}}
 ' >"$trust"
 build_input() {
   local source=$1 destination=$2 snapshot_sha
   snapshot_sha=$(sha_file "$source")
   "${jq_cmd[@]}" -S -c -n --slurpfile trust "$trust" --slurpfile snapshot "$source" \
-    --arg sha "$snapshot_sha" '{trust_context:($trust[0] | .body.snapshot_ref.sha256=$sha),snapshot:$snapshot[0]}' \
+    --arg sha "$snapshot_sha" '
+      {trust_context:($trust[0] |
+         .body.verified_snapshot={content:$snapshot[0],sha256:$sha}),
+       snapshot:$snapshot[0]}
+    ' \
     >"$destination"
+}
+refresh_verified_snapshot() {
+  local source=$1 destination=$2 snapshot_sha
+  local verified="$destination.snapshot"
+  "${jq_cmd[@]}" -S -c '.snapshot' "$source" >"$verified"
+  snapshot_sha=$(sha_file "$verified")
+  "${jq_cmd[@]}" -S -c --slurpfile snapshot "$verified" --arg sha "$snapshot_sha" '
+    .trust_context.body.verified_snapshot={content:$snapshot[0],sha256:$sha}
+  ' "$source" >"$destination"
+  /bin/rm -f -- "$verified"
 }
 baseline_input="$tmp/baseline.input"
 build_input "$snapshot" "$baseline_input"
@@ -195,12 +223,41 @@ while read -r source_state state reason status outcome output_state; do
     ' >/dev/null; then pass; else fail "state-$source_state"; fi
 done <<<"$states"
 
+incomplete_snapshot="$tmp/incomplete.snapshot"
 incomplete="$tmp/incomplete.input"
-"${jq_cmd[@]}" -S -c '.snapshot.body.execution.metadata.model={state:"unavailable",reason_id:"provider.model-unavailable"}' \
-  "$baseline_input" >"$incomplete"
+"${jq_cmd[@]}" -S -c \
+  '.body.execution.metadata.model={state:"unavailable",reason_id:"provider.model-unavailable"}' \
+  "$snapshot" >"$incomplete_snapshot"
+build_input "$incomplete_snapshot" "$incomplete"
 if normalize "$incomplete" | "${jq_cmd[@]}" -e '.state=="inconclusive" and
   .reason_id=="adapter.metadata-incomplete" and .observation.result.output_ref.state=="absent"' >/dev/null; then pass
 else fail metadata-incomplete; fi
+
+baseline_output="$tmp/baseline.output"
+normalize "$baseline_input" >"$baseline_output"
+check verified-snapshot-provenance "${jq_cmd[@]}" -e \
+  --slurpfile input "$baseline_input" '
+    .trust_context.snapshot_ref == {
+      content_id:"claude-code-snapshot",media_type:"application/json",
+      sha256:$input[0].trust_context.body.verified_snapshot.sha256
+    } and
+    .trust_context.expected_attempt_id == "attempt.example" and
+    .trust_context.expected_attempt_number == 1
+  ' "$baseline_output"
+check git-patch-text-diff "${jq_cmd[@]}" -e \
+  --slurpfile request "$request_file" '
+    $request[0].body.operation.arguments.artifact_kind == "git-patch" and
+    .state == "changed" and
+    .observation.result.output_ref.value.media_type == "text/x-diff"
+  ' "$baseline_output"
+
+expect_raw_error moved-untrusted-snapshot-fixed-pair E_STALE \
+  '.snapshot.body.provider_metadata.message.value="moved untrusted content"'
+expect_raw_error bare-unverified-snapshot-digest E_SHAPE '
+  .trust_context.body.verified_snapshot.sha256 as $sha |
+  .trust_context.body |= (del(.verified_snapshot) |
+    .snapshot_ref={content_id:"claude-code-snapshot",media_type:"application/json",sha256:$sha})
+'
 
 expect_error missing-fact E_SHAPE 'del(.snapshot.body.execution.metadata.model)'
 expect_error unknown-state E_SHAPE '.snapshot.body.state="unknown"'
@@ -217,6 +274,14 @@ expect_error oversized-output-media-type E_SHAPE \
   '.snapshot.body.output.value.media_type=("application/"+("x"*116))'
 expect_error malformed-target-revision E_SHAPE \
   '.trust_context.body.target_revision.commit_id=("A"*40)'
+expect_error invalid-expected-attempt-number E_SHAPE \
+  '.trust_context.body.expected_attempt_number=0'
+expect_error moved-attempt-id E_STALE \
+  '.snapshot.body.attempt.attempt_id="attempt.other"'
+expect_error moved-attempt-number E_STALE \
+  '.snapshot.body.attempt.attempt_number=2'
+expect_error git-patch-json-output E_STALE \
+  '.snapshot.body.output.value.media_type="application/json"'
 expect_error moved-target E_STALE '.snapshot.body.target_revision.commit_id=("0"*40)'
 expect_error package-mismatch E_STALE '.snapshot.body.execution.actual_binding.package_ref.object_id=("0"*40)'
 expect_error config-mismatch E_STALE '.snapshot.body.execution.actual_binding.config_ref.value.object_id=("0"*40)'

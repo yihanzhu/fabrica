@@ -252,6 +252,10 @@ snapshot against a caller-supplied core request, resolved profile, manifest,
 target, package, config, prompt, skills, tools, model, effort, and execution
 boundary. It returns a canonical observation for changed, unchanged, stale,
 failed, timed out, degraded, or inconclusive work. Provider text stays data.
+Before constructing the trust context, the caller must canonicalize the snapshot,
+verify its SHA-256, and supply that verified content-and-digest pair. The
+normalizer requires the untrusted snapshot to equal the pair, binds the expected
+attempt ID and number, and requires `text/x-diff` output for a changed git patch.
 
 This payload ships no adapter manifest. Its focused test owns a synthetic
 manifest only to prove the caller-manifest and binding checks stay closed. A

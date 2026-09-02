@@ -489,6 +489,9 @@ bash scripts/test/default-claude-code-producer-adapter.test.sh
 This checks the caller-supplied core request, resolved profile, manifest, target,
 package, config, prompt, skills, tools, model, effort, and execution boundary. The
 test manifest is synthetic fixture data; no adapter manifest ships in this unit.
+A caller constructs the trust context only after canonical SHA-256 verification
+of the snapshot pair. The proof rejects moved untrusted content, changed attempt
+identity, and non-diff output for a changed git-patch request.
 A later assembly PR can bind the durable main payload into the default profile.
 The pure jq payload is inactive, offline, and unqualified. It does not call Claude
 Code, invoke a model, use a credential or network, write a target, publish, or
