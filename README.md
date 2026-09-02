@@ -63,14 +63,25 @@ and an external-target smoke remain required.
 
 ## Inactive control policy-set validator
 
-`control/v1/` defines a canonical identity bundle for six later Control foundation
-policies: duty separation, sandbox, credentials, risk gates, kill switch, and
-immutable evidence. Its validator checks exact immutable policy and decision refs;
-it does not contain or evaluate those policies.
+`control/v1/` defines the canonical shape and order for six Control foundation
+policies: credentials, duty separation, immutable evidence, kill switch, risk
+gates, and sandbox. Its validator checks the set shape and relations. It does not
+contain or evaluate those policies.
 
 The package stays inactive and fail-closed. It grants no authority, activates no
 profile, reads no credential, launches no adapter, and performs no external write.
 Later bounded units own each policy body and its enforcement.
+
+## Inactive Control foundation roll-up
+
+`control/v1/control-policy-set.json` pins the six shipped policy and decision files
+in the required order. It also pins their shared core contract generation and
+package. The focused test recomputes all twelve file digests and the core package
+closure rather than trusting the refs in the set.
+
+This is a static, repo-only identity bundle. It adds no aggregator runtime and
+makes no enforcement, qualification, approval, authority, activation, or external
+effect claim. The set stays inactive and fails closed.
 
 ## Inactive duty-separation evaluator
 
