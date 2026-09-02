@@ -21,6 +21,29 @@ fail() { /usr/bin/printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 passes=0
 pass() { passes=$((passes + 1)); /usr/bin/printf 'ok %s - %s\n' "$passes" "$1"; }
 sha256_path() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+test_path_identity() {
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
+      my ($path)=@ARGV; my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+      exit 2 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      my @parent=lstat($parent); chdir($parent) or exit 2;
+      my @cwd=stat("."); my @leaf=lstat($name);
+      exit 2 unless @parent && @cwd && @leaf && S_ISDIR($parent[2]) &&
+        S_ISREG($leaf[2]);
+      sysopen(my $input,$name,O_RDONLY|O_NOFOLLOW) or exit 2;
+      binmode($input); my @opened=stat($input); my $sha=Digest::SHA->new(256);
+      while (1) { my $read=sysread($input,my $buffer,65536); exit 2 unless
+        defined($read); last if $read==0; $sha->add($buffer); }
+      my @after=stat($input); my @path_after=lstat($name);
+      exit 2 unless @opened && @after && @path_after &&
+        $leaf[0]==$opened[0] && $leaf[1]==$opened[1] &&
+        $opened[0]==$after[0] && $opened[1]==$after[1] &&
+        $after[0]==$path_after[0] && $after[1]==$path_after[1];
+      print $parent[0],":",$parent[1],":",$leaf[0],":",$leaf[1],":",
+        $leaf[7],":",$leaf[9],":",$leaf[10],":",$sha->hexdigest,"\n";
+    ' "$1"
+}
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -176,6 +199,22 @@ run_eval() {
   "$jq_bin" -S -c . "$out" >"$tmp/$name.canonical"
   /usr/bin/cmp -s "$out" "$tmp/$name.canonical" || fail "$name canonical"
 }
+run_eval_tuple() {
+  local name=$1 request_input=$2 resolved_input=$3 result_input=$4 input=$5
+  local runtime=${6:-$root} run_status=0
+  local out="$tmp/$name.out" err="$tmp/$name.err"
+  PATH="$bin:/usr/bin:/bin" "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+    "$policy_set" "$request_input" "$resolved_input" "$result_input" "$input" \
+    >"$out" 2>"$err" || run_status=$?
+  if [ "$run_status" -ne 0 ]; then
+    /usr/bin/printf 'diagnostic %s status=%s stderr=' "$name" "$run_status" >&2
+    /bin/cat "$err" >&2
+    fail "$name status"
+  fi
+  [ ! -s "$err" ] || fail "$name stderr"
+  "$jq_bin" -S -c . "$out" >"$tmp/$name.canonical"
+  /usr/bin/cmp -s "$out" "$tmp/$name.canonical" || fail "$name canonical"
+}
 expect_error() {
   local name=$1 expected=$2 policy_input=${3:-$policy_set} request_input=${4:-$request}
   local resolved_input=${5:-$resolved} result_input=${6:-$result}
@@ -197,21 +236,6 @@ pure_eval() {
     --arg policy_set_sha "$(sha256_path "$policy_set")" --arg request_sha "$request_sha" \
     --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" \
     --arg presentation_sha "$(sha256_path "$input")" >"$output"
-}
-pure_eval_tuple() {
-  local request_input=$1 result_input=$2 presentation_input=$3 output=$4
-  local request_digest result_digest
-  request_digest=$(sha256_path "$request_input")
-  result_digest=$(sha256_path "$result_input")
-  "$jq_bin" -S -c -n -f "$program" --slurpfile policy "$policy" \
-    --slurpfile decision "$definition" --slurpfile policy_set "$policy_set" \
-    --slurpfile request "$request_input" --slurpfile resolved "$resolved" \
-    --slurpfile result "$result_input" --slurpfile presentation "$presentation_input" \
-    --arg policy_sha "$policy_sha" --arg decision_sha "$definition_sha" \
-    --arg policy_set_sha "$(sha256_path "$policy_set")" \
-    --arg request_sha "$request_digest" --arg resolved_sha "$resolved_sha" \
-    --arg result_sha "$result_digest" \
-    --arg presentation_sha "$(sha256_path "$presentation_input")" >"$output"
 }
 expect_pure_violation() {
   local name=$1 filter=$2 reason=$3 second_reason=${4:-}
@@ -293,40 +317,66 @@ expect_full_malformed_element current-null '.body.evidence=[null]' \
   evidence.current-mismatch
 expect_full_malformed_element current-array '.body.evidence=[[]]' \
   evidence.current-mismatch
+expect_full_malformed_element current-object-missing '.body.evidence=[{},{}]' \
+  evidence.current-mismatch
+expect_full_malformed_element current-object-wrong-type \
+  '.body.evidence=[{evidence_id:1,kind:1,proof_ref:1,verdict:1},
+    {evidence_id:1,kind:1,proof_ref:1,verdict:1}]' evidence.current-mismatch
 expect_full_malformed_element prior-scalar '.body.prior_evidence_refs=[1]' \
   evidence.prior-stale
 expect_full_malformed_element prior-null '.body.prior_evidence_refs=[null]' \
   evidence.prior-stale
 expect_full_malformed_element prior-array '.body.prior_evidence_refs=[[]]' \
   evidence.prior-stale
+expect_full_malformed_element prior-object-missing \
+  '.body.prior_evidence_refs=[{},{}]' evidence.prior-stale
+expect_full_malformed_element prior-object-wrong-type \
+  '.body.prior_evidence_refs=[{evidence_id:1,stage_result_ref:1},
+    {evidence_id:1,stage_result_ref:1}]' evidence.prior-stale
 
+shared_request="$tmp/shared-proof.request"
+"$jq_bin" -L "$root/scripts/test" -S -c -n --arg resolved_sha "$resolved_sha" '
+  import "portable-core-profile-graph-fixtures" as profile;
+  import "portable-core-stage-request-fixtures" as request;
+  request::request_doc("verifier";$resolved_sha) |
+  walk(if type == "object" and has("schema_version") then .schema_version=2 else . end) |
+  .body.qualification_ref=profile::scope("qualification";"qualification.shared";("7"*64))
+' >"$shared_request"
+shared_request_sha=$(sha256_path "$shared_request")
 shared_result="$tmp/shared-proof.result"
 shared_presentation="$tmp/shared-proof.presentation"
-shared_output="$tmp/shared-proof.out"
-"$jq_bin" -S -c '
-  .body.evidence += [(.body.evidence[0] |
-    .evidence_id="evidence.zzz" | .kind="runtime-alt" |
-    .proof_ref.content_id="proof.logical-alt" |
-    .proof_ref.media_type="application/vnd.ystack.alt-proof+json")] |
-  .body.evidence |= sort_by(.evidence_id)
-' "$result" >"$shared_result"
+"$jq_bin" -L "$root/scripts/test" -S -c -n \
+  --slurpfile request "$shared_request" --slurpfile resolved "$resolved" \
+  --arg request_sha "$shared_request_sha" --arg resolved_sha "$resolved_sha" '
+  import "portable-core-result-truth-fixtures" as result;
+  result::completed_result_doc($request[0];$request_sha;$resolved[0];$resolved_sha) |
+  walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
+' >"$shared_result"
 shared_result_sha=$(sha256_path "$shared_result")
-"$jq_bin" -S -c --slurpfile result "$shared_result" \
-  --arg result_sha "$shared_result_sha" '
-  .body.evidence=$result[0].body.evidence |
-  .body.result_ref={schema_version:$result[0].schema_version,kind:$result[0].kind,
-    id:$result[0].id,sha256:$result_sha}
-' "$presentation" >"$shared_presentation"
-pure_eval_tuple "$request" "$shared_result" "$shared_presentation" "$shared_output"
+"$jq_bin" -S -c -n --arg request_sha "$shared_request_sha" \
+  --arg resolved_sha "$resolved_sha" --arg result_sha "$shared_result_sha" \
+  --slurpfile request "$shared_request" --slurpfile resolved "$resolved" \
+  --slurpfile result "$shared_result" '
+  def doc($value;$sha):
+    {schema_version:$value.schema_version,kind:$value.kind,id:$value.id,sha256:$sha};
+  {schema_version:1,kind:"evidence_integrity_presentation",id:"evidence.presentation.shared",
+   body:{evidence:$result[0].body.evidence,
+     prior_evidence_refs:$request[0].body.prior_evidence_refs,
+     qualification_ref:{state:"present",value:$request[0].body.qualification_ref},
+     request_ref:doc($request[0];$request_sha),
+     resolved_profile_ref:doc($resolved[0];$resolved_sha),
+     result_ref:doc($result[0];$result_sha)}}
+' >"$shared_presentation"
+run_eval_tuple shared-proof "$shared_request" "$resolved" "$shared_result" \
+  "$shared_presentation"
 "$jq_bin" -e '
   .body.verdict=="satisfied" and
   .body.reason_ids==["evidence.integrity-satisfied"] and
-  (.body.evidence_refs|length)==2 and
-  (.body.evidence_refs[0].proof_ref.sha256==.body.evidence_refs[1].proof_ref.sha256) and
-  (.body.evidence_refs[0].proof_ref.content_id!=
-    .body.evidence_refs[1].proof_ref.content_id)
-' "$shared_output" >/dev/null || {
-  /bin/cat "$shared_output" >&2
+  (.body.evidence_refs|length)==3 and
+  (.body.evidence_refs|map(.proof_ref.sha256)|unique|length)==1 and
+  (.body.evidence_refs|map(.proof_ref.content_id)|unique|length)==3
+' "$tmp/shared-proof.out" >/dev/null || {
+  /bin/cat "$tmp/shared-proof.out" >&2
   fail 'same proof bytes distinct logical refs'
 }
 pass 'same proof digest under distinct logical refs remains valid'
@@ -335,11 +385,12 @@ shared_mismatch="$tmp/shared-proof-mismatch.presentation"
 "$jq_bin" -S -c \
   '.body.evidence[0].proof_ref.content_id="proof.presentation-only"' \
   "$shared_presentation" >"$shared_mismatch"
-pure_eval_tuple "$request" "$shared_result" "$shared_mismatch" "$shared_output"
+run_eval_tuple shared-proof-mismatch "$shared_request" "$resolved" "$shared_result" \
+  "$shared_mismatch"
 "$jq_bin" -e '
   .body.verdict=="violated" and
   (.body.reason_ids|index("evidence.current-mismatch")!=null)
-' "$shared_output" >/dev/null || fail 'logical ref identity mismatch'
+' "$tmp/shared-proof-mismatch.out" >/dev/null || fail 'logical ref identity mismatch'
 pass 'changed logical proof identity with retained digest fails closed'
 
 absent_request="$tmp/qualification-absent.request"
@@ -348,9 +399,13 @@ absent_presentation="$tmp/qualification-absent.presentation"
 absent_output="$tmp/qualification-absent.out"
 "$jq_bin" -S -c 'del(.body.qualification_ref)' "$request" >"$absent_request"
 absent_request_sha=$(sha256_path "$absent_request")
-"$jq_bin" -S -c --arg request_sha "$absent_request_sha" \
-  '.body.request_ref.sha256=$request_sha |
-   .body.evidence[0].verdict="inconclusive"' "$result" >"$absent_result"
+"$jq_bin" -L "$root/scripts/test" -S -c -n \
+  --slurpfile request "$absent_request" --slurpfile resolved "$resolved" \
+  --arg request_sha "$absent_request_sha" --arg resolved_sha "$resolved_sha" '
+  import "portable-core-result-truth-fixtures" as result;
+  result::failed_result_doc($request[0];$request_sha;$resolved[0];$resolved_sha) |
+  walk(if type == "object" and has("schema_version") then .schema_version=2 else . end)
+' >"$absent_result"
 absent_result_sha=$(sha256_path "$absent_result")
 "$jq_bin" -S -c --slurpfile request "$absent_request" \
   --slurpfile result "$absent_result" --arg request_sha "$absent_request_sha" \
@@ -362,14 +417,14 @@ absent_result_sha=$(sha256_path "$absent_result")
     id:$result[0].id,sha256:$result_sha} |
   .body.evidence=$result[0].body.evidence
 ' "$presentation" >"$absent_presentation"
-pure_eval_tuple "$absent_request" "$absent_result" "$absent_presentation" \
-  "$absent_output"
+run_eval_tuple qualification-absent "$absent_request" "$resolved" "$absent_result" \
+  "$absent_presentation"
 "$jq_bin" -e '
   .body.verdict=="satisfied" and
   .body.qualification_observation=={state:"absent"} and
   .body.qualification_semantics=="identity-only-unqualified" and
   .body.authority_effect=="none" and .body.storage_effect=="none" and
-  (.body.evidence_refs[0].verdict=="inconclusive")
+  (.body.evidence_refs[0].verdict=="failed")
 ' "$absent_output" >/dev/null || fail 'absent qualification identity-only'
 pass 'absent qualification and inconclusive proof remain identity-only'
 
@@ -454,6 +509,50 @@ copy_runtime() {
   /bin/cp "$root/scripts/core-contract.sh" "$destination/scripts/core-contract.sh"
   /bin/cp -R "$root/core/v2" "$destination/core/v2"
 }
+
+forged_stage_case() {
+  local stage=$1 suffix runtime="$tmp/forged-$1-runtime" scratch
+  local sentinel="$tmp/forged-$1-sentinel" physical_tmp origin live driver_id live_id
+  local private_driver_id
+  local status=0
+  case "$stage" in supervisor) suffix=SUPERV ;; worker) suffix=WORKER ;; esac
+  scratch="$tmp/ystack-evidence.$suffix"
+  copy_runtime "$runtime"
+  runtime=$(CDPATH='' cd -P -- "$runtime" && pwd -P)
+  /bin/mkdir -m 0700 "$scratch" "$scratch/bin"
+  scratch=$(CDPATH='' cd -P -- "$scratch" && pwd -P)
+  origin="$runtime/control/v1/evaluate-evidence-integrity.sh"
+  /bin/cp "$origin" "$scratch/driver.sh"
+  /bin/chmod 0500 "$scratch/driver.sh"
+  /usr/bin/printf '%s\n' '#!/bin/bash' \
+    "sentinel='$sentinel'" \
+    'if [ "${1:-}" = --version ]; then echo jq-1.6; exit 0; fi' \
+    ': >"$sentinel"' \
+    'exec /usr/bin/jq "$@"' >"$scratch/bin/jq"
+  /bin/chmod 0500 "$scratch/bin/jq"
+  live="$scratch/bin/jq"
+  driver_id=$(test_path_identity "$origin")
+  private_driver_id=$(test_path_identity "$scratch/driver.sh")
+  live_id=$(test_path_identity "$live")
+  physical_tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+  /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
+    YSTACK_EVIDENCE_STAGE="$stage" YSTACK_EVIDENCE_SCRATCH="$scratch" \
+    YSTACK_EVIDENCE_ORIGIN="$origin" YSTACK_EVIDENCE_ORIGIN_ID="$driver_id" \
+    YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="$private_driver_id" \
+    YSTACK_EVIDENCE_LIVE_JQ="$live" YSTACK_EVIDENCE_LIVE_JQ_ID="$live_id" \
+    YSTACK_EVIDENCE_PRIVATE_JQ="$live" YSTACK_EVIDENCE_PRIVATE_JQ_ID="$live_id" \
+    /bin/bash "$scratch/driver.sh" evaluate "$physical_tmp/policy-set.json" \
+    "$physical_tmp/request.json" "$physical_tmp/resolved.json" \
+    "$physical_tmp/result.json" "$physical_tmp/presentation.json" \
+    >"$tmp/forged-$stage.out" 2>"$tmp/forged-$stage.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/forged-$stage.out" ] &&
+    [ "$(/bin/cat "$tmp/forged-$stage.err")" = E_RUNTIME ] &&
+    [ ! -e "$sentinel" ] || fail "forged $stage stage"
+  pass "forged $stage stage cannot bypass official jq binding"
+}
+
+forged_stage_case supervisor
+forged_stage_case worker
 
 mutated_decision_runtime="$tmp/mutated-decision-runtime"
 copy_runtime "$mutated_decision_runtime"
@@ -629,10 +728,10 @@ output_runtime="$tmp/output-swap-runtime"
 output_scratch="$tmp/output-swap-scratch"
 copy_runtime "$output_runtime"
 /usr/bin/perl -0777 -pi -e '
-  s{  pin_path "\$scratch/worker\.out" \|\| emit_supervisor_failure E_RUNTIME}{
-    /bin/mv "\$scratch/worker.out" "\$scratch/worker.saved" || exit 1;
-    /bin/ln -s "\$scratch/worker.saved" "\$scratch/worker.out" || exit 1;
-    pin_path "\$scratch/worker.out" || emit_supervisor_failure E_RUNTIME
+  s{  pin_path "\$scratch/evaluation\.json" \|\| emit_supervisor_failure E_RUNTIME}{
+    /bin/mv "\$scratch/evaluation.json" "\$scratch/evaluation.saved" || exit 1;
+    /bin/ln -s "\$scratch/evaluation.saved" "\$scratch/evaluation.json" || exit 1;
+    pin_path "\$scratch/evaluation.json" || emit_supervisor_failure E_RUNTIME
   }
 ' "$output_runtime/control/v1/evaluate-evidence-integrity.sh"
 bind_modified_driver "$output_runtime" "$tmp/output-swap-set.json"
@@ -663,6 +762,18 @@ TMPDIR="$cleanup_scratch" PATH="$bin:/usr/bin:/bin" \
 [ "$cleanup_status" -ne 0 ] && [ ! -s "$tmp/cleanup-failure.out" ] ||
   fail 'cleanup failure output'
 pass 'cleanup failure remains non-success and emits no stdout'
+
+cleanup_error_scratch="$tmp/cleanup-error-scratch"
+/bin/mkdir "$cleanup_error_scratch"
+cleanup_error_status=0
+TMPDIR="$cleanup_error_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$cleanup_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/cleanup-failure-set.json" "$request" "$resolved" "$result" \
+  "$tmp/invalid.json" >"$tmp/cleanup-error.out" 2>"$tmp/cleanup-error.err" ||
+  cleanup_error_status=$?
+[ "$cleanup_error_status" -ne 0 ] && [ ! -s "$tmp/cleanup-error.out" ] &&
+  [ ! -s "$tmp/cleanup-error.err" ] || fail 'cleanup failure error-path output'
+pass 'error paths emit nothing when scratch cleanup fails'
 
 for required in control/v1/evidence-integrity-policy.json \
   control/v1/evidence-integrity-decision.json control/v1/evidence-integrity.jq \

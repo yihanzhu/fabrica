@@ -1,16 +1,25 @@
 #!/bin/bash
-# shellcheck disable=SC2016
+# shellcheck disable=SC2016,SC2329
 set -uo pipefail
 export LC_ALL=C
 umask 077
 
 emit_error() {
-  case "${1:-}" in
-    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_POLICY_SET|E_CORE)
-      /usr/bin/printf '%s\n' "$1" >&2
-      ;;
-    *) /usr/bin/printf '%s\n' E_RUNTIME >&2 ;;
+  local token=${1:-E_RUNTIME} current_stage=${YSTACK_EVIDENCE_STAGE:-bootstrap}
+  case "$token" in
+    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_POLICY_SET|E_CORE) ;;
+    *) token=E_RUNTIME ;;
   esac
+  if [ "$current_stage" != worker ] && [ -n "${scratch:-}" ] &&
+     declare -F cleanup >/dev/null 2>&1; then
+    if cleanup; then
+      trap - EXIT HUP INT TERM
+    else
+      exec >/dev/null 2>&1
+      exit 125
+    fi
+  fi
+  /usr/bin/printf '%s\n' "$token" >&2
   exit 1
 }
 
@@ -22,6 +31,37 @@ physical_regular() {
   [ -n "$parent" ] || parent=/
   physical=$(CDPATH='' cd -P -- "$parent" 2>/dev/null && pwd -P) || return 1
   [ "$candidate" = "$physical/${candidate##*/}" ]
+}
+
+expected_jq_digest() {
+  case "$(/usr/bin/uname -s):$(/usr/bin/uname -m)" in
+    Darwin:*)
+      /usr/bin/printf '%s\n' \
+        5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
+      ;;
+    Linux:x86_64)
+      /usr/bin/printf '%s\n' \
+        af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+private_mode_ok() {
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:mode -e '
+      my @st=lstat($ARGV[0]);
+      exit 1 unless @st && S_ISREG($st[2]) && (($st[2] & 07777) == 0500);
+    ' "$1"
+}
+
+private_directory_ok() {
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
+      my ($path)=@ARGV; my @st=lstat($path); my $physical=abs_path($path);
+      exit 1 unless @st && S_ISDIR($st[2]) && (($st[2] & 07777) == 0700) &&
+        defined($physical) && $physical eq $path;
+    ' "$1"
 }
 
 path_identity() {
@@ -335,12 +375,7 @@ if [ "$stage" = bootstrap ]; then
   live_jq="$live_jq_parent/${live_jq##*/}"
   physical_regular "$live_jq" || emit_error E_RUNTIME
   live_jq_identity=$(path_identity "$live_jq" 16777216) || emit_error E_RUNTIME
-  platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
-  case "$platform" in
-    Darwin:*) expected_jq=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef ;;
-    Linux:x86_64) expected_jq=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44 ;;
-    *) emit_error E_RUNTIME ;;
-  esac
+  expected_jq=$(expected_jq_digest) || emit_error E_RUNTIME
   [ "${live_jq_identity##*:}" = "$expected_jq" ] || emit_error E_RUNTIME
   scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence.XXXXXX" 2>/dev/null) ||
     emit_error E_RUNTIME
@@ -374,12 +409,29 @@ source_path=${BASH_SOURCE[0]}
 case "$source_path" in /*) ;; *) source_path="$(pwd -P)/$source_path" ;; esac
 origin=${YSTACK_EVIDENCE_ORIGIN:-}
 jq_bin=${YSTACK_EVIDENCE_PRIVATE_JQ:-}
+[ -n "$scratch" ] || emit_error E_RUNTIME
+case "$scratch" in /*/ystack-evidence.??????) ;; *) emit_error E_RUNTIME ;; esac
+private_directory_ok "$scratch" || emit_error E_RUNTIME
 [ "$source_path" = "$scratch/driver.sh" ] && [ "$jq_bin" = "$scratch/bin/jq" ] ||
   emit_error E_RUNTIME
-PINNED_PATHS=("$origin" "$source_path" "${YSTACK_EVIDENCE_LIVE_JQ:-}" "$jq_bin")
-PINNED_IDENTITIES=("${YSTACK_EVIDENCE_ORIGIN_ID:-}" \
-  "${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}" "${YSTACK_EVIDENCE_LIVE_JQ_ID:-}" \
-  "${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}")
+origin_id=${YSTACK_EVIDENCE_ORIGIN_ID:-}
+private_driver_id=${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}
+live_jq_path=${YSTACK_EVIDENCE_LIVE_JQ:-}
+live_jq_id=${YSTACK_EVIDENCE_LIVE_JQ_ID:-}
+private_jq_id=${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}
+PINNED_PATHS=("$origin" "$source_path" "$live_jq_path" "$jq_bin")
+PINNED_IDENTITIES=("$origin_id" "$private_driver_id" "$live_jq_id" "$private_jq_id")
+for internal_identity in "${PINNED_IDENTITIES[@]}"; do
+  [ -n "$internal_identity" ] || emit_error E_RUNTIME
+done
+expected_jq=$(expected_jq_digest) || emit_error E_RUNTIME
+[ "${origin_id##*:}" = "${private_driver_id##*:}" ] || emit_error E_RUNTIME
+[ "${live_jq_id##*:}" = "$expected_jq" ] &&
+  [ "${private_jq_id##*:}" = "$expected_jq" ] ||
+  emit_error E_RUNTIME
+if ! private_mode_ok "$source_path" || ! private_mode_ok "$jq_bin"; then
+  emit_error E_RUNTIME
+fi
 verify_all_pins || emit_error E_RELATION
 
 if [ "$stage" = supervisor ]; then
@@ -402,8 +454,15 @@ if [ "$stage" = supervisor ]; then
   if [ "$worker_status" -ne 0 ]; then emit_supervisor_failure "$error_text"; fi
   [ -z "$error_text" ] || emit_supervisor_failure E_RUNTIME
   pin_path "$scratch/worker.out" || emit_supervisor_failure E_RUNTIME
-  output_identity=$(pinned_identity "$scratch/worker.out") || emit_supervisor_failure E_RUNTIME
-  output_text=$(capture_identity_text "$scratch/worker.out" "$output_identity") ||
+  worker_output_identity=$(pinned_identity "$scratch/worker.out") ||
+    emit_supervisor_failure E_RUNTIME
+  worker_output_text=$(capture_identity_text "$scratch/worker.out" \
+    "$worker_output_identity") || emit_supervisor_failure E_RUNTIME
+  [ -z "$worker_output_text" ] || emit_supervisor_failure E_RUNTIME
+  pin_path "$scratch/evaluation.json" || emit_supervisor_failure E_RUNTIME
+  output_identity=$(pinned_identity "$scratch/evaluation.json") ||
+    emit_supervisor_failure E_RUNTIME
+  output_text=$(capture_identity_text "$scratch/evaluation.json" "$output_identity") ||
     emit_supervisor_failure E_RUNTIME
   verify_all_pins || emit_supervisor_failure E_RELATION
   if ! cleanup; then exit 1; fi
@@ -835,4 +894,4 @@ canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||
 
 pin_path "$scratch/evaluation.json" || emit_error E_RUNTIME
 verify_all_pins || emit_error E_RELATION
-/bin/cat "$scratch/evaluation.json" || emit_error E_RUNTIME
+exit 0
