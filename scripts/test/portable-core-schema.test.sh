@@ -777,6 +777,7 @@ schema_import_path_ok() {
   local test_path
   case "$import_path" in
     orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
+    scripts/test/default-github-forge-adapter.test.sh) ;;
     scripts/test/portable-core-*)
       test_path="${import_path#scripts/test/}"
       case "$test_path" in */*) return 1 ;; esac
