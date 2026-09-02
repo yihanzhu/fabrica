@@ -245,6 +245,26 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
+## Inactive local Git materializer protocol
+
+`adapters/local-git-materializer/v1/protocol.jq` defines the pure input, receipt,
+and stage-result boundary for the existing portable-core v2
+`core.forge.materialize-candidate.v2` capability. It validates a complete profile,
+resolved profile, manifest set, exact stage request, materialization contract, and
+patch payload links before projecting a canonical path-free receipt and core-valid
+result.
+
+This stage contains no materialization executable. Its fixture builder is test-only
+and creates synthetic JSON under a caller-owned test directory; it is not a product
+execution seam. The protocol cannot read a repository, write a candidate, invoke a
+hook or filter, use a credential or network, contact a provider, or perform an
+external effect.
+
+A later runtime PR can consume this exact protocol and test fixture without copying
+them. That PR must separately prove the physical Git and scratch boundaries before
+any manifest or profile may bind the package. Nothing here is qualified, selected,
+installed, or activated.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

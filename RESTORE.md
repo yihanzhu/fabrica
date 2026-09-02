@@ -479,6 +479,25 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
+Restore the three paths in the manifest's inactive local Git materializer protocol
+block, then run:
+
+```sh
+bash scripts/test/local-git-materializer-protocol.test.sh
+```
+
+This builds only synthetic JSON fixtures. It validates the exact portable-core v2
+profile, request, manifest, contract, payload, receipt, and result relations. The
+negative matrix rejects malformed, stale, duplicate, relabelled, unsafe-path,
+expanded-mode, and weakened-limit inputs, and repeat checks require canonical
+output.
+
+There is no materialization executable in this stage. Restoring it cannot read or
+write a Git repository, create a candidate, run provider tooling, use a credential
+or network, grant authority or qualification, or perform an external effect. A
+later runtime PR may consume the protocol and test fixture; only a still-later
+assembly may add a manifest after the complete package has a durable main commit.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
