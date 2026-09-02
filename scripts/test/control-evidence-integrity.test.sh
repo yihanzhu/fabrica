@@ -887,37 +887,39 @@ bind_modified_driver() {
   ' "$policy_set" >"$output_set"
 }
 
-core_stall_runtime="$tmp/core-stall-runtime"
 core_stall_scratch="$tmp/core-stall-scratch"
-core_stall_helper="$tmp/core-stall-helper.sh"
-core_stall_marker="$tmp/core-stall.pid"
-copy_runtime "$core_stall_runtime"
-/usr/bin/printf '%s\n' '#!/bin/bash' 'set -u' \
-  'root=$2' \
-  '/bin/mkdir "$root/stalled-core" || exit 1' \
-  "/usr/bin/printf '%s\\n' \"\$\$\" >\"$core_stall_marker\"" \
-  '/bin/kill -STOP "$$"' \
-  'while :; do /bin/sleep 1; done' >"$core_stall_helper"
-/bin/chmod 0500 "$core_stall_helper"
-CORE_STALL_HELPER="$core_stall_helper" /usr/bin/perl -0777 -pi -e '
-  my $helper=$ENV{"CORE_STALL_HELPER"};
-  s{"\$mirror_core_driver" --accounted-validation}{"$helper" --accounted-validation}
-    or exit 2;
-' "$core_stall_runtime/control/v1/evaluate-evidence-integrity.sh"
-bind_modified_driver "$core_stall_runtime" "$tmp/core-stall-set.json"
 /bin/mkdir "$core_stall_scratch"
+core_stall_scratch=$(CDPATH='' cd -P -- "$core_stall_scratch" && pwd -P)
 TMPDIR="$core_stall_scratch" PATH="$bin:/usr/bin:/bin" \
-  "$core_stall_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
-  "$tmp/core-stall-set.json" "$request" "$resolved" "$result" "$presentation" \
+  "$evaluator" evaluate "$policy_set" "$request" "$resolved" "$result" "$presentation" \
   >"$tmp/core-stall.out" 2>"$tmp/core-stall.err" &
 core_stall_parent=$!
 core_stall_attempt=0
-while [ ! -s "$core_stall_marker" ] && kill -0 "$core_stall_parent" 2>/dev/null &&
+core_stall_pid=
+while [ -z "$core_stall_pid" ] && kill -0 "$core_stall_parent" 2>/dev/null &&
       [ "$core_stall_attempt" -lt "$late_marker_attempts" ]; do
+  core_stall_temp=$(/usr/bin/find "$core_stall_scratch" -type d \
+    -path '*/worker/core-accounted/portable-core-accounted-v2.*' \
+    -print -quit 2>/dev/null) || core_stall_temp=
+  if [ -n "$core_stall_temp" ]; then
+    core_stall_candidate=$(find_owned_leader "$core_stall_parent") ||
+      core_stall_candidate=
+    if [[ "$core_stall_candidate" =~ ^[1-9][0-9]*$ ]] &&
+       /bin/kill -STOP -- "-$core_stall_candidate" 2>/dev/null; then
+      core_stall_pid=$core_stall_candidate
+      break
+    fi
+  fi
   core_stall_attempt=$((core_stall_attempt + 1)); /bin/sleep 0.005
 done
-[ -s "$core_stall_marker" ] || fail 'nested core stall marker'
-core_stall_pid=$(/bin/cat "$core_stall_marker")
+if [ -z "$core_stall_pid" ]; then
+  core_stall_early_status=0
+  wait "$core_stall_parent" || core_stall_early_status=$?
+  /usr/bin/printf 'diagnostic nested-core status=%s stderr=' \
+    "$core_stall_early_status" >&2
+  /bin/cat "$tmp/core-stall.err" >&2
+  fail 'nested core stall marker'
+fi
 [[ "$core_stall_pid" =~ ^[1-9][0-9]*$ ]] || fail 'nested core stall pid'
 /bin/kill -TERM "$core_stall_parent"
 wait_exit "$core_stall_parent" 500 || fail 'nested core bounded exit'
@@ -979,10 +981,10 @@ output_runtime="$tmp/output-swap-runtime"
 output_scratch="$tmp/output-swap-scratch"
 copy_runtime "$output_runtime"
 /usr/bin/perl -0777 -pi -e '
-  s{capture_path_matches "\$scratch/evaluation\.json" "\$evaluation_capture_key" \|\|}{
+  s{capture_full_identity_matches "\$scratch/evaluation\.json" "\$evaluation_final" \|\|}{
     /bin/mv "\$scratch/evaluation.json" "\$scratch/evaluation.saved" || exit 1;
     /bin/ln -s "\$scratch/evaluation.saved" "\$scratch/evaluation.json" || exit 1;
-    capture_path_matches "\$scratch/evaluation.json" "\$evaluation_capture_key" ||
+    capture_full_identity_matches "\$scratch/evaluation.json" "\$evaluation_final" ||
   } or exit 2
 ' "$output_runtime/control/v1/evaluate-evidence-integrity.sh"
 bind_modified_driver "$output_runtime" "$tmp/output-swap-set.json"
@@ -1028,6 +1030,8 @@ done
 post_capture_root=$(/usr/bin/find "$post_capture_scratch" -mindepth 1 -maxdepth 1 \
   -type d -name 'ystack-evidence.??????' -print -quit)
 [ -n "$post_capture_root" ] || fail 'post-capture replacement root'
+[ ! -e "$post_capture_root/io/worker.identity" ] ||
+  fail 'post-capture metadata channel remained path-backed'
 /bin/mv "$post_capture_root/io/worker.out" "$post_capture_root/io/worker.saved"
 /usr/bin/printf '{"forged":true}\n' >"$post_capture_root/io/worker.out"
 : >"$post_capture_go"
@@ -1038,6 +1042,57 @@ wait "$post_capture_pid" || post_capture_status=$?
   [ -z "$(/usr/bin/find "$post_capture_scratch" -mindepth 1 -print -quit)" ] ||
   fail 'post-capture replacement result'
 pass 'post-creation output replacement is rejected before consumption'
+
+post_inplace_runtime="$tmp/post-inplace-runtime"
+post_inplace_scratch="$tmp/post-inplace-scratch"
+post_inplace_ready="$tmp/post-inplace.ready"
+post_inplace_go="$tmp/post-inplace.go"
+copy_runtime "$post_inplace_runtime"
+POST_INPLACE_READY="$post_inplace_ready" POST_INPLACE_GO="$post_inplace_go" \
+  /usr/bin/perl -0777 -pi -e '
+    my $ready=$ENV{"POST_INPLACE_READY"}; my $go=$ENV{"POST_INPLACE_GO"};
+    my $replacement = qq{    worker_status=\$?\n} .
+      qq{  /usr/bin/printf "ready\\n" >"$ready" || exit 1\n} .
+      qq{  while [ ! -e "$go" ]; do /bin/sleep 0.01; done\n} .
+      qq{  if [ -n};
+    s{    worker_status=\$\?\n  if \[ -n}{$replacement} or exit 2;
+  ' "$post_inplace_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$post_inplace_runtime" "$tmp/post-inplace-set.json"
+/bin/mkdir "$post_inplace_scratch"
+TMPDIR="$post_inplace_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$post_inplace_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/post-inplace-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/post-inplace.out" 2>"$tmp/post-inplace.err" &
+post_inplace_pid=$!
+post_inplace_attempt=0
+while [ ! -e "$post_inplace_ready" ] && kill -0 "$post_inplace_pid" 2>/dev/null &&
+      [ "$post_inplace_attempt" -lt "$late_marker_attempts" ]; do
+  post_inplace_attempt=$((post_inplace_attempt + 1)); /bin/sleep 0.005
+done
+[ -e "$post_inplace_ready" ] || fail 'post-producer in-place ready'
+post_inplace_root=$(/usr/bin/find "$post_inplace_scratch" -mindepth 1 -maxdepth 1 \
+  -type d -name 'ystack-evidence.??????' -print -quit)
+[ -n "$post_inplace_root" ] || fail 'post-producer in-place root'
+post_inplace_root=$(CDPATH='' cd -P -- "$post_inplace_root" && pwd -P)
+[ ! -e "$post_inplace_root/io/worker.identity" ] ||
+  fail 'post-producer metadata channel remained path-backed'
+post_inplace_identity_before=$(test_path_identity "$post_inplace_root/io/worker.out")
+post_inplace_inode_before=$(/usr/bin/printf '%s\n' "$post_inplace_identity_before" |
+  /usr/bin/awk -F: '{print $3":"$4}')
+/usr/bin/printf '{"forged":true}\n' >"$post_inplace_root/io/worker.out"
+post_inplace_identity_after=$(test_path_identity "$post_inplace_root/io/worker.out")
+post_inplace_inode_after=$(/usr/bin/printf '%s\n' "$post_inplace_identity_after" |
+  /usr/bin/awk -F: '{print $3":"$4}')
+[ "$post_inplace_inode_before" = "$post_inplace_inode_after" ] ||
+  fail 'post-producer mutation changed inode'
+: >"$post_inplace_go"
+post_inplace_status=0
+wait "$post_inplace_pid" || post_inplace_status=$?
+[ "$post_inplace_status" -ne 0 ] && [ ! -s "$tmp/post-inplace.out" ] &&
+  [ "$(/bin/cat "$tmp/post-inplace.err")" = E_RUNTIME ] &&
+  [ -z "$(/usr/bin/find "$post_inplace_scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'post-producer in-place result'
+pass 'producer-final full identity rejects same-inode output mutation'
 
 cleanup_runtime="$tmp/cleanup-failure-runtime"
 cleanup_scratch="$tmp/cleanup-failure-scratch"

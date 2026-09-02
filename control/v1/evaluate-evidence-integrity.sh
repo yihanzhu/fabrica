@@ -276,14 +276,16 @@ scratch_relative() {
 }
 
 scratch_prepare_capture() {
-  local output=$1 error=$2 receipt=$3
+  local output=$1 error=$2 receipt=$3 record=$4
   if { [ "$output" != - ] &&
        { [ "$output" = "$error" ] || [ "$output" = "$receipt" ]; }; } ||
      { [ "$error" != - ] && [ "$error" = "$receipt" ]; }; then
     return 125
   fi
+  [ "$record" != - ] && [ "$record" != "$output" ] &&
+    [ "$record" != "$error" ] && [ "$record" != "$receipt" ] || return 125
   /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
-    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MCwd=abs_path -e '
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MCwd=abs_path -MPOSIX=mkfifo -e '
       use strict; use warnings;
       my ($root,$expected,@names)=@ARGV;
       my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
@@ -302,8 +304,8 @@ scratch_prepare_capture() {
       my @root_opened=stat($root_dh);
       exit 125 unless @root_opened && S_ISDIR($root_opened[2]) &&
         $root_opened[0]==$d_dev && $root_opened[1]==$d_ino;
-      sub create_output {
-        my ($root_handle,$relative)=@_;
+      sub create_node {
+        my ($root_handle,$relative,$fifo)=@_;
         return "-" if $relative eq "-";
         exit 125 unless $relative =~ m{\A[^/]+(?:/[^/]+)*\z};
         chdir($root_handle) or exit 125;
@@ -319,6 +321,12 @@ scratch_prepare_capture() {
           chdir($next) or exit 125;
         }
         exit 125 if $leaf eq "." or $leaf eq "..";
+        if ($fifo) {
+          mkfifo($leaf,0600) or exit 125;
+          my @created=lstat($leaf);
+          exit 125 unless @created && S_ISFIFO($created[2]);
+          return $created[0].":".$created[1];
+        }
         sysopen(my $file,$leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600) or
           exit 125;
         my @opened=stat($file);
@@ -326,34 +334,88 @@ scratch_prepare_capture() {
         close($file) or exit 125;
         return $opened[0].":".$opened[1];
       }
-      print join(" ",map {create_output($root_dh,$_)} @names),"\n";
-    ' "$scratch" "$SCRATCH_ID" "$output" "$error" "$receipt"
+      my $record=pop @names;
+      print join(" ",(map {create_node($root_dh,$_,0)} @names),
+        create_node($root_dh,$record,1)),"\n";
+    ' "$scratch" "$SCRATCH_ID" "$output" "$error" "$receipt" "$record"
+}
+
+capture_channel_seal() {
+  local relative=$1 key=$2
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($root,$expected,$relative,$key)=@ARGV;
+      my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
+      my ($f_dev,$f_ino)=split(/:/,$key,2);
+      exit 1 unless $relative =~ m{\A[^/]+(?:/[^/]+)*\z};
+      open(my $channel,"<&=6") or exit 1;
+      my @channel_st=stat($channel);
+      exit 1 unless @channel_st && S_ISFIFO($channel_st[2]) &&
+        $channel_st[0]==$f_dev && $channel_st[1]==$f_ino;
+      my ($parent,$name)=$root =~ m{\A(.+)/([^/]+)\z};
+      exit 1 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      opendir(my $parent_dh,$parent) or exit 1;
+      my @parent_st=stat($parent_dh);
+      exit 1 unless @parent_st && $parent_st[0]==$p_dev && $parent_st[1]==$p_ino;
+      chdir($parent_dh) or exit 1;
+      my @root_named=lstat($name);
+      exit 1 unless @root_named && S_ISDIR($root_named[2]) &&
+        $root_named[0]==$d_dev && $root_named[1]==$d_ino;
+      opendir(my $root_dh,$name) or exit 1;
+      my @parts=split(m{/},$relative); my $leaf=pop @parts;
+      chdir($root_dh) or exit 1;
+      for my $component (@parts) {
+        my @named=lstat($component);
+        exit 1 unless @named && S_ISDIR($named[2]);
+        opendir(my $next,$component) or exit 1;
+        my @opened=stat($next);
+        exit 1 unless @opened && $opened[0]==$named[0] && $opened[1]==$named[1];
+        chdir($next) or exit 1;
+      }
+      my @named=lstat($leaf);
+      exit 1 unless @named && S_ISFIFO($named[2]) &&
+        $named[0]==$f_dev && $named[1]==$f_ino && unlink($leaf);
+      exit 1 if lstat($leaf);
+    ' "$scratch" "$SCRATCH_ID" "$relative" "$key" || return 1
+  [ ! -e "$scratch/$relative" ] && [ ! -L "$scratch/$relative" ]
 }
 
 scratch_prepare_capture_keys() {
   local prepared remainder
-  prepared=$(scratch_prepare_capture "$1" "$2" "$3") || return 125
-  case "$prepared" in *' '*' '*) ;; *) return 125 ;; esac
+  prepared=$(scratch_prepare_capture "$1" "$2" "$3" "$4") || return 125
+  case "$prepared" in *' '*' '*' '*) ;; *) return 125 ;; esac
   CAPTURE_OUTPUT_KEY=${prepared%% *}
   remainder=${prepared#* }
   CAPTURE_ERROR_KEY=${remainder%% *}
-  CAPTURE_RECEIPT_KEY=${remainder#* }
-  case "$CAPTURE_RECEIPT_KEY" in *' '*) return 125 ;; esac
+  remainder=${remainder#* }
+  CAPTURE_RECEIPT_KEY=${remainder%% *}
+  CAPTURE_RECORD_KEY=${remainder#* }
+  case "$CAPTURE_RECORD_KEY" in *' '*) return 125 ;; esac
   [ -n "$CAPTURE_OUTPUT_KEY" ] && [ -n "$CAPTURE_ERROR_KEY" ] &&
-    [ -n "$CAPTURE_RECEIPT_KEY" ]
+    [ -n "$CAPTURE_RECEIPT_KEY" ] && [ -n "$CAPTURE_RECORD_KEY" ] || return 125
+  exec 6>&-
+  exec 6<>"$scratch/$4" || return 125
+  if ! capture_channel_seal "$4" "$CAPTURE_RECORD_KEY"; then
+    exec 6>&-
+    return 125
+  fi
 }
 
 scratch_capture_prepared() {
   local output=$1 output_key=$2 error=$3 error_key=$4
-  local receipt=$5 receipt_key=$6 input=$7 input_identity=$8 payload_sha=$9
-  shift 9
+  local receipt=$5 receipt_key=$6 record=$7 record_key=$8
+  local input=$9 input_identity=${10} payload_sha=${11}
+  shift 11
   [ "$#" -gt 0 ] || return 125
   /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
     /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path \
       -MPOSIX=_exit,dup2 -e '
       use strict; use warnings;
       my ($root,$expected,$stdout_name,$stdout_key,$stderr_name,$stderr_key,
-        $receipt_name,$receipt_key,$stdin_name,$stdin_identity,$payload_sha,
+        $receipt_name,$receipt_key,$record_name,$record_key,$stdin_name,
+        $stdin_identity,$payload_sha,
         @command)=@ARGV;
       exit 125 unless @command;
       my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
@@ -376,7 +438,7 @@ scratch_capture_prepared() {
         my ($root_handle,$relative,$key)=@_;
         if ($relative eq "-") {
           exit 125 unless $key eq "-";
-          sysopen(my $null,"/dev/null",O_WRONLY|O_NOFOLLOW) or exit 125;
+          sysopen(my $null,"/dev/null",O_RDWR|O_NOFOLLOW) or exit 125;
           return $null;
         }
         exit 125 unless $relative =~ m{\A[^/]+(?:/[^/]+)*\z} &&
@@ -397,7 +459,7 @@ scratch_capture_prepared() {
         my @named=lstat($leaf);
         exit 125 unless @named && S_ISREG($named[2]) &&
           $named[0]==$dev && $named[1]==$ino && $named[7]==0;
-        sysopen(my $file,$leaf,O_WRONLY|O_NOFOLLOW) or exit 125;
+        sysopen(my $file,$leaf,O_RDWR|O_NOFOLLOW) or exit 125;
         my @opened=stat($file);
         exit 125 unless @opened && S_ISREG($opened[2]) &&
           $opened[0]==$dev && $opened[1]==$ino && $opened[7]==0;
@@ -470,10 +532,17 @@ scratch_capture_prepared() {
       my $stdout=open_output($root_dh,$stdout_name,$stdout_key);
       my $stderr=open_output($root_dh,$stderr_name,$stderr_key);
       my $receipt=open_output($root_dh,$receipt_name,$receipt_key);
+      my ($record_dev,$record_ino)=split(/:/,$record_key,2);
+      open(my $channel,">&=6") or exit 125;
+      my @channel_st=stat($channel);
+      exit 125 unless @channel_st && S_ISFIFO($channel_st[2]) &&
+        $channel_st[0]==$record_dev && $channel_st[1]==$record_ino;
+      fcntl($channel,F_SETFD,FD_CLOEXEC) or exit 125;
       my $stdin_text=input_bytes($root_dh,$stdin_name,$stdin_identity,$payload_sha);
+      my $writer_pid=-1;
       if (defined($stdin_text)) {
         pipe(my $reader,my $writer) or exit 125;
-        my $writer_pid=fork(); exit 125 unless defined($writer_pid);
+        $writer_pid=fork(); exit 125 unless defined($writer_pid);
         if ($writer_pid==0) {
           close($reader); my $offset=0; my $length=length($stdin_text);
           while ($offset < $length) {
@@ -488,25 +557,80 @@ scratch_capture_prepared() {
         sysopen(my $null,"/dev/null",O_RDONLY|O_NOFOLLOW) or exit 125;
         open(STDIN,"<&",$null) or exit 125; close($null);
       }
-      open(STDOUT,">&",$stdout) or exit 125;
-      open(STDERR,">&",$stderr) or exit 125;
-      my $receipt_fd=fileno($receipt);
-      close($stdout); close($stderr); close($root_dh); close($parent_dh);
-      dup2($receipt_fd,3)>=0 or exit 125;
-      close($receipt) if $receipt_fd!=3;
-      exec {$command[0]} @command; exit 126;
+      my $command_pid=fork(); exit 125 unless defined($command_pid);
+      if ($command_pid==0) {
+        open(STDOUT,">&",$stdout) or _exit(125);
+        open(STDERR,">&",$stderr) or _exit(125);
+        my $receipt_fd=fileno($receipt);
+        close($channel); close($root_dh); close($parent_dh);
+        dup2($receipt_fd,3)>=0 or _exit(125);
+        close($receipt) if $receipt_fd!=3;
+        close($stdout); close($stderr);
+        exec {$command[0]} @command or _exit(126);
+      }
+      close(STDIN); close($root_dh); close($parent_dh);
+      waitpid($command_pid,0)==$command_pid or exit 125;
+      my $raw_status=$?; my $status;
+      if (($raw_status & 127)==0) { $status=($raw_status >> 8) & 255; }
+      else { $status=128+($raw_status & 127); }
+      if ($writer_pid>0) {
+        waitpid($writer_pid,0)==$writer_pid or exit 125;
+        $status=125 unless (($? & 127)==0 && (($? >> 8) & 255)==0);
+      }
+      sub final_identity {
+        my ($handle,$name)=@_; return "-" if $name eq "-";
+        seek($handle,0,0) or exit 125;
+        my @before=stat($handle); my $sha=Digest::SHA->new(256); my $total=0;
+        exit 125 unless @before && S_ISREG($before[2]);
+        while (1) {
+          my $read=sysread($handle,my $buffer,65536);
+          exit 125 unless defined $read; last if $read==0;
+          $total += $read; exit 125 if $total > 2097152; $sha->add($buffer);
+        }
+        my @after=stat($handle);
+        exit 125 unless @after && $total==$after[7] &&
+          $before[0]==$after[0] && $before[1]==$after[1] &&
+          $before[7]==$after[7] && $before[9]==$after[9] &&
+          $before[10]==$after[10];
+        return join(":",$after[0],$after[1],$after[7],$after[9],$after[10],
+          $sha->hexdigest);
+      }
+      my $stdout_final=final_identity($stdout,$stdout_name);
+      my $stderr_final=final_identity($stderr,$stderr_name);
+      my $receipt_final=final_identity($receipt,$receipt_name);
+      my $record_text=join(" ","status:".$status,"output:".$stdout_final,
+        "error:".$stderr_final,"receipt:".$receipt_final)."\n";
+      my $offset=0;
+      while ($offset<length($record_text)) {
+        my $written=syswrite($channel,$record_text,length($record_text)-$offset,$offset);
+        exit 125 unless defined($written) && $written>0; $offset += $written;
+      }
+      close($stdout); close($stderr); close($receipt); close($channel) or exit 125;
+      exit $status;
     ' "$scratch" "$SCRATCH_ID" "$output" "$output_key" "$error" \
-      "$error_key" "$receipt" "$receipt_key" "$input" "$input_identity" \
-      "$payload_sha" "$@"
+      "$error_key" "$receipt" "$receipt_key" "$record" "$record_key" \
+      "$input" "$input_identity" "$payload_sha" "$@"
 }
 
 scratch_capture() {
-  local output=$1 error=$2 receipt=$3 input=$4 input_identity=$5 payload_sha=$6
-  shift 6
-  scratch_prepare_capture_keys "$output" "$error" "$receipt" || return 125
+  local output=$1 error=$2 receipt=$3 record=$4 input=$5 input_identity=$6
+  local payload_sha=$7
+  shift 7
+  local status=0 record_text
+  scratch_prepare_capture_keys "$output" "$error" "$receipt" "$record" ||
+    return 125
   scratch_capture_prepared "$output" "$CAPTURE_OUTPUT_KEY" \
     "$error" "$CAPTURE_ERROR_KEY" "$receipt" "$CAPTURE_RECEIPT_KEY" \
-    "$input" "$input_identity" "$payload_sha" "$@"
+    "$record" "$CAPTURE_RECORD_KEY" "$input" "$input_identity" \
+    "$payload_sha" "$@" || status=$?
+  IFS= read -r -t 5 record_text <&6 || {
+    exec 6>&-
+    return 125
+  }
+  exec 6>&-
+  capture_record_parse "$record_text" || return 125
+  [ "$CAPTURE_FINAL_STATUS" -eq "$status" ] || return 125
+  return "$status"
 }
 
 capture_identity_for_key() {
@@ -521,6 +645,34 @@ capture_identity_for_key() {
 
 capture_path_matches() {
   capture_identity_for_key "$@" >/dev/null
+}
+
+capture_record_parse() {
+  local text=$1 atom
+  atom='(-|[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-9a-f]{64})'
+  if [[ "$text" =~ ^status:([0-9]+)[[:space:]]output:${atom}[[:space:]]error:${atom}[[:space:]]receipt:${atom}$ ]]; then
+    CAPTURE_FINAL_STATUS=${BASH_REMATCH[1]}
+    CAPTURE_OUTPUT_FINAL=${BASH_REMATCH[2]}
+    CAPTURE_ERROR_FINAL=${BASH_REMATCH[3]}
+    CAPTURE_RECEIPT_FINAL=${BASH_REMATCH[4]}
+  else
+    return 1
+  fi
+  [ "$CAPTURE_FINAL_STATUS" -le 255 ]
+}
+
+capture_identity_for_final() {
+  local path=$1 final=$2 limit=${3:-2097152} identity observed
+  [ "$final" != - ] || return 1
+  identity=$(path_identity "$path" "$limit") || return 1
+  observed=$(/usr/bin/printf '%s\n' "$identity" | /usr/bin/awk -F: \
+    'NF==8 {print $3":"$4":"$5":"$6":"$7":"$8}') || return 1
+  [ "$observed" = "$final" ] || return 1
+  /usr/bin/printf '%s\n' "$identity"
+}
+
+capture_full_identity_matches() {
+  capture_identity_for_final "$@" >/dev/null
 }
 
 scratch_write_lines() {
@@ -985,12 +1137,14 @@ verify_all_pins || emit_error E_RELATION
 
 supervisor_main() {
   worker_status=0
-  scratch_prepare_capture_keys io/worker.out io/worker.err - ||
+  scratch_prepare_capture_keys io/worker.out io/worker.err - io/worker.identity ||
     emit_supervisor_failure E_RUNTIME
   worker_output_key=$CAPTURE_OUTPUT_KEY
   worker_error_key=$CAPTURE_ERROR_KEY
+  worker_record_key=$CAPTURE_RECORD_KEY
   run_child scratch_capture_prepared io/worker.out "$worker_output_key" \
-    io/worker.err "$worker_error_key" - - driver.sh "$private_driver_id" \
+    io/worker.err "$worker_error_key" - - io/worker.identity "$worker_record_key" \
+    driver.sh "$private_driver_id" \
     "$private_payload_sha" /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
     TMPDIR="$scratch" HOME=/nonexistent /bin/bash -c \
     'source /dev/stdin || exit 125; worker_entry "$@"' ystack-evidence-worker \
@@ -1001,22 +1155,32 @@ supervisor_main() {
   if [ -n "${ACTIVE_PGID:-}" ] || [ -n "${ACTIVE_PID:-}" ]; then
     signal_exit 125
   fi
-  error_identity=$(capture_identity_for_key "$scratch/io/worker.err" \
-    "$worker_error_key") ||
+  IFS= read -r -t 5 worker_record_text <&6 || {
+    exec 6>&-
+    emit_supervisor_failure E_RUNTIME
+  }
+  exec 6>&-
+  capture_record_parse "$worker_record_text" || emit_supervisor_failure E_RUNTIME
+  [ "$CAPTURE_FINAL_STATUS" -eq "$worker_status" ] ||
+    emit_supervisor_failure E_RUNTIME
+  worker_output_final=$CAPTURE_OUTPUT_FINAL
+  worker_error_final=$CAPTURE_ERROR_FINAL
+  error_identity=$(capture_identity_for_final "$scratch/io/worker.err" \
+    "$worker_error_final") ||
     emit_supervisor_failure E_RUNTIME
   error_text=$(capture_identity_text "$scratch/io/worker.err" "$error_identity") ||
     emit_supervisor_failure E_RUNTIME
-  capture_path_matches "$scratch/io/worker.err" "$worker_error_key" ||
+  capture_full_identity_matches "$scratch/io/worker.err" "$worker_error_final" ||
     emit_supervisor_failure E_RUNTIME
   if [ "$worker_status" -ne 0 ]; then emit_supervisor_failure "$error_text"; fi
   [ -z "$error_text" ] || emit_supervisor_failure E_RUNTIME
-  worker_output_identity=$(capture_identity_for_key "$scratch/io/worker.out" \
-    "$worker_output_key") ||
+  worker_output_identity=$(capture_identity_for_final "$scratch/io/worker.out" \
+    "$worker_output_final") ||
     emit_supervisor_failure E_RUNTIME
   worker_output_text=$(capture_identity_text "$scratch/io/worker.out" \
     "$worker_output_identity") || emit_supervisor_failure E_RUNTIME
   [ -n "$worker_output_text" ] || emit_supervisor_failure E_RUNTIME
-  capture_path_matches "$scratch/io/worker.out" "$worker_output_key" ||
+  capture_full_identity_matches "$scratch/io/worker.out" "$worker_output_final" ||
     emit_supervisor_failure E_RUNTIME
   policy_set_expected=$(pinned_identity "$2") || emit_supervisor_failure E_RUNTIME
   request_expected=$(pinned_identity "$3") || emit_supervisor_failure E_RUNTIME
@@ -1031,21 +1195,43 @@ supervisor_main() {
     --arg request_sha "${request_expected##*:}" \
     --arg resolved_sha "${resolved_expected##*:}" \
     --arg result_sha "${result_expected##*:}" \
-    --arg presentation_sha "${presentation_expected##*:}" '
+    --arg presentation_sha "${presentation_expected##*:}" \
+    --slurpfile policy_set "$2" --slurpfile request "$3" \
+    --slurpfile result "$5" --slurpfile presentation "$6" '
     (keys|sort)==["body","id","kind","schema_version"] and
     .schema_version==1 and .kind=="evidence_integrity_evaluation" and
+    .id==$result[0].id and
+    (.body|keys|sort)==["activation_state","authority_effect","core_contract",
+      "decision_ref","evaluation_mode","evidence_refs","policy_ref","policy_set",
+      "presentation_ref","prior_evidence_refs","qualification_observation",
+      "qualification_semantics","reason_ids","reference_semantics","stage",
+      "storage_effect","verdict"] and
     .body.activation_state=="inactive" and .body.authority_effect=="none" and
-    .body.storage_effect=="none" and
-    .body.policy_set.sha256==$policy_set_sha and
+    .body.storage_effect=="none" and .body.evaluation_mode=="observation-only" and
+    .body.reference_semantics=="identity-only" and
+    .body.qualification_semantics=="identity-only-unqualified" and
+    .body.core_contract==$policy_set[0].body.core_contract and
+    .body.policy_set=={id:$policy_set[0].id,sha256:$policy_set_sha} and
     .body.stage.request_ref.sha256==$request_sha and
     .body.stage.resolved_profile_ref.sha256==$resolved_sha and
     .body.stage.result_ref.sha256==$result_sha and
     .body.presentation_ref.sha256==$presentation_sha and
+    .body.evidence_refs==($result[0].body.evidence|
+      map({evidence_id,kind,proof_ref,verdict})) and
+    .body.prior_evidence_refs==$request[0].body.prior_evidence_refs and
+    .body.qualification_observation==
+      (if $request[0].body|has("qualification_ref") then
+         {state:"present",value:$request[0].body.qualification_ref}
+       else {state:"absent"} end) and
     (.body.verdict=="satisfied" or .body.verdict=="violated") and
+    (.body.reason_ids|type=="array" and length>=1 and .==(sort|unique)) and
+    (if .body.verdict=="satisfied" then
+       .body.reason_ids==["evidence.integrity-satisfied"]
+     else (.body.reason_ids|index("evidence.integrity-satisfied")==null) end) and
     ((.body|has("grant_ref") or has("qualification_ref") or has("activation") or
       has("credential") or has("network") or has("candidate_execution"))|not)
   ' "$scratch/io/worker.out" >/dev/null 2>&1 || emit_supervisor_failure E_RUNTIME
-  capture_path_matches "$scratch/io/worker.out" "$worker_output_key" ||
+  capture_full_identity_matches "$scratch/io/worker.out" "$worker_output_final" ||
     emit_supervisor_failure E_RUNTIME
   output_text=$worker_output_text
   verify_all_pins || emit_supervisor_failure E_RELATION
@@ -1154,14 +1340,16 @@ canonical_json() {
   "$jq_bin" -s -e 'length==1' "$input" </dev/null >/dev/null 2>&1 ||
     emit_error E_PARSE
   canonical_relative=$(scratch_relative "$canonical") || emit_error E_RUNTIME
-  scratch_capture "$canonical_relative" - - - - - "$jq_bin" -S -c . "$input" ||
+  scratch_capture "$canonical_relative" - - "$canonical_relative.identity" \
+    - - - "$jq_bin" -S -c . "$input" ||
     emit_error E_PARSE
-  canonical_identity=$(capture_identity_for_key "$canonical" \
-    "$CAPTURE_OUTPUT_KEY") || emit_error E_RUNTIME
+  canonical_identity=$(capture_identity_for_final "$canonical" \
+    "$CAPTURE_OUTPUT_FINAL") || emit_error E_RUNTIME
   input_identity=$(path_identity "$input" 1048576) || emit_error E_RUNTIME
   [ "${canonical_identity##*:}" = "${input_identity##*:}" ] ||
     emit_error E_CANONICAL
-  capture_path_matches "$canonical" "$CAPTURE_OUTPUT_KEY" || emit_error E_RUNTIME
+  capture_full_identity_matches "$canonical" "$CAPTURE_OUTPUT_FINAL" ||
+    emit_error E_RUNTIME
   "$jq_bin" -e '
     def depth:
       if type=="array" then if length==0 then 1 else 1+([.[]|depth]|max) end
@@ -1226,13 +1414,14 @@ core_closure_sha() {
   [ "$count" -eq 3 ] && [ "$modules" -eq 5 ] || return 1
   [ -f "$registry" ] && [ ! -L "$registry" ] || return 1
   canonical="$scratch/registry-$tag.json"
-  scratch_capture "registry-$tag.json" - - - - - "$jq_bin" -s -S -c \
+  scratch_capture "registry-$tag.json" - - "registry-$tag.identity" \
+    - - - "$jq_bin" -s -S -c \
     'if length==1 then .[0] else error("root-count") end' "$registry" || return 1
-  canonical_identity=$(capture_identity_for_key "$canonical" \
-    "$CAPTURE_OUTPUT_KEY") || return 1
+  canonical_identity=$(capture_identity_for_final "$canonical" \
+    "$CAPTURE_OUTPUT_FINAL") || return 1
   registry_identity=$(path_identity "$registry" 1048576) || return 1
   [ "${canonical_identity##*:}" = "${registry_identity##*:}" ] || return 1
-  capture_path_matches "$canonical" "$CAPTURE_OUTPUT_KEY" || return 1
+  capture_full_identity_matches "$canonical" "$CAPTURE_OUTPUT_FINAL" || return 1
   "$jq_bin" -e --arg selected "$selected" '
     type=="array" and length>=1 and
     ([.[]|select(.generation_id==$selected and .semantic_identity=="core.contracts.v2")]
@@ -1408,13 +1597,14 @@ validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
   "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha" ||
   emit_error E_RELATION
 policy_status=0
-scratch_capture policy.out policy.err - - - - /usr/bin/env -i LC_ALL=C \
+scratch_capture policy.out policy.err - policy.identity - - - \
+  /usr/bin/env -i LC_ALL=C \
   PATH="${jq_bin%/*}:/usr/bin:/bin" TMPDIR="$scratch" HOME=/nonexistent \
   "$mirror_policy_validator" validate "$scratch/policy-set.json" ||
   policy_status=$?
-capture_path_matches "$scratch/policy.out" "$CAPTURE_OUTPUT_KEY" ||
+capture_full_identity_matches "$scratch/policy.out" "$CAPTURE_OUTPUT_FINAL" ||
   emit_error E_RUNTIME
-capture_path_matches "$scratch/policy.err" "$CAPTURE_ERROR_KEY" ||
+capture_full_identity_matches "$scratch/policy.err" "$CAPTURE_ERROR_FINAL" ||
   emit_error E_RUNTIME
 if ! validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
      "$validator_driver_sha" "$validator_program_sha" ||
@@ -1458,24 +1648,27 @@ core_accounted_root="$scratch/core-accounted"
 core_accounted_id=$(directory_identity "$core_accounted_root") ||
   emit_error E_RUNTIME
 core_byte_budget=16777216
-scratch_capture core.out core.err core.receipt - - - /usr/bin/env -i LC_ALL=C \
+scratch_capture core.out core.err core.receipt core.identity - - - \
+  /usr/bin/env -i LC_ALL=C \
   PATH="${jq_bin%/*}:/usr/bin:/bin" TMPDIR="$scratch" HOME=/nonexistent \
   "$mirror_core_driver" --accounted-validation "$core_accounted_root" \
   "$core_byte_budget" validate-stage-run \
   "$scratch/request.json" "$scratch/resolved.json" "$scratch/result.json" \
   || core_status=$?
-core_output_key=$CAPTURE_OUTPUT_KEY
-core_error_key=$CAPTURE_ERROR_KEY
-core_receipt_key=$CAPTURE_RECEIPT_KEY
-capture_path_matches "$scratch/core.out" "$core_output_key" || emit_error E_RUNTIME
-capture_path_matches "$scratch/core.err" "$core_error_key" || emit_error E_RUNTIME
-capture_path_matches "$scratch/core.receipt" "$core_receipt_key" ||
+core_output_final=$CAPTURE_OUTPUT_FINAL
+core_error_final=$CAPTURE_ERROR_FINAL
+core_receipt_final=$CAPTURE_RECEIPT_FINAL
+capture_full_identity_matches "$scratch/core.out" "$core_output_final" ||
   emit_error E_RUNTIME
-core_receipt_identity=$(capture_identity_for_key "$scratch/core.receipt" \
-  "$core_receipt_key") || emit_error E_RUNTIME
+capture_full_identity_matches "$scratch/core.err" "$core_error_final" ||
+  emit_error E_RUNTIME
+capture_full_identity_matches "$scratch/core.receipt" "$core_receipt_final" ||
+  emit_error E_RUNTIME
+core_receipt_identity=$(capture_identity_for_final "$scratch/core.receipt" \
+  "$core_receipt_final") || emit_error E_RUNTIME
 core_receipt_text=$(capture_identity_text "$scratch/core.receipt" \
   "$core_receipt_identity") || emit_error E_RUNTIME
-capture_path_matches "$scratch/core.receipt" "$core_receipt_key" ||
+capture_full_identity_matches "$scratch/core.receipt" "$core_receipt_final" ||
   emit_error E_RUNTIME
 case "$core_receipt_text" in written-bytes:*) ;; *) emit_error E_RUNTIME ;; esac
 core_written_bytes=${core_receipt_text#written-bytes:}
@@ -1507,7 +1700,8 @@ request_sha=$(sha256_path "$scratch/request.json") || emit_error E_RUNTIME
 resolved_sha=$(sha256_path "$scratch/resolved.json") || emit_error E_RUNTIME
 result_sha=$(sha256_path "$scratch/result.json") || emit_error E_RUNTIME
 presentation_sha=$(sha256_path "$scratch/presentation.json") || emit_error E_RUNTIME
-scratch_capture evaluation.json - - - - - "$jq_bin" -S -c -n \
+scratch_capture evaluation.json - - evaluation.identity - - - \
+  "$jq_bin" -S -c -n \
   -f "$scratch/program.jq" \
   --slurpfile policy "$scratch/policy.json" \
   --slurpfile decision "$scratch/decision.json" \
@@ -1521,9 +1715,9 @@ scratch_capture evaluation.json - - - - - "$jq_bin" -S -c -n \
   --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" \
   --arg presentation_sha "$presentation_sha" ||
   emit_error E_RUNTIME
-evaluation_capture_key=$CAPTURE_OUTPUT_KEY
-evaluation_identity=$(capture_identity_for_key "$scratch/evaluation.json" \
-  "$evaluation_capture_key") || emit_error E_RUNTIME
+evaluation_final=$CAPTURE_OUTPUT_FINAL
+evaluation_identity=$(capture_identity_for_final "$scratch/evaluation.json" \
+  "$evaluation_final") || emit_error E_RUNTIME
 fixed_files_ok || emit_error E_RELATION
 final_live_core_sha=$(core_closure_sha "$repo" "$core_driver" "$selected" live-final) ||
   emit_error E_RELATION
@@ -1588,13 +1782,13 @@ canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||
     has("credential") or has("network") or has("candidate_execution"))|not)
 ' "$scratch/evaluation.json" >/dev/null 2>&1 || emit_error E_RUNTIME
 
-capture_path_matches "$scratch/evaluation.json" "$evaluation_capture_key" ||
+capture_full_identity_matches "$scratch/evaluation.json" "$evaluation_final" ||
   emit_error E_RUNTIME
 verify_all_pins || emit_error E_RELATION
 output_text=$(capture_identity_text "$scratch/evaluation.json" \
   "$evaluation_identity") ||
   emit_error E_RUNTIME
-capture_path_matches "$scratch/evaluation.json" "$evaluation_capture_key" ||
+capture_full_identity_matches "$scratch/evaluation.json" "$evaluation_final" ||
   emit_error E_RUNTIME
 if ! cleanup; then silent_fail; fi
 trap - EXIT HUP INT TERM

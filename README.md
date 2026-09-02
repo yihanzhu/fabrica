@@ -161,8 +161,9 @@ The launcher is an explicit trusted shell boundary; it does not claim to
 self-attest bytes that Bash already loaded. The decision separately binds the
 exact marked evaluation payload. The launcher extracts those fragments from a
 private no-follow snapshot, verifies their content identity, and gives only the
-verified bytes to the worker. Scratch output descriptors keep their creation
-identities through consumption. Public-core validation uses its accounted mode
+verified bytes to the worker. Scratch producers return full final descriptor
+identities over an inherited, unlinked channel; consumers bind every read to
+those identities. Public-core validation uses its accounted mode
 with a fixed budget, an anchored receipt descriptor, and a worker-owned root.
 
 The evaluator never reads proof bytes. Matching references do not prove a claim

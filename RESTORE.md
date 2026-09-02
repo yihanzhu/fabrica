@@ -404,7 +404,7 @@ bash scripts/test/control-evidence-integrity.test.sh
 This checks exact policy-set and public-core closure, stage and qualification
 identity binding, canonical evidence/prior sets, stale or aliased references, and
 deterministic observation output. It also checks the explicit trusted-launcher
-boundary, exact marked-payload identity, retained scratch descriptor identities,
+boundary, exact marked-payload identity, producer-final scratch identities,
 accounted core receipt and cleanup, and nested Bash environment isolation. The
 launcher is not self-attested. It does not read proof bytes, establish proof
 truth, qualify a workflow, store evidence, grant authority, activate a profile,
