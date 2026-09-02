@@ -353,8 +353,9 @@ must remain in source or move to an accepted sidecar/metadata mechanism.
   PR description when a prompt changes.
 - **Never weaken the safety rails without explicit human sign-off:** reviewer stays
   read-only / comments-only. Outside the active, identity-matching ystack-self
-  construction overlay, **merging is the operator's, always** — no agent has a merge path
-  (`.claude/hooks/no-merge-guard.sh` blocks every merge command). The overlay above is the sole narrow exception and authorizes only
+  construction overlay, **merging is the operator's, always** — this is policy, and it binds every
+  agent whatever its harness; `.claude/hooks/no-merge-guard.sh` is only defense-in-depth for
+  known Claude Bash merge and direct-main-push commands. The overlay above is the sole narrow exception and authorizes only
   the publisher named by the matching mode record after the exact gates above
   pass. The rounds cap and `needs-human` escalation stay
   intact. yshifu never writes code/opens PRs and **never self-approves acting alone** — a

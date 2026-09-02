@@ -870,9 +870,10 @@ chooses the session model; you cannot verify your own tier, so do not guess at i
 
 ## Merge & never
 
-- **You never merge. The operator does.** No agent has a merge path: the
-  `no-merge-guard` hook blocks every push to `main` and every merge command, and the
-  operator merges at the gate. When a PR is
+- **You never merge. The operator does.** This is policy: outside the
+  named construction overlay, every agent is forbidden to merge, whatever its harness. The
+  `no-merge-guard` hook is only defense-in-depth for known Claude Bash merge and
+  direct-main-push commands. When a PR is
   CI-green and an authenticated review matches the immediately re-queried current
   head/base, apply **`merge-ready`** and hand it to the operator — that label means
   "reviewed clean at this head/base", nothing more. Either moving voids it; clear the
