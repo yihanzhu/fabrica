@@ -201,6 +201,21 @@ scanner is inactive and observation only: it does not deliver events, schedule,
 dispatch, retry, reconcile, write state, use a credential or network, activate a
 profile, or touch a target.
 
+## Inactive reconciliation planner
+
+`orchestrator/v1/reconciliation-plan.jq` is a pure jq 1.6 planning filter. It
+accepts one canonical scanner observation, one canonical delivery ledger, their
+caller-supplied exact references, and a bounded concurrency limit. It returns a
+canonical inactive plan. A delivery key binds the stage key, request digest,
+planned operation, and attempt number.
+
+Pending and failed deliveries reappear with that same key until acknowledged.
+Acknowledged deliveries are suppressed. New work uses only slots left after
+pending deliveries, with redeliveries first and stable stage-key order; work that
+does not fit is listed as deferred. Scanner recovery actions and reasons remain
+data in the plan. The filter does not dispatch, schedule, execute recovery, write
+state, use a credential or network, activate a profile, publish, or touch a target.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
