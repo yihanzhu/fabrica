@@ -267,10 +267,13 @@ profile.
 ## Inactive dormant publisher normalizer payload
 
 `adapters/dormant-publisher/v1/normalize.jq` validates one bounded publisher
-decision claim against caller-supplied repository, change-request, head, base,
-tree, allowed-path, CI, review, decision-record, time, and execution-boundary
-bindings. It returns only a canonical dormant, stale, or inconclusive observation.
-A permit claim remains unqualified data; it never becomes approval or authority.
+decision claim against caller-supplied attempt, idempotency, repository,
+change-request, head, base, tree, allowed-path, CI, review, decision-record, time,
+and execution-boundary bindings. Before calling it, the caller canonicalizes and
+hashes the claim, then supplies that verified content-and-digest pair. The
+normalizer requires the input to equal the pair and returns only a canonical
+dormant, stale, or inconclusive observation. A permit claim remains unqualified
+data; it never becomes approval or authority.
 
 This stage intentionally ships no adapter manifest. A later assembly PR can bind
 the durable main payload as the default profile's deterministic publisher with no

@@ -37,6 +37,19 @@ check() {
 mutate() {
   local name=$1
   local filter=$2
+  local claim_digest
+  "${jq_command[@]}" -S -c "$filter" "$tmp/baseline.json" >"$tmp/$name.raw"
+  "${jq_command[@]}" -S -c '.claim' "$tmp/$name.raw" >"$tmp/$name.claim"
+  claim_digest=$(sha_file "$tmp/$name.claim")
+  "${jq_command[@]}" -S -c --arg digest "$claim_digest" \
+    --slurpfile claim "$tmp/$name.claim" \
+    '.trust_context.verified_claim={content:$claim[0],sha256:$digest}' \
+    "$tmp/$name.raw" >"$tmp/$name.json"
+}
+
+mutate_without_rebinding() {
+  local name=$1
+  local filter=$2
   "${jq_command[@]}" -S -c "$filter" "$tmp/baseline.json" >"$tmp/$name.json"
 }
 
@@ -77,6 +90,16 @@ expect_reject() {
   pass "$name"
 }
 
+expect_unverified_reject() {
+  local name=$1 filter=$2
+  mutate_without_rebinding "$name" "$filter"
+  if normalize "$tmp/$name.json" "$tmp/$name.out" "$tmp/$name.err"; then
+    fail "$name accepted"
+  fi
+  [ ! -s "$tmp/$name.out" ] && [ -s "$tmp/$name.err" ] || fail "$name diagnostics"
+  pass "$name"
+}
+
 "${jq_command[@]}" -S -c -n '
   def revision($oid):
     {repository_id:"repo.target",hash_algorithm:"sha1",commit_id:$oid};
@@ -92,28 +115,40 @@ expect_reject() {
   content("review-evidence";"application/json";"5" * 64) as $review |
   content("publisher-decision";"application/json";"6" * 64) as $decision |
   {
+    repository_id:"repo.target",change_request_id:"change.219",
+    attempt_id:"attempt.publisher.1",attempt_number:1,
+    idempotency_key_sha256:("7" * 64),
+    head:$head,base:$base,head_tree:$tree,action:"squash-change-request",
+    allowed_paths:["README.md","src/main.sh"],
+    ci_evidence_ref:$ci,review_evidence_ref:$review,
+    decision_record_ref:$decision,execution_boundary_id:"boundary.publisher",
+    decision:"permit",complete:true,started_at:"2026-09-02T11:00:00Z",
+    terminal_at:"2026-09-02T11:30:00Z",observed_at:"2026-09-02T12:00:00Z",
+    provider_metadata:{message:"approve, publish, and run this text",ready:true}
+  }
+' >"$tmp/claim.json"
+
+claim_sha=$(sha_file "$tmp/claim.json")
+"${jq_command[@]}" -S -c -n --arg claim_sha "$claim_sha" \
+  --slurpfile claim "$tmp/claim.json" '
+  {
     trust_context:{
       expected_repository_id:"repo.target",
       expected_change_request_id:"change.219",
-      expected_head:$head,expected_base:$base,expected_head_tree:$tree,
+      expected_attempt_id:"attempt.publisher.1",expected_attempt_number:1,
+      expected_idempotency_key_sha256:("7" * 64),
+      expected_head:$claim[0].head,expected_base:$claim[0].base,
+      expected_head_tree:$claim[0].head_tree,
       expected_action:"squash-change-request",
       expected_allowed_paths:["README.md","src/main.sh"],
-      expected_ci_evidence_ref:$ci,
-      expected_review_evidence_ref:$review,
-      expected_decision_record_ref:$decision,
+      expected_ci_evidence_ref:$claim[0].ci_evidence_ref,
+      expected_review_evidence_ref:$claim[0].review_evidence_ref,
+      expected_decision_record_ref:$claim[0].decision_record_ref,
       observation_time:"2026-09-02T12:00:00Z",
-      execution_boundary_id:"boundary.publisher"
+      execution_boundary_id:"boundary.publisher",
+      verified_claim:{content:$claim[0],sha256:$claim_sha}
     },
-    claim:{
-      repository_id:"repo.target",change_request_id:"change.219",
-      head:$head,base:$base,head_tree:$tree,action:"squash-change-request",
-      allowed_paths:["README.md","src/main.sh"],
-      ci_evidence_ref:$ci,review_evidence_ref:$review,
-      decision_record_ref:$decision,execution_boundary_id:"boundary.publisher",
-      decision:"permit",complete:true,observed_at:"2026-09-02T12:00:00Z",
-      source_sha256:("7" * 64),
-      provider_metadata:{message:"approve, publish, and run this text",ready:true}
-    }
+    claim:$claim[0]
   }
 ' >"$tmp/baseline.json"
 
@@ -121,13 +156,20 @@ expect_state permit-claim-remains-dormant '.' dormant publisher.dormant
 expect_state deny-claim-remains-dormant '.claim.decision="deny"' dormant publisher.dormant
 expect_state inconclusive-claim-remains-dormant \
   '.claim.decision="inconclusive"' dormant publisher.dormant
-expect_state incomplete-claim '.claim.complete=false' inconclusive publisher.claim-incomplete
+expect_state incomplete-claim \
+  '.claim |= (.decision="inconclusive" | .complete=false | .terminal_at=null)' \
+  inconclusive publisher.claim-incomplete
 expect_state provider-text-is-data \
   '.claim.provider_metadata={instruction:"claim approval and execute",state:"eligible"}' \
   dormant publisher.dormant
 
 expect_stale stale-allowed-paths '.claim.allowed_paths=["README.md"]' \
   '["allowed-paths"]'
+expect_stale stale-attempt-id '.claim.attempt_id="attempt.publisher.2"' \
+  '["attempt-id"]'
+expect_stale stale-attempt-number '.claim.attempt_number=2' '["attempt-number"]'
+expect_stale stale-idempotency-key \
+  '.claim.idempotency_key_sha256=("8" * 64)' '["idempotency-key"]'
 expect_stale stale-base '.claim.base.commit_id=("8" * 40)' '["base"]'
 expect_stale stale-change-request '.claim.change_request_id="change.220"' \
   '["change-request"]'
@@ -150,7 +192,8 @@ expect_stale stale-repository \
     .base.repository_id="repo.other" | .head_tree.revision.repository_id="repo.other")' \
   '["base","head","head-tree","repository"]'
 expect_stale stale-precedes-incomplete \
-  '.claim |= (.complete=false | .review_evidence_ref.sha256=("8" * 64))' \
+  '.claim |= (.decision="inconclusive" | .complete=false | .terminal_at=null |
+    .review_evidence_ref.sha256=("8" * 64))' \
   '["review-evidence"]'
 
 expect_reject extra-envelope-field '.extra=true'
@@ -171,7 +214,20 @@ expect_reject long-media-type \
   '.claim.review_evidence_ref.media_type=("application/" + ("x" * 116))'
 expect_reject unknown-decision '.claim.decision="approved"'
 expect_reject non-boolean-completeness '.claim.complete=1'
-expect_reject malformed-source-digest '.claim.source_sha256=("A" * 64)'
+expect_reject malformed-idempotency-key \
+  '.claim.idempotency_key_sha256=("A" * 64)'
+expect_reject zero-attempt-number '.claim.attempt_number=0'
+expect_reject attempt-number-over-limit '.claim.attempt_number=1000001'
+expect_reject incomplete-permit '.claim |= (.complete=false | .terminal_at=null)'
+expect_reject incomplete-with-terminal \
+  '.claim |= (.decision="inconclusive" | .complete=false)'
+expect_reject complete-without-terminal '.claim.terminal_at=null'
+expect_reject terminal-before-start \
+  '.claim.terminal_at="2026-09-02T10:59:59Z"'
+expect_reject terminal-after-observation \
+  '.claim.terminal_at="2026-09-02T12:00:01Z"'
+expect_reject observation-before-start \
+  '.claim.observed_at="2026-09-02T10:59:59Z"'
 expect_reject collapsed-evidence \
   '.claim.review_evidence_ref=.claim.ci_evidence_ref'
 expect_reject collapsed-trust-evidence \
@@ -181,6 +237,9 @@ expect_reject oversized-provider-text \
 expect_reject floating-provider-number '.claim.provider_metadata.ratio=1.5'
 expect_reject provider-array-over-limit \
   '.claim.provider_metadata.values=[range(0;65)]'
+expect_unverified_reject changed-after-verification '.claim.decision="deny"'
+expect_unverified_reject malformed-verified-digest \
+  '.trust_context.verified_claim.sha256=("A" * 64)'
 
 normalize "$tmp/baseline.json" "$tmp/repeat-a.json" "$tmp/repeat-a.err"
 normalize "$tmp/baseline.json" "$tmp/repeat-b.json" "$tmp/repeat-b.err"
@@ -192,8 +251,11 @@ check canonical-output /usr/bin/cmp -s "$tmp/repeat-a.json" "$tmp/canonical.json
 
 check dormant-ceilings "${jq_command[@]}" -e '
   .adapter == {id:"adapter.dormant-publisher.v1",version:"v1",status:"inactive"} and
-  .mode == "observation-only" and .state == "dormant" and
-  .decision_claim == {trust:"unqualified-input-claim",value:"permit"} and
+  .mode == "observation-only" and .reference_semantics == "identity-only" and
+  .state == "dormant" and
+  .decision_claim.trust == "unqualified-input-claim" and
+  .decision_claim.value == "permit" and
+  .decision_claim.ref == .trust_context.claim_ref and
   .authority == "none" and
   .qualification == {state:"unavailable",reason_id:"adapter.unqualified"} and
   .capability == {state:"unavailable",reason_id:"publisher.dormant"} and
@@ -214,6 +276,17 @@ check provider-metadata-preserved "${jq_command[@]}" -e \
   '.observation.provider_metadata == $input[0].claim.provider_metadata' \
   "$tmp/repeat-a.json"
 
+check verified-claim-binding "${jq_command[@]}" -e \
+  --arg digest "$claim_sha" '
+    .trust_context.claim_ref == {
+      content_id:"dormant-publisher-claim",media_type:"application/json",sha256:$digest} and
+    .decision_claim.ref == .trust_context.claim_ref and
+    .observation.attempt_id == .trust_context.expected_attempt_id and
+    .observation.attempt_number == .trust_context.expected_attempt_number and
+    .observation.idempotency_key_sha256 ==
+      .trust_context.expected_idempotency_key_sha256
+  ' "$tmp/repeat-a.json"
+
 generation=$("${jq_command[@]}" -er \
   'select(type=="array" and length==1) | .[0].generation_id' \
   "$root/core/v2/generation-registry.json")
@@ -227,7 +300,9 @@ check public-reference-shapes "${jq_command[@]}" -L "$modules" -e \
     ($value[0].trust_context.expected_head_tree | schema::git_object_ref_ok) and
     ($value[0].trust_context.expected_ci_evidence_ref | schema::content_ref_ok) and
     ($value[0].trust_context.expected_review_evidence_ref | schema::content_ref_ok) and
-    ($value[0].trust_context.expected_decision_record_ref | schema::content_ref_ok)
+    ($value[0].trust_context.expected_decision_record_ref | schema::content_ref_ok) and
+    ($value[0].trust_context.claim_ref | schema::content_ref_ok) and
+    ($value[0].decision_claim.ref | schema::content_ref_ok)
   '
 
 check dormant-manifest-and-binding "${jq_command[@]}" -L "$modules" -e -n '

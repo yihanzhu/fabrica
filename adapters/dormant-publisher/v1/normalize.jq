@@ -10,6 +10,10 @@ def id_ok:
 def sha256_ok:
   type == "string" and test("\\A[0-9a-f]{64}\\z");
 
+def int_ok:
+  type == "number" and . == floor and . >= 0 and . <= 2147483647 and
+  tostring != "-0";
+
 def time_ok:
   type == "string" and
   test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z") and
@@ -80,17 +84,33 @@ def bounded_data($depth):
   else true
   end;
 
+def verified_claim_ok:
+  exact_fields(["content","sha256"];[]) and
+  (.content | type == "object") and (.sha256 | sha256_ok);
+
+def claim_ref($verified):
+  {
+    content_id:"dormant-publisher-claim",
+    media_type:"application/json",
+    sha256:$verified.sha256
+  };
+
 def trust_context_ok:
   . as $context |
   exact_fields(
-    ["expected_repository_id","expected_change_request_id","expected_head",
+    ["expected_repository_id","expected_change_request_id","expected_attempt_id",
+     "expected_attempt_number","expected_idempotency_key_sha256","expected_head",
      "expected_base","expected_head_tree","expected_action",
      "expected_allowed_paths","expected_ci_evidence_ref",
      "expected_review_evidence_ref","expected_decision_record_ref",
-     "observation_time","execution_boundary_id"];
+     "observation_time","execution_boundary_id","verified_claim"];
     []) and
   (.expected_repository_id | id_ok) and
   (.expected_change_request_id | id_ok) and
+  (.expected_attempt_id | id_ok) and
+  (.expected_attempt_number | int_ok) and
+  .expected_attempt_number >= 1 and .expected_attempt_number <= 1000000 and
+  (.expected_idempotency_key_sha256 | sha256_ok) and
   (.expected_head | revision_ok) and (.expected_base | revision_ok) and
   .expected_head.repository_id == .expected_repository_id and
   .expected_base.repository_id == .expected_repository_id and
@@ -104,17 +124,22 @@ def trust_context_ok:
   ([.expected_ci_evidence_ref,.expected_review_evidence_ref,
     .expected_decision_record_ref] | unique | length) == 3 and
   (.observation_time | time_ok) and
-  (.execution_boundary_id | id_ok);
+  (.execution_boundary_id | id_ok) and
+  (.verified_claim | verified_claim_ok);
 
 def claim_ok:
   . as $claim |
   exact_fields(
-    ["repository_id","change_request_id","head","base","head_tree","action",
-     "allowed_paths","ci_evidence_ref","review_evidence_ref",
+    ["repository_id","change_request_id","attempt_id","attempt_number",
+     "idempotency_key_sha256","head","base","head_tree","action","allowed_paths",
+     "ci_evidence_ref","review_evidence_ref",
      "decision_record_ref","execution_boundary_id","decision","complete",
-     "observed_at","source_sha256","provider_metadata"];
+     "started_at","terminal_at","observed_at","provider_metadata"];
     []) and
   (.repository_id | id_ok) and (.change_request_id | id_ok) and
+  (.attempt_id | id_ok) and (.attempt_number | int_ok) and
+  .attempt_number >= 1 and .attempt_number <= 1000000 and
+  (.idempotency_key_sha256 | sha256_ok) and
   (.head | revision_ok) and (.base | revision_ok) and
   .head.repository_id == .repository_id and
   .base.repository_id == .repository_id and .head != .base and
@@ -128,13 +153,22 @@ def claim_ok:
    unique | length) == 3 and
   (.execution_boundary_id | id_ok) and
   (.decision == "permit" or .decision == "deny" or .decision == "inconclusive") and
-  (.complete | type == "boolean") and (.observed_at | time_ok) and
-  (.source_sha256 | sha256_ok) and
+  (.complete | type == "boolean") and
+  (.started_at | time_ok) and (.observed_at | time_ok) and
+  .started_at <= .observed_at and
+  (if .complete then
+     (.terminal_at | time_ok) and
+     .started_at <= .terminal_at and .terminal_at <= .observed_at
+   else
+     .terminal_at == null and .decision == "inconclusive"
+   end) and
   (.provider_metadata | type == "object" and bounded_data(0));
 
 def stale_bindings($context; $claim):
   [
     if $claim.allowed_paths != $context.expected_allowed_paths then "allowed-paths" else empty end,
+    if $claim.attempt_id != $context.expected_attempt_id then "attempt-id" else empty end,
+    if $claim.attempt_number != $context.expected_attempt_number then "attempt-number" else empty end,
     if $claim.base != $context.expected_base then "base" else empty end,
     if $claim.change_request_id != $context.expected_change_request_id then "change-request" else empty end,
     if $claim.ci_evidence_ref != $context.expected_ci_evidence_ref then "ci-evidence" else empty end,
@@ -142,6 +176,7 @@ def stale_bindings($context; $claim):
     if $claim.execution_boundary_id != $context.execution_boundary_id then "execution-boundary" else empty end,
     if $claim.head != $context.expected_head then "head" else empty end,
     if $claim.head_tree != $context.expected_head_tree then "head-tree" else empty end,
+    if $claim.idempotency_key_sha256 != $context.expected_idempotency_key_sha256 then "idempotency-key" else empty end,
     if $claim.observed_at != $context.observation_time then "observation-time" else empty end,
     if $claim.repository_id != $context.expected_repository_id then "repository" else empty end,
     if $claim.review_evidence_ref != $context.expected_review_evidence_ref then "review-evidence" else empty end
@@ -159,6 +194,8 @@ elif (.trust_context | trust_context_ok) == false then
   error("dormant-publisher.invalid-trust-context")
 elif (.claim | claim_ok) == false then
   error("dormant-publisher.invalid-claim")
+elif .claim != .trust_context.verified_claim.content then
+  error("dormant-publisher.unverified-claim")
 else
   .trust_context as $context |
   .claim as $claim |
@@ -169,12 +206,15 @@ else
     kind:"adapter_observation",
     adapter:{id:"adapter.dormant-publisher.v1",version:"v1",status:"inactive"},
     mode:"observation-only",
+    reference_semantics:"identity-only",
     state:$normalized[0],
     reason_id:$normalized[1],
     stale_bindings:$stale,
-    trust_context:$context,
+    trust_context:($context | del(.verified_claim) +
+      {claim_ref:claim_ref($context.verified_claim)}),
     observation:$claim,
-    decision_claim:{trust:"unqualified-input-claim",value:$claim.decision},
+    decision_claim:{trust:"unqualified-input-claim",
+      ref:claim_ref($context.verified_claim),value:$claim.decision},
     authority:"none",
     qualification:{state:"unavailable",reason_id:"adapter.unqualified"},
     capability:{state:"unavailable",reason_id:"publisher.dormant"},

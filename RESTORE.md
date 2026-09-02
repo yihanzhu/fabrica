@@ -504,13 +504,15 @@ payload block, then run:
 bash scripts/test/default-dormant-publisher-adapter.test.sh
 ```
 
-This checks exact repository, change-request, candidate, path, evidence, decision,
-time, and boundary bindings. Permit, deny, and inconclusive claims all remain inert;
-malformed input is rejected and moved input becomes stale. This stage has no adapter
-manifest. A later assembly PR can bind its durable main payload with empty
-capability, permission, and tool sets. It is separate from the temporary
-construction publisher gate and performs no credential, network, merge, external
-write, authority, qualification, or profile activation.
+This checks exact attempt, idempotency, repository, change-request, candidate,
+path, evidence, decision, terminal-time, observation-time, and boundary bindings.
+The caller supplies a canonical, SHA-256-verified claim pair, and changed content
+is rejected. Permit, deny, and inconclusive claims all remain inert; malformed
+input is rejected and moved input becomes stale. This stage has no adapter manifest.
+A later assembly PR can bind its durable main payload with empty capability,
+permission, and tool sets. It is separate from the temporary construction
+publisher gate and performs no credential, network, merge, external write,
+authority, qualification, or profile activation.
 
 ---
 
