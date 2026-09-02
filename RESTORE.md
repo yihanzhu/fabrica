@@ -436,6 +436,20 @@ runtime snapshots, and fail-closed input handling. The scanner remains inactive
 and observation only. It does not deliver or retry events, reconcile or write
 state, use a credential or network, activate a profile, or touch a target.
 
+Restore the two paths in the manifest's inactive reconciliation planner block,
+then run:
+
+```sh
+bash scripts/test/orchestrator-reconciliation-plan.test.sh
+```
+
+This checks deterministic at-least-once planning, failed-stage retry, stranded
+attempt recovery without a new attempt, acknowledged-delivery suppression,
+operator messages, and stable backpressure. It also rejects malformed, stale,
+duplicate, unsorted, and oversized inputs. The jq filter remains inactive and
+planning only. It does not dispatch, schedule, execute recovery, write state, use
+a credential or network, activate a profile, publish, or touch a target.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive

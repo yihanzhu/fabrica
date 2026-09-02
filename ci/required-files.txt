@@ -224,3 +224,7 @@ orchestrator/v1/state-scanner-launcher.sh
 orchestrator/v1/state-scanner-driver.sh
 orchestrator/v1/state-scanner.jq
 scripts/test/orchestrator-state-scanner.test.sh
+
+# Inactive canonical orchestrator reconciliation planner
+orchestrator/v1/reconciliation-plan.jq
+scripts/test/orchestrator-reconciliation-plan.test.sh
