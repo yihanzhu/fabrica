@@ -145,7 +145,8 @@ def children_agree($snapshot):
   elif $snapshot.status == "in_progress" then
     all($jobs[]; .status | status_ok) and
     (if $snapshot.complete then any($jobs[]; .status != "completed") else true end)
-  elif $snapshot.complete == false then all($jobs[]; .status == "completed")
+  elif (all($jobs[]; .status == "completed") | not) then false
+  elif $snapshot.complete == false then true
   elif $snapshot.conclusion == "success" then
     any($jobs[]; .conclusion == "success") and
     all($jobs[]; .conclusion | IN("success","neutral","skipped"))

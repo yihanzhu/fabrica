@@ -137,12 +137,12 @@ for spec in \
   'passed|passed|.' \
   'queued|queued|.snapshot.status="queued"|.snapshot.conclusion=null|.snapshot.started_at=null|.snapshot.completed_at=null|.snapshot.jobs|=map(.status="queued"|.conclusion=null|.started_at=null|.completed_at=null)' \
   'in-progress|in-progress|.snapshot.status="in_progress"|.snapshot.conclusion=null|.snapshot.completed_at=null|.snapshot.jobs[0].status="in_progress"|.snapshot.jobs[0].conclusion=null|.snapshot.jobs[0].completed_at=null|.snapshot.jobs[1].status="queued"|.snapshot.jobs[1].conclusion=null|.snapshot.jobs[1].started_at=null|.snapshot.jobs[1].completed_at=null' \
-  'failed|failed|.snapshot.conclusion="failure"|.snapshot.jobs[0].conclusion="failure"' \
-  'cancelled|cancelled|.snapshot.conclusion="cancelled"|.snapshot.jobs[0].conclusion="cancelled"' \
-  'timed-out|timed-out|.snapshot.conclusion="timed_out"|.snapshot.jobs[0].conclusion="timed_out"' \
-  'action-required|action-required|.snapshot.conclusion="action_required"|.snapshot.jobs[0].conclusion="action_required"' \
-  'provider-stale|stale|.snapshot.conclusion="stale"|.snapshot.jobs[0].conclusion="stale"' \
-  'neutral|inconclusive|.snapshot.conclusion="neutral"|.snapshot.jobs[0].conclusion="neutral"' \
+  'failed-all-completed-mixed|failed|.snapshot.conclusion="failure"|.snapshot.jobs[0].conclusion="failure"' \
+  'cancelled-all-completed-mixed|cancelled|.snapshot.conclusion="cancelled"|.snapshot.jobs[0].conclusion="cancelled"' \
+  'timed-out-all-completed-mixed|timed-out|.snapshot.conclusion="timed_out"|.snapshot.jobs[0].conclusion="timed_out"' \
+  'action-required-all-completed-mixed|action-required|.snapshot.conclusion="action_required"|.snapshot.jobs[0].conclusion="action_required"' \
+  'provider-stale-all-completed-mixed|stale|.snapshot.conclusion="stale"|.snapshot.jobs[0].conclusion="stale"' \
+  'neutral-all-completed-mixed|inconclusive|.snapshot.conclusion="neutral"|.snapshot.jobs[0].conclusion="neutral"' \
   'job-start-boundary|passed|.snapshot.started_at="2026-09-02T10:00:40Z"|.snapshot.jobs[0].started_at=.snapshot.started_at' \
   'attempt-min|passed|.trust_context.expected_run_attempt=1|.snapshot.run_attempt=1' \
   'attempt-max|passed|.trust_context.expected_run_attempt=1000000|.snapshot.run_attempt=1000000' \
@@ -222,6 +222,14 @@ for spec in \
   IFS='|' read -r name filter <<<"$spec"
   expect_reject "$name" "$filter"
 done
+
+for terminal in failure cancelled timed_out action_required stale neutral; do
+  expect_reject "completed-$terminal-with-queued" \
+    ".snapshot.conclusion=\"$terminal\"|.snapshot.jobs[0].conclusion=\"$terminal\"|.snapshot.jobs[1].status=\"queued\"|.snapshot.jobs[1].conclusion=null|.snapshot.jobs[1].started_at=null|.snapshot.jobs[1].completed_at=null"
+done
+grep -Fq 'github-actions-ci.provider-contradiction' \
+  "$tmp/completed-failure-with-queued.err" || fail terminal-child-contradiction
+pass
 
 base_out="$tmp/base.out"
 run "$root_input" >"$base_out"
