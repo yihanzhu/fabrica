@@ -759,6 +759,7 @@ v1_activation_path_ok() {
 v2_activation_path_ok() {
   case "$1" in
     README.md|RESTORE.md|ci/required-files.txt|\
+    control/v1/control-policy-set.json|\
     core/v2/generation-registry.json|\
     scripts/core-contract.sh|scripts/lib/profile-resolution.sh|\
     scripts/test/portable-core-schema.test.sh|\
@@ -838,6 +839,7 @@ fi
 schema_v2_expected_live_hits="$schema_test_tmp/v2-expected-live-hits"
 printf '%s\n' \
   ci/required-files.txt \
+  control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
   scripts/core-contract.sh \
