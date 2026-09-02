@@ -10,8 +10,7 @@ emit_error() {
     E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_POLICY_SET|E_CORE) ;;
     *) token=E_RUNTIME ;;
   esac
-  if [ "${INTERNAL_WORKER:-0}" -ne 1 ] && [ -n "${scratch:-}" ] &&
-     declare -F cleanup >/dev/null 2>&1; then
+  if [ -n "${scratch:-}" ] && declare -F cleanup >/dev/null 2>&1; then
     if cleanup; then
       trap - EXIT HUP INT TERM
     else
@@ -268,6 +267,188 @@ scratch_mkdirs() {
     ' "$scratch" "$SCRATCH_ID" "$@"
 }
 
+scratch_relative() {
+  case "$1" in
+    "$scratch"/*) /usr/bin/printf '%s\n' "${1#"$scratch/"}" ;;
+    *) return 1 ;;
+  esac
+}
+
+scratch_capture() {
+  local output=$1 error=$2 input=$3 input_identity=$4
+  shift 4
+  [ "$#" -gt 0 ] && [ "$output" != "$error" ] || return 125
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path \
+      -MPOSIX=_exit -e '
+      use strict; use warnings;
+      my ($root,$expected,$stdout_name,$stderr_name,$stdin_name,
+        $stdin_identity,@command)=@ARGV;
+      exit 125 unless @command;
+      my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
+      my ($parent,$name)=$root =~ m{\A(.+)/([^/]+)\z};
+      exit 125 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      opendir(my $parent_dh,$parent) or exit 125;
+      my @parent_st=stat($parent_dh);
+      exit 125 unless @parent_st && S_ISDIR($parent_st[2]) &&
+        $parent_st[0]==$p_dev && $parent_st[1]==$p_ino;
+      chdir($parent_dh) or exit 125;
+      my @root_named=lstat($name);
+      exit 125 unless @root_named && S_ISDIR($root_named[2]) &&
+        $root_named[0]==$d_dev && $root_named[1]==$d_ino;
+      opendir(my $root_dh,$name) or exit 125;
+      my @root_opened=stat($root_dh);
+      exit 125 unless @root_opened && S_ISDIR($root_opened[2]) &&
+        $root_opened[0]==$d_dev && $root_opened[1]==$d_ino;
+
+      sub output_handle {
+        my ($root_handle,$relative)=@_;
+        if ($relative eq "-") {
+          sysopen(my $null,"/dev/null",O_WRONLY|O_NOFOLLOW) or exit 125;
+          return $null;
+        }
+        exit 125 unless $relative =~ m{\A[^/]+(?:/[^/]+)*\z};
+        chdir($root_handle) or exit 125;
+        my @parts=split(m{/},$relative); my $leaf=pop @parts;
+        for my $component (@parts) {
+          exit 125 if $component eq "." or $component eq "..";
+          my @named=lstat($component);
+          exit 125 unless @named && S_ISDIR($named[2]);
+          opendir(my $next,$component) or exit 125;
+          my @opened=stat($next);
+          exit 125 unless @opened && S_ISDIR($opened[2]) &&
+            $opened[0]==$named[0] && $opened[1]==$named[1];
+          chdir($next) or exit 125;
+        }
+        exit 125 if $leaf eq "." or $leaf eq "..";
+        sysopen(my $file,$leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600) or
+          exit 125;
+        my @opened=stat($file);
+        exit 125 unless @opened && S_ISREG($opened[2]);
+        return $file;
+      }
+
+      sub input_bytes {
+        my ($root_handle,$relative,$identity)=@_;
+        return undef if $relative eq "-";
+        exit 125 unless $relative =~ m{\A[^/]+(?:/[^/]+)*\z};
+        my (undef,undef,$f_dev,$f_ino,$size,$mtime,$ctime,$digest)=
+          split(/:/,$identity,8);
+        chdir($root_handle) or exit 125;
+        my @parts=split(m{/},$relative); my $leaf=pop @parts;
+        for my $component (@parts) {
+          exit 125 if $component eq "." or $component eq "..";
+          my @named=lstat($component);
+          exit 125 unless @named && S_ISDIR($named[2]);
+          opendir(my $next,$component) or exit 125;
+          my @opened=stat($next);
+          exit 125 unless @opened && S_ISDIR($opened[2]) &&
+            $opened[0]==$named[0] && $opened[1]==$named[1];
+          chdir($next) or exit 125;
+        }
+        exit 125 if $leaf eq "." or $leaf eq "..";
+        my @named=lstat($leaf);
+        exit 125 unless @named && S_ISREG($named[2]) &&
+          $named[0]==$f_dev && $named[1]==$f_ino && $named[7]==$size &&
+          $named[9]==$mtime && $named[10]==$ctime;
+        sysopen(my $file,$leaf,O_RDONLY|O_NOFOLLOW) or exit 125;
+        my @opened=stat($file);
+        exit 125 unless @opened && S_ISREG($opened[2]) &&
+          $opened[0]==$f_dev && $opened[1]==$f_ino && $opened[7]==$size &&
+          $opened[9]==$mtime && $opened[10]==$ctime;
+        my $sha=Digest::SHA->new(256); my $total=0; my $text="";
+        while (1) {
+          my $read=sysread($file,my $buffer,65536);
+          exit 125 unless defined $read; last if $read==0;
+          $total += $read; exit 125 if $total > 1048576;
+          $sha->add($buffer); $text .= $buffer;
+        }
+        my @after=stat($file); my @path_after=lstat($leaf);
+        exit 125 unless $total==$size && $sha->hexdigest eq $digest &&
+          @after && @path_after && S_ISREG($path_after[2]) &&
+          $after[0]==$f_dev && $after[1]==$f_ino &&
+          $path_after[0]==$f_dev && $path_after[1]==$f_ino;
+        return $text;
+      }
+
+      my $stdout=output_handle($root_dh,$stdout_name);
+      my $stderr=output_handle($root_dh,$stderr_name);
+      my $stdin_text=input_bytes($root_dh,$stdin_name,$stdin_identity);
+      if (defined($stdin_text)) {
+        pipe(my $reader,my $writer) or exit 125;
+        my $writer_pid=fork(); exit 125 unless defined($writer_pid);
+        if ($writer_pid==0) {
+          close($reader);
+          my $offset=0; my $length=length($stdin_text);
+          while ($offset < $length) {
+            my $written=syswrite($writer,$stdin_text,$length-$offset,$offset);
+            _exit(125) unless defined($written) && $written>0;
+            $offset += $written;
+          }
+          close($writer); _exit(0);
+        }
+        close($writer);
+        open(STDIN,"<&",$reader) or exit 125;
+        close($reader);
+      } else {
+        sysopen(my $null,"/dev/null",O_RDONLY|O_NOFOLLOW) or exit 125;
+        open(STDIN,"<&",$null) or exit 125;
+        close($null);
+      }
+      open(STDOUT,">&",$stdout) or exit 125;
+      open(STDERR,">&",$stderr) or exit 125;
+      close($stdout); close($stderr); close($root_dh);
+      close($parent_dh);
+      exec {$command[0]} @command;
+      exit 126;
+    ' "$scratch" "$SCRATCH_ID" "$output" "$error" "$input" \
+      "$input_identity" "$@"
+}
+
+scratch_write_lines() {
+  local target=$1
+  shift
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:DEFAULT,:mode -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($root,$expected,$target,@lines)=@ARGV;
+      my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
+      my ($parent,$name)=$root =~ m{\A(.+)/([^/]+)\z};
+      exit 1 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent &&
+        $target =~ m{\A[^/]+(?:/[^/]+)*\z};
+      opendir(my $parent_dh,$parent) or exit 1;
+      my @parent_st=stat($parent_dh);
+      exit 1 unless @parent_st && S_ISDIR($parent_st[2]) &&
+        $parent_st[0]==$p_dev && $parent_st[1]==$p_ino;
+      chdir($parent_dh) or exit 1;
+      my @root_named=lstat($name);
+      exit 1 unless @root_named && S_ISDIR($root_named[2]) &&
+        $root_named[0]==$d_dev && $root_named[1]==$d_ino;
+      opendir(my $root_dh,$name) or exit 1;
+      my @root_opened=stat($root_dh);
+      exit 1 unless @root_opened && S_ISDIR($root_opened[2]) &&
+        $root_opened[0]==$d_dev && $root_opened[1]==$d_ino;
+      chdir($root_dh) or exit 1;
+      my @parts=split(m{/},$target); my $leaf=pop @parts;
+      for my $component (@parts) {
+        exit 1 if $component eq "." or $component eq "..";
+        my @named=lstat($component);
+        exit 1 unless @named && S_ISDIR($named[2]);
+        opendir(my $next,$component) or exit 1;
+        my @opened=stat($next);
+        exit 1 unless @opened && S_ISDIR($opened[2]) &&
+          $opened[0]==$named[0] && $opened[1]==$named[1];
+        chdir($next) or exit 1;
+      }
+      exit 1 if $leaf eq "." or $leaf eq "..";
+      sysopen(my $file,$leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600) or exit 1;
+      for my $line (@lines) { print {$file} $line,"\n" or exit 1; }
+      close($file) or exit 1;
+    ' "$scratch" "$SCRATCH_ID" "$target" "$@"
+}
+
 capture_identity_text() {
   /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
     /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
@@ -364,12 +545,14 @@ if [ -n "${YSTACK_EVIDENCE_STAGE+x}" ]; then silent_fail; fi
 scratch=
 SCRATCH_ID=
 SCRATCH_OWNED=0
-INTERNAL_WORKER=0
 ACTIVE_PID=
 ACTIVE_PGID=
 cleanup() {
   [ -z "${scratch:-}" ] && return 0
-  case "$scratch" in /*/ystack-evidence.??????) ;; *) return 1 ;; esac
+  case "$scratch" in
+    /*/ystack-evidence.??????|/*/ystack-evidence.??????/worker) ;;
+    *) return 1 ;;
+  esac
   [ "$SCRATCH_OWNED" -eq 1 ] && [ -n "$SCRATCH_ID" ] || return 1
   /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
     /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
@@ -566,6 +749,7 @@ emit_supervisor_failure() {
   exit 1
 }
 
+bootstrap_prepare() {
 [ "$#" -eq 6 ] && [ "$1" = evaluate ] || emit_error E_USAGE
 normalized_args=(evaluate)
 for input in "${@:2}"; do
@@ -597,7 +781,9 @@ scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence.XXXXXX" 2>/dev/nul
 scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
 SCRATCH_ID=$(directory_identity "$scratch") || emit_error E_RUNTIME
 SCRATCH_OWNED=1
-scratch_mkdirs bin || emit_error E_RUNTIME
+scratch_mkdirs bin io worker || emit_error E_RUNTIME
+worker_scratch="$scratch/worker"
+worker_scratch_id=$(directory_identity "$worker_scratch") || emit_error E_RUNTIME
 source_path="$scratch/driver.sh"
 jq_bin="$scratch/bin/jq"
 snapshot_nofollow "$origin" "$origin_identity" "$source_path" 1048576 0500 ||
@@ -636,31 +822,35 @@ if ! private_mode_ok "$source_path" || ! private_mode_ok "$jq_bin"; then
   emit_error E_RUNTIME
 fi
 verify_all_pins || emit_error E_RELATION
+}
 
 supervisor_main() {
   worker_status=0
-  run_child worker_main "$@" >"$scratch/worker.out" 2>"$scratch/worker.err" ||
+  run_child scratch_capture io/worker.out io/worker.err driver.sh \
+    "$private_driver_id" /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    TMPDIR="$scratch" HOME=/nonexistent /bin/bash -c \
+    'source /dev/stdin || exit 125; worker_entry "$@"' ystack-evidence-worker \
+    "$worker_scratch" "$worker_scratch_id" "$origin" "$origin_id" "$source_path" \
+    "$private_driver_id" "$live_jq_path" "$live_jq_id" "$jq_bin" \
+    "$private_jq_id" "$@" ||
     worker_status=$?
   if [ -n "${ACTIVE_PGID:-}" ] || [ -n "${ACTIVE_PID:-}" ]; then
     signal_exit 125
   fi
-  pin_path "$scratch/worker.err" || emit_supervisor_failure E_RUNTIME
-  error_identity=$(pinned_identity "$scratch/worker.err") || emit_supervisor_failure E_RUNTIME
-  error_text=$(capture_identity_text "$scratch/worker.err" "$error_identity") ||
+  pin_path "$scratch/io/worker.err" || emit_supervisor_failure E_RUNTIME
+  error_identity=$(pinned_identity "$scratch/io/worker.err") ||
+    emit_supervisor_failure E_RUNTIME
+  error_text=$(capture_identity_text "$scratch/io/worker.err" "$error_identity") ||
     emit_supervisor_failure E_RUNTIME
   if [ "$worker_status" -ne 0 ]; then emit_supervisor_failure "$error_text"; fi
   [ -z "$error_text" ] || emit_supervisor_failure E_RUNTIME
-  pin_path "$scratch/worker.out" || emit_supervisor_failure E_RUNTIME
-  worker_output_identity=$(pinned_identity "$scratch/worker.out") ||
+  pin_path "$scratch/io/worker.out" || emit_supervisor_failure E_RUNTIME
+  worker_output_identity=$(pinned_identity "$scratch/io/worker.out") ||
     emit_supervisor_failure E_RUNTIME
-  worker_output_text=$(capture_identity_text "$scratch/worker.out" \
+  worker_output_text=$(capture_identity_text "$scratch/io/worker.out" \
     "$worker_output_identity") || emit_supervisor_failure E_RUNTIME
-  [ -z "$worker_output_text" ] || emit_supervisor_failure E_RUNTIME
-  pin_path "$scratch/evaluation.json" || emit_supervisor_failure E_RUNTIME
-  output_identity=$(pinned_identity "$scratch/evaluation.json") ||
-    emit_supervisor_failure E_RUNTIME
-  output_text=$(capture_identity_text "$scratch/evaluation.json" "$output_identity") ||
-    emit_supervisor_failure E_RUNTIME
+  [ -n "$worker_output_text" ] || emit_supervisor_failure E_RUNTIME
+  output_text=$worker_output_text
   verify_all_pins || emit_supervisor_failure E_RELATION
   if ! cleanup; then exit 1; fi
   trap - EXIT HUP INT TERM
@@ -668,10 +858,42 @@ supervisor_main() {
   exit 0
 }
 
-worker_main() {
-INTERNAL_WORKER=1
+worker_entry() {
+  [ "$#" -eq 16 ] || silent_fail
+  trap - EXIT HUP INT TERM
+  scratch=$1
+  SCRATCH_ID=$2
+  origin=$3
+  origin_id=$4
+  source_path=$5
+  private_driver_id=$6
+  live_jq_path=$7
+  live_jq_id=$8
+  jq_bin=$9
+  private_jq_id=${10}
+  shift 10
+  SCRATCH_OWNED=0
+  ACTIVE_PID=
+  ACTIVE_PGID=
+  [ "$#" -eq 6 ] && [ "$1" = evaluate ] || silent_fail
+  case "$scratch" in /*/ystack-evidence.??????/worker) ;; *) silent_fail ;; esac
+  directory_matches_identity "$scratch" "$SCRATCH_ID" || silent_fail
+  SCRATCH_OWNED=1
+  outer_scratch=${scratch%/worker}
+  [ "$source_path" = "$outer_scratch/driver.sh" ] &&
+    [ "$jq_bin" = "$outer_scratch/bin/jq" ] || emit_error E_RUNTIME
+  PINNED_PATHS=("$origin" "$source_path" "$live_jq_path" "$jq_bin")
+  PINNED_IDENTITIES=("$origin_id" "$private_driver_id" "$live_jq_id" "$private_jq_id")
+  expected_jq=$(expected_jq_digest) || emit_error E_RUNTIME
+  [ "${origin_id##*:}" = "${private_driver_id##*:}" ] &&
+    [ "${live_jq_id##*:}" = "$expected_jq" ] &&
+    [ "${private_jq_id##*:}" = "$expected_jq" ] || emit_error E_RUNTIME
+  if ! private_mode_ok "$source_path" || ! private_mode_ok "$jq_bin"; then
+    emit_error E_RUNTIME
+  fi
+  verify_all_pins || emit_error E_RUNTIME
 trap - EXIT HUP INT TERM
-ulimit -f 2048 || silent_fail
+ulimit -f 2048 || emit_error E_RUNTIME
 
 shift
 source_dir=$(CDPATH='' cd -P -- "${origin%/*}" 2>/dev/null && pwd -P) ||
@@ -722,14 +944,16 @@ snapshot_executable() {
   pin_path "$target" || emit_error E_RUNTIME
 }
 canonical_json() {
-  local input=$1 canonical=$2 bom
+  local input=$1 canonical=$2 canonical_relative bom
   bom=$(/usr/bin/od -An -tx1 -N3 "$input" 2>/dev/null | /usr/bin/tr -d ' \n') ||
     emit_error E_RUNTIME
   [ "$bom" != efbbbf ] || emit_error E_PARSE
   "$jq_bin" -e 'true' "$input" </dev/null >/dev/null 2>&1 || emit_error E_PARSE
   "$jq_bin" -s -e 'length==1' "$input" </dev/null >/dev/null 2>&1 ||
     emit_error E_PARSE
-  "$jq_bin" -S -c . "$input" >"$canonical" 2>/dev/null || emit_error E_PARSE
+  canonical_relative=$(scratch_relative "$canonical") || emit_error E_RUNTIME
+  scratch_capture "$canonical_relative" - - - "$jq_bin" -S -c . "$input" ||
+    emit_error E_PARSE
   /usr/bin/cmp -s "$input" "$canonical" || emit_error E_CANONICAL
   "$jq_bin" -e '
     def depth:
@@ -776,7 +1000,8 @@ build_validator_mirror() {
 core_closure_sha() {
   local root=$1 wrapper=$2 selected=$3 tag=$4 registry generation_root canonical
   local relative file digest members descriptor physical selected_sha count modules
-  local -a paths
+  local members_identity members_text
+  local -a paths member_lines
   registry="$root/core/v2/generation-registry.json"
   generation_root="$root/core/v2/generations/$selected"
   for required_dir in "$root" "$root/scripts" "$root/core" "$root/core/v2" \
@@ -794,8 +1019,8 @@ core_closure_sha() {
   [ "$count" -eq 3 ] && [ "$modules" -eq 5 ] || return 1
   [ -f "$registry" ] && [ ! -L "$registry" ] || return 1
   canonical="$scratch/registry-$tag.json"
-  "$jq_bin" -s -S -c 'if length==1 then .[0] else error("root-count") end' \
-    "$registry" >"$canonical" 2>/dev/null || return 1
+  scratch_capture "registry-$tag.json" - - - "$jq_bin" -s -S -c \
+    'if length==1 then .[0] else error("root-count") end' "$registry" || return 1
   /usr/bin/cmp -s "$registry" "$canonical" || return 1
   "$jq_bin" -e --arg selected "$selected" '
     type=="array" and length>=1 and
@@ -814,20 +1039,26 @@ core_closure_sha() {
     "core/v2/generations/$selected/modules/stage_request.jq"
   )
   members="$scratch/core-members-$tag.tsv"
-  : >"$members" || return 1
+  member_lines=()
   for relative in "${paths[@]}"; do
     file="$root/$relative"
     [ -f "$file" ] && [ ! -L "$file" ] || return 1
     digest=$(sha256_path "$file") || return 1
-    /usr/bin/printf '%s\t%s\n' "$relative" "$digest" >>"$members" || return 1
+    member_lines[${#member_lines[@]}]="$relative"$'\t'"$digest"
   done
+  scratch_write_lines "core-members-$tag.tsv" "${member_lines[@]}" || return 1
+  pin_path "$members" || return 1
+  members_identity=$(pinned_identity "$members") || return 1
+  members_text=$(capture_identity_text "$members" "$members_identity") || return 1
   selected_sha=$(sha256_text "$selected") || return 1
-  descriptor=$("$jq_bin" -Rn -S -c --arg selected_sha "$selected_sha" '
-    [inputs|split("\t")|{path:.[0],sha256:.[1]}] as $members |
+  descriptor=$("$jq_bin" -Rn -S -c --arg selected_sha "$selected_sha" \
+    --arg members "$members_text" '
+    ($members|split("\n")|map(select(length>0)|split("\t")|
+      {path:.[0],sha256:.[1]})) as $members |
     {schema_version:1,kind:"core_contract_package_closure",
      semantic_identity:"core.contracts.v2",
      selected_generation_id_sha256:$selected_sha,members:$members}
-  ' <"$members") || return 1
+  ') || return 1
   sha256_text "$descriptor"
 }
 build_core_mirror() {
@@ -955,8 +1186,9 @@ validator_pair_ok "$mirror_validator_dir" "$mirror_policy_validator" \
   "$mirror_validator_program" "$validator_driver_sha" "$validator_program_sha" ||
   emit_error E_RELATION
 policy_status=0
-PATH="${jq_bin%/*}:/usr/bin:/bin" "$mirror_policy_validator" validate \
-  "$scratch/policy-set.json" >"$scratch/policy.out" 2>"$scratch/policy.err" ||
+scratch_capture policy.out policy.err - - /usr/bin/env -i LC_ALL=C \
+  PATH="${jq_bin%/*}:/usr/bin:/bin" TMPDIR="$scratch" HOME=/nonexistent \
+  "$mirror_policy_validator" validate "$scratch/policy-set.json" ||
   policy_status=$?
 if ! validator_pair_ok "$source_dir" "$policy_validator" "$validator_program" \
      "$validator_driver_sha" "$validator_program_sha" ||
@@ -995,9 +1227,11 @@ mirror_core_sha=$(core_closure_sha "$mirror_root" "$mirror_core_driver" "$select
 ' "$scratch/policy-set.json" >/dev/null 2>&1 || emit_error E_RELATION
 
 core_status=0
-PATH="${jq_bin%/*}:/usr/bin:/bin" "$mirror_core_driver" validate-stage-run \
+scratch_capture core.out core.err - - /usr/bin/env -i LC_ALL=C \
+  PATH="${jq_bin%/*}:/usr/bin:/bin" TMPDIR="$scratch" HOME=/nonexistent \
+  "$mirror_core_driver" validate-stage-run \
   "$scratch/request.json" "$scratch/resolved.json" "$scratch/result.json" \
-  >"$scratch/core.out" 2>"$scratch/core.err" || core_status=$?
+  || core_status=$?
 post_live_core_sha=$(core_closure_sha "$repo" "$core_driver" "$selected" live-post) ||
   emit_error E_RELATION
 post_mirror_core_sha=$(core_closure_sha \
@@ -1017,7 +1251,8 @@ request_sha=$(sha256_path "$scratch/request.json") || emit_error E_RUNTIME
 resolved_sha=$(sha256_path "$scratch/resolved.json") || emit_error E_RUNTIME
 result_sha=$(sha256_path "$scratch/result.json") || emit_error E_RUNTIME
 presentation_sha=$(sha256_path "$scratch/presentation.json") || emit_error E_RUNTIME
-"$jq_bin" -S -c -n -f "$scratch/program.jq" \
+scratch_capture evaluation.json - - - "$jq_bin" -S -c -n \
+  -f "$scratch/program.jq" \
   --slurpfile policy "$scratch/policy.json" \
   --slurpfile decision "$scratch/decision.json" \
   --slurpfile policy_set "$scratch/policy-set.json" \
@@ -1028,7 +1263,7 @@ presentation_sha=$(sha256_path "$scratch/presentation.json") || emit_error E_RUN
   --arg policy_sha "$policy_sha" --arg decision_sha "$decision_sha" \
   --arg policy_set_sha "$policy_set_sha" --arg request_sha "$request_sha" \
   --arg resolved_sha "$resolved_sha" --arg result_sha "$result_sha" \
-  --arg presentation_sha "$presentation_sha" >"$scratch/evaluation.json" 2>/dev/null ||
+  --arg presentation_sha "$presentation_sha" ||
   emit_error E_RUNTIME
 fixed_files_ok || emit_error E_RELATION
 final_live_core_sha=$(core_closure_sha "$repo" "$core_driver" "$selected" live-final) ||
@@ -1096,7 +1331,16 @@ canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||
 
 pin_path "$scratch/evaluation.json" || emit_error E_RUNTIME
 verify_all_pins || emit_error E_RELATION
+output_identity=$(pinned_identity "$scratch/evaluation.json") || emit_error E_RUNTIME
+output_text=$(capture_identity_text "$scratch/evaluation.json" "$output_identity") ||
+  emit_error E_RUNTIME
+if ! cleanup; then silent_fail; fi
+trap - EXIT HUP INT TERM
+/usr/bin/printf '%s\n' "$output_text" || exit 1
 return 0
 }
 
-supervisor_main "${normalized_args[@]}"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  bootstrap_prepare "$@"
+  supervisor_main "${normalized_args[@]}"
+fi

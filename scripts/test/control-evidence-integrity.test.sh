@@ -290,6 +290,27 @@ run_eval portable-valid
   fail 'portable valid output'
 pass "portable valid evaluation on $platform"
 
+bash_env_hook="$tmp/conditional-bash-env.sh"
+bash_env_sentinel="$tmp/conditional-bash-env.sentinel"
+/usr/bin/printf '%s\n' \
+  'case "$0" in' \
+  '  */validate.sh|*/core-contract.sh)' \
+  '    /usr/bin/printf "%s\\n" "${AWS_SECRET_ACCESS_KEY:-missing}" >'\
+"\"$bash_env_sentinel\"" \
+  '    ;;' \
+  'esac' >"$bash_env_hook"
+bash_env_status=0
+BASH_ENV="$bash_env_hook" AWS_SECRET_ACCESS_KEY=must-not-reach-nested-bash \
+  PATH="$bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" "$request" \
+  "$resolved" "$result" "$presentation" >"$tmp/bash-env.out" \
+  2>"$tmp/bash-env.err" || bash_env_status=$?
+if ! { [ "$bash_env_status" -eq 0 ] && [ -s "$tmp/bash-env.out" ] &&
+       [ ! -s "$tmp/bash-env.err" ] && [ ! -e "$bash_env_sentinel" ] &&
+       /usr/bin/cmp -s "$tmp/valid.out" "$tmp/bash-env.out"; }; then
+  fail 'nested bash environment isolation'
+fi
+pass 'nested bash ignores conditional BASH_ENV and credential-like values'
+
 expect_pure_violation result-moved '.body.result_ref.sha256=("0"*64)' \
   evidence.result-moved
 expect_pure_violation request-moved '.body.request_ref.sha256=("0"*64)' \
@@ -623,6 +644,47 @@ forged_stage_case worker
 forged_stage_case supervisor official
 forged_stage_case worker official
 
+direct_runtime="$tmp/direct-worker-runtime"
+direct_scratch="$tmp/ystack-evidence.DIRECT"
+copy_runtime "$direct_runtime"
+/bin/mkdir -m 0700 "$direct_scratch" "$direct_scratch/bin" "$direct_scratch/worker"
+direct_runtime=$(CDPATH='' cd -P -- "$direct_runtime" && pwd -P)
+direct_scratch=$(CDPATH='' cd -P -- "$direct_scratch" && pwd -P)
+direct_worker="$direct_scratch/worker"
+direct_live_parent=$(CDPATH='' cd -P -- "${jq_bin%/*}" && pwd -P)
+direct_live="$direct_live_parent/${jq_bin##*/}"
+direct_input_parent=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+direct_origin="$direct_runtime/control/v1/evaluate-evidence-integrity.sh"
+/bin/cp "$direct_origin" "$direct_scratch/driver.sh"
+/bin/chmod 0500 "$direct_scratch/driver.sh"
+/bin/cp "$jq_bin" "$direct_scratch/bin/jq"
+/bin/chmod 0500 "$direct_scratch/bin/jq"
+direct_origin_id=$(test_path_identity "$direct_origin")
+direct_driver_id=$(test_path_identity "$direct_scratch/driver.sh")
+direct_live_id=$(test_path_identity "$direct_live")
+direct_jq_id=$(test_path_identity "$direct_scratch/bin/jq")
+direct_worker_id=$(test_directory_identity "$direct_worker")
+direct_status=0
+/usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$direct_scratch" \
+  HOME=/nonexistent /bin/bash -c \
+  'source "$1" || exit 125; shift; declare -F worker_main >/dev/null && exit 124;
+   worker_entry "$@"' direct-worker \
+  "$direct_origin" "$direct_worker" "$direct_worker_id" "$direct_origin" \
+  "$direct_origin_id" "$direct_scratch/driver.sh" "$direct_driver_id" \
+  "$direct_live" "$direct_live_id" "$direct_scratch/bin/jq" "$direct_jq_id" \
+  evaluate "$direct_input_parent/policy-set.json" "$direct_input_parent/request.json" \
+  "$direct_input_parent/resolved.json" "$direct_input_parent/result.json" \
+  "$direct_input_parent/presentation.json" \
+  >"$tmp/direct-worker.out" 2>"$tmp/direct-worker.err" || direct_status=$?
+if ! { [ "$direct_status" -eq 0 ] && [ -s "$tmp/direct-worker.out" ] &&
+       [ ! -s "$tmp/direct-worker.err" ] && [ ! -e "$direct_worker" ] &&
+       [ -z "$(/usr/bin/find "$direct_scratch" -name evaluation.json -print -quit)" ] &&
+       "$jq_bin" -e '.kind=="evidence_integrity_evaluation"' \
+         "$tmp/direct-worker.out" >/dev/null; }; then
+  fail 'direct sourced worker cleanup'
+fi
+pass 'direct sourced worker has observation output but no retained worker effects'
+
 mutated_decision_runtime="$tmp/mutated-decision-runtime"
 copy_runtime "$mutated_decision_runtime"
 "$jq_bin" -S -c '.body.semantics.authority_effect="unexpected"' \
@@ -691,7 +753,7 @@ replace_identity_case() {
     origin) target="$runtime/control/v1/evaluate-evidence-integrity.sh" ;;
     private-driver) target="${observed%/bin/jq}/driver.sh" ;;
     live-jq) target="$live_bin/jq" ;;
-    private-jq) target="${observed%/evaluation.json}/bin/jq" ;;
+    private-jq) target="${observed%/worker/evaluation.json}/bin/jq" ;;
     *) fail "$name target" ;;
   esac
   /bin/cp "$target" "$target.next"
@@ -839,11 +901,11 @@ output_runtime="$tmp/output-swap-runtime"
 output_scratch="$tmp/output-swap-scratch"
 copy_runtime "$output_runtime"
 /usr/bin/perl -0777 -pi -e '
-  s{  pin_path "\$scratch/evaluation\.json" \|\| emit_supervisor_failure E_RUNTIME}{
+  s{pin_path "\$scratch/evaluation\.json" \|\| emit_error E_RUNTIME}{
     /bin/mv "\$scratch/evaluation.json" "\$scratch/evaluation.saved" || exit 1;
     /bin/ln -s "\$scratch/evaluation.saved" "\$scratch/evaluation.json" || exit 1;
-    pin_path "\$scratch/evaluation.json" || emit_supervisor_failure E_RUNTIME
-  }
+    pin_path "\$scratch/evaluation.json" || emit_error E_RUNTIME
+  } or exit 2
 ' "$output_runtime/control/v1/evaluate-evidence-integrity.sh"
 bind_modified_driver "$output_runtime" "$tmp/output-swap-set.json"
 /bin/mkdir "$output_scratch"
@@ -886,6 +948,59 @@ TMPDIR="$cleanup_error_scratch" PATH="$bin:/usr/bin:/bin" \
   [ ! -s "$tmp/cleanup-error.err" ] || fail 'cleanup failure error-path output'
 pass 'error paths emit nothing when scratch cleanup fails'
 
+capture_swap_case() {
+  local mode=$1 runtime="$tmp/capture-$1-runtime"
+  local parent="$tmp/capture-$1-parent" outside="$tmp/capture-$1-outside"
+  local ready="$tmp/capture-$1.ready" go="$tmp/capture-$1.go"
+  local process scratch_path status=0 attempt=0
+  copy_runtime "$runtime"
+  /bin/mkdir "$parent" "$outside"
+  /usr/bin/printf 'outside-unchanged\n' >"$outside/sentinel"
+  CAPTURE_READY="$ready" CAPTURE_GO="$go" /usr/bin/perl -0777 -pi -e '
+    my $ready=$ENV{"CAPTURE_READY"}; my $go=$ENV{"CAPTURE_GO"};
+    my $replacement = qq{  /usr/bin/printf "ready\\n" >"$ready" || exit 1\n} .
+      qq{  while [ ! -e "$go" ]; do /bin/sleep 0.01; done\n} .
+      qq{  run_child scratch_capture};
+    s{  run_child scratch_capture}{$replacement} or exit 2;
+  ' "$runtime/control/v1/evaluate-evidence-integrity.sh"
+  bind_modified_driver "$runtime" "$tmp/capture-$1-set.json"
+  TMPDIR="$parent" PATH="$bin:/usr/bin:/bin" \
+    "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+    "$tmp/capture-$1-set.json" "$request" "$resolved" "$result" "$presentation" \
+    >"$tmp/capture-$1.out" 2>"$tmp/capture-$1.err" &
+  process=$!
+  while [ ! -e "$ready" ] && kill -0 "$process" 2>/dev/null &&
+        [ "$attempt" -lt 1200 ]; do
+    attempt=$((attempt + 1)); /bin/sleep 0.005
+  done
+  [ -e "$ready" ] || fail "capture $mode ready"
+  scratch_path=$(/usr/bin/find "$parent" -mindepth 1 -maxdepth 1 -type d \
+    -name 'ystack-evidence.??????' -print -quit)
+  [ -n "$scratch_path" ] || fail "capture $mode scratch"
+  case "$mode" in
+    ancestor)
+      /bin/mv "$scratch_path/io" "$scratch_path/io.saved"
+      /bin/ln -s "$outside" "$scratch_path/io"
+      ;;
+    leaf)
+      /bin/ln -s "$outside/sentinel" "$scratch_path/io/worker.out"
+      ;;
+    *) fail "capture $mode mode" ;;
+  esac
+  : >"$go"
+  wait "$process" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/capture-$1.out" ] &&
+    [ "$(/bin/cat "$tmp/capture-$1.err")" = E_RUNTIME ] &&
+    [ "$(/bin/cat "$outside/sentinel")" = outside-unchanged ] &&
+    [ ! -e "$outside/worker.out" ] && [ ! -e "$outside/worker.err" ] &&
+    [ -z "$(/usr/bin/find "$parent" -mindepth 1 -print -quit)" ] ||
+    fail "capture $mode result"
+  pass "anchored scratch capture rejects $mode replacement"
+}
+
+capture_swap_case leaf
+capture_swap_case ancestor
+
 bin_swap_runtime="$tmp/bin-swap-runtime"
 bin_swap_parent="$tmp/bin-swap-parent"
 bin_swap_outside="$tmp/bin-swap-outside"
@@ -897,10 +1012,10 @@ copy_runtime "$bin_swap_runtime"
 BIN_SWAP_READY="$bin_swap_ready" BIN_SWAP_GO="$bin_swap_go" \
   /usr/bin/perl -0777 -pi -e '
     my $ready=$ENV{"BIN_SWAP_READY"}; my $go=$ENV{"BIN_SWAP_GO"};
-    my $replacement = qq{scratch_mkdirs bin || emit_error E_RUNTIME\n} .
+    my $replacement = qq{scratch_mkdirs bin io worker || emit_error E_RUNTIME\n} .
       qq{/usr/bin/printf "ready\\n" >"$ready" || exit 1\n} .
       qq{while [ ! -e "$go" ]; do /bin/sleep 0.01; done};
-    s{scratch_mkdirs bin \|\| emit_error E_RUNTIME}{$replacement} or exit 2;
+    s{scratch_mkdirs bin io worker \|\| emit_error E_RUNTIME}{$replacement} or exit 2;
   ' "$bin_swap_runtime/control/v1/evaluate-evidence-integrity.sh"
 bind_modified_driver "$bin_swap_runtime" "$tmp/bin-swap-set.json"
 TMPDIR="$bin_swap_parent" PATH="$bin:/usr/bin:/bin" \
