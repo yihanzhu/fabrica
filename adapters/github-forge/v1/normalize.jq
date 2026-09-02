@@ -7,6 +7,13 @@ def exact_fields($required; $optional):
 def id_ok:
   type == "string" and test("\\A[a-z0-9][a-z0-9._:-]{0,127}\\z");
 
+def content_id_ok:
+  id_ok and (contains(":") | not) and (contains("/") | not);
+
+def media_type_ok:
+  type == "string" and utf8bytelength <= 127 and
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
+
 def provider_id_ok:
   type == "string" and test("\\A[1-9][0-9]{0,19}\\z");
 
@@ -45,9 +52,8 @@ def revision_ok:
 
 def content_ref_ok:
   exact_fields(["content_id","media_type","sha256"];[]) and
-  (.content_id | id_ok) and
-  (.media_type | type == "string" and
-   test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z")) and
+  (.content_id | content_id_ok) and
+  (.media_type | media_type_ok) and
   (.sha256 | sha256_ok);
 
 def trust_context_ok:
