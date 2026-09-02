@@ -233,6 +233,10 @@ scripts/test/orchestrator-reconciliation-plan.test.sh
 adapters/github-forge/v1/normalize.jq
 scripts/test/default-github-forge-adapter.test.sh
 
+# Inactive GitHub Actions CI normalizer payload
+adapters/github-actions-ci/v1/normalize.jq
+scripts/test/default-github-actions-ci-adapter.test.sh
+
 # Inactive deterministic verifier normalizer payload
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
