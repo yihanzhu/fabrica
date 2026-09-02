@@ -271,10 +271,58 @@ ACTIVE_PGID=
 cleanup() {
   [ -z "${scratch:-}" ] && return 0
   case "$scratch" in /*/ystack-evidence.??????) ;; *) return 1 ;; esac
-  [ "$SCRATCH_OWNED" -eq 1 ] && [ -n "$SCRATCH_ID" ] &&
-    directory_matches_identity "$scratch" "$SCRATCH_ID" || return 1
-  /bin/rm -rf -- "$scratch" >/dev/null 2>&1 &&
-    [ ! -e "$scratch" ] && [ ! -L "$scratch" ]
+  [ "$SCRATCH_OWNED" -eq 1 ] && [ -n "$SCRATCH_ID" ] || return 1
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($path,$expected)=@ARGV;
+      my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
+      my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+      exit 1 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      opendir(my $parent_dh,$parent) or exit 1;
+      my @parent_st=stat($parent_dh);
+      exit 1 unless @parent_st && S_ISDIR($parent_st[2]) &&
+        $parent_st[0]==$p_dev && $parent_st[1]==$p_ino;
+      chdir($parent_dh) or exit 1;
+      my @named=lstat($name);
+      exit 1 unless @named && S_ISDIR($named[2]) &&
+        $named[0]==$d_dev && $named[1]==$d_ino;
+      opendir(my $root_dh,$name) or exit 1;
+      my @opened=stat($root_dh);
+      exit 1 unless @opened && S_ISDIR($opened[2]) &&
+        $opened[0]==$d_dev && $opened[1]==$d_ino;
+
+      sub empty_dir {
+        my ($dh)=@_; chdir($dh) or return 0; rewinddir($dh);
+        while (defined(my $entry=readdir($dh))) {
+          next if $entry eq "." or $entry eq "..";
+          my @before=lstat($entry); return 0 unless @before;
+          if (S_ISDIR($before[2])) {
+            opendir(my $child,$entry) or return 0;
+            my @child_st=stat($child);
+            return 0 unless @child_st && $child_st[0]==$before[0] &&
+              $child_st[1]==$before[1] && empty_dir($child);
+            chdir($dh) or return 0;
+            my @after=lstat($entry);
+            return 0 unless @after && S_ISDIR($after[2]) &&
+              $after[0]==$before[0] && $after[1]==$before[1] && rmdir($entry);
+          } else {
+            return 0 unless unlink($entry);
+          }
+          chdir($dh) or return 0;
+        }
+        return 1;
+      }
+
+      exit 1 unless empty_dir($root_dh);
+      chdir($parent_dh) or exit 1;
+      my @final=lstat($name);
+      exit 1 unless @final && S_ISDIR($final[2]) &&
+        $final[0]==$d_dev && $final[1]==$d_ino && rmdir($name);
+      exit 1 if lstat($name);
+    ' "$scratch" "$SCRATCH_ID" >/dev/null 2>&1 || return 1
+  [ ! -e "$scratch" ] && [ ! -L "$scratch" ]
 }
 group_live_count() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
@@ -317,38 +365,103 @@ signal_exit() {
   trap - EXIT HUP INT TERM
   exit "$status"
 }
-trap cleanup EXIT
-trap 'signal_exit 129' HUP
-trap 'signal_exit 130' INT
-trap 'signal_exit 143' TERM
+PENDING_SIGNAL=0
+arm_signal_traps() {
+  trap cleanup EXIT
+  trap 'signal_exit 129' HUP
+  trap 'signal_exit 130' INT
+  trap 'signal_exit 143' TERM
+}
+defer_signal_traps() {
+  PENDING_SIGNAL=0
+  trap 'PENDING_SIGNAL=129' HUP
+  trap 'PENDING_SIGNAL=130' INT
+  trap 'PENDING_SIGNAL=143' TERM
+}
+kill_unregistered_child() {
+  local child=$1 state attempt=0
+  /bin/kill -TERM "$child" 2>/dev/null || :
+  state=$(leader_state "$child") || state=
+  while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 100 ]; do
+    attempt=$((attempt + 1)); /bin/sleep 0.01
+    state=$(leader_state "$child") || state=
+  done
+  if [ -n "$state" ] && [[ "$state" != Z* ]]; then
+    /bin/kill -KILL "$child" 2>/dev/null || :
+  fi
+  wait "$child" 2>/dev/null || :
+  state=$(leader_state "$child") || state=
+  [ -z "$state" ]
+}
+arm_signal_traps
 
 run_child() {
   local child pgid state attempt=0 child_status=0 count self_pgid
+  local gate="$scratch/worker.gate"
   [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
-  self_pgid=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || return 125
+  defer_signal_traps
+  self_pgid=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || {
+    arm_signal_traps
+    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
+    return 125
+  }
+  if [ -e "$gate" ] || [ -L "$gate" ] ||
+     ! /usr/bin/mkfifo -m 0600 "$gate"; then
+    arm_signal_traps
+    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
+    return 125
+  fi
   set -m
-  /bin/bash -c 'ulimit -f 2048; exec "$@"' evidence-child "$@" &
+  /bin/bash -c '
+    gate=$1; shift
+    IFS= read -r gate_value <"$gate" || exit 125
+    [ "$gate_value" = go ] || exit 125
+    ulimit -f 2048
+    exec "$@"
+  ' evidence-child "$gate" "$@" &
   child=$!
   set +m
-  pgid=$(/bin/ps -o pgid= -p "$child" 2>/dev/null | /usr/bin/tr -d ' ') || pgid=
+  while [ "$attempt" -lt 100 ]; do
+    pgid=$(/bin/ps -o pgid= -p "$child" 2>/dev/null | /usr/bin/tr -d ' ') || pgid=
+    if [[ "$pgid" =~ ^[1-9][0-9]*$ ]] && [ "$pgid" = "$child" ] &&
+       [ "$pgid" != "$self_pgid" ]; then break; fi
+    state=$(leader_state "$child") || state=
+    [ -n "$state" ] && [[ "$state" != Z* ]] || break
+    attempt=$((attempt + 1)); /bin/sleep 0.01
+  done
   if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$child" ] ||
      [ "$pgid" = "$self_pgid" ]; then
-    wait "$child" 2>/dev/null || :; return 125
+    kill_unregistered_child "$child" || :
+    arm_signal_traps
+    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
+    return 125
   fi
   ACTIVE_PID=$child; ACTIVE_PGID=$pgid
+  arm_signal_traps
+  [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
+  /usr/bin/printf 'go\n' >"$gate" || {
+    terminate_active || return 125
+    return 125
+  }
+  attempt=0
   state=$(leader_state "$child") || state=
   while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 1000 ]; do
     attempt=$((attempt + 1)); /bin/sleep 0.01
     state=$(leader_state "$child") || state=
   done
   if [ -n "$state" ] && [[ "$state" != Z* ]]; then
-    terminate_active || :; return 124
+    terminate_active || return 125
+    return 124
   fi
   wait "$child" || child_status=$?
-  count=$(group_live_count "$pgid") || return 125
+  count=$(group_live_count "$pgid") || {
+    terminate_active || return 125
+    return 125
+  }
   if [ "$count" -ne 0 ]; then
     ACTIVE_PID=$child; ACTIVE_PGID=$pgid
-    terminate_active || :; return 125
+    terminate_active || return 125
+    return 125
   fi
   ACTIVE_PID=; ACTIVE_PGID=
   return "$child_status"
@@ -470,6 +583,9 @@ if [ "$stage" = supervisor ]; then
     YSTACK_EVIDENCE_PRIVATE_JQ_ID="${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}" \
     /bin/bash "$source_path" "$@" >"$scratch/worker.out" 2>"$scratch/worker.err" ||
     worker_status=$?
+  if [ -n "${ACTIVE_PGID:-}" ] || [ -n "${ACTIVE_PID:-}" ]; then
+    signal_exit 125
+  fi
   pin_path "$scratch/worker.err" || emit_supervisor_failure E_RUNTIME
   error_identity=$(pinned_identity "$scratch/worker.err") || emit_supervisor_failure E_RUNTIME
   error_text=$(capture_identity_text "$scratch/worker.err" "$error_identity") ||

@@ -345,6 +345,14 @@ expect_full_malformed_element prior-object-missing \
 expect_full_malformed_element prior-object-wrong-type \
   '.body.prior_evidence_refs=[{evidence_id:1,stage_result_ref:1},
     {evidence_id:1,stage_result_ref:1}]' evidence.prior-stale
+expect_full_malformed_element invalid-evidence-kind \
+  '.body.evidence[0].kind="runtime-alt"' evidence.current-mismatch
+expect_full_malformed_element invalid-proof-content-id \
+  '.body.evidence[0].proof_ref.content_id="proof:invalid"' evidence.current-mismatch
+expect_full_malformed_element invalid-proof-media-type \
+  '.body.evidence[0].proof_ref.media_type=""' evidence.current-mismatch
+expect_full_malformed_element invalid-qualification-subject \
+  '.body.qualification_ref.value.subject_ref={}' evidence.qualification-mismatch
 
 shared_request="$tmp/shared-proof.request"
 "$jq_bin" -L "$root/scripts/test" -S -c -n --arg resolved_sha "$resolved_sha" '
@@ -750,6 +758,48 @@ bind_modified_driver() {
       then .decision_ref.sha256=$digest else . end
   ' "$policy_set" >"$output_set"
 }
+
+launch_runtime="$tmp/launch-signal-runtime"
+launch_scratch="$tmp/launch-signal-scratch"
+launch_ready="$tmp/launch-signal.ready"
+launch_go="$tmp/launch-signal.go"
+copy_runtime "$launch_runtime"
+/bin/mkdir "$launch_scratch"
+LAUNCH_READY="$launch_ready" LAUNCH_GO="$launch_go" \
+  /usr/bin/perl -0777 -pi -e '
+    my $ready=$ENV{"LAUNCH_READY"}; my $go=$ENV{"LAUNCH_GO"};
+    my $replacement = qq{  child=\$!\n} .
+      qq{  /usr/bin/printf "%s\\n" "\$child" >"$ready" || exit 125\n} .
+      qq{  while [ ! -e "$go" ]; do /bin/sleep 0.01; done};
+    s{  child=\$!}{$replacement} or exit 2;
+  ' "$launch_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$launch_runtime" "$tmp/launch-signal-set.json"
+TMPDIR="$launch_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$launch_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/launch-signal-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/launch-signal.out" 2>"$tmp/launch-signal.err" &
+launch_pid=$!
+launch_attempt=0
+while [ ! -s "$launch_ready" ] && kill -0 "$launch_pid" 2>/dev/null &&
+      [ "$launch_attempt" -lt 1200 ]; do
+  launch_attempt=$((launch_attempt + 1)); /bin/sleep 0.005
+done
+[ -s "$launch_ready" ] || fail 'launch signal ready'
+launch_child=$(/bin/cat "$launch_ready")
+[[ "$launch_child" =~ ^[1-9][0-9]*$ ]] || fail 'launch signal child'
+/bin/kill -TERM "$launch_pid"
+: >"$launch_go"
+wait_exit "$launch_pid" 500 || fail 'launch signal bounded exit'
+launch_status=0
+wait "$launch_pid" || launch_status=$?
+launch_live=$(/bin/ps -axo pgid=,state= 2>/dev/null | /usr/bin/awk \
+  -v group="$launch_child" '$1==group && $2!~/^Z/ {count++} END {print count+0}')
+[ "$launch_status" -ne 0 ] && ! kill -0 "$launch_child" 2>/dev/null &&
+  [ "$launch_live" -eq 0 ] && [ ! -s "$tmp/launch-signal.out" ] &&
+  [ ! -s "$tmp/launch-signal.err" ] &&
+  [ -z "$(/usr/bin/find "$launch_scratch" -mindepth 1 -print -quit)" ] ||
+  fail 'launch signal cleanup'
+pass 'launch-window signals wait for owned child registration and reap'
 
 output_runtime="$tmp/output-swap-runtime"
 output_scratch="$tmp/output-swap-scratch"
