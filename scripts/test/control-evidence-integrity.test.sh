@@ -44,6 +44,18 @@ test_path_identity() {
         $leaf[7],":",$leaf[9],":",$leaf[10],":",$sha->hexdigest,"\n";
     ' "$1"
 }
+test_directory_identity() {
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
+      my ($path)=@ARGV; my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+      exit 1 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      my @parent=lstat($parent); my @dir=lstat($path); my $physical=abs_path($path);
+      exit 1 unless @parent && @dir && S_ISDIR($parent[2]) && S_ISDIR($dir[2]) &&
+        (($dir[2] & 07777) == 0700) && defined($physical) && $physical eq $path;
+      print $parent[0],":",$parent[1],":",$dir[0],":",$dir[1],"\n";
+    ' "$1"
+}
 
 platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
 case "$platform" in
@@ -288,14 +300,14 @@ expect_pure_violation ambiguous-presentation '.body.evidence += [.body.evidence[
   evidence.presentation-ambiguous
 
 expect_pure_violation duplicate-evidence-id \
-  '.body.evidence += [(.body.evidence[0] | .kind="runtime-alt")]' \
+  '.body.evidence += [(.body.evidence[0] | .kind="behavioral")]' \
   evidence.presentation-ambiguous evidence.presentation-malformed
 expect_pure_violation duplicate-evidence-kind \
   '.body.evidence += [(.body.evidence[0] | .evidence_id="evidence.zzz")]' \
   evidence.presentation-ambiguous evidence.presentation-malformed
 expect_pure_violation reversed-evidence \
   '.body.evidence += [(.body.evidence[0] | .evidence_id="evidence.zzz" |
-    .kind="runtime-alt")] | .body.evidence |= reverse' \
+    .kind="behavioral")] | .body.evidence |= reverse' \
   evidence.presentation-malformed
 expect_pure_violation duplicate-prior-key \
   '.body.prior_evidence_refs += [.body.prior_evidence_refs[0]]' \
@@ -494,6 +506,18 @@ PATH="$wrapper_bin:/usr/bin:/bin" "$evaluator" evaluate "$policy_set" \
   [ "$(/bin/cat "$tmp/unbound-jq.err")" = E_RUNTIME ] || fail 'unbound jq result'
 pass 'only official jq 1.6 bytes are accepted'
 
+inherited_scratch="$tmp/ystack-evidence.KEEPIT"
+/bin/mkdir -m 0700 "$inherited_scratch"
+: >"$inherited_scratch/owned-by-caller"
+inherited_status=0
+YSTACK_EVIDENCE_SCRATCH="$inherited_scratch" PATH="$bin:/usr/bin:/bin" \
+  "$evaluator" invalid >"$tmp/inherited.out" 2>"$tmp/inherited.err" ||
+  inherited_status=$?
+[ "$inherited_status" -ne 0 ] && [ ! -s "$tmp/inherited.out" ] &&
+  [ "$(/bin/cat "$tmp/inherited.err")" = E_USAGE ] &&
+  [ -f "$inherited_scratch/owned-by-caller" ] || fail 'inherited scratch ownership'
+pass 'bootstrap ignores inherited scratch cleanup authority'
+
 /usr/bin/grep -Fq \
   '"$jq_bin" -n -e --arg policy_sha "$policy_sha" --arg driver_sha "$driver_sha"' \
   "$evaluator" || fail 'decision envelope null-input mode'
@@ -513,6 +537,7 @@ copy_runtime() {
 forged_stage_case() {
   local stage=$1 suffix runtime="$tmp/forged-$1-runtime" scratch
   local sentinel="$tmp/forged-$1-sentinel" physical_tmp origin live driver_id live_id
+  local scratch_id
   local private_driver_id
   local status=0
   case "$stage" in supervisor) suffix=SUPERV ;; worker) suffix=WORKER ;; esac
@@ -531,12 +556,14 @@ forged_stage_case() {
     'exec /usr/bin/jq "$@"' >"$scratch/bin/jq"
   /bin/chmod 0500 "$scratch/bin/jq"
   live="$scratch/bin/jq"
+  scratch_id=$(test_directory_identity "$scratch")
   driver_id=$(test_path_identity "$origin")
   private_driver_id=$(test_path_identity "$scratch/driver.sh")
   live_id=$(test_path_identity "$live")
   physical_tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
   /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
     YSTACK_EVIDENCE_STAGE="$stage" YSTACK_EVIDENCE_SCRATCH="$scratch" \
+    YSTACK_EVIDENCE_SCRATCH_ID="$scratch_id" \
     YSTACK_EVIDENCE_ORIGIN="$origin" YSTACK_EVIDENCE_ORIGIN_ID="$driver_id" \
     YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="$private_driver_id" \
     YSTACK_EVIDENCE_LIVE_JQ="$live" YSTACK_EVIDENCE_LIVE_JQ_ID="$live_id" \
@@ -774,6 +801,46 @@ TMPDIR="$cleanup_error_scratch" PATH="$bin:/usr/bin:/bin" \
 [ "$cleanup_error_status" -ne 0 ] && [ ! -s "$tmp/cleanup-error.out" ] &&
   [ ! -s "$tmp/cleanup-error.err" ] || fail 'cleanup failure error-path output'
 pass 'error paths emit nothing when scratch cleanup fails'
+
+scratch_swap_runtime="$tmp/scratch-swap-runtime"
+scratch_swap_parent="$tmp/scratch-swap-parent"
+scratch_swap_ready="$tmp/scratch-swap.ready"
+scratch_swap_go="$tmp/scratch-swap.go"
+copy_runtime "$scratch_swap_runtime"
+/bin/mkdir "$scratch_swap_parent"
+SCRATCH_READY="$scratch_swap_ready" SCRATCH_GO="$scratch_swap_go" \
+  /usr/bin/perl -0777 -pi -e '
+    my $ready=$ENV{"SCRATCH_READY"}; my $go=$ENV{"SCRATCH_GO"};
+    my $replacement = qq{  /usr/bin/printf "ready\\n" >"$ready" || exit 1;\n} .
+      qq{  while [ ! -e "$go" ]; do /bin/sleep 0.01; done\n} .
+      qq{  if ! cleanup; then exit 1; fi};
+    s{  if ! cleanup; then exit 1; fi}{$replacement} or exit 2;
+  ' "$scratch_swap_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$scratch_swap_runtime" "$tmp/scratch-swap-set.json"
+TMPDIR="$scratch_swap_parent" PATH="$bin:/usr/bin:/bin" \
+  "$scratch_swap_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/scratch-swap-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/scratch-swap.out" 2>"$tmp/scratch-swap.err" &
+scratch_swap_pid=$!
+scratch_swap_attempt=0
+while [ ! -e "$scratch_swap_ready" ] && kill -0 "$scratch_swap_pid" 2>/dev/null &&
+      [ "$scratch_swap_attempt" -lt 1200 ]; do
+  scratch_swap_attempt=$((scratch_swap_attempt + 1)); /bin/sleep 0.005
+done
+[ -e "$scratch_swap_ready" ] || fail 'scratch swap ready'
+scratch_original=$(/usr/bin/find "$scratch_swap_parent" -mindepth 1 -maxdepth 1 \
+  -type d -name 'ystack-evidence.??????' -print -quit)
+[ -n "$scratch_original" ] || fail 'scratch swap original'
+/bin/mv "$scratch_original" "$scratch_original.saved"
+/bin/mkdir -m 0700 "$scratch_original"
+: >"$scratch_original/replacement"
+: >"$scratch_swap_go"
+scratch_swap_status=0
+wait "$scratch_swap_pid" || scratch_swap_status=$?
+[ "$scratch_swap_status" -ne 0 ] && [ ! -s "$tmp/scratch-swap.out" ] &&
+  [ ! -s "$tmp/scratch-swap.err" ] && [ -d "$scratch_original.saved" ] &&
+  [ -f "$scratch_original/replacement" ] || fail 'scratch swap cleanup identity'
+pass 'scratch path replacement cannot authorize cleanup or output'
 
 for required in control/v1/evidence-integrity-policy.json \
   control/v1/evidence-integrity-decision.json control/v1/evidence-integrity.jq \

@@ -7,20 +7,76 @@ def id_ok:
 def sha256_ok:
   type == "string" and test("\\A[0-9a-f]{64}\\z");
 
+def media_type_ok:
+  type == "string" and length <= 127 and
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
+
+def evidence_kind_ok:
+  type == "string" and
+  (. as $kind |
+   ["architecture","behavioral","deterministic","independent-review"] |
+   index($kind) != null);
+
 def content_ref_ok:
   exact(["content_id","media_type","sha256"]) and
-  (.content_id | id_ok) and (.media_type | type == "string") and
+  (.content_id | id_ok) and (.content_id | contains(":") | not) and
+  (.content_id | contains("/") | not) and (.media_type | media_type_ok) and
+  (.sha256 | sha256_ok);
+
+def document_ref_any_ok:
+  exact(["id","kind","schema_version","sha256"]) and
+  .schema_version == 2 and
+  (.kind as $kind |
+   ["adapter_manifest","profile","resolved_profile","stage_request","stage_result"] |
+   index($kind) != null) and (.id | id_ok) and
   (.sha256 | sha256_ok);
 
 def document_ref_ok($kind):
-  exact(["id","kind","schema_version","sha256"]) and
-  .schema_version == 2 and .kind == $kind and (.id | id_ok) and
-  (.sha256 | sha256_ok);
+  document_ref_any_ok and .kind == $kind;
+
+def repo_path_ok:
+  type == "string" and length > 0 and
+  (test("[\\x{0000}-\\x{001f}\\x{007f}-\\x{009f}]") | not) and
+  (contains("\\") | not) and
+  (split("/") | all(.[];. != "" and . != "." and . != ".."));
+
+def git_revision_ref_ok:
+  exact(["repository_id","hash_algorithm","commit_id"]) and
+  (.repository_id | id_ok) and
+  (.hash_algorithm == "sha1" or .hash_algorithm == "sha256") and
+  (if .hash_algorithm == "sha1" then
+     (.commit_id | type == "string" and test("\\A[0-9a-f]{40}\\z"))
+   else (.commit_id | type == "string" and test("\\A[0-9a-f]{64}\\z")) end);
+
+def git_location_ok:
+  (exact(["kind"]) and .kind == "root") or
+  (exact(["kind","value"]) and .kind == "path" and (.value | repo_path_ok));
+
+def git_object_ref_ok:
+  exact(["revision","location","object_type","object_id","mode"]) and
+  (.revision | git_revision_ref_ok) and (.location | git_location_ok) and
+  (.object_type == "blob" or .object_type == "tree") and
+  (if .revision.hash_algorithm == "sha1" then
+     (.object_id | type == "string" and test("\\A[0-9a-f]{40}\\z"))
+   else (.object_id | type == "string" and test("\\A[0-9a-f]{64}\\z")) end) and
+  (if .location.kind == "root" then .object_type == "tree" else true end) and
+  (if .object_type == "tree" then .mode == "040000"
+   else (.mode == "100644" or .mode == "100755") end);
+
+def artifact_ref_ok:
+  exact(["type","value"]) and
+  ((.type == "git-object" and (.value | git_object_ref_ok)) or
+   (.type == "content" and (.value | content_ref_ok)));
+
+def scope_subject_ok:
+  exact(["type","value"]) and
+  ((.type == "artifact" and (.value | artifact_ref_ok)) or
+   (.type == "document" and (.value | document_ref_any_ok)));
 
 def scope_ref_ok($purpose):
   exact(["decision_record_ref","purpose","scope_sha256","subject_ref"]) and
   .purpose == $purpose and (.decision_record_ref | content_ref_ok) and
-  (.scope_sha256 | sha256_ok) and (.subject_ref | type == "object");
+  (.scope_sha256 | sha256_ok) and (.subject_ref | scope_subject_ok);
 
 def presence_ok(value_ok):
   type == "object" and
@@ -29,7 +85,7 @@ def presence_ok(value_ok):
 
 def evidence_ok:
   exact(["evidence_id","kind","proof_ref","verdict"]) and
-  (.evidence_id | id_ok) and (.kind | id_ok) and
+  (.evidence_id | id_ok) and (.kind | evidence_kind_ok) and
   (.verdict == "passed" or .verdict == "failed" or .verdict == "inconclusive") and
   (.proof_ref | content_ref_ok);
 

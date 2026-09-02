@@ -55,13 +55,23 @@ private_mode_ok() {
     ' "$1"
 }
 
-private_directory_ok() {
+directory_identity() {
   /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
     /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
-      my ($path)=@ARGV; my @st=lstat($path); my $physical=abs_path($path);
-      exit 1 unless @st && S_ISDIR($st[2]) && (($st[2] & 07777) == 0700) &&
-        defined($physical) && $physical eq $path;
+      my ($path)=@ARGV; my ($parent,$name)=$path =~ m{\A(.+)/([^/]+)\z};
+      exit 1 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      my @parent=lstat($parent); my @dir=lstat($path); my $physical=abs_path($path);
+      exit 1 unless @parent && @dir && S_ISDIR($parent[2]) && S_ISDIR($dir[2]) &&
+        (($dir[2] & 07777) == 0700) && defined($physical) && $physical eq $path;
+      print $parent[0],":",$parent[1],":",$dir[0],":",$dir[1],"\n";
     ' "$1"
+}
+
+directory_matches_identity() {
+  local actual
+  actual=$(directory_identity "$1") || return 1
+  [ "$actual" = "$2" ]
 }
 
 path_identity() {
@@ -252,12 +262,17 @@ sha256_path() {
   /usr/bin/printf '%s\n' "${identity##*:}"
 }
 
-scratch=${YSTACK_EVIDENCE_SCRATCH:-}
+stage_hint=${YSTACK_EVIDENCE_STAGE:-bootstrap}
+if [ "$stage_hint" = bootstrap ]; then scratch=; else scratch=${YSTACK_EVIDENCE_SCRATCH:-}; fi
+SCRATCH_ID=${YSTACK_EVIDENCE_SCRATCH_ID:-}
+SCRATCH_OWNED=0
 ACTIVE_PID=
 ACTIVE_PGID=
 cleanup() {
   [ -z "${scratch:-}" ] && return 0
   case "$scratch" in /*/ystack-evidence.??????) ;; *) return 1 ;; esac
+  [ "$SCRATCH_OWNED" -eq 1 ] && [ -n "$SCRATCH_ID" ] &&
+    directory_matches_identity "$scratch" "$SCRATCH_ID" || return 1
   /bin/rm -rf -- "$scratch" >/dev/null 2>&1 &&
     [ ! -e "$scratch" ] && [ ! -L "$scratch" ]
 }
@@ -350,7 +365,7 @@ emit_supervisor_failure() {
 }
 
 [ "$#" -eq 6 ] && [ "$1" = evaluate ] || emit_error E_USAGE
-stage=${YSTACK_EVIDENCE_STAGE:-bootstrap}
+stage=$stage_hint
 if [ "$stage" = bootstrap ]; then
   normalized_args=(evaluate)
   for input in "${@:2}"; do
@@ -381,6 +396,8 @@ if [ "$stage" = bootstrap ]; then
     emit_error E_RUNTIME
   scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
   /bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
+  SCRATCH_ID=$(directory_identity "$scratch") || emit_error E_RUNTIME
+  SCRATCH_OWNED=1
   /bin/mkdir -m 0700 "$scratch/bin" || emit_error E_RUNTIME
   private_driver="$scratch/driver.sh"
   private_jq="$scratch/bin/jq"
@@ -395,6 +412,7 @@ if [ "$stage" = bootstrap ]; then
   private_jq_identity=$(path_identity "$private_jq" 16777216) || emit_error E_RUNTIME
   exec /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
     YSTACK_EVIDENCE_STAGE=supervisor YSTACK_EVIDENCE_SCRATCH="$scratch" \
+    YSTACK_EVIDENCE_SCRATCH_ID="$SCRATCH_ID" \
     YSTACK_EVIDENCE_ORIGIN="$origin" \
     YSTACK_EVIDENCE_ORIGIN_ID="$origin_identity" \
     YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="$private_driver_identity" \
@@ -411,7 +429,11 @@ origin=${YSTACK_EVIDENCE_ORIGIN:-}
 jq_bin=${YSTACK_EVIDENCE_PRIVATE_JQ:-}
 [ -n "$scratch" ] || emit_error E_RUNTIME
 case "$scratch" in /*/ystack-evidence.??????) ;; *) emit_error E_RUNTIME ;; esac
-private_directory_ok "$scratch" || emit_error E_RUNTIME
+if [ -z "$SCRATCH_ID" ] ||
+   ! directory_matches_identity "$scratch" "$SCRATCH_ID"; then
+  emit_error E_RUNTIME
+fi
+SCRATCH_OWNED=1
 [ "$source_path" = "$scratch/driver.sh" ] && [ "$jq_bin" = "$scratch/bin/jq" ] ||
   emit_error E_RUNTIME
 origin_id=${YSTACK_EVIDENCE_ORIGIN_ID:-}
@@ -438,6 +460,7 @@ if [ "$stage" = supervisor ]; then
   worker_status=0
   run_child /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
     YSTACK_EVIDENCE_STAGE=worker YSTACK_EVIDENCE_SCRATCH="$scratch" \
+    YSTACK_EVIDENCE_SCRATCH_ID="$SCRATCH_ID" \
     YSTACK_EVIDENCE_ORIGIN="$origin" \
     YSTACK_EVIDENCE_ORIGIN_ID="${YSTACK_EVIDENCE_ORIGIN_ID:-}" \
     YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}" \
