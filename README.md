@@ -230,6 +230,22 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI, 
 credential, change a repository or request, grant authority or qualification, or
 activate a profile.
 
+## Inactive Codex native reviewer normalizer payload
+
+`adapters/codex-native-reviewer/v1/normalize.jq` validates one untrusted
+native-review snapshot against caller-supplied repository, change request,
+review, head, base, GitHub app, time, instruction, policy, and execution-boundary
+bindings. It returns a canonical generic observation for clean, findings,
+dismissed, timeout, failed, stale, incomplete, or non-terminal state. Provider
+severity and metadata stay opaque data, and unavailable hidden execution facts
+remain explicit.
+
+This stage lands only the immutable normalizer payload. A later assembly PR can
+add its manifest and default-set wiring after this payload has a durable commit
+on main. The payload is offline, read-only, and unqualified. It does not invoke a
+model or CLI, use a credential or network, post a review, grant authority or
+qualification, or activate a profile.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

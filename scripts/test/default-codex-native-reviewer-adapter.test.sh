@@ -5,7 +5,6 @@ export LC_ALL=C
 
 root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 normalizer="$root/adapters/codex-native-reviewer/v1/normalize.jq"
-manifest="$root/adapters/codex-native-reviewer/v1/manifest.json"
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-codex-reviewer.XXXXXX")
 trap '/bin/rm -rf -- "$tmp"' EXIT
 
@@ -108,42 +107,6 @@ expect_reject() {
   }
 ' >"$tmp/baseline.json"
 
-check manifest-canonical /usr/bin/cmp -s "$manifest" \
-  <("${jq_command[@]}" -S -c . "$manifest")
-check manifest-core-document /usr/bin/env PATH="$runtime_bin:/usr/bin:/bin" \
-  "$root/scripts/core-contract.sh" validate-document "$manifest"
-generation=$("${jq_command[@]}" -er \
-  'select(type=="array" and length==1) | .[0].generation_id' \
-  "$root/core/v2/generation-registry.json")
-modules="$root/core/v2/generations/$generation/modules"
-check manifest-public-reviewer-policy "${jq_command[@]}" -L "$modules" -e -n \
-  --slurpfile manifest_doc "$manifest" '
-    import "schema" as schema;
-    import "profile_graph" as graph;
-    $manifest_doc[0] as $manifest |
-    ($manifest | graph::adapter_manifest_self_ok) and
-    $manifest.body.offered_capabilities == schema::capabilities_for_role("reviewer") and
-    $manifest.body.offered_permissions ==
-      schema::permissions_for_capability("core.review.change.v1";"model") and
-    $manifest.body.offered_tools == []
-  '
-
-package_ref_ok() {
-  local repository commit path object mode
-  repository=$("${jq_command[@]}" -r \
-    '.body.package_ref.revision.repository_id' "$manifest")
-  commit=$("${jq_command[@]}" -r '.body.package_ref.revision.commit_id' "$manifest")
-  path=$("${jq_command[@]}" -r '.body.package_ref.location.value' "$manifest")
-  object=$("${jq_command[@]}" -r '.body.package_ref.object_id' "$manifest")
-  mode=$("${jq_command[@]}" -r '.body.package_ref.mode' "$manifest")
-  [ "$repository" = ystack.control-plane ] &&
-    /usr/bin/git -C "$root" merge-base --is-ancestor "$commit" HEAD &&
-    [ "$(/usr/bin/git -C "$root" rev-parse "$commit:$path")" = "$object" ] &&
-    [ "$(/usr/bin/git -C "$root" hash-object "$normalizer")" = "$object" ] &&
-    [ "$(/usr/bin/git -C "$root" ls-tree "$commit" -- "$path" | /usr/bin/awk '{print $1}')" = "$mode" ]
-}
-check manifest-package-ref package_ref_ok
-
 top='[{finding_id:"T1",body:"top finding",provider_severity:"custom-urgent",
   provider_metadata:{classification:"provider-only"}}]'
 inline='[{finding_id:"I1",path:"src/main.sh",line:7,side:"RIGHT",
@@ -230,8 +193,8 @@ check instruction-boundary-provenance "${jq_command[@]}" -e \
      all(.[]; .state == "unavailable"))
   ' "$tmp/repeat-a.json"
 check no-selected-generation-id /usr/bin/env sh -c \
-  '! grep -E "g-[0-9a-f]{64}" "$1" "$2" "$3"' sh \
-  "$normalizer" "$manifest" "$root/scripts/test/default-codex-native-reviewer-adapter.test.sh"
+  '! grep -E "g-[0-9a-f]{64}" "$1" "$2"' sh \
+  "$normalizer" "$root/scripts/test/default-codex-native-reviewer-adapter.test.sh"
 check pure-read-only-jq /usr/bin/env sh -c \
   '! grep -E "core[.]perm|@codex[[:space:]]+fix|approve|merge|credential|token|curl|graphql|github[.]com" "$1"' sh \
   "$normalizer"
