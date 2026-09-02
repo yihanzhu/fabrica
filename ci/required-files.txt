@@ -217,3 +217,10 @@ scripts/test/control-evidence-integrity.test.sh
 # Inactive Control foundation policy roll-up
 control/v1/control-policy-set.json
 scripts/test/control-foundation-rollup.test.sh
+
+# Inactive canonical orchestrator state scanner
+orchestrator/v1/scan-state.sh
+orchestrator/v1/state-scanner-launcher.sh
+orchestrator/v1/state-scanner-driver.sh
+orchestrator/v1/state-scanner.jq
+scripts/test/orchestrator-state-scanner.test.sh

@@ -1,0 +1,295 @@
+#!/bin/bash
+# shellcheck disable=SC2016
+set -uo pipefail
+export LC_ALL=C
+umask 077
+
+emit_error() {
+  case "${1:-}" in
+    E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE)
+      /usr/bin/printf '%s\n' "$1" >&2
+      ;;
+    *) /usr/bin/printf '%s\n' E_RUNTIME >&2 ;;
+  esac
+  exit 1
+}
+
+sha256_path() {
+  /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
+}
+
+sha256_line() {
+  builtin printf '%s\n' "$1" | /usr/bin/shasum -a 256 |
+    /usr/bin/awk '{print $1}'
+}
+
+snapshot_file() {
+  /usr/bin/perl -MFcntl=:DEFAULT,:mode -e '
+    my ($source,$target,$limit,$mode)=@ARGV;
+    sysopen(my $in,$source,O_RDONLY|O_NOFOLLOW) or exit 40;
+    my @stat=stat($in);
+    @stat && S_ISREG($stat[2]) or exit 40;
+    $stat[7] <= $limit or exit 42;
+    sysopen(my $out,$target,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,oct($mode))
+      or exit 40;
+    my $total=0;
+    while (1) {
+      my $read=sysread($in,my $buffer,65536);
+      defined($read) or exit 40;
+      last if $read == 0;
+      $total += $read;
+      $total <= $limit or exit 42;
+      my $offset=0;
+      while ($offset < $read) {
+        my $written=syswrite($out,$buffer,$read-$offset,$offset);
+        defined($written) && $written > 0 or exit 40;
+        $offset += $written;
+      }
+    }
+    close($in) or exit 40;
+    close($out) or exit 40;
+    chmod(oct($mode),$target) == 1 or exit 40;
+  ' "$1" "$2" "$3" "$4"
+}
+
+snapshot_expected() {
+  local expected=$1 source=$2 target=$3 mode=$4 status=0
+  snapshot_file "$source" "$target" 16777216 "$mode" || status=$?
+  [ "$status" -eq 0 ] && [ "$(sha256_path "$target")" = "$expected" ]
+}
+
+[ "$#" -eq 4 ] && [ "$1" = scan ] || emit_error E_USAGE
+expected_repository_id=$2
+expected_commit_id=$3
+input=$4
+[[ "$expected_repository_id" =~ ^[a-z0-9][a-z0-9._:-]{0,127}$ ]] ||
+  emit_error E_USAGE
+[[ "$expected_commit_id" =~ ^[0-9a-f]{40}$ ]] ||
+  [[ "$expected_commit_id" =~ ^[0-9a-f]{64}$ ]] || emit_error E_USAGE
+
+self=${BASH_SOURCE[0]}
+case "$self" in /*) ;; *) self="$(pwd -P)/$self" ;; esac
+[ -f "$self" ] && [ ! -L "$self" ] || emit_error E_RUNTIME
+source_dir=$(CDPATH='' cd -P -- "${self%/*}" 2>/dev/null && pwd -P) ||
+  emit_error E_RUNTIME
+self="$source_dir/${self##*/}"
+[ "$self" = "$source_dir/state-scanner-launcher.sh" ] || emit_error E_RUNTIME
+repo=$(CDPATH='' cd -P -- "$source_dir/../.." 2>/dev/null && pwd -P) ||
+  emit_error E_RUNTIME
+[ "$source_dir" = "$repo/orchestrator/v1" ] || emit_error E_RUNTIME
+
+platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
+case "$platform" in
+  Linux:x86_64)
+    host_os=linux; host_arch=x86_64; jq_arch=x86_64; execution_mode=native
+    jq_asset=jq-linux64
+    jq_sha=af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44
+    ;;
+  Darwin:x86_64)
+    host_os=darwin; host_arch=x86_64; jq_arch=x86_64; execution_mode=native
+    jq_asset=jq-osx-amd64
+    jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
+    ;;
+  Darwin:arm64)
+    host_os=darwin; host_arch=arm64; jq_arch=x86_64; execution_mode=rosetta
+    jq_asset=jq-osx-amd64
+    jq_sha=5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef
+    ;;
+  *) emit_error E_RUNTIME ;;
+esac
+
+jq_source=''
+for candidate in "${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset" "/usr/bin/jq"; do
+  if [ -f "$candidate" ] && [ ! -L "$candidate" ] &&
+     [ "$(sha256_path "$candidate")" = "$jq_sha" ]; then
+    jq_source=$candidate
+    break
+  fi
+done
+[ -n "$jq_source" ] || emit_error E_RUNTIME
+
+scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-state-scan.XXXXXX" 2>/dev/null) ||
+  emit_error E_RUNTIME
+scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+cleanup() { /bin/rm -rf -- "$scratch" >/dev/null 2>&1 || :; }
+signal_exit() { trap - EXIT HUP INT TERM; cleanup; exit 1; }
+trap cleanup EXIT
+trap signal_exit HUP INT TERM
+runtime="$scratch/runtime"
+/bin/mkdir -m 0700 "$runtime" "$runtime/core" "$runtime/core/v2" \
+  "$runtime/core/v2/generations" "$runtime/scripts" "$scratch/work" ||
+  emit_error E_RUNTIME
+generation=g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e
+generation_runtime="$runtime/core/v2/generations/$generation"
+/bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
+  emit_error E_RUNTIME
+
+snapshot_file "$source_dir/scan-state.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
+  emit_error E_RUNTIME
+bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
+snapshot_file "$self" "$runtime/launcher.sh" 1048576 0400 || emit_error E_RUNTIME
+launcher_sha=$(sha256_path "$runtime/launcher.sh") || emit_error E_RUNTIME
+snapshot_expected 3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a \
+  "$source_dir/state-scanner-driver.sh" "$runtime/driver.sh" 0400 ||
+  emit_error E_STALE
+snapshot_expected 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
+  "$source_dir/state-scanner.jq" "$runtime/program.jq" 0400 || emit_error E_STALE
+snapshot_expected f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1 \
+  "$repo/core/v2/generation-registry.json" \
+  "$runtime/core/v2/generation-registry.json" 0400 || emit_error E_STALE
+snapshot_expected 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
+  "$repo/core/v2/generations/$generation/contracts.jq" \
+  "$generation_runtime/contracts.jq" 0400 || emit_error E_STALE
+snapshot_expected db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b \
+  "$repo/core/v2/generations/$generation/core-ingress.sh" \
+  "$generation_runtime/core-ingress.sh" 0400 || emit_error E_STALE
+for member in \
+  'profile_graph.jq c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207' \
+  'result_facts.jq 8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281' \
+  'result_truth.jq ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3' \
+  'schema.jq 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade' \
+  'stage_request.jq 6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" \
+    "$repo/core/v2/generations/$generation/modules/$name" \
+    "$generation_runtime/modules/$name" 0400 || emit_error E_STALE
+done
+snapshot_expected bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3 \
+  "$repo/scripts/core-contract.sh" "$runtime/scripts/core-contract.sh" 0400 ||
+  emit_error E_STALE
+snapshot_expected "$jq_sha" "$jq_source" "$runtime/jq" 0500 || emit_error E_RUNTIME
+bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
+snapshot_file "$input" "$scratch/input.json" 1048576 0400 || {
+  status=$?
+  [ "$status" -eq 42 ] && emit_error E_LIMIT
+  emit_error E_RUNTIME
+}
+snapshot_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
+
+"$runtime/jq" -S -c -n \
+  --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
+  --arg driver_sha 3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a \
+  --arg program_sha 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
+  --arg jq_sha "$jq_sha" --arg bash_sha "$bash_sha" \
+  --arg host_os "$host_os" --arg host_arch "$host_arch" \
+  --arg jq_arch "$jq_arch" --arg execution_mode "$execution_mode" '
+  def ref($id;$media;$sha): {content_id:$id,media_type:$media,sha256:$sha};
+  {
+    schema_version:1,kind:"orchestrator_state_scanner_evaluator",
+    id:"orchestrator.state-scanner.v1",
+    body:{
+      core_contract:{
+        generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
+        package_ref:ref("core-contract-package.v2";
+          "application/vnd.ystack.core-contract+json";
+          "005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"),
+        semantic_identity:"core.contracts.v2"
+      },
+      core_closure:[
+        {path:"core/v2/generation-registry.json",sha256:"f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq",sha256:"65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh",sha256:"db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/profile_graph.jq",sha256:"c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/result_facts.jq",sha256:"8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/result_truth.jq",sha256:"ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/schema.jq",sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
+        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/stage_request.jq",sha256:"6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e"},
+        {path:"scripts/core-contract.sh",sha256:"bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3"}
+      ],
+      bootstrap_ref:ref("orchestrator-state-scanner-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
+      launcher_ref:ref("orchestrator-state-scanner-launcher.v1";"text/x-shellscript";$launcher_sha),
+      driver_ref:ref("orchestrator-state-scanner-driver.v1";"text/x-shellscript";$driver_sha),
+      program_ref:ref("orchestrator-state-scanner-program.v1";"text/x-jq";$program_sha),
+      runtime:{
+        host_os:$host_os,host_architecture:$host_arch,jq_architecture:$jq_arch,
+        execution_mode:$execution_mode,
+        jq_ref:ref("jq-runtime.v1";"application/x-executable";$jq_sha),
+        shell_ref:ref("bash-runtime";"application/x-executable";$bash_sha)
+      }
+    }
+  }
+' > "$runtime/evaluator.json" 2>/dev/null || emit_error E_RUNTIME
+evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
+
+verify_private_core() {
+  [ "$(sha256_path "$runtime/core/v2/generation-registry.json")" = \
+      f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1 ] &&
+  [ "$(sha256_path "$generation_runtime/contracts.jq")" = \
+      65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a ] &&
+  [ "$(sha256_path "$generation_runtime/core-ingress.sh")" = \
+      db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b ] &&
+  [ "$(sha256_path "$generation_runtime/modules/profile_graph.jq")" = \
+      c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207 ] &&
+  [ "$(sha256_path "$generation_runtime/modules/result_facts.jq")" = \
+      8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281 ] &&
+  [ "$(sha256_path "$generation_runtime/modules/result_truth.jq")" = \
+      ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3 ] &&
+  [ "$(sha256_path "$generation_runtime/modules/schema.jq")" = \
+      8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade ] &&
+  [ "$(sha256_path "$generation_runtime/modules/stage_request.jq")" = \
+      6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e ] &&
+  [ "$(sha256_path "$runtime/scripts/core-contract.sh")" = \
+      bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3 ]
+}
+
+output="$scratch/output.json"
+error="$scratch/error"
+/usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$scratch" \
+  /bin/bash "$runtime/driver.sh" run \
+  "$expected_repository_id" "$expected_commit_id" "$runtime" \
+  "$scratch/input.json" "$runtime/evaluator.json" "$evaluator_sha" \
+  "$snapshot_sha" >"$output" 2>"$error"
+status=$?
+if [ "$status" -ne 0 ]; then
+  [ ! -s "$output" ] || emit_error E_RUNTIME
+  driver_error=$(/bin/cat "$error" 2>/dev/null) || emit_error E_RUNTIME
+  case "$driver_error" in
+    E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_SHAPE|E_RELATION|E_STALE)
+      emit_error "$driver_error"
+      ;;
+    *) emit_error E_RUNTIME ;;
+  esac
+fi
+[ ! -s "$error" ] || emit_error E_RUNTIME
+
+item_count=$("$runtime/jq" -r '.body.items | length' "$scratch/input.json") ||
+  emit_error E_RUNTIME
+i=0
+while [ "$i" -lt "$item_count" ]; do
+  content=$("$runtime/jq" -S -c ".body.items[$i]" "$scratch/input.json") ||
+    emit_error E_RUNTIME
+  [ "$(sha256_line "$content")" = \
+    "$("$runtime/jq" -r ".[$i]" "$scratch/work/item-shas.json")" ] ||
+    emit_error E_RUNTIME
+  i=$((i + 1))
+done
+
+verify_private_core || emit_error E_STALE
+"$runtime/jq" -n -e -L "$generation_runtime/modules" \
+  --arg scanner_operation validate-observation \
+  --arg expected_repository_id "$expected_repository_id" \
+  --arg expected_commit_id "$expected_commit_id" \
+  --arg snapshot_sha256 "$snapshot_sha" \
+  --arg evaluator_sha256 "$evaluator_sha" \
+  --slurpfile evaluator_docs "$runtime/evaluator.json" \
+  --slurpfile item_sha_docs "$scratch/work/item-shas.json" \
+  --slurpfile snapshot_docs "$scratch/input.json" \
+  --slurpfile candidate_docs "$output" \
+  -f "$runtime/program.jq" >/dev/null 2>&1 || emit_error E_RUNTIME
+verify_private_core || emit_error E_STALE
+[ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
+[ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/driver.sh")" = \
+    3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a ] &&
+[ "$(sha256_path "$runtime/program.jq")" = \
+    8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 ] &&
+[ "$(sha256_path "$runtime/jq")" = "$jq_sha" ] &&
+[ "$(sha256_path /bin/bash)" = "$bash_sha" ] &&
+[ "$(sha256_path "$scratch/input.json")" = "$snapshot_sha" ] &&
+[ "$(sha256_path "$runtime/evaluator.json")" = "$evaluator_sha" ] ||
+  emit_error E_RUNTIME
+if ! /bin/cat "$output" 2>"$scratch/delivery-error"; then
+  emit_error E_RUNTIME
+fi
+trap - EXIT HUP INT TERM
+cleanup

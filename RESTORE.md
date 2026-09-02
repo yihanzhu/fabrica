@@ -422,6 +422,20 @@ launcher is not self-attested. It does not read proof bytes, establish proof
 truth, qualify a workflow, store evidence, grant authority, activate a profile,
 run a candidate or adapter, or perform a network or external-write action.
 
+Restore the five paths in the manifest's inactive canonical state scanner block
+from the same commit. With the same pinned, architecture-bound jq 1.6 runtime used
+by the portable core, run:
+
+```sh
+bash scripts/test/orchestrator-state-scanner.test.sh
+```
+
+This checks bounded canonical snapshots, exact repository and commit binding,
+deterministic pending and stranded classifications, recovery reasons, private
+runtime snapshots, and fail-closed input handling. The scanner remains inactive
+and observation only. It does not deliver or retry events, reconcile or write
+state, use a credential or network, activate a profile, or touch a target.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive

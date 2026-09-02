@@ -183,6 +183,24 @@ references. The package stays inactive, stores nothing, grants no authority, and
 performs no candidate, credential, network, adapter, publish, deploy, or external
 write.
 
+## Inactive canonical state scanner
+
+`orchestrator/v1/scan-state.sh` reads one bounded canonical snapshot that binds an
+explicit Git repository and commit and carries canonical stage request, resolved
+profile, attempt, and result records. Run it with the same repository and commit
+identities:
+
+```text
+orchestrator/v1/scan-state.sh scan REPOSITORY_ID COMMIT_ID SNAPSHOT.json
+```
+
+It emits a deterministic canonical observation that classifies each stage as
+terminal, stale, blocked, retryable, stranded, or pending, with a recovery action
+and reason. Those fields are messages for later recovery work, not commands. The
+scanner is inactive and observation only: it does not deliver events, schedule,
+dispatch, retry, reconcile, write state, use a credential or network, activate a
+profile, or touch a target.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

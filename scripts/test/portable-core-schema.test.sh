@@ -761,7 +761,11 @@ v2_activation_path_ok() {
     README.md|RESTORE.md|ci/required-files.txt|\
     control/v1/control-policy-set.json|\
     core/v2/generation-registry.json|\
+    orchestrator/v1/state-scanner-driver.sh|\
+    orchestrator/v1/state-scanner-launcher.sh|\
+    orchestrator/v1/state-scanner.jq|\
     scripts/core-contract.sh|scripts/lib/profile-resolution.sh|\
+    scripts/test/orchestrator-state-scanner.test.sh|\
     scripts/test/portable-core-schema.test.sh|\
     scripts/test/portable-core-v2-fake-forge.test.sh) ;;
     *) v2_generation_path_ok "$1" || return 1 ;;
@@ -772,6 +776,7 @@ schema_import_path_ok() {
   local import_path="$1"
   local test_path
   case "$import_path" in
+    orchestrator/v1/state-scanner.jq) ;;
     scripts/test/portable-core-*)
       test_path="${import_path#scripts/test/}"
       case "$test_path" in */*) return 1 ;; esac
@@ -842,8 +847,12 @@ printf '%s\n' \
   control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
+  orchestrator/v1/state-scanner-driver.sh \
+  orchestrator/v1/state-scanner-launcher.sh \
+  orchestrator/v1/state-scanner.jq \
   scripts/core-contract.sh \
   scripts/lib/profile-resolution.sh \
+  scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > \
   "$schema_v2_expected_live_hits"
@@ -890,8 +899,12 @@ printf '%s\n' \
   "core/v2/generations/$schema_v2_generation/modules/result_truth.jq" \
   "core/v2/generations/$schema_v2_generation/modules/schema.jq" \
   "core/v2/generations/$schema_v2_generation/modules/stage_request.jq" \
+  orchestrator/v1/state-scanner-driver.sh \
+  orchestrator/v1/state-scanner-launcher.sh \
+  orchestrator/v1/state-scanner.jq \
   scripts/core-contract.sh \
   scripts/lib/profile-resolution.sh \
+  scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > "$schema_v2_allowed_paths"
 schema_v2_injected_source="$schema_test_tmp/v2-injected-source"
