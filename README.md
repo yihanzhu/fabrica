@@ -216,6 +216,20 @@ does not fit is listed as deferred. Scanner recovery actions and reasons remain
 data in the plan. The filter does not dispatch, schedule, execute recovery, write
 state, use a credential or network, activate a profile, publish, or touch a target.
 
+## Inactive GitHub forge normalizer payload
+
+`adapters/github-forge/v1/normalize.jq` validates one untrusted GitHub
+change-request snapshot against caller-supplied repository, request, head, base,
+app, time, instruction, and config bindings. It returns a canonical generic
+observation for open, blocked, closed, merged, stale, incomplete, or unknown
+state. Provider metadata stays opaque data.
+
+This PR lands only the immutable normalizer payload. A later assembly PR can add
+its manifest and default-set wiring after this payload has a durable commit on
+main. The payload is offline and unqualified. It does not call GitHub or a CLI, use a
+credential, change a repository or request, grant authority or qualification, or
+activate a profile.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
