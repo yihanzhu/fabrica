@@ -23,6 +23,17 @@ emit_error() {
   exit 1
 }
 
+stage_auth_fail() {
+  exec >/dev/null 2>&1
+  exit 125
+}
+
+terminal_teardown_fail() {
+  exec >/dev/null 2>&1
+  trap - EXIT HUP INT TERM
+  exit 125
+}
+
 physical_regular() {
   local candidate=$1 parent physical
   case "$candidate" in /*) ;; *) return 1 ;; esac
@@ -360,7 +371,9 @@ terminate_active() {
 signal_exit() {
   local status=${1:-1}
   exec >/dev/null 2>&1
-  if [ -n "${ACTIVE_PGID:-}" ]; then terminate_active || status=125; fi
+  if [ -n "${ACTIVE_PGID:-}" ] && ! terminate_active; then
+    terminal_teardown_fail
+  fi
   cleanup || status=125
   trap - EXIT HUP INT TERM
   exit "$status"
@@ -397,7 +410,7 @@ arm_signal_traps
 
 run_child() {
   local child pgid state attempt=0 child_status=0 count self_pgid
-  local gate="$scratch/worker.gate"
+  local worker_cap="$scratch/worker.cap"
   [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
   defer_signal_traps
   self_pgid=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || {
@@ -405,20 +418,25 @@ run_child() {
     [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
     return 125
   }
-  if [ -e "$gate" ] || [ -L "$gate" ] ||
-     ! /usr/bin/mkfifo -m 0600 "$gate"; then
+  if [ -e "$worker_cap" ] || [ -L "$worker_cap" ] ||
+     ! /usr/bin/mkfifo -m 0600 "$worker_cap"; then
     arm_signal_traps
     [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
     return 125
   fi
+  exec 9<>"$worker_cap" || {
+    arm_signal_traps
+    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
+    return 125
+  }
+  /bin/rm -f -- "$worker_cap" || {
+    exec 9>&-
+    arm_signal_traps
+    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
+    return 125
+  }
   set -m
-  /bin/bash -c '
-    gate=$1; shift
-    IFS= read -r gate_value <"$gate" || exit 125
-    [ "$gate_value" = go ] || exit 125
-    ulimit -f 2048
-    exec "$@"
-  ' evidence-child "$gate" "$@" &
+  "$@" &
   child=$!
   set +m
   while [ "$attempt" -lt 100 ]; do
@@ -431,7 +449,8 @@ run_child() {
   done
   if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$child" ] ||
      [ "$pgid" = "$self_pgid" ]; then
-    kill_unregistered_child "$child" || :
+    kill_unregistered_child "$child" || terminal_teardown_fail
+    exec 9>&-
     arm_signal_traps
     [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
     return 125
@@ -439,10 +458,12 @@ run_child() {
   ACTIVE_PID=$child; ACTIVE_PGID=$pgid
   arm_signal_traps
   [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
-  /usr/bin/printf 'go\n' >"$gate" || {
+  /usr/bin/printf 'worker\n' >&9 || {
+    exec 9>&-
     terminate_active || return 125
     return 125
   }
+  exec 9>&-
   attempt=0
   state=$(leader_state "$child") || state=
   while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 1000 ]; do
@@ -479,6 +500,18 @@ emit_supervisor_failure() {
 
 [ "$#" -eq 6 ] && [ "$1" = evaluate ] || emit_error E_USAGE
 stage=$stage_hint
+if [ "$stage" = supervisor ]; then
+  [ -p /dev/fd/8 ] || stage_auth_fail
+  IFS= read -r stage_capability <&8 || stage_auth_fail
+  exec 8<&-
+  [ "$stage_capability" = supervisor ] || stage_auth_fail
+elif [ "$stage" = worker ]; then
+  [ -p /dev/fd/9 ] || stage_auth_fail
+  IFS= read -r stage_capability <&9 || stage_auth_fail
+  exec 9<&-
+  [ "$stage_capability" = worker ] || stage_auth_fail
+  ulimit -f 2048 || stage_auth_fail
+fi
 if [ "$stage" = bootstrap ]; then
   normalized_args=(evaluate)
   for input in "${@:2}"; do
@@ -523,7 +556,12 @@ if [ "$stage" = bootstrap ]; then
     emit_error E_RUNTIME
   /bin/chmod 0500 "$private_jq" || emit_error E_RUNTIME
   private_jq_identity=$(path_identity "$private_jq" 16777216) || emit_error E_RUNTIME
-  exec /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
+  supervisor_cap="$scratch/supervisor.cap"
+  /usr/bin/mkfifo -m 0600 "$supervisor_cap" || emit_error E_RUNTIME
+  exec 8<>"$supervisor_cap" || emit_error E_RUNTIME
+  /bin/rm -f -- "$supervisor_cap" || emit_error E_RUNTIME
+  /usr/bin/printf 'supervisor\n' >&8 || emit_error E_RUNTIME
+  exec /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" TMPDIR="$scratch" \
     YSTACK_EVIDENCE_STAGE=supervisor YSTACK_EVIDENCE_SCRATCH="$scratch" \
     YSTACK_EVIDENCE_SCRATCH_ID="$SCRATCH_ID" \
     YSTACK_EVIDENCE_ORIGIN="$origin" \
@@ -571,7 +609,7 @@ verify_all_pins || emit_error E_RELATION
 
 if [ "$stage" = supervisor ]; then
   worker_status=0
-  run_child /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
+  run_child /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" TMPDIR="$scratch" \
     YSTACK_EVIDENCE_STAGE=worker YSTACK_EVIDENCE_SCRATCH="$scratch" \
     YSTACK_EVIDENCE_SCRATCH_ID="$SCRATCH_ID" \
     YSTACK_EVIDENCE_ORIGIN="$origin" \

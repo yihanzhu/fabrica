@@ -234,8 +234,12 @@ expect_error() {
   PATH="$bin:/usr/bin:/bin" "$runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
     "$policy_input" "$request_input" "$resolved_input" "$result_input" \
     "$presentation_input" >"$tmp/$name.out" 2>"$tmp/$name.err" || status=$?
-  [ "$status" -ne 0 ] && [ ! -s "$tmp/$name.out" ] &&
-    [ "$(/bin/cat "$tmp/$name.err")" = "$expected" ] || fail "$name error"
+  if [ "$status" -eq 0 ] || [ -s "$tmp/$name.out" ] ||
+     [ "$(/bin/cat "$tmp/$name.err")" != "$expected" ]; then
+    /usr/bin/printf 'diagnostic %s status=%s stderr=' "$name" "$status" >&2
+    /bin/cat "$tmp/$name.err" >&2
+    fail "$name error"
+  fi
   pass "$name"
 }
 pure_eval() {
@@ -543,12 +547,19 @@ copy_runtime() {
 }
 
 forged_stage_case() {
-  local stage=$1 suffix runtime="$tmp/forged-$1-runtime" scratch
-  local sentinel="$tmp/forged-$1-sentinel" physical_tmp origin live driver_id live_id
+  local stage=$1 jq_mode=${2:-fake}
+  local suffix runtime="$tmp/forged-$stage-$jq_mode-runtime" scratch
+  local sentinel="$tmp/forged-$1-$jq_mode-sentinel" physical_tmp origin live
+  local driver_id live_id
   local scratch_id
   local private_driver_id
   local status=0
-  case "$stage" in supervisor) suffix=SUPERV ;; worker) suffix=WORKER ;; esac
+  case "$stage:$jq_mode" in
+    supervisor:fake) suffix=FAKESV ;;
+    worker:fake) suffix=FAKEWK ;;
+    supervisor:official) suffix=OFFISV ;;
+    worker:official) suffix=OFFIWK ;;
+  esac
   scratch="$tmp/ystack-evidence.$suffix"
   copy_runtime "$runtime"
   runtime=$(CDPATH='' cd -P -- "$runtime" && pwd -P)
@@ -557,11 +568,15 @@ forged_stage_case() {
   origin="$runtime/control/v1/evaluate-evidence-integrity.sh"
   /bin/cp "$origin" "$scratch/driver.sh"
   /bin/chmod 0500 "$scratch/driver.sh"
-  /usr/bin/printf '%s\n' '#!/bin/bash' \
-    "sentinel='$sentinel'" \
-    'if [ "${1:-}" = --version ]; then echo jq-1.6; exit 0; fi' \
-    ': >"$sentinel"' \
-    'exec /usr/bin/jq "$@"' >"$scratch/bin/jq"
+  if [ "$jq_mode" = official ]; then
+    /bin/cp "$jq_bin" "$scratch/bin/jq"
+  else
+    /usr/bin/printf '%s\n' '#!/bin/bash' \
+      "sentinel='$sentinel'" \
+      'if [ "${1:-}" = --version ]; then echo jq-1.6; exit 0; fi' \
+      ': >"$sentinel"' \
+      'exec /usr/bin/jq "$@"' >"$scratch/bin/jq"
+  fi
   /bin/chmod 0500 "$scratch/bin/jq"
   live="$scratch/bin/jq"
   scratch_id=$(test_directory_identity "$scratch")
@@ -579,15 +594,18 @@ forged_stage_case() {
     /bin/bash "$scratch/driver.sh" evaluate "$physical_tmp/policy-set.json" \
     "$physical_tmp/request.json" "$physical_tmp/resolved.json" \
     "$physical_tmp/result.json" "$physical_tmp/presentation.json" \
-    >"$tmp/forged-$stage.out" 2>"$tmp/forged-$stage.err" || status=$?
-  [ "$status" -ne 0 ] && [ ! -s "$tmp/forged-$stage.out" ] &&
-    [ "$(/bin/cat "$tmp/forged-$stage.err")" = E_RUNTIME ] &&
+    >"$tmp/forged-$stage-$jq_mode.out" \
+    2>"$tmp/forged-$stage-$jq_mode.err" || status=$?
+  [ "$status" -ne 0 ] && [ ! -s "$tmp/forged-$stage-$jq_mode.out" ] &&
+    [ ! -s "$tmp/forged-$stage-$jq_mode.err" ] &&
     [ ! -e "$sentinel" ] || fail "forged $stage stage"
-  pass "forged $stage stage cannot bypass official jq binding"
+  pass "forged $stage stage with $jq_mode jq cannot bypass parent capability"
 }
 
 forged_stage_case supervisor
 forged_stage_case worker
+forged_stage_case supervisor official
+forged_stage_case worker official
 
 mutated_decision_runtime="$tmp/mutated-decision-runtime"
 copy_runtime "$mutated_decision_runtime"
