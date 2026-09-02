@@ -246,6 +246,21 @@ on main. The payload is offline, read-only, and unqualified. It does not invoke 
 model or CLI, use a credential or network, post a review, grant authority or
 qualification, or activate a profile.
 
+## Inactive GitHub Actions CI normalizer payload
+
+`adapters/github-actions-ci/v1/normalize.jq` validates one untrusted GitHub
+Actions workflow and check snapshot against caller-supplied repository, suite,
+workflow, run, attempt, job, check, app, head, base, time, instruction, config, and
+execution-boundary bindings. It returns a canonical generic observation for
+queued, running, passed, failed, cancelled, timed out, action-required, stale,
+or inconclusive state. Provider names, text, and details stay opaque data.
+
+This PR lands only the immutable normalizer payload. A later assembly PR can add
+its manifest and default-set wiring after this payload has a durable commit on
+main. The payload is offline and unqualified. It does not call GitHub or a CLI,
+use a credential, rerun or cancel work, dispatch a workflow, change a repository,
+grant authority or qualification, or activate a profile.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles

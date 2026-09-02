@@ -479,6 +479,21 @@ and add default-set wiring. The pure jq payload is offline, read-only, and
 unqualified. It does not invoke a model or CLI, use a credential or network,
 post a review, grant authority or qualification, or activate a profile.
 
+Restore the two paths in the manifest's inactive GitHub Actions CI normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-github-actions-ci-adapter.test.sh
+```
+
+This checks exact caller bindings, deterministic workflow and job-state
+normalization, opaque provider data, and fail-closed malformed, contradictory,
+incomplete, or stale input. This stage intentionally has no adapter manifest. A
+later assembly PR can bind the payload through a durable main commit and add
+default-set wiring. The pure jq payload is offline and unqualified. It does not
+call GitHub, use a credential, rerun, cancel, or dispatch work, change a
+repository, grant authority or qualification, or activate a profile.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
