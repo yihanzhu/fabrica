@@ -192,22 +192,31 @@ make_result() {
 }
 
 make_input() {
-  local result_file=$1 output=$2 result_sha
+  local result_file=$1 output=$2 result_sha snapshot_file snapshot_sha
   result_sha=$(sha_file "$result_file")
+  snapshot_file="${output%.json}.snapshot.json"
+  "${jq_command[@]}" -S -c -n --slurpfile result_doc "$result_file" \
+    --arg result_sha "$result_sha" '
+    def pair($docs;$sha): {content:$docs[0],sha256:$sha};
+    {schema_version:1,kind:"deterministic_verifier_snapshot",id:"snapshot.verifier",
+     body:{observed_at:"2026-08-30T00:00:04Z",result:pair($result_doc;$result_sha)}}
+  ' >"$snapshot_file"
+  snapshot_sha=$(sha_file "$snapshot_file")
   "${jq_command[@]}" -S -c -n --slurpfile manifest "$tmp/manifest-verifier.json" \
     --slurpfile request_doc "$tmp/request.json" --slurpfile resolved "$tmp/resolved.json" \
-    --slurpfile result_doc "$result_file" --arg manifest_sha "$verifier_sha" \
+    --slurpfile result_doc "$result_file" --slurpfile snapshot_doc "$snapshot_file" \
+    --arg manifest_sha "$verifier_sha" \
     --arg request_sha "$request_sha" --arg resolved_sha "$resolved_sha" \
-    --arg result_sha "$result_sha" '
+    --arg result_sha "$result_sha" --arg snapshot_sha "$snapshot_sha" '
     def pair($docs;$sha): {content:$docs[0],sha256:$sha};
     {
       trust_context:{schema_version:1,kind:"adapter_trust_context",id:"trust.verifier",
-        body:{binding_id:"binding.verifier",manifest:pair($manifest;$manifest_sha),
+        body:{binding_id:"binding.verifier",expected_attempt_id:"attempt.example",
+          expected_attempt_number:1,manifest:pair($manifest;$manifest_sha),
           request:pair($request_doc;$request_sha),resolved_profile:pair($resolved;$resolved_sha),
-          snapshot_ref:{content_id:"verifier-snapshot",media_type:"application/json",
-            sha256:$result_sha}}},
-      snapshot:{schema_version:1,kind:"deterministic_verifier_snapshot",id:"snapshot.verifier",
-        body:{observed_at:"2026-08-30T00:00:04Z",result:pair($result_doc;$result_sha)}}
+          verified_result:pair($result_doc;$result_sha),
+          verified_snapshot:pair($snapshot_doc;$snapshot_sha)}},
+      snapshot:$snapshot_doc[0]
     }
   ' >"$output"
 }
@@ -263,7 +272,17 @@ expect_error verifier-model \
 expect_error stale-request-digest '.trust_context.body.request.sha256=("0"*64)' E_RESULT
 expect_error stale-resolved-digest '.trust_context.body.resolved_profile.sha256=("0"*64)' E_TRUST
 expect_error stale-manifest-digest '.trust_context.body.manifest.sha256=("0"*64)' E_TRUST
-expect_error stale-snapshot-digest '.trust_context.body.snapshot_ref.sha256=("0"*64)' E_RESULT
+expect_error moved-untrusted-snapshot '.snapshot.id="snapshot.moved"' E_RESULT
+expect_error moved-verified-snapshot \
+  '.trust_context.body.verified_snapshot.content.id="snapshot.moved"' E_RESULT
+expect_error moved-verified-result \
+  '.trust_context.body.verified_result.sha256=("0"*64)' E_RESULT
+expect_error malformed-verified-snapshot-digest \
+  '.trust_context.body.verified_snapshot.sha256=("A"*64)' E_SHAPE
+expect_error expected-attempt-id \
+  '.trust_context.body.expected_attempt_id="attempt.other"' E_RESULT
+expect_error expected-attempt-number \
+  '.trust_context.body.expected_attempt_number=2' E_RESULT
 expect_error performer-mismatch \
   '.snapshot.body.result.content.body.execution.performer.principal_id="principal.other"' E_RESULT
 expect_error reporter-mismatch \
@@ -277,6 +296,21 @@ expect_error verifier-output \
     ref:{content_id:"forbidden",media_type:"application/json",sha256:("a"*64)}}]' E_RESULT
 expect_error observation-before-result \
   '.snapshot.body.observed_at="2026-08-30T00:00:02Z"' E_RESULT
+expect_error terminal-before-start '
+  .snapshot.body.result.content.body.finished_at="2026-08-29T23:59:59Z" |
+  .trust_context.body.verified_result=.snapshot.body.result |
+  .trust_context.body.verified_snapshot.content=.snapshot' E_RESULT
+expect_error invalid-proof-media '
+  .snapshot.body.result.content.body.evidence[0].proof_ref.media_type="INVALID" |
+  .trust_context.body.verified_result=.snapshot.body.result |
+  .trust_context.body.verified_snapshot.content=.snapshot' E_RESULT
+expect_error non-core-content-id '
+  .snapshot.body.result.content.body.evidence[0].proof_ref.content_id="proof:invalid" |
+  .trust_context.body.verified_result=.snapshot.body.result |
+  .trust_context.body.verified_snapshot.content=.snapshot' E_RESULT
+expect_error opaque-metadata-rejected '
+  .snapshot.body.provider_metadata={nested:{message:("x"*9000)}} |
+  .trust_context.body.verified_snapshot.content=.snapshot' E_SHAPE
 
 normalize "$tmp/passed.json" >"$tmp/repeat-a.json"
 normalize "$tmp/passed.json" >"$tmp/repeat-b.json"
@@ -294,8 +328,30 @@ check exact-candidate-and-plan "${jq_command[@]}" -e \
     ($input[0].trust_context.body.request.content.body.inputs[] |
      select(.input_id=="input.candidate")) and
   .observation.verification_plan ==
-    $input[0].trust_context.body.request.content.body.operation.arguments.verification_plan
+    $input[0].trust_context.body.request.content.body.operation.arguments.verification_plan and
+  .trust_context.expected_attempt_id ==
+    $input[0].trust_context.body.expected_attempt_id and
+  .trust_context.expected_attempt_number ==
+    $input[0].trust_context.body.expected_attempt_number and
+  .trust_context.snapshot_ref.sha256 ==
+    $input[0].trust_context.body.verified_snapshot.sha256 and
+  .observation.result.result_ref.sha256 ==
+    $input[0].trust_context.body.verified_result.sha256
 ' "$tmp/repeat-a.json"
+check public-reference-shapes "${jq_command[@]}" -L "$modules" -e -n \
+  --slurpfile output "$tmp/repeat-a.json" '
+  import "schema" as schema;
+  ($output[0].trust_context.snapshot_ref | schema::content_ref_ok) and
+  ($output[0].trust_context.manifest_ref |
+    schema::document_ref_kind_ok("adapter_manifest")) and
+  ($output[0].trust_context.request_ref |
+    schema::document_ref_kind_ok("stage_request")) and
+  ($output[0].trust_context.resolved_profile_ref |
+    schema::document_ref_kind_ok("resolved_profile")) and
+  ($output[0].observation.result.result_ref |
+    schema::document_ref_kind_ok("stage_result")) and
+  all($output[0].observation.result.evidence[];.proof_ref | schema::content_ref_ok)
+  '
 check no-ci-projection "${jq_command[@]}" -e '
   ([.. | objects | keys[]] as $keys |
    all(["app_id","check_run_id","check_suite_id","job_id","run_id","workflow_id"][];

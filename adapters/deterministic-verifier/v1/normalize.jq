@@ -14,19 +14,12 @@ def document_ref($pair):
     sha256:$pair.sha256
   };
 
-def trust_context_shape_ok:
-  schema::exact_fields(["body","id","kind","schema_version"];[]) and
-  .schema_version == 1 and .kind == "adapter_trust_context" and
-  (.id | schema::id_ok) and
-  (.body |
-   schema::exact_fields(
-     ["binding_id","manifest","request","resolved_profile","snapshot_ref"];[]) and
-   (.binding_id | schema::id_ok) and
-   (.manifest | profile::document_pair_ok("adapter_manifest")) and
-   (.request | profile::document_pair_ok("stage_request")) and
-   (.resolved_profile | profile::document_pair_ok("resolved_profile")) and
-   (.snapshot_ref | schema::content_ref_ok) and
-   .snapshot_ref.media_type == "application/json");
+def snapshot_ref($pair):
+  {
+    content_id:"deterministic-verifier-snapshot",
+    media_type:"application/json",
+    sha256:$pair.sha256
+  };
 
 def snapshot_shape_ok:
   schema::exact_fields(["body","id","kind","schema_version"];[]) and
@@ -36,6 +29,29 @@ def snapshot_shape_ok:
    schema::exact_fields(["observed_at","result"];[]) and
    (.observed_at | schema::time_ok) and
    (.result | profile::document_pair_ok("stage_result")));
+
+def verified_snapshot_pair_ok:
+  schema::exact_fields(["content","sha256"];[]) and
+  (.content | snapshot_shape_ok) and (.sha256 | schema::sha256_ok);
+
+def trust_context_shape_ok:
+  schema::exact_fields(["body","id","kind","schema_version"];[]) and
+  .schema_version == 1 and .kind == "adapter_trust_context" and
+  (.id | schema::id_ok) and
+  (.body |
+   schema::exact_fields(
+     ["binding_id","expected_attempt_id","expected_attempt_number","manifest",
+      "request","resolved_profile","verified_result","verified_snapshot"];
+     []) and
+   (.binding_id | schema::id_ok) and
+   (.expected_attempt_id | schema::id_ok) and
+   (.expected_attempt_number | schema::int_ok) and
+   .expected_attempt_number >= 1 and
+   (.manifest | profile::document_pair_ok("adapter_manifest")) and
+   (.request | profile::document_pair_ok("stage_request")) and
+   (.resolved_profile | profile::document_pair_ok("resolved_profile")) and
+   (.verified_result | profile::document_pair_ok("stage_result")) and
+   (.verified_snapshot | verified_snapshot_pair_ok));
 
 def input_shape_ok:
   schema::exact_fields(["snapshot","trust_context"];[]) and
@@ -90,7 +106,12 @@ def trust_relations_ok($trust):
   $request_pair.content.body.operation.arguments.network_mode == "deny";
 
 def snapshot_relations_ok($trust; $snapshot):
-  $trust.body.snapshot_ref.sha256 == $snapshot.body.result.sha256 and
+  $snapshot == $trust.body.verified_snapshot.content and
+  $snapshot.body.result == $trust.body.verified_result and
+  $snapshot.body.result.content.body.attempt_id ==
+    $trust.body.expected_attempt_id and
+  $snapshot.body.result.content.body.attempt_number ==
+    $trust.body.expected_attempt_number and
   result::stage_run_ok(
     $trust.body.request;$trust.body.resolved_profile;$snapshot.body.result) and
   (if $snapshot.body.result.content.body | has("execution") then
@@ -131,11 +152,13 @@ def observation($trust; $snapshot):
     state:normalized_state($result_body),
     reason_id:normalized_reason($result_body),
     trust_context:{
-      snapshot_ref:$trust.body.snapshot_ref,
+      snapshot_ref:snapshot_ref($trust.body.verified_snapshot),
       manifest_ref:document_ref($trust.body.manifest),
       request_ref:document_ref($trust.body.request),
       resolved_profile_ref:document_ref($trust.body.resolved_profile),
-      binding_id:$trust.body.binding_id
+      binding_id:$trust.body.binding_id,
+      expected_attempt_id:$trust.body.expected_attempt_id,
+      expected_attempt_number:$trust.body.expected_attempt_number
     },
     observation:{
       observed_at:$snapshot.body.observed_at,

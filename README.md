@@ -270,7 +270,10 @@ profile.
 portable-core v2 verifier request, resolved profile, adapter contract, and stage
 result. It reuses the core's request, profile, and result relations, then returns
 one canonical observation. It does not interpret provider or CI status as verifier
-evidence. GitHub Actions remains a separate CI observation boundary.
+evidence. GitHub Actions remains a separate CI observation boundary. The caller
+first canonicalizes and hashes the snapshot and stage result, supplies those
+verified content-and-digest pairs, and fixes the expected attempt ID and number.
+The normalizer rejects any mismatch before emitting their references.
 
 This payload is offline and unqualified. It does not execute a candidate or tool,
 read proof bytes, enforce a sandbox, use a credential or network, write evidence,
