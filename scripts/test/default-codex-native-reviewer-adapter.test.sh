@@ -28,6 +28,10 @@ if [ "$platform" = Darwin:arm64 ]; then jq_command=(/usr/bin/arch -x86_64 "$jq_b
 runtime_bin="$tmp/bin"
 /bin/mkdir -m 700 "$runtime_bin"
 /bin/ln -s "$jq_bin" "$runtime_bin/jq"
+generation=$("${jq_command[@]}" -er \
+  'select(type=="array" and length==1) | .[0].generation_id' \
+  "$root/core/v2/generation-registry.json")
+modules="$root/core/v2/generations/$generation/modules"
 
 check() {
   local name=$1
@@ -112,6 +116,37 @@ top='[{finding_id:"T1",body:"top finding",provider_severity:"custom-urgent",
 inline='[{finding_id:"I1",path:"src/main.sh",line:7,side:"RIGHT",
   commit_id:("1" * 40),body:"inline finding",provider_severity:"banana",
   provider_metadata:{classification:"provider-only"}}]'
+
+check content-ref-public-schema-positive "${jq_command[@]}" -L "$modules" -e '
+  import "schema" as schema;
+  all([.trust_context.instruction_ref,.trust_context.review_policy_ref][];
+      schema::content_ref_ok)
+' "$tmp/baseline.json"
+expect_state content-ref-boundary '
+  .trust_context |=
+    (.instruction_ref.content_id=("a" + ("b" * 127)) |
+     .instruction_ref.media_type=("a/" + ("b" * 125)) |
+     .review_policy_ref.content_id=("c" + ("d" * 127)) |
+     .review_policy_ref.media_type=("c/" + ("d" * 125)))
+' clean
+check content-ref-public-schema-boundary "${jq_command[@]}" -L "$modules" -e '
+  import "schema" as schema;
+  all([.trust_context.instruction_ref,.trust_context.review_policy_ref][];
+      schema::content_ref_ok)
+' "$tmp/content-ref-boundary.json"
+expect_reject content-ref-colon \
+  '.trust_context.instruction_ref.content_id="instruction:bad"'
+check content-ref-public-schema-reject-colon "${jq_command[@]}" -L "$modules" -e '
+  import "schema" as schema;
+  (.trust_context.instruction_ref | schema::content_ref_ok) == false
+' "$tmp/content-ref-colon.json"
+expect_reject content-ref-slash \
+  '.trust_context.review_policy_ref.content_id="review/policy"'
+expect_reject content-ref-media-too-long \
+  '.trust_context.instruction_ref.media_type=("a/" + ("b" * 126))'
+expect_reject content-ref-media-invalid \
+  '.trust_context.review_policy_ref.media_type="Application/JSON"'
+
 expect_state clean '.' clean
 expect_state top-findings ".snapshot |= (.top_level_findings=$top | .reported_top_level_count=1)" findings
 expect_state inline-findings ".snapshot |= (.inline_findings=$inline | .reported_inline_count=1)" findings
@@ -126,6 +161,69 @@ expect_state in-progress \
   '.snapshot |= (.status="IN_PROGRESS" | .complete=false | .terminal_at=null)' inconclusive
 expect_state unknown \
   '.snapshot |= (.status="UNKNOWN" | .complete=false | .terminal_at=null)' inconclusive
+
+expect_reject completed-terminal-before-start \
+  '.snapshot.terminal_at="2026-09-02T09:59:59Z"'
+expect_reject failed-terminal-before-start \
+  '.snapshot |= (.status="FAILED" | .complete=false |
+    .terminal_at="2026-09-02T09:59:59Z")'
+expect_reject timeout-terminal-before-start \
+  '.snapshot |= (.status="TIMED_OUT" | .complete=false |
+    .terminal_at="2026-09-02T09:59:59Z")'
+expect_reject dismissed-terminal-before-start \
+  '.snapshot |= (.status="DISMISSED" |
+    .terminal_at="2026-09-02T09:59:59Z" |
+    .dismissed_at="2026-09-02T10:30:00Z")'
+
+expect_state snapshot-metadata-serialized-boundary '
+  .snapshot.provider_metadata={
+    a:("x" * 4096),b:("x" * 4096),c:("x" * 4096),d:("x" * 4067)
+  }
+' clean
+check snapshot-metadata-exact-byte-boundary "${jq_command[@]}" -e '
+  (.snapshot.provider_metadata | tojson | utf8bytelength) == 16384
+' "$tmp/snapshot-metadata-serialized-boundary.json"
+expect_state snapshot-metadata-depth-boundary \
+  '.snapshot.provider_metadata={a:{a:{a:{a:{a:{a:{a:"x"}}}}}}}' clean
+expect_state snapshot-metadata-node-boundary '
+  .snapshot.provider_metadata={
+    a:[range(0;64)],b:[range(0;64)],c:[range(0;64)],d:[range(0;59)]
+  }
+' clean
+expect_state snapshot-metadata-scalar-domain '
+  .snapshot.provider_metadata={
+    null_value:null,bool_value:true,number_value:1.5,string_value:"opaque"
+  }
+' clean
+expect_state top-metadata-key-boundary \
+  ".snapshot |= (.top_level_findings=$top | .reported_top_level_count=1 |
+    .top_level_findings[0].provider_metadata=({} | .[(\"k\" * 128)]=\"v\"))" findings
+expect_state inline-metadata-container-boundary \
+  ".snapshot |= (.inline_findings=$inline | .reported_inline_count=1 |
+    .inline_findings[0].provider_metadata={items:[range(0;64)]})" findings
+
+expect_reject snapshot-metadata-string-too-large \
+  '.snapshot.provider_metadata={text:("x" * 4097)}'
+expect_reject snapshot-metadata-serialized-too-large '
+  .snapshot.provider_metadata={
+    a:("x" * 4096),b:("x" * 4096),c:("x" * 4096),d:("x" * 4068)
+  }
+'
+expect_reject snapshot-metadata-too-deep \
+  '.snapshot.provider_metadata={a:{a:{a:{a:{a:{a:{a:{a:"x"}}}}}}}}'
+expect_reject snapshot-metadata-too-many-nodes '
+  .snapshot.provider_metadata={
+    a:[range(0;64)],b:[range(0;64)],c:[range(0;64)],d:[range(0;60)]
+  }
+'
+expect_reject snapshot-metadata-number-out-of-domain \
+  '.snapshot.provider_metadata={value:9007199254740992}'
+expect_reject top-metadata-key-too-large \
+  ".snapshot |= (.top_level_findings=$top | .reported_top_level_count=1 |
+    .top_level_findings[0].provider_metadata=({} | .[(\"k\" * 129)]=\"v\"))"
+expect_reject inline-metadata-container-too-large \
+  ".snapshot |= (.inline_findings=$inline | .reported_inline_count=1 |
+    .inline_findings[0].provider_metadata={items:[range(0;65)]})"
 
 expect_stale stale-app '.snapshot.github_app_id="15369"' app
 expect_stale stale-base '.snapshot.base.commit_id=("7" * 40)' base
@@ -172,6 +270,12 @@ expect_reject invalid-inline-line \
 check canonical-repeat /usr/bin/cmp -s "$tmp/repeat-a.json" "$tmp/repeat-b.json"
 check canonical-output /usr/bin/cmp -s "$tmp/repeat-a.json" \
   <("${jq_command[@]}" -S -c . "$tmp/repeat-a.json")
+"${jq_command[@]}" -S -c -f "$normalizer" \
+  "$tmp/snapshot-metadata-serialized-boundary.json" >"$tmp/metadata-repeat-a.json"
+"${jq_command[@]}" -S -c -f "$normalizer" \
+  "$tmp/snapshot-metadata-serialized-boundary.json" >"$tmp/metadata-repeat-b.json"
+check metadata-boundary-canonical-repeat /usr/bin/cmp -s \
+  "$tmp/metadata-repeat-a.json" "$tmp/metadata-repeat-b.json"
 check read-only-no-authority-effects "${jq_command[@]}" -e '
   .review_mode == "read-only" and .authority == "none" and .effects == [] and
   .qualification == {state:"unavailable",reason_id:"adapter.unqualified"} and

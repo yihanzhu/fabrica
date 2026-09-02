@@ -14,6 +14,42 @@ def sha256_ok:
   type == "string" and test("\\A[0-9a-f]{64}\\z");
 def text_ok:
   type == "string" and utf8bytelength >= 1 and utf8bytelength <= 8192;
+def media_type_ok:
+  type == "string" and
+  utf8bytelength <= 127 and
+  test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z");
+
+def metadata_number_ok:
+  type == "number" and
+  (isnan | not) and
+  (isinfinite | not) and
+  . >= -9007199254740991 and
+  . <= 9007199254740991 and
+  tostring != "-0";
+
+def metadata_value_ok($depth):
+  . as $value |
+  $depth <= 8 and
+  if type == "object" then
+    length <= 64 and
+    all(keys_unsorted[];
+      utf8bytelength <= 128 and
+      ($value[.] | metadata_value_ok($depth + 1)))
+  elif type == "array" then
+    length <= 64 and all(.[]; metadata_value_ok($depth + 1))
+  elif type == "string" then
+    utf8bytelength <= 4096
+  elif type == "number" then
+    metadata_number_ok
+  else
+    type == "boolean" or type == "null"
+  end;
+
+def provider_metadata_ok:
+  type == "object" and
+  (tojson | utf8bytelength <= 16384) and
+  ([paths] | length <= 255) and
+  metadata_value_ok(1);
 
 def time_ok:
   type == "string" and
@@ -45,8 +81,9 @@ def revision_ok:
 def content_ref_ok:
   exact_fields(["content_id","media_type","sha256"];[]) and
   (.content_id | id_ok) and
-  (.media_type | type == "string" and
-   test("\\A[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*\\z")) and
+  (.content_id | contains(":") | not) and
+  (.content_id | contains("/") | not) and
+  (.media_type | media_type_ok) and
   (.sha256 | sha256_ok);
 
 def trust_context_ok:
@@ -88,7 +125,7 @@ def top_finding_ok:
   (.finding_id | finding_id_ok) and
   (.body | text_ok) and
   (.provider_severity | text_ok) and
-  (.provider_metadata | type == "object");
+  (.provider_metadata | provider_metadata_ok);
 
 def inline_finding_ok($head):
   exact_fields(
@@ -102,7 +139,7 @@ def inline_finding_ok($head):
   .commit_id == $head.commit_id and
   (.body | text_ok) and
   (.provider_severity | text_ok) and
-  (.provider_metadata | type == "object");
+  (.provider_metadata | provider_metadata_ok);
 
 def findings_ok:
   . as $snapshot |
@@ -143,7 +180,9 @@ def status_facts_ok:
 def timestamps_ok:
   (.started_at | time_ok) and (.updated_at | time_ok) and (.observed_at | time_ok) and
   .started_at <= .updated_at and .updated_at <= .observed_at and
-  (if .terminal_at == null then true else .terminal_at <= .updated_at end) and
+  (if .terminal_at == null then true
+   else .started_at <= .terminal_at and .terminal_at <= .updated_at
+   end) and
   (if .dismissed_at == null then true else .dismissed_at <= .updated_at end);
 
 def snapshot_ok:
@@ -164,7 +203,7 @@ def snapshot_ok:
   (.status | IN("COMPLETED","DISMISSED","TIMED_OUT","FAILED","IN_PROGRESS","UNKNOWN")) and
   (.complete | type == "boolean") and
   (.hidden_execution | hidden_execution_ok) and
-  (.provider_metadata | type == "object") and
+  (.provider_metadata | provider_metadata_ok) and
   status_facts_ok and timestamps_ok and findings_ok;
 
 def stale_bindings($context; $snapshot):
