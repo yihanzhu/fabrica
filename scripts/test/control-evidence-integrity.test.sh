@@ -285,6 +285,10 @@ run_eval valid
   .body.qualification_semantics=="identity-only-unqualified" and
   (.body.evidence_refs|length)==1' "$tmp/valid.out" >/dev/null || fail 'valid output'
 pass 'valid exact immutable evidence presentation'
+run_eval portable-valid
+/usr/bin/cmp -s "$tmp/valid.out" "$tmp/portable-valid.out" ||
+  fail 'portable valid output'
+pass "portable valid evaluation on $platform"
 
 expect_pure_violation result-moved '.body.result_ref.sha256=("0"*64)' \
   evidence.result-moved
@@ -550,7 +554,7 @@ forged_stage_case() {
   local stage=$1 jq_mode=${2:-fake}
   local suffix runtime="$tmp/forged-$stage-$jq_mode-runtime" scratch
   local sentinel="$tmp/forged-$1-$jq_mode-sentinel" physical_tmp origin live
-  local driver_id live_id
+  local driver_id live_id capability
   local scratch_id
   local private_driver_id
   local status=0
@@ -584,6 +588,17 @@ forged_stage_case() {
   private_driver_id=$(test_path_identity "$scratch/driver.sh")
   live_id=$(test_path_identity "$live")
   physical_tmp=$(CDPATH='' cd -P -- "$tmp" && pwd -P)
+  capability="$scratch/caller.cap"
+  /usr/bin/mkfifo -m 0600 "$capability"
+  if [ "$stage" = supervisor ]; then
+    exec 8<>"$capability"
+    /bin/rm -f "$capability"
+    /usr/bin/printf 'supervisor\n' >&8
+  else
+    exec 9<>"$capability"
+    /bin/rm -f "$capability"
+    /usr/bin/printf 'worker\n' >&9
+  fi
   /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" \
     YSTACK_EVIDENCE_STAGE="$stage" YSTACK_EVIDENCE_SCRATCH="$scratch" \
     YSTACK_EVIDENCE_SCRATCH_ID="$scratch_id" \
@@ -596,6 +611,7 @@ forged_stage_case() {
     "$physical_tmp/result.json" "$physical_tmp/presentation.json" \
     >"$tmp/forged-$stage-$jq_mode.out" \
     2>"$tmp/forged-$stage-$jq_mode.err" || status=$?
+  if [ "$stage" = supervisor ]; then exec 8>&-; else exec 9>&-; fi
   [ "$status" -ne 0 ] && [ ! -s "$tmp/forged-$stage-$jq_mode.out" ] &&
     [ ! -s "$tmp/forged-$stage-$jq_mode.err" ] &&
     [ ! -e "$sentinel" ] || fail "forged $stage stage"
@@ -869,6 +885,50 @@ TMPDIR="$cleanup_error_scratch" PATH="$bin:/usr/bin:/bin" \
 [ "$cleanup_error_status" -ne 0 ] && [ ! -s "$tmp/cleanup-error.out" ] &&
   [ ! -s "$tmp/cleanup-error.err" ] || fail 'cleanup failure error-path output'
 pass 'error paths emit nothing when scratch cleanup fails'
+
+bin_swap_runtime="$tmp/bin-swap-runtime"
+bin_swap_parent="$tmp/bin-swap-parent"
+bin_swap_outside="$tmp/bin-swap-outside"
+bin_swap_ready="$tmp/bin-swap.ready"
+bin_swap_go="$tmp/bin-swap.go"
+copy_runtime "$bin_swap_runtime"
+/bin/mkdir "$bin_swap_parent" "$bin_swap_outside"
+/usr/bin/printf 'outside-unchanged\n' >"$bin_swap_outside/sentinel"
+BIN_SWAP_READY="$bin_swap_ready" BIN_SWAP_GO="$bin_swap_go" \
+  /usr/bin/perl -0777 -pi -e '
+    my $ready=$ENV{"BIN_SWAP_READY"}; my $go=$ENV{"BIN_SWAP_GO"};
+    my $replacement = qq{scratch_mkdirs bin || emit_error E_RUNTIME\n} .
+      qq{/usr/bin/printf "ready\\n" >"$ready" || exit 1\n} .
+      qq{while [ ! -e "$go" ]; do /bin/sleep 0.01; done};
+    s{scratch_mkdirs bin \|\| emit_error E_RUNTIME}{$replacement} or exit 2;
+  ' "$bin_swap_runtime/control/v1/evaluate-evidence-integrity.sh"
+bind_modified_driver "$bin_swap_runtime" "$tmp/bin-swap-set.json"
+TMPDIR="$bin_swap_parent" PATH="$bin:/usr/bin:/bin" \
+  "$bin_swap_runtime/control/v1/evaluate-evidence-integrity.sh" evaluate \
+  "$tmp/bin-swap-set.json" "$request" "$resolved" "$result" "$presentation" \
+  >"$tmp/bin-swap.out" 2>"$tmp/bin-swap.err" &
+bin_swap_pid=$!
+bin_swap_attempt=0
+while [ ! -e "$bin_swap_ready" ] && kill -0 "$bin_swap_pid" 2>/dev/null &&
+      [ "$bin_swap_attempt" -lt 1200 ]; do
+  bin_swap_attempt=$((bin_swap_attempt + 1)); /bin/sleep 0.005
+done
+[ -e "$bin_swap_ready" ] || fail 'bin ancestor swap ready'
+bin_swap_scratch=$(/usr/bin/find "$bin_swap_parent" -mindepth 1 -maxdepth 1 \
+  -type d -name 'ystack-evidence.??????' -print -quit)
+[ -n "$bin_swap_scratch" ] || fail 'bin ancestor swap scratch'
+/bin/mv "$bin_swap_scratch/bin" "$bin_swap_scratch/bin.saved"
+/bin/ln -s "$bin_swap_outside" "$bin_swap_scratch/bin"
+: >"$bin_swap_go"
+bin_swap_status=0
+wait "$bin_swap_pid" || bin_swap_status=$?
+[ "$bin_swap_status" -ne 0 ] && [ ! -s "$tmp/bin-swap.out" ] &&
+  [ "$(/bin/cat "$tmp/bin-swap.err")" = E_RUNTIME ] &&
+  [ "$(/bin/cat "$bin_swap_outside/sentinel")" = outside-unchanged ] &&
+  [ ! -e "$bin_swap_outside/jq" ] &&
+  [ -z "$(/usr/bin/find "$bin_swap_parent" -mindepth 1 -print -quit)" ] ||
+  fail 'bin ancestor swap result'
+pass 'scratch bin ancestor swap cannot create or chmod outside files'
 
 scratch_swap_runtime="$tmp/scratch-swap-runtime"
 scratch_swap_parent="$tmp/scratch-swap-parent"

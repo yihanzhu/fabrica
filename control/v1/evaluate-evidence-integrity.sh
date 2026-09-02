@@ -5,12 +5,12 @@ export LC_ALL=C
 umask 077
 
 emit_error() {
-  local token=${1:-E_RUNTIME} current_stage=${YSTACK_EVIDENCE_STAGE:-bootstrap}
+  local token=${1:-E_RUNTIME}
   case "$token" in
     E_USAGE|E_RUNTIME|E_LIMIT|E_PARSE|E_CANONICAL|E_RELATION|E_POLICY_SET|E_CORE) ;;
     *) token=E_RUNTIME ;;
   esac
-  if [ "$current_stage" != worker ] && [ -n "${scratch:-}" ] &&
+  if [ "${INTERNAL_WORKER:-0}" -ne 1 ] && [ -n "${scratch:-}" ] &&
      declare -F cleanup >/dev/null 2>&1; then
     if cleanup; then
       trap - EXIT HUP INT TERM
@@ -23,7 +23,7 @@ emit_error() {
   exit 1
 }
 
-stage_auth_fail() {
+silent_fail() {
   exec >/dev/null 2>&1
   exit 125
 }
@@ -132,11 +132,16 @@ path_matches_identity() {
 }
 
 snapshot_nofollow() {
-  local source=$1 expected=$2 target=$3 limit=$4 copy_status=0
+  local source=$1 expected=$2 target=$3 limit=$4 mode=${5:-0600}
+  local copy_status=0 relative
+  case "$target" in
+    "$scratch"/*) relative=${target#"$scratch/"} ;;
+    *) return 1 ;;
+  esac
   /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
     /usr/bin/perl -MFcntl=:DEFAULT,:mode -MDigest::SHA -MCwd=abs_path -e '
       use strict; use warnings;
-      my ($source,$expected,$target,$limit)=@ARGV;
+      my ($source,$expected,$root,$root_expected,$target,$limit,$mode)=@ARGV;
       my ($p_dev,$p_ino,$f_dev,$f_ino,$size,$mtime,$ctime,$digest)=
         split(/:/,$expected,8);
       my ($parent,$name)=$source =~ m{\A(.+)/([^/]+)\z};
@@ -145,8 +150,13 @@ snapshot_nofollow() {
       my @parent=lstat($parent);
       exit 2 unless @parent && S_ISDIR($parent[2]) &&
         $parent[0]==$p_dev && $parent[1]==$p_ino;
-      chdir($parent) or exit 2;
-      my @cwd=stat("."); my @leaf=lstat($name);
+      opendir(my $source_parent_dh,$parent) or exit 2;
+      my @source_parent_opened=stat($source_parent_dh);
+      exit 2 unless @source_parent_opened && S_ISDIR($source_parent_opened[2]) &&
+        $source_parent_opened[0]==$parent[0] &&
+        $source_parent_opened[1]==$parent[1];
+      chdir($source_parent_dh) or exit 2;
+      my @cwd=stat($source_parent_dh); my @leaf=lstat($name);
       exit 2 unless @cwd && @leaf && S_ISREG($leaf[2]) &&
         $leaf[0]==$f_dev && $leaf[1]==$f_ino && $leaf[7]==$size &&
         $leaf[9]==$mtime && $leaf[10]==$ctime;
@@ -155,7 +165,38 @@ snapshot_nofollow() {
       exit 2 unless @opened && S_ISREG($opened[2]) &&
         $opened[0]==$f_dev && $opened[1]==$f_ino && $opened[7]==$size &&
         $opened[9]==$mtime && $opened[10]==$ctime;
-      sysopen(my $output,$target,O_WRONLY|O_CREAT|O_EXCL,0600) or exit 2;
+
+      my ($rp_dev,$rp_ino,$rd_dev,$rd_ino)=split(/:/,$root_expected,4);
+      my ($root_parent,$root_name)=$root =~ m{\A(.+)/([^/]+)\z};
+      exit 2 unless defined($root_parent) && defined($root_name) &&
+        defined(abs_path($root_parent)) && abs_path($root_parent) eq $root_parent &&
+        $target =~ m{\A[^/]+(?:/[^/]+)*\z};
+      opendir(my $root_parent_dh,$root_parent) or exit 2;
+      my @root_parent_st=stat($root_parent_dh);
+      exit 2 unless @root_parent_st && S_ISDIR($root_parent_st[2]) &&
+        $root_parent_st[0]==$rp_dev && $root_parent_st[1]==$rp_ino;
+      chdir($root_parent_dh) or exit 2;
+      my @root_named=lstat($root_name);
+      exit 2 unless @root_named && S_ISDIR($root_named[2]) &&
+        $root_named[0]==$rd_dev && $root_named[1]==$rd_ino;
+      opendir(my $root_dh,$root_name) or exit 2;
+      my @root_opened=stat($root_dh);
+      exit 2 unless @root_opened && S_ISDIR($root_opened[2]) &&
+        $root_opened[0]==$rd_dev && $root_opened[1]==$rd_ino;
+      chdir($root_dh) or exit 2;
+      my @parts=split(m{/},$target); my $leaf=pop @parts;
+      for my $component (@parts) {
+        exit 2 if $component eq "." or $component eq "..";
+        my @named=lstat($component);
+        exit 2 unless @named && S_ISDIR($named[2]);
+        opendir(my $next,$component) or exit 2;
+        my @next_opened=stat($next);
+        exit 2 unless @next_opened && S_ISDIR($next_opened[2]) &&
+          $next_opened[0]==$named[0] && $next_opened[1]==$named[1];
+        chdir($next) or exit 2;
+      }
+      exit 2 if $leaf eq "." or $leaf eq "..";
+      sysopen(my $output,$leaf,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600) or exit 2;
       binmode($output); my $sha=Digest::SHA->new(256); my $total=0;
       while (1) {
         my $read=sysread($input,my $buffer,65536);
@@ -167,7 +208,9 @@ snapshot_nofollow() {
           exit 2 unless defined($written) && $written>0; $offset += $written;
         }
       }
+      chmod(oct($mode),$output) or exit 2;
       close($output) or exit 2;
+      chdir($source_parent_dh) or exit 2;
       my @after=stat($input); my @path_after=lstat($name);
       my @parent_after=lstat($parent);
       exit 2 unless @after && @path_after && @parent_after &&
@@ -177,8 +220,52 @@ snapshot_nofollow() {
         $opened[10]==$after[10] && $after[0]==$path_after[0] &&
         $after[1]==$path_after[1] && $cwd[0]==$parent_after[0] &&
         $cwd[1]==$parent_after[1] && $sha->hexdigest eq $digest;
-    ' "$source" "$expected" "$target" "$limit" || copy_status=$?
+    ' "$source" "$expected" "$scratch" "$SCRATCH_ID" "$relative" "$limit" \
+      "$mode" || copy_status=$?
   case "$copy_status" in 0) ;; 3) emit_error E_LIMIT ;; *) return 1 ;; esac
+}
+
+scratch_mkdirs() {
+  [ "$#" -gt 0 ] || return 1
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/perl -MFcntl=:mode -MCwd=abs_path -e '
+      use strict; use warnings;
+      my ($root,$expected,@paths)=@ARGV;
+      my ($p_dev,$p_ino,$d_dev,$d_ino)=split(/:/,$expected,4);
+      my ($parent,$name)=$root =~ m{\A(.+)/([^/]+)\z};
+      exit 1 unless defined($parent) && defined($name) &&
+        defined(abs_path($parent)) && abs_path($parent) eq $parent;
+      opendir(my $parent_dh,$parent) or exit 1;
+      my @parent_st=stat($parent_dh);
+      exit 1 unless @parent_st && S_ISDIR($parent_st[2]) &&
+        $parent_st[0]==$p_dev && $parent_st[1]==$p_ino;
+      chdir($parent_dh) or exit 1;
+      my @root_named=lstat($name);
+      exit 1 unless @root_named && S_ISDIR($root_named[2]) &&
+        $root_named[0]==$d_dev && $root_named[1]==$d_ino;
+      opendir(my $root_dh,$name) or exit 1;
+      my @root_opened=stat($root_dh);
+      exit 1 unless @root_opened && S_ISDIR($root_opened[2]) &&
+        $root_opened[0]==$d_dev && $root_opened[1]==$d_ino;
+      for my $path (@paths) {
+        exit 1 unless $path =~ m{\A[^/]+(?:/[^/]+)*\z};
+        chdir($root_dh) or exit 1;
+        for my $component (split(m{/},$path)) {
+          exit 1 if $component eq "." or $component eq "..";
+          my @named=lstat($component);
+          if (!@named) {
+            mkdir($component,0700) or exit 1;
+            @named=lstat($component);
+          }
+          exit 1 unless @named && S_ISDIR($named[2]);
+          opendir(my $next,$component) or exit 1;
+          my @opened=stat($next);
+          exit 1 unless @opened && S_ISDIR($opened[2]) &&
+            $opened[0]==$named[0] && $opened[1]==$named[1];
+          chdir($next) or exit 1;
+        }
+      }
+    ' "$scratch" "$SCRATCH_ID" "$@"
 }
 
 capture_identity_text() {
@@ -259,8 +346,8 @@ verify_all_pins() {
   local index=0 limit
   while [ "$index" -lt "${#PINNED_PATHS[@]}" ]; do
     limit=1048576
-    [ "${PINNED_PATHS[$index]}" != "${YSTACK_EVIDENCE_LIVE_JQ:-}" ] || limit=16777216
-    [ "${PINNED_PATHS[$index]}" != "${YSTACK_EVIDENCE_PRIVATE_JQ:-}" ] || limit=16777216
+    [ "${PINNED_PATHS[$index]}" != "${live_jq_path:-}" ] || limit=16777216
+    [ "${PINNED_PATHS[$index]}" != "${jq_bin:-}" ] || limit=16777216
     path_matches_identity "${PINNED_PATHS[$index]}" \
       "${PINNED_IDENTITIES[$index]}" "$limit" || return 1
     index=$((index + 1))
@@ -273,10 +360,11 @@ sha256_path() {
   /usr/bin/printf '%s\n' "${identity##*:}"
 }
 
-stage_hint=${YSTACK_EVIDENCE_STAGE:-bootstrap}
-if [ "$stage_hint" = bootstrap ]; then scratch=; else scratch=${YSTACK_EVIDENCE_SCRATCH:-}; fi
-SCRATCH_ID=${YSTACK_EVIDENCE_SCRATCH_ID:-}
+if [ -n "${YSTACK_EVIDENCE_STAGE+x}" ]; then silent_fail; fi
+scratch=
+SCRATCH_ID=
 SCRATCH_OWNED=0
+INTERNAL_WORKER=0
 ACTIVE_PID=
 ACTIVE_PGID=
 cleanup() {
@@ -410,31 +498,18 @@ arm_signal_traps
 
 run_child() {
   local child pgid state attempt=0 child_status=0 count self_pgid
-  local worker_cap="$scratch/worker.cap"
   [ -z "${ACTIVE_PID:-}" ] && [ -z "${ACTIVE_PGID:-}" ] || return 125
   defer_signal_traps
-  self_pgid=$(/bin/ps -o pgid= -p $$ 2>/dev/null | /usr/bin/tr -d ' ') || {
+  self_pgid=$(/bin/ps -o pgid= -p "$$" 2>/dev/null | /usr/bin/tr -d ' ') || {
     arm_signal_traps
     [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
     return 125
   }
-  if [ -e "$worker_cap" ] || [ -L "$worker_cap" ] ||
-     ! /usr/bin/mkfifo -m 0600 "$worker_cap"; then
+  if ! [[ "$self_pgid" =~ ^[1-9][0-9]*$ ]]; then
     arm_signal_traps
     [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
     return 125
   fi
-  exec 9<>"$worker_cap" || {
-    arm_signal_traps
-    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
-    return 125
-  }
-  /bin/rm -f -- "$worker_cap" || {
-    exec 9>&-
-    arm_signal_traps
-    [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
-    return 125
-  }
   set -m
   "$@" &
   child=$!
@@ -450,7 +525,6 @@ run_child() {
   if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || [ "$pgid" != "$child" ] ||
      [ "$pgid" = "$self_pgid" ]; then
     kill_unregistered_child "$child" || terminal_teardown_fail
-    exec 9>&-
     arm_signal_traps
     [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
     return 125
@@ -458,12 +532,6 @@ run_child() {
   ACTIVE_PID=$child; ACTIVE_PGID=$pgid
   arm_signal_traps
   [ "$PENDING_SIGNAL" -eq 0 ] || signal_exit "$PENDING_SIGNAL"
-  /usr/bin/printf 'worker\n' >&9 || {
-    exec 9>&-
-    terminate_active || return 125
-    return 125
-  }
-  exec 9>&-
   attempt=0
   state=$(leader_state "$child") || state=
   while [ -n "$state" ] && [[ "$state" != Z* ]] && [ "$attempt" -lt 1000 ]; do
@@ -499,85 +567,47 @@ emit_supervisor_failure() {
 }
 
 [ "$#" -eq 6 ] && [ "$1" = evaluate ] || emit_error E_USAGE
-stage=$stage_hint
-if [ "$stage" = supervisor ]; then
-  [ -p /dev/fd/8 ] || stage_auth_fail
-  IFS= read -r stage_capability <&8 || stage_auth_fail
-  exec 8<&-
-  [ "$stage_capability" = supervisor ] || stage_auth_fail
-elif [ "$stage" = worker ]; then
-  [ -p /dev/fd/9 ] || stage_auth_fail
-  IFS= read -r stage_capability <&9 || stage_auth_fail
-  exec 9<&-
-  [ "$stage_capability" = worker ] || stage_auth_fail
-  ulimit -f 2048 || stage_auth_fail
-fi
-if [ "$stage" = bootstrap ]; then
-  normalized_args=(evaluate)
-  for input in "${@:2}"; do
-    case "$input" in /*) ;; *) input="$(pwd -P)/$input" ;; esac
-    input_parent=$(CDPATH='' cd -P -- "${input%/*}" 2>/dev/null && pwd -P) ||
-      emit_error E_RUNTIME
-    input="$input_parent/${input##*/}"
-    physical_regular "$input" || emit_error E_RUNTIME
-    normalized_args+=("$input")
-  done
-  origin=${BASH_SOURCE[0]}
-  case "$origin" in /*) ;; *) origin="$(pwd -P)/$origin" ;; esac
-  origin_dir=$(CDPATH='' cd -P -- "${origin%/*}" 2>/dev/null && pwd -P) ||
+normalized_args=(evaluate)
+for input in "${@:2}"; do
+  case "$input" in /*) ;; *) input="$(pwd -P)/$input" ;; esac
+  input_parent=$(CDPATH='' cd -P -- "${input%/*}" 2>/dev/null && pwd -P) ||
     emit_error E_RUNTIME
-  origin="$origin_dir/${origin##*/}"
-  [ "$origin" = "$origin_dir/evaluate-evidence-integrity.sh" ] || emit_error E_RUNTIME
-  origin_identity=$(path_identity "$origin" 1048576) || emit_error E_RUNTIME
-  live_jq=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
-  case "$live_jq" in /*) ;; *) emit_error E_RUNTIME ;; esac
-  live_jq_parent=$(CDPATH='' cd -P -- "${live_jq%/*}" 2>/dev/null && pwd -P) ||
-    emit_error E_RUNTIME
-  live_jq="$live_jq_parent/${live_jq##*/}"
-  physical_regular "$live_jq" || emit_error E_RUNTIME
-  live_jq_identity=$(path_identity "$live_jq" 16777216) || emit_error E_RUNTIME
-  expected_jq=$(expected_jq_digest) || emit_error E_RUNTIME
-  [ "${live_jq_identity##*:}" = "$expected_jq" ] || emit_error E_RUNTIME
-  scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence.XXXXXX" 2>/dev/null) ||
-    emit_error E_RUNTIME
-  scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
-  /bin/chmod 0700 "$scratch" || emit_error E_RUNTIME
-  SCRATCH_ID=$(directory_identity "$scratch") || emit_error E_RUNTIME
-  SCRATCH_OWNED=1
-  /bin/mkdir -m 0700 "$scratch/bin" || emit_error E_RUNTIME
-  private_driver="$scratch/driver.sh"
-  private_jq="$scratch/bin/jq"
-  snapshot_nofollow "$origin" "$origin_identity" "$private_driver" 1048576 ||
-    emit_error E_RUNTIME
-  /bin/chmod 0500 "$private_driver" || emit_error E_RUNTIME
-  private_driver_identity=$(path_identity "$private_driver" 1048576) ||
-    emit_error E_RUNTIME
-  snapshot_nofollow "$live_jq" "$live_jq_identity" "$private_jq" 16777216 ||
-    emit_error E_RUNTIME
-  /bin/chmod 0500 "$private_jq" || emit_error E_RUNTIME
-  private_jq_identity=$(path_identity "$private_jq" 16777216) || emit_error E_RUNTIME
-  supervisor_cap="$scratch/supervisor.cap"
-  /usr/bin/mkfifo -m 0600 "$supervisor_cap" || emit_error E_RUNTIME
-  exec 8<>"$supervisor_cap" || emit_error E_RUNTIME
-  /bin/rm -f -- "$supervisor_cap" || emit_error E_RUNTIME
-  /usr/bin/printf 'supervisor\n' >&8 || emit_error E_RUNTIME
-  exec /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" TMPDIR="$scratch" \
-    YSTACK_EVIDENCE_STAGE=supervisor YSTACK_EVIDENCE_SCRATCH="$scratch" \
-    YSTACK_EVIDENCE_SCRATCH_ID="$SCRATCH_ID" \
-    YSTACK_EVIDENCE_ORIGIN="$origin" \
-    YSTACK_EVIDENCE_ORIGIN_ID="$origin_identity" \
-    YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="$private_driver_identity" \
-    YSTACK_EVIDENCE_LIVE_JQ="$live_jq" \
-    YSTACK_EVIDENCE_LIVE_JQ_ID="$live_jq_identity" \
-    YSTACK_EVIDENCE_PRIVATE_JQ="$private_jq" \
-    YSTACK_EVIDENCE_PRIVATE_JQ_ID="$private_jq_identity" \
-    /bin/bash "$private_driver" "${normalized_args[@]}"
-fi
+  input="$input_parent/${input##*/}"
+  physical_regular "$input" || emit_error E_RUNTIME
+  normalized_args+=("$input")
+done
+origin=${BASH_SOURCE[0]}
+case "$origin" in /*) ;; *) origin="$(pwd -P)/$origin" ;; esac
+origin_dir=$(CDPATH='' cd -P -- "${origin%/*}" 2>/dev/null && pwd -P) ||
+  emit_error E_RUNTIME
+origin="$origin_dir/${origin##*/}"
+[ "$origin" = "$origin_dir/evaluate-evidence-integrity.sh" ] || emit_error E_RUNTIME
+origin_identity=$(path_identity "$origin" 1048576) || emit_error E_RUNTIME
+live_jq=$(command -v jq 2>/dev/null) || emit_error E_RUNTIME
+case "$live_jq" in /*) ;; *) emit_error E_RUNTIME ;; esac
+live_jq_parent=$(CDPATH='' cd -P -- "${live_jq%/*}" 2>/dev/null && pwd -P) ||
+  emit_error E_RUNTIME
+live_jq="$live_jq_parent/${live_jq##*/}"
+physical_regular "$live_jq" || emit_error E_RUNTIME
+live_jq_identity=$(path_identity "$live_jq" 16777216) || emit_error E_RUNTIME
+expected_jq=$(expected_jq_digest) || emit_error E_RUNTIME
+[ "${live_jq_identity##*:}" = "$expected_jq" ] || emit_error E_RUNTIME
+scratch=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-evidence.XXXXXX" 2>/dev/null) ||
+  emit_error E_RUNTIME
+scratch=$(CDPATH='' cd -P -- "$scratch" 2>/dev/null && pwd -P) || emit_error E_RUNTIME
+SCRATCH_ID=$(directory_identity "$scratch") || emit_error E_RUNTIME
+SCRATCH_OWNED=1
+scratch_mkdirs bin || emit_error E_RUNTIME
+source_path="$scratch/driver.sh"
+jq_bin="$scratch/bin/jq"
+snapshot_nofollow "$origin" "$origin_identity" "$source_path" 1048576 0500 ||
+  emit_error E_RUNTIME
+private_driver_identity=$(path_identity "$source_path" 1048576) ||
+  emit_error E_RUNTIME
+snapshot_nofollow "$live_jq" "$live_jq_identity" "$jq_bin" 16777216 0500 ||
+  emit_error E_RUNTIME
+private_jq_identity=$(path_identity "$jq_bin" 16777216) || emit_error E_RUNTIME
 
-source_path=${BASH_SOURCE[0]}
-case "$source_path" in /*) ;; *) source_path="$(pwd -P)/$source_path" ;; esac
-origin=${YSTACK_EVIDENCE_ORIGIN:-}
-jq_bin=${YSTACK_EVIDENCE_PRIVATE_JQ:-}
 [ -n "$scratch" ] || emit_error E_RUNTIME
 case "$scratch" in /*/ystack-evidence.??????) ;; *) emit_error E_RUNTIME ;; esac
 if [ -z "$SCRATCH_ID" ] ||
@@ -587,11 +617,11 @@ fi
 SCRATCH_OWNED=1
 [ "$source_path" = "$scratch/driver.sh" ] && [ "$jq_bin" = "$scratch/bin/jq" ] ||
   emit_error E_RUNTIME
-origin_id=${YSTACK_EVIDENCE_ORIGIN_ID:-}
-private_driver_id=${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}
-live_jq_path=${YSTACK_EVIDENCE_LIVE_JQ:-}
-live_jq_id=${YSTACK_EVIDENCE_LIVE_JQ_ID:-}
-private_jq_id=${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}
+origin_id=$origin_identity
+private_driver_id=$private_driver_identity
+live_jq_path=$live_jq
+live_jq_id=$live_jq_identity
+private_jq_id=$private_jq_identity
 PINNED_PATHS=("$origin" "$source_path" "$live_jq_path" "$jq_bin")
 PINNED_IDENTITIES=("$origin_id" "$private_driver_id" "$live_jq_id" "$private_jq_id")
 for internal_identity in "${PINNED_IDENTITIES[@]}"; do
@@ -607,19 +637,9 @@ if ! private_mode_ok "$source_path" || ! private_mode_ok "$jq_bin"; then
 fi
 verify_all_pins || emit_error E_RELATION
 
-if [ "$stage" = supervisor ]; then
+supervisor_main() {
   worker_status=0
-  run_child /usr/bin/env -i LC_ALL=C PATH="$scratch/bin:/usr/bin:/bin" TMPDIR="$scratch" \
-    YSTACK_EVIDENCE_STAGE=worker YSTACK_EVIDENCE_SCRATCH="$scratch" \
-    YSTACK_EVIDENCE_SCRATCH_ID="$SCRATCH_ID" \
-    YSTACK_EVIDENCE_ORIGIN="$origin" \
-    YSTACK_EVIDENCE_ORIGIN_ID="${YSTACK_EVIDENCE_ORIGIN_ID:-}" \
-    YSTACK_EVIDENCE_PRIVATE_DRIVER_ID="${YSTACK_EVIDENCE_PRIVATE_DRIVER_ID:-}" \
-    YSTACK_EVIDENCE_LIVE_JQ="${YSTACK_EVIDENCE_LIVE_JQ:-}" \
-    YSTACK_EVIDENCE_LIVE_JQ_ID="${YSTACK_EVIDENCE_LIVE_JQ_ID:-}" \
-    YSTACK_EVIDENCE_PRIVATE_JQ="$jq_bin" \
-    YSTACK_EVIDENCE_PRIVATE_JQ_ID="${YSTACK_EVIDENCE_PRIVATE_JQ_ID:-}" \
-    /bin/bash "$source_path" "$@" >"$scratch/worker.out" 2>"$scratch/worker.err" ||
+  run_child worker_main "$@" >"$scratch/worker.out" 2>"$scratch/worker.err" ||
     worker_status=$?
   if [ -n "${ACTIVE_PGID:-}" ] || [ -n "${ACTIVE_PID:-}" ]; then
     signal_exit 125
@@ -646,9 +666,12 @@ if [ "$stage" = supervisor ]; then
   trap - EXIT HUP INT TERM
   /usr/bin/printf '%s\n' "$output_text" || exit 1
   exit 0
-fi
-[ "$stage" = worker ] || emit_error E_RUNTIME
+}
+
+worker_main() {
+INTERNAL_WORKER=1
 trap - EXIT HUP INT TERM
+ulimit -f 2048 || silent_fail
 
 shift
 source_dir=$(CDPATH='' cd -P -- "${origin%/*}" 2>/dev/null && pwd -P) ||
@@ -686,15 +709,16 @@ snapshot_fixed() {
   local source=$1 target=$2 expected
   pin_path "$source" || emit_error E_RUNTIME
   expected=$(pinned_identity "$source") || emit_error E_RUNTIME
-  snapshot_nofollow "$source" "$expected" "$target" 1048576 || emit_error E_RUNTIME
+  snapshot_nofollow "$source" "$expected" "$target" 1048576 0600 ||
+    emit_error E_RUNTIME
   pin_path "$target" || emit_error E_RUNTIME
 }
 snapshot_executable() {
   local source=$1 target=$2 expected
   pin_path "$source" || emit_error E_RUNTIME
   expected=$(pinned_identity "$source") || emit_error E_RUNTIME
-  snapshot_nofollow "$source" "$expected" "$target" 1048576 || emit_error E_RUNTIME
-  /bin/chmod 0500 "$target" || emit_error E_RUNTIME
+  snapshot_nofollow "$source" "$expected" "$target" 1048576 0500 ||
+    emit_error E_RUNTIME
   pin_path "$target" || emit_error E_RUNTIME
 }
 canonical_json() {
@@ -739,7 +763,7 @@ validator_pair_ok() {
 }
 build_validator_mirror() {
   local mirror="$scratch/policy-validator/control/v1" source target
-  /bin/mkdir -p "$mirror" || return 1
+  scratch_mkdirs policy-validator/control/v1 || return 1
   for source in "$policy_validator" "$validator_program"; do
     target="$mirror/${source##*/}"
     case "$source" in
@@ -809,7 +833,8 @@ core_closure_sha() {
 build_core_mirror() {
   local selected=$1 mirror="$scratch/core-package" relative source target
   local -a paths
-  /bin/mkdir -p "$mirror/scripts" "$mirror/core/v2/generations/$selected/modules" ||
+  scratch_mkdirs core-package/scripts \
+    "core-package/core/v2/generations/$selected/modules" ||
     return 1
   paths=(
     scripts/core-contract.sh
@@ -1071,4 +1096,7 @@ canonical_json "$scratch/evaluation.json" "$scratch/evaluation.canonical" ||
 
 pin_path "$scratch/evaluation.json" || emit_error E_RUNTIME
 verify_all_pins || emit_error E_RELATION
-exit 0
+return 0
+}
+
+supervisor_main "${normalized_args[@]}"
