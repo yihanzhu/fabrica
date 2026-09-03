@@ -92,9 +92,9 @@ expect_class() {
       (.body.evaluator.content.body.bootstrap_ref.sha256 |
         test("^[0-9a-f]{64}$")) and
       .body.evaluator.content.body.program_ref.sha256 ==
-        "8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80" and
+        "722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae" and
       .body.evaluator.content.body.driver_ref.sha256 ==
-        "3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a" and
+        "5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b" and
       .body.evaluator.content.body.runtime.host_architecture == $host_arch and
       .body.evaluator.content.body.runtime.execution_mode == $execution_mode and
       (.body.evaluator.content.body.core_closure | length) == 9 and
@@ -229,10 +229,10 @@ make_snapshot() {
         id:"snapshot.example",
         body:{
           core_contract:{
-            generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
+            generation_id_sha256:"84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
             package_ref:{content_id:"core-contract-package.v2",
               media_type:"application/vnd.ystack.core-contract+json",
-              sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"},
+              sha256:"eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"},
             semantic_identity:"core.contracts.v2"
           },
           items:[{
@@ -535,17 +535,17 @@ link="$tmp/input-link.json"
 expect_error symlink-input E_RUNTIME "$link"
 
 copy_root="$tmp/scanner-copy"
-copy_modules="$copy_root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules"
+copy_modules="$copy_root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules"
 /bin/mkdir -p "$copy_root/orchestrator/v1" "$copy_modules" "$copy_root/scripts"
 /bin/cp "$root/orchestrator/v1/scan-state.sh" \
   "$root/orchestrator/v1/state-scanner-launcher.sh" \
   "$root/orchestrator/v1/state-scanner-driver.sh" \
   "$root/orchestrator/v1/state-scanner.jq" "$copy_root/orchestrator/v1/"
 /bin/cp "$root/core/v2/generation-registry.json" "$copy_root/core/v2/"
-/bin/cp "$root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq" \
-  "$root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh" \
-  "$copy_root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/"
-/bin/cp "$root/core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/"*.jq \
+/bin/cp "$root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/contracts.jq" \
+  "$root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/core-ingress.sh" \
+  "$copy_root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/"
+/bin/cp "$root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/"*.jq \
   "$copy_modules/"
 /bin/cp "$root/scripts/core-contract.sh" "$copy_root/scripts/"
 /bin/chmod 0500 "$copy_root/orchestrator/v1/scan-state.sh"

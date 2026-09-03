@@ -47,6 +47,12 @@ The stable `scripts/core-contract.sh` wrapper and inactive resolver select this 
 generation together. This is a repo-only compatibility switch. It does not install
 the resolver, select a live profile, or qualify a real forge.
 
+The v2 registry also carries the selected evidence-identity correction. It requires
+every passed evidence item to come from the exact selected execution; incident
+mismatches remain valid only when all evidence is non-passing. The stable wrapper,
+inactive resolver, Control closure, and scanner select it together. The prior
+generation remains immutable and restorable.
+
 ## Inactive fake adapter contract matrix
 
 `adapter-tests/v1/` runs a fixed 2×2 producer/forge matrix against one unrelated

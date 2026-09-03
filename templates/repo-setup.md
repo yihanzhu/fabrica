@@ -57,8 +57,7 @@ yours, and yshifu never runs it.)
   know the trade.** ystack's reviewer (`scripts/codex-review.sh`) is **comments-only and never
   approves**, so no agent can ever satisfy that requirement — and `merge-pr.sh` refuses such a
   PR outright (`reviewDecision=REVIEW_REQUIRED`), so you merge those **by hand** instead of
-  with the script. Gate on required **status checks** if you want `merge-pr.sh` usable. (ystack's
-  own `main` takes the other trade: a PR plus one approving review, with no agent bypass.)
+  with the script. Gate on required **status checks** if you want `merge-pr.sh` usable.
 - ⛔️ **Keep GitHub's native auto-merge button off** — merges run through **you**, gated on
   green CI and a `merge-ready` label, not a server-side trigger that lands a PR while nobody
   is looking.
@@ -147,5 +146,5 @@ defaults (checks (k) and (l)). The review/manager-debate gates (`scripts/codex-r
 producer/model keys** (`YSTACK_CODER_MODEL`, `YSTACK_HANDS_MODEL`, `YSTACK_CODEX_MODEL`):
 `YSTACK_REVIEW_EFFORT` / `YSTACK_DEBATE_EFFORT` can never be set this way (a target can
 never lower or change its own gate — an attempt is ignored with a visible warning in the
-posted PR/issue comment). Wiring the coder-spawn / hands-policy keys into the producers
-themselves is still follow-up work.
+posted PR/issue comment). The manager reads the same override before every coder/hands
+spawn.

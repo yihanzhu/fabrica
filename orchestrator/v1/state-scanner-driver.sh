@@ -48,31 +48,31 @@ runtime_parent=${runtime%/*}
 case "$input" in "$runtime_parent"/input.json) ;; *) emit_error E_RUNTIME ;; esac
 case "$evaluator" in "$runtime"/evaluator.json) ;; *) emit_error E_RUNTIME ;; esac
 
-generation=g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e
+generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 modules="$runtime/core/v2/generations/$generation/modules"
 program="$runtime/program.jq"
 jq_bin="$runtime/jq"
 work="$runtime_parent/work"
 verify_runtime() {
-  verify_hash 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
+  verify_hash 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
     "$program" &&
-  verify_hash f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1 \
+  verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
     "$runtime/core/v2/generations/$generation/contracts.jq" &&
-  verify_hash db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b \
+  verify_hash dfdd273ea98f8737188a2a347151b3ffc0e631e222abfaac55391d58dd2618e8 \
     "$runtime/core/v2/generations/$generation/core-ingress.sh" &&
   verify_hash c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207 \
     "$modules/profile_graph.jq" &&
   verify_hash 8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281 \
     "$modules/result_facts.jq" &&
-  verify_hash ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3 \
+  verify_hash ed4a9946a95ad0c701f74d6bd64c3b45264126927c2a53511d31c52241c7fd46 \
     "$modules/result_truth.jq" &&
   verify_hash 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade \
     "$modules/schema.jq" &&
   verify_hash 6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e \
     "$modules/stage_request.jq" &&
-  verify_hash bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3 \
+  verify_hash b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     "$runtime/scripts/core-contract.sh" &&
   [ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   { [ "$(sha256_path "$jq_bin")" = \
