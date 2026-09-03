@@ -204,7 +204,7 @@ shift
 assembly_inputs=("$@")
 
 PORTABLE_CORE_SCHEMA_MAJOR='2'
-PORTABLE_CORE_GENERATION='g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e'
+PORTABLE_CORE_GENERATION='g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43'
 assembly_source="${BASH_SOURCE[0]}"
 case "$assembly_source" in
   /*) ;;

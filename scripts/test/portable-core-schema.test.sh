@@ -632,7 +632,7 @@ schema_activation_state_ok() {
     [ "$(grep -Ec "^PORTABLE_CORE_SCHEMA_MAJOR='[12]'$" "$wrapper")" -eq 1 ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
     [ "$selected_major" = 2 ] &&
-    [ "$selected_generation" = "$schema_v2_generation" ] &&
+    [ "$selected_generation" = "$schema_v2_corrective_generation" ] &&
     grep -Fq "\"generation_id\":\"$selected_generation\"" "$selected_registry" &&
     [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
     [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
@@ -895,15 +895,8 @@ fi
 schema_v2_expected_live_hits="$schema_test_tmp/v2-expected-live-hits"
 printf '%s\n' \
   ci/required-files.txt \
-  control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
-  orchestrator/v1/state-scanner-driver.sh \
-  orchestrator/v1/state-scanner-launcher.sh \
-  orchestrator/v1/state-scanner.jq \
-  scripts/core-contract.sh \
-  scripts/lib/profile-resolution.sh \
-  scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-evidence-identity.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > \
@@ -925,8 +918,15 @@ done < <(git -C "$schema_root" ls-files -z)
 schema_v2_corrective_expected_hits="$schema_test_tmp/v2-corrective-expected-hits"
 printf '%s\n' \
   ci/required-files.txt \
+  control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \
+  orchestrator/v1/state-scanner-driver.sh \
+  orchestrator/v1/state-scanner-launcher.sh \
+  orchestrator/v1/state-scanner.jq \
+  scripts/core-contract.sh \
+  scripts/lib/profile-resolution.sh \
+  scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
   scripts/test/portable-core-v2-evidence-identity.test.sh > \
   "$schema_v2_corrective_expected_hits"

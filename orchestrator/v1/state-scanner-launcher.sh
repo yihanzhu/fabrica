@@ -119,7 +119,7 @@ runtime="$scratch/runtime"
 /bin/mkdir -m 0700 "$runtime" "$runtime/core" "$runtime/core/v2" \
   "$runtime/core/v2/generations" "$runtime/scripts" "$scratch/work" ||
   emit_error E_RUNTIME
-generation=g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e
+generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
@@ -129,10 +129,10 @@ snapshot_file "$source_dir/scan-state.sh" "$runtime/bootstrap.sh" 1048576 0400 |
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
 snapshot_file "$self" "$runtime/launcher.sh" 1048576 0400 || emit_error E_RUNTIME
 launcher_sha=$(sha256_path "$runtime/launcher.sh") || emit_error E_RUNTIME
-snapshot_expected 10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3 \
+snapshot_expected 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b \
   "$source_dir/state-scanner-driver.sh" "$runtime/driver.sh" 0400 ||
   emit_error E_STALE
-snapshot_expected 43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 \
+snapshot_expected 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
   "$source_dir/state-scanner.jq" "$runtime/program.jq" 0400 || emit_error E_STALE
 snapshot_expected 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
   "$repo/core/v2/generation-registry.json" \
@@ -140,13 +140,13 @@ snapshot_expected 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f
 snapshot_expected 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
   "$repo/core/v2/generations/$generation/contracts.jq" \
   "$generation_runtime/contracts.jq" 0400 || emit_error E_STALE
-snapshot_expected db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b \
+snapshot_expected dfdd273ea98f8737188a2a347151b3ffc0e631e222abfaac55391d58dd2618e8 \
   "$repo/core/v2/generations/$generation/core-ingress.sh" \
   "$generation_runtime/core-ingress.sh" 0400 || emit_error E_STALE
 for member in \
   'profile_graph.jq c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207' \
   'result_facts.jq 8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281' \
-  'result_truth.jq ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3' \
+  'result_truth.jq ed4a9946a95ad0c701f74d6bd64c3b45264126927c2a53511d31c52241c7fd46' \
   'schema.jq 8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade' \
   'stage_request.jq 6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e'; do
   read -r name digest <<<"$member"
@@ -154,7 +154,7 @@ for member in \
     "$repo/core/v2/generations/$generation/modules/$name" \
     "$generation_runtime/modules/$name" 0400 || emit_error E_STALE
 done
-snapshot_expected bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3 \
+snapshot_expected b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
   "$repo/scripts/core-contract.sh" "$runtime/scripts/core-contract.sh" 0400 ||
   emit_error E_STALE
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/jq" 0500 || emit_error E_RUNTIME
@@ -168,8 +168,8 @@ snapshot_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
 
 "$runtime/jq" -S -c -n \
   --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
-  --arg driver_sha 10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3 \
-  --arg program_sha 43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 \
+  --arg driver_sha 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b \
+  --arg program_sha 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
   --arg jq_sha "$jq_sha" --arg bash_sha "$bash_sha" \
   --arg host_os "$host_os" --arg host_arch "$host_arch" \
   --arg jq_arch "$jq_arch" --arg execution_mode "$execution_mode" '
@@ -179,22 +179,22 @@ snapshot_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
     id:"orchestrator.state-scanner.v1",
     body:{
       core_contract:{
-        generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
+        generation_id_sha256:"84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
         package_ref:ref("core-contract-package.v2";
           "application/vnd.ystack.core-contract+json";
-          "2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"),
+          "eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"),
         semantic_identity:"core.contracts.v2"
       },
       core_closure:[
         {path:"core/v2/generation-registry.json",sha256:"3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq",sha256:"65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh",sha256:"db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/profile_graph.jq",sha256:"c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/result_facts.jq",sha256:"8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/result_truth.jq",sha256:"ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/schema.jq",sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
-        {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/stage_request.jq",sha256:"6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e"},
-        {path:"scripts/core-contract.sh",sha256:"bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3"}
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/contracts.jq",sha256:"65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a"},
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/core-ingress.sh",sha256:"dfdd273ea98f8737188a2a347151b3ffc0e631e222abfaac55391d58dd2618e8"},
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/profile_graph.jq",sha256:"c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207"},
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/result_facts.jq",sha256:"8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281"},
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/result_truth.jq",sha256:"ed4a9946a95ad0c701f74d6bd64c3b45264126927c2a53511d31c52241c7fd46"},
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq",sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
+        {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/stage_request.jq",sha256:"6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e"},
+        {path:"scripts/core-contract.sh",sha256:"b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9"}
       ],
       bootstrap_ref:ref("orchestrator-state-scanner-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
       launcher_ref:ref("orchestrator-state-scanner-launcher.v1";"text/x-shellscript";$launcher_sha),
@@ -217,19 +217,19 @@ verify_private_core() {
   [ "$(sha256_path "$generation_runtime/contracts.jq")" = \
       65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a ] &&
   [ "$(sha256_path "$generation_runtime/core-ingress.sh")" = \
-      db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b ] &&
+      dfdd273ea98f8737188a2a347151b3ffc0e631e222abfaac55391d58dd2618e8 ] &&
   [ "$(sha256_path "$generation_runtime/modules/profile_graph.jq")" = \
       c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207 ] &&
   [ "$(sha256_path "$generation_runtime/modules/result_facts.jq")" = \
       8e49c2c091f1bbe525f7499e3fca072f6916a14d5bb34adbf121439e8ca2d281 ] &&
   [ "$(sha256_path "$generation_runtime/modules/result_truth.jq")" = \
-      ed992f26761d08e3c3f5ab57eda9bcd771ad59e3aebeb02643de88844184d2d3 ] &&
+      ed4a9946a95ad0c701f74d6bd64c3b45264126927c2a53511d31c52241c7fd46 ] &&
   [ "$(sha256_path "$generation_runtime/modules/schema.jq")" = \
       8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade ] &&
   [ "$(sha256_path "$generation_runtime/modules/stage_request.jq")" = \
       6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e ] &&
   [ "$(sha256_path "$runtime/scripts/core-contract.sh")" = \
-      bdb5def832e8e611bba8a7b30a2aae95ea4f2701c44b198cf51cd3dfd9ff88f3 ]
+      b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 ]
 }
 
 output="$scratch/output.json"
@@ -280,9 +280,9 @@ verify_private_core || emit_error E_STALE
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
 [ "$(sha256_path "$runtime/driver.sh")" = \
-    10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3 ] &&
+    5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b ] &&
 [ "$(sha256_path "$runtime/program.jq")" = \
-    43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 ] &&
+    722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae ] &&
 [ "$(sha256_path "$runtime/jq")" = "$jq_sha" ] &&
 [ "$(sha256_path /bin/bash)" = "$bash_sha" ] &&
 [ "$(sha256_path "$scratch/input.json")" = "$snapshot_sha" ] &&
