@@ -256,6 +256,10 @@ scripts/test/default-github-actions-ci-adapter.test.sh
 adapters/claude-code-producer/v1/normalize.jq
 scripts/test/default-claude-code-producer-adapter.test.sh
 
+# Inactive dormant publisher normalizer payload
+adapters/dormant-publisher/v1/normalize.jq
+scripts/test/default-dormant-publisher-adapter.test.sh
+
 # Inactive deterministic verifier normalizer payload
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh

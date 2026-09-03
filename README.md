@@ -286,6 +286,23 @@ The payload is inactive and unqualified. It does not call Claude Code, invoke a
 model, use a credential or network, write a target, publish, or activate a
 profile.
 
+## Inactive dormant publisher normalizer payload
+
+`adapters/dormant-publisher/v1/normalize.jq` validates one bounded publisher
+decision claim against caller-supplied attempt, idempotency, repository,
+change-request, head, base, tree, allowed-path, CI, review, decision-record, time,
+and execution-boundary bindings. Before calling it, the caller canonicalizes and
+hashes the claim, then supplies that verified content-and-digest pair. The
+normalizer requires the input to equal the pair and returns only a canonical
+dormant, stale, or inconclusive observation. A permit claim remains unqualified
+data; it never becomes approval or authority.
+
+This stage intentionally ships no adapter manifest. A later assembly PR can bind
+the durable main payload as the default profile's deterministic publisher with no
+capabilities, permissions, or tools. The payload is not the temporary construction
+publisher gate and cannot call it. It uses no credential or network, performs no
+merge or external write, and activates no profile.
+
 ## Inactive deterministic verifier normalizer payload
 
 `adapters/deterministic-verifier/v1/normalize.jq` validates an already-supplied

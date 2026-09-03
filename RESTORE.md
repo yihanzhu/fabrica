@@ -526,6 +526,23 @@ The pure jq payload is inactive, offline, and unqualified. It does not call Clau
 Code, invoke a model, use a credential or network, write a target, publish, or
 activate a profile.
 
+Restore the two paths in the manifest's inactive dormant publisher normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-dormant-publisher-adapter.test.sh
+```
+
+This checks exact attempt, idempotency, repository, change-request, candidate,
+path, evidence, decision, terminal-time, observation-time, and boundary bindings.
+The caller supplies a canonical, SHA-256-verified claim pair, and changed content
+is rejected. Permit, deny, and inconclusive claims all remain inert; malformed
+input is rejected and moved input becomes stale. This stage has no adapter manifest.
+A later assembly PR can bind its durable main payload with empty capability,
+permission, and tool sets. It is separate from the temporary construction
+publisher gate and performs no credential, network, merge, external write,
+authority, qualification, or profile activation.
+
 Restore the two paths in the manifest's inactive deterministic verifier normalizer
 payload block, then run:
 
