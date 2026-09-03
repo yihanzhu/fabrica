@@ -54,10 +54,10 @@ def claim_ok:
 def expected_core:
   {semantic_identity:"core.contracts.v2",
    generation_id_sha256:
-     "6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
+     "84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
    package_ref:{content_id:"core-contract-package.v2",
      media_type:"application/vnd.ystack.core-contract+json",
-     sha256:"2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"}};
+     sha256:"eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"}};
 
 def expected_credential_classes:
   [{credential_class:"model-inference",delivery:"brokered",
@@ -81,10 +81,10 @@ def policy_ok:
     .duty_separation == {
       decision_ref:{content_id:"control-decision.duty-separation",
         media_type:"application/vnd.ystack.control-decision+json",
-        sha256:"25a513104dc08de8e22727901555d0a3fb6008dd8b222f7a604ed50734d4e23e"},
+        sha256:"4c2297341d1d389f21ace62b58b83e27a6ed248f9bf13a10fa385c4f8474af99"},
       policy_ref:{content_id:"control-policy.duty-separation",
         media_type:"application/vnd.ystack.control-policy+json",
-        sha256:"6a86ddbe4432dae9e6e3748295b4b1da7280aa7ca410515531d0059ba2e1d566"}} and
+        sha256:"b2663c0c0ae3d1d2e95b2e5d5ade7e00b2893f242a1143e90fad74659f6a41f9"}} and
     .evaluation_mode == "observation-only" and .fail_mode == "closed" and
     .policy_version == "v1" and
     .protected_roles ==

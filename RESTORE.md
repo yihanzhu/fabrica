@@ -295,9 +295,10 @@ descriptor-3 receipt, ordinary-call compatibility, cleanup, and byte-for-byte co
 of the unchanged exports. It performs no install, activation, networked validation,
 or target use.
 
-`core/v2/` is the append-only inactive fake-forge generation selected by the stable
-wrapper and inactive profile resolver. Restore its registry and complete generation
-from one commit, then run:
+`core/v2/` contains append-only inactive generations, including the unchanged
+fake-forge generation. The stable wrapper and inactive profile resolver select the
+evidence-identity correction. Restore the registry and both complete generations from
+one commit, then run:
 
 ```sh
 bash scripts/test/portable-core-v2-fake-forge.test.sh
@@ -308,8 +309,8 @@ materialization in a caller-disposable repository. The package is not qualified 
 It grants no credential, network, publish, push, merge, or remote branch-write
 capability. The switch does not install the resolver or select a live profile.
 
-Restore the complete unselected v2 evidence-identity generation, its dedicated
-ledger, and its focused test from the manifest, then run:
+Restore the complete selected v2 evidence-identity generation, its dedicated ledger,
+and its focused test from the manifest, then run:
 
 ```sh
 bash scripts/test/portable-core-v2-evidence-identity.test.sh
@@ -317,9 +318,9 @@ bash scripts/test/portable-core-v2-evidence-identity.test.sh
 
 This proof requires passed evidence to retain the exact selected performer,
 binding, environment, capability, and metadata projection. It also proves that
-all-non-passing incident mismatches remain preservable. The stable wrapper remains
-on the prior generation until the separate atomic cutover; this step grants no
-authority, qualification, credential, network, activation, or external effect.
+all-non-passing incident mismatches remain preservable. Its selection is bound to
+the reviewed generation merge and publisher receipt and grants no authority,
+qualification, credential, network, activation, or external effect.
 
 Restore every path in the manifest's inactive fake adapter matrix block, then run:
 
