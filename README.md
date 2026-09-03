@@ -286,6 +286,33 @@ The payload is inactive and unqualified. It does not call Claude Code, invoke a
 model, use a credential or network, write a target, publish, or activate a
 profile.
 
+## Inactive local Git materializer protocol
+
+`adapters/local-git-materializer/v1/protocol.jq` defines the pure input, receipt,
+and stage-result boundary for the existing portable-core v2
+`core.forge.materialize-candidate.v2` capability. It validates a complete profile,
+resolved profile, manifest set, exact stage request, materialization contract, and
+patch payload links before projecting a canonical path-free receipt and core-valid
+result. The caller first canonicalizes and hashes both payloads, supplies those
+verified content-and-digest pairs in the trust context, and keeps raw payloads
+separate; changed bytes are rejected before any projection.
+
+Successful result projection likewise requires the raw materialization receipt and
+its caller-verified content-and-digest pair. The protocol rechecks the receipt's
+request, attempt, source, candidate, path count, and changed/no-change relation
+before its digest may back passing evidence.
+
+This stage contains no materialization executable. Its fixture builder is test-only
+and creates synthetic JSON under a caller-owned test directory; it is not a product
+execution seam. The protocol cannot read a repository, write a candidate, invoke a
+hook or filter, use a credential or network, contact a provider, or perform an
+external effect.
+
+A later runtime PR can consume this exact protocol and test fixture without copying
+them. That PR must separately prove the physical Git and scratch boundaries before
+any manifest or profile may bind the package. Nothing here is qualified, selected,
+installed, or activated.
+
 ## Inactive dormant publisher normalizer payload
 
 `adapters/dormant-publisher/v1/normalize.jq` validates one bounded publisher

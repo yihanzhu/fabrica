@@ -825,6 +825,7 @@ schema_import_path_ok() {
   local import_path="$1"
   local test_path
   case "$import_path" in
+    adapters/local-git-materializer/v1/protocol.jq|\
     adapters/deterministic-verifier/v1/normalize.jq|\
     orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
     scripts/test/default-codex-native-reviewer-adapter.test.sh|\

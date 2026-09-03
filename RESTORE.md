@@ -526,6 +526,30 @@ The pure jq payload is inactive, offline, and unqualified. It does not call Clau
 Code, invoke a model, use a credential or network, write a target, publish, or
 activate a profile.
 
+Restore the three paths in the manifest's inactive local Git materializer protocol
+block, then run:
+
+```sh
+bash scripts/test/local-git-materializer-protocol.test.sh
+```
+
+This builds only synthetic JSON fixtures. It validates the exact portable-core v2
+profile, request, manifest, contract, payload, receipt, and result relations. The
+negative matrix rejects malformed, stale, duplicate, relabelled, unsafe-path,
+expanded-mode, and weakened-limit inputs, and repeat checks require canonical
+output. It also requires caller-verified content-and-digest payload pairs, binds the
+source repository, commit, and tree to the request, enforces patch and changed-path
+limits, and revalidates the envelope before every projection. A stage result also
+requires a caller-verified receipt pair whose request, attempt, source, limits, and
+changed/no-change outcome all match before the receipt digest can back passing
+evidence.
+
+There is no materialization executable in this stage. Restoring it cannot read or
+write a Git repository, create a candidate, run provider tooling, use a credential
+or network, grant authority or qualification, or perform an external effect. A
+later runtime PR may consume the protocol and test fixture; only a still-later
+assembly may add a manifest after the complete package has a durable main commit.
+
 Restore the two paths in the manifest's inactive dormant publisher normalizer
 payload block, then run:
 
