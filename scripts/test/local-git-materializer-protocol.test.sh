@@ -85,6 +85,14 @@ expect_invalid() {
   pass "$name"
 }
 
+expect_invalid_contract() {
+  local name=$1 filter=$2
+  expect_invalid "$name" "$filter |
+    (.trust_context.verified_payloads[] |
+      select(.input_id==\"input.materialize\") | .content.data) =
+      (.payloads[] | select(.input_id==\"input.materialize\") | .data)"
+}
+
 expect_invalid extra-envelope-field '.unexpected=true'
 expect_invalid missing-attempt 'del(.attempt)'
 expect_invalid malformed-time '.attempt.finished_at="2026-02-30T00:00:02Z"'
@@ -105,41 +113,38 @@ expect_invalid wrong-capability \
   '.stage_request.content.body.operation.capability_id="core.harness.produce.v1"'
 expect_invalid wrong-permissions \
   '.stage_request.content.body.operation.permissions-=["core.perm.candidate-repository.write.v2"]'
-expect_invalid malformed-contract-data \
+expect_invalid_contract malformed-contract-data \
   '(.payloads[] | select(.input_id=="input.materialize") | .data)="{"'
-expect_invalid traversal-contract-path \
+expect_invalid_contract traversal-contract-path \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .allowed_paths=["../escape"] | tojson)'
-expect_invalid git-contract-path \
+expect_invalid_contract git-contract-path \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .allowed_paths=[".Git/config"] | tojson)'
-expect_invalid contract-mode-expansion \
+expect_invalid_contract contract-mode-expansion \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .allowed_modes += ["120000"] | tojson)'
-expect_invalid contract-zero-byte-limit \
+expect_invalid_contract contract-zero-byte-limit \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .max_patch_bytes=0 | tojson)'
-expect_invalid contract-change-limit-over-paths \
+expect_invalid_contract contract-change-limit-over-paths \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .max_changed_paths=2 | tojson)'
-expect_invalid contract-allows-binary \
+expect_invalid_contract contract-allows-binary \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .allow_binary_patch=true | tojson)'
-expect_invalid contract-allows-symlink \
+expect_invalid_contract contract-allows-symlink \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .allow_symlinks=true | tojson)'
-expect_invalid contract-allows-submodule \
+expect_invalid_contract contract-allows-submodule \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .allow_submodules=true | tojson)'
-expect_invalid contract-worktree-output \
+expect_invalid_contract contract-worktree-output \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .candidate_repository_kind="worktree" | tojson)'
-expect_invalid contract-patch-byte-limit '
+expect_invalid_contract contract-patch-byte-limit '
   (.payloads[] | select(.input_id=="input.materialize") | .data) |=
-    (fromjson | .max_patch_bytes=1 | tojson) |
-  (.trust_context.verified_payloads[] |
-    select(.input_id=="input.materialize") | .content.data) =
-    (.payloads[] | select(.input_id=="input.materialize") | .data)'
+    (fromjson | .max_patch_bytes=1 | tojson)'
 
 receipt="$tmp/receipt.json"
 candidate_commit=$(printf '%040d' 0 | /usr/bin/tr 0 3)
