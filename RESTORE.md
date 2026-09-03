@@ -537,7 +537,9 @@ This builds only synthetic JSON fixtures. It validates the exact portable-core v
 profile, request, manifest, contract, payload, receipt, and result relations. The
 negative matrix rejects malformed, stale, duplicate, relabelled, unsafe-path,
 expanded-mode, and weakened-limit inputs, and repeat checks require canonical
-output.
+output. It also requires caller-verified content-and-digest payload pairs, binds the
+source repository, commit, and tree to the request, enforces patch and changed-path
+limits, and revalidates the envelope before every projection.
 
 There is no materialization executable in this stage. Restoring it cannot read or
 write a Git repository, create a candidate, run provider tooling, use a credential

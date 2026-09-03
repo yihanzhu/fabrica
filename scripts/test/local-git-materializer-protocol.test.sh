@@ -91,6 +91,9 @@ expect_invalid malformed-time '.attempt.finished_at="2026-02-30T00:00:02Z"'
 expect_invalid duplicate-payload '.payloads[1]=.payloads[0]'
 expect_invalid relabelled-payload '.payloads[1].input_id="input.other"'
 expect_invalid payload-media-mismatch '.payloads[1].media_type="application/json"'
+expect_invalid changed-after-verification \
+  '(.payloads[] | select(.input_id=="input.producer-patch") | .data) += "tamper"'
+expect_invalid missing-verified-payload 'del(.trust_context.verified_payloads[0])'
 expect_invalid stale-resolved-ref \
   '.stage_request.content.body.resolved_profile_ref.sha256=("0"*64)'
 expect_invalid duplicate-manifest '.manifests += [.manifests[0]]'
@@ -131,19 +134,45 @@ expect_invalid contract-allows-submodule \
 expect_invalid contract-worktree-output \
   '(.payloads[] | select(.input_id=="input.materialize") | .data) |=
     (fromjson | .candidate_repository_kind="worktree" | tojson)'
+expect_invalid contract-patch-byte-limit '
+  (.payloads[] | select(.input_id=="input.materialize") | .data) |=
+    (fromjson | .max_patch_bytes=1 | tojson) |
+  (.trust_context.verified_payloads[] |
+    select(.input_id=="input.materialize") | .content.data) =
+    (.payloads[] | select(.input_id=="input.materialize") | .data)'
 
 receipt="$tmp/receipt.json"
+candidate_commit=$(printf '%040d' 0 | /usr/bin/tr 0 3)
+candidate_tree=$(printf '%040d' 0 | /usr/bin/tr 0 4)
+changed_paths_sha=$(printf '%064d' 0 | /usr/bin/tr 0 5)
 receipt_args=(
   --arg command receipt
   --arg source_repository_id fixture.target
   --arg source_hash_algorithm sha1
   --arg source_commit "$source_commit"
   --arg source_tree "$source_tree"
-  --arg candidate_commit "$(printf '%040d' 0 | /usr/bin/tr 0 3)"
-  --arg candidate_tree "$(printf '%040d' 0 | /usr/bin/tr 0 4)"
+  --arg candidate_commit "$candidate_commit"
+  --arg candidate_tree "$candidate_tree"
   --arg changed_path_count 1
-  --arg changed_paths_sha256 "$(printf '%064d' 0 | /usr/bin/tr 0 5)"
+  --arg changed_paths_sha256 "$changed_paths_sha"
 )
+projection_malformed="$tmp/projection-malformed.json"
+"$jq_bin" -S -c '.unexpected=true' "$input" > "$projection_malformed"
+for projection_command in contract patch receipt stage-result; do
+  projection_args=(--arg command "$projection_command")
+  case "$projection_command" in
+    receipt) projection_args=("${receipt_args[@]}") ;;
+    stage-result)
+      projection_args=(--arg command stage-result --arg outcome changed
+        --arg receipt_sha256 "$(printf '%064d' 0 | /usr/bin/tr 0 6)")
+      ;;
+  esac
+  if "$jq_bin" -L "$modules" "${projection_args[@]}" -f "$protocol" \
+       "$projection_malformed" >"$tmp/$projection_command-malformed.out" 2>/dev/null; then
+    fail "$projection_command projection accepted invalid envelope"
+  fi
+  pass "$projection_command validates the current envelope"
+done
 "$jq_bin" -S -c -L "$modules" "${receipt_args[@]}" -f "$protocol" "$input" > "$receipt"
 "$jq_bin" -S -c -L "$modules" "${receipt_args[@]}" -f "$protocol" "$input" > "$tmp/receipt-repeat"
 /usr/bin/cmp -s "$receipt" "$tmp/receipt-repeat" || fail receipt-repeat
@@ -153,6 +182,28 @@ if /usr/bin/grep -Fq "$tmp" "$receipt" ||
   fail receipt-effect-surface
 fi
 pass 'canonical receipt is path-free and carries no authority or effect'
+
+expect_receipt_reject() {
+  local name=$1 repository_id=$2 commit_id=$3 tree_id=$4 changed_count=$5
+  if "$jq_bin" -L "$modules" --arg command receipt \
+      --arg source_repository_id "$repository_id" --arg source_hash_algorithm sha1 \
+      --arg source_commit "$commit_id" --arg source_tree "$tree_id" \
+      --arg candidate_commit "$candidate_commit" --arg candidate_tree "$candidate_tree" \
+      --arg changed_path_count "$changed_count" \
+      --arg changed_paths_sha256 "$changed_paths_sha" \
+      -f "$protocol" "$input" >/dev/null 2>&1; then
+    fail "$name"
+  fi
+  pass "$name"
+}
+expect_receipt_reject source-repository-mismatch fixture.other \
+  "$source_commit" "$source_tree" 1
+expect_receipt_reject source-commit-mismatch fixture.target \
+  "$(printf '%040d' 0 | /usr/bin/tr 0 6)" "$source_tree" 1
+expect_receipt_reject source-tree-mismatch fixture.target \
+  "$source_commit" "$(printf '%040d' 0 | /usr/bin/tr 0 7)" 1
+expect_receipt_reject changed-path-limit fixture.target \
+  "$source_commit" "$source_tree" 2
 
 receipt_sha=$(sha_file "$receipt")
 result="$tmp/result.json"

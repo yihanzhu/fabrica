@@ -293,7 +293,9 @@ and stage-result boundary for the existing portable-core v2
 `core.forge.materialize-candidate.v2` capability. It validates a complete profile,
 resolved profile, manifest set, exact stage request, materialization contract, and
 patch payload links before projecting a canonical path-free receipt and core-valid
-result.
+result. The caller first canonicalizes and hashes both payloads, supplies those
+verified content-and-digest pairs in the trust context, and keeps raw payloads
+separate; changed bytes are rejected before any projection.
 
 This stage contains no materialization executable. Its fixture builder is test-only
 and creates synthetic JSON under a caller-owned test directory; it is not a product

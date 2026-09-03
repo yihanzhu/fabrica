@@ -176,7 +176,13 @@ input_file="$output_root/input.json"
      {content:$verifier[0],sha256:$shas.verifier}] | sort_by(.content.id)),
    stage_request:{content:$request[0],sha256:$request_sha},
    payloads:([
-     {input_id:"input.materialize",media_type:"application/json",sha256:$contract_sha,data:$contract},
-     {input_id:"input.producer-patch",media_type:"text/x-diff",sha256:$patch_sha,data:$patch}]
-     | sort_by(.input_id))}
+     {input_id:"input.materialize",media_type:"application/json",data:$contract},
+     {input_id:"input.producer-patch",media_type:"text/x-diff",data:$patch}]
+     | sort_by(.input_id)),
+   trust_context:{verified_payloads:([
+     {input_id:"input.materialize",content:{media_type:"application/json",data:$contract},
+      sha256:$contract_sha},
+     {input_id:"input.producer-patch",content:{media_type:"text/x-diff",data:$patch},
+      sha256:$patch_sha}]
+     | sort_by(.input_id))}}
 ' > "$input_file"
