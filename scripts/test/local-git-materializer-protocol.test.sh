@@ -279,6 +279,22 @@ expect_stage_result_reject receipt-digest-shape changed \
 expect_stage_result_reject receipt-outcome-mismatch no-change \
   "$receipt" "$verified_receipt"
 
+unchanged_commit_receipt="$tmp/unchanged-commit-receipt.json"
+"$jq_bin" -S -c '.candidate.commit_id=.source.commit_id' \
+  "$receipt" > "$unchanged_commit_receipt"
+unchanged_commit_pair="$tmp/unchanged-commit-pair.json"
+make_verified_receipt "$unchanged_commit_receipt" "$unchanged_commit_pair"
+expect_stage_result_reject changed-with-unchanged-commit changed \
+  "$unchanged_commit_receipt" "$unchanged_commit_pair"
+
+unchanged_tree_receipt="$tmp/unchanged-tree-receipt.json"
+"$jq_bin" -S -c '.candidate.tree_id=.source.tree_id' \
+  "$receipt" > "$unchanged_tree_receipt"
+unchanged_tree_pair="$tmp/unchanged-tree-pair.json"
+make_verified_receipt "$unchanged_tree_receipt" "$unchanged_tree_pair"
+expect_stage_result_reject changed-with-unchanged-tree changed \
+  "$unchanged_tree_receipt" "$unchanged_tree_pair"
+
 no_change_receipt="$tmp/no-change-receipt.json"
 "$jq_bin" -S -c -L "$modules" --arg command receipt \
   --arg source_repository_id fixture.target --arg source_hash_algorithm sha1 \

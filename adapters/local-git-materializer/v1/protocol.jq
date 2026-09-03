@@ -348,7 +348,7 @@ def receipt_relations_ok($input; $value):
 def receipt_outcome_ok($value; $outcome):
   if $outcome == "changed" then
     $value.changed_paths.count >= 1 and
-    ($value.candidate.commit_id != $value.source.commit_id or
+    ($value.candidate.commit_id != $value.source.commit_id and
      $value.candidate.tree_id != $value.source.tree_id)
   elif $outcome == "no-change" then
     $value.changed_paths.count == 0 and
