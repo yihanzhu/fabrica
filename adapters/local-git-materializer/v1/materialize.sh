@@ -35,10 +35,10 @@ source_git_dir=$4
 candidate_root=$5
 scratch_root=$6
 
-case "$script_path:$input_path:$source_git_dir:$candidate_root:$scratch_root" in
-  /*:/*:/*:/*:/*) ;;
-  *) emit_error E_USAGE ;;
-esac
+for absolute_path in "$script_path" "$input_path" "$source_git_dir" \
+  "$candidate_root" "$scratch_root"; do
+  case "$absolute_path" in /*) ;; *) emit_error E_USAGE ;; esac
+done
 [ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_PACKAGE
 script_dir=$(CDPATH='' cd -P -- "${script_path%/*}" && pwd -P) || emit_error E_PACKAGE
 repo_root=$(CDPATH='' cd -P -- "$script_dir/../../.." && pwd -P) || emit_error E_PACKAGE
@@ -249,6 +249,30 @@ git_dir() {
   "${git_env[@]}" /usr/bin/git --no-replace-objects --git-dir="$directory" "$@"
 }
 
+source_inventory="$run_root/source-filesystem"
+source_inventory_byte_limit=8388608
+source_inventory_entry_limit=65536
+source_inventory_ceiling=$((source_inventory_byte_limit + 1))
+if ! /usr/bin/find "$source_git_dir" -mindepth 1 -print0 |
+  /usr/bin/head -c "$source_inventory_ceiling" > "$source_inventory"; then
+  emit_error E_SOURCE_LIMIT
+fi
+source_inventory_bytes=$(/usr/bin/wc -c < "$source_inventory" | /usr/bin/tr -d ' ') ||
+  emit_error E_SOURCE_LIMIT
+[ "$source_inventory_bytes" -le "$source_inventory_byte_limit" ] ||
+  emit_error E_SOURCE_LIMIT
+source_inventory_entries=0
+while IFS= builtin read -r -d '' source_entry; do
+  source_inventory_entries=$((source_inventory_entries + 1))
+  [ "$source_inventory_entries" -le "$source_inventory_entry_limit" ] ||
+    emit_error E_SOURCE_LIMIT
+  case "$source_entry" in "$source_git_dir"/*) ;; *) emit_error E_SOURCE_GIT ;; esac
+  if [ -L "$source_entry" ] || { [ ! -f "$source_entry" ] && [ ! -d "$source_entry" ]; }; then
+    emit_error E_SOURCE_GIT
+  fi
+done < "$source_inventory"
+/bin/rm -f -- "$source_inventory"
+
 source_config="$run_root/source-config"
 git_dir "$source_git_dir" config --local --name-only --list --no-includes \
   > "$source_config" 2>/dev/null || emit_error E_SOURCE_GIT
@@ -266,7 +290,6 @@ done < "$source_config"
   [ ! -e "$source_git_dir/info/grafts" ] &&
   [ ! -e "$source_git_dir/objects/info/alternates" ] &&
   [ ! -d "$source_git_dir/refs/replace" ] &&
-  [ -z "$(find "$source_git_dir" -type l -print -quit)" ] &&
   [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
   emit_error E_SOURCE_GIT
 [ -z "$(git_dir "$source_git_dir" for-each-ref --format='%(refname)' \
@@ -458,11 +481,22 @@ scan_tree "$staging_repo" "$candidate_tree" "$candidate_paths" || emit_error E_C
 /bin/rm -f -- "$candidate_paths"
 
 changed_paths="$run_root/changed-paths"
+changed_paths_raw="$run_root/changed-paths.raw"
+changed_paths_byte_limit=2097152
+changed_paths_ceiling=$((changed_paths_byte_limit + 1))
+if ! git_dir "$staging_repo" diff-tree -r --name-only -z \
+  "$source_tree" "$candidate_tree" |
+  /usr/bin/head -c "$changed_paths_ceiling" > "$changed_paths_raw"; then
+  emit_error E_CANDIDATE_GIT
+fi
+changed_paths_bytes=$(/usr/bin/wc -c < "$changed_paths_raw" | /usr/bin/tr -d ' ') ||
+  emit_error E_CANDIDATE_GIT
+[ "$changed_paths_bytes" -le "$changed_paths_byte_limit" ] || emit_error E_PATCH_LIMIT
 : > "$changed_paths"
 while IFS= read -r -d '' changed_path; do
   safe_repo_path "$changed_path" || emit_error E_PATCH_PATH
   printf '%s\n' "$changed_path" >> "$changed_paths"
-done < <(git_dir "$staging_repo" diff-tree -r --name-only -z "$source_tree" "$candidate_tree")
+done < "$changed_paths_raw"
 LC_ALL=C /usr/bin/sort -u "$changed_paths" -o "$changed_paths"
 changed_count=$(wc -l < "$changed_paths" | /usr/bin/tr -d ' ')
 [ "$changed_count" -le "$max_changed" ] || emit_error E_PATCH_LIMIT

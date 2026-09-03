@@ -374,6 +374,20 @@ fi
   fail direct-clean-worker-sanitization
 pass 'direct worker entry blocks startup files and strips hostile environment state'
 
+relative_case="$tmp/relative-path"
+/bin/mkdir -m 700 "$relative_case" "$relative_case/candidate" "$relative_case/scratch"
+if (
+  cd "$tmp"
+  PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize 'relative:/input.json' \
+    fixture.target "$tmp/source.git" "$relative_case/candidate" "$relative_case/scratch" \
+    > "$relative_case/out" 2> "$relative_case/err"
+); then
+  fail relative-input-path-accepted
+fi
+[ ! -s "$relative_case/out" ] && [ "$(cat "$relative_case/err")" = E_USAGE ] ||
+  fail relative-input-path
+pass 'each filesystem argument must be independently absolute'
+
 refresh_request_pair() {
   local source=$1 destination=$2 request_snapshot="$tmp/request-refresh"
   "${jq_cmd[@]}" -S -c '.stage_request.content' "$source" > "$request_snapshot"
@@ -939,5 +953,12 @@ if [ "$(/usr/bin/grep -Fc -- '--accounted-validation' "$adapter")" -ne 1 ] ||
 fi
 pass 'core validation is routed through caller-owned accounted scratch'
 pass 'payload has no provider, transport, credential, authority or qualification path'
+
+if /usr/bin/grep -Fq 'done < <(git_dir "$staging_repo" diff-tree' "$adapter" ||
+   ! /usr/bin/grep -Fq 'diff-tree -r --name-only -z' "$adapter" ||
+   ! /usr/bin/grep -Fq '> "$changed_paths_raw"' "$adapter"; then
+  fail changed-path-status-capture
+fi
+pass 'changed-path enumeration is captured before evidence processing'
 
 printf 'local Git materializer: %s focused checks passed\n' "$passed"
