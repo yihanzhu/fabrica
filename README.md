@@ -284,7 +284,8 @@ cumulative source blob sizes plus patch bytes must fit a 256 MiB candidate budge
 The fixed `materialize` command accepts only caller-named physical source,
 candidate, and scratch boundaries. It rejects worktrees, alternates, shallow or
 partial repositories, replace or graft state, active hooks and filters, remote
-configuration, unsafe paths, binary patches, symlinks, and submodules. It never
+configuration, unsafe paths, binary or copy/rename patches, empty subtrees,
+symlinks, and submodules. It never
 inherits host Git templates, checks out a worktree, or runs a transport command.
 An empty producer patch returns the explicit `no-change` result. Tests cover both
 SHA-1 and SHA-256 object formats with disposable local fixtures.

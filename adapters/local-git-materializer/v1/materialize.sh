@@ -216,6 +216,11 @@ patch_without_nul=$(LC_ALL=C /usr/bin/tr -d '\000' < "$patch_file" | wc -c | /us
 if /usr/bin/grep -aEq '^(GIT binary patch|Binary files .+ differ)$' "$patch_file"; then
   emit_error E_BINARY_PATCH
 fi
+if /usr/bin/grep -aEq \
+  '^(copy from|copy to|rename from|rename to|similarity index|dissimilarity index) ' \
+  "$patch_file"; then
+  emit_error E_PATCH
+fi
 
 source_commit=$("$jq_bin" -r '.stage_request.content.body.target_revision.value.commit_id' \
   "$input_snapshot") || emit_error E_SOURCE_IDENTITY
@@ -301,19 +306,20 @@ safe_repo_path() {
 }
 
 scan_tree() {
-  local repository=$1 tree=$2 output=$3 raw_output entry metadata mode type object path
+  local repository=$1 tree=$2 output=$3 raw_output entry metadata mode type object path empty_tree
   local raw_bytes entry_count tree_scan_byte_limit tree_scan_entry_limit tree_scan_ceiling
   tree_scan_byte_limit=16777216
   tree_scan_entry_limit=65536
   tree_scan_ceiling=$((tree_scan_byte_limit + 1))
   raw_output="$output.raw"
-  if ! git_dir "$repository" ls-tree -rz -r "$tree" |
+  if ! git_dir "$repository" ls-tree -rz -r -t "$tree" |
     /usr/bin/head -c "$tree_scan_ceiling" > "$raw_output"; then
     return 1
   fi
   raw_bytes=$(/usr/bin/wc -c < "$raw_output" | /usr/bin/tr -d ' ') || return 1
   [ "$raw_bytes" -le "$tree_scan_byte_limit" ] || return 1
   /usr/bin/iconv -f UTF-8 -t UTF-8 "$raw_output" >/dev/null 2>&1 || return 1
+  empty_tree=$(git_dir "$repository" hash-object -t tree --stdin </dev/null) || return 1
   : > "$output"
   entry_count=0
   while IFS= read -r -d '' entry; do
@@ -323,9 +329,12 @@ scan_tree() {
     path=${entry#*$'\t'}
     read -r mode type object <<< "$metadata"
     [ -n "$object" ] || return 1
-    case "$mode:$type" in 100644:blob|100755:blob) ;; *) return 1 ;; esac
     safe_repo_path "$path" || return 1
-    printf '%s\n' "$path" >> "$output"
+    case "$mode:$type" in
+      100644:blob|100755:blob) printf '%s\n' "$path" >> "$output" ;;
+      040000:tree) [ "$object" != "$empty_tree" ] || return 1 ;;
+      *) return 1 ;;
+    esac
   done < "$raw_output"
   /bin/rm -f -- "$raw_output"
 }

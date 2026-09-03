@@ -583,6 +583,20 @@ shared_input="$tmp/shared-input.json"
 input_with_patch "$shared_contract_input" "$shared_patch" "$shared_input"
 expect_error candidate-mutation-budget E_CANDIDATE_LIMIT "$shared_input" "$shared_source"
 
+copy_contract="$tmp/copy-contract.json"
+"${jq_cmd[@]}" -S -c \
+  '.allowed_paths=["copy-1","source.txt"] | .max_changed_paths=1' \
+  "$contract_file" > "$copy_contract"
+copy_patch="$tmp/copy.patch"
+printf '%s\n' 'diff --git a/source.txt b/copy-1' 'similarity index 99%' \
+  'copy from source.txt' 'copy to copy-1' '--- a/source.txt' '+++ b/copy-1' \
+  '@@ -1 +1 @@' '-alpha' '+beta' > "$copy_patch"
+copy_contract_input="$tmp/copy-contract-input.json"
+input_with_contract "$input_file" "$copy_contract" "$copy_contract_input"
+copy_input="$tmp/copy-input.json"
+input_with_patch "$copy_contract_input" "$copy_patch" "$copy_input"
+expect_error copy-metadata E_PATCH "$copy_input"
+
 /usr/bin/printf '%s\n' '/invalid/alternate' > "$tmp/source.git/objects/info/alternates"
 expect_error alternates E_SOURCE_GIT
 /bin/rm "$tmp/source.git/objects/info/alternates"
@@ -672,6 +686,29 @@ git_clean --git-dir="$submodule_source" update-ref refs/heads/main "$outer_commi
 submodule_input="$tmp/submodule-input.json"
 input_for_source "$input_file" "$submodule_input" sha1 "$outer_commit" "$outer_tree"
 expect_error source-submodule-mode E_SOURCE_TREE "$submodule_input" "$submodule_source"
+
+empty_subtree_source="$tmp/source-empty-subtree.git"
+/bin/mkdir -m 700 "$empty_subtree_source"
+git_clean init -q --bare --object-format=sha1 "$empty_subtree_source"
+empty_subtree_blob=$(printf '%s\n' alpha beta |
+  git_clean --git-dir="$empty_subtree_source" hash-object -w --stdin)
+empty_tree=$(git_clean --git-dir="$empty_subtree_source" mktree </dev/null)
+empty_subtree_tree=$(printf '040000 tree %s\tempty\n100644 blob %s\tsource.txt\n' \
+  "$empty_tree" "$empty_subtree_blob" |
+  git_clean --git-dir="$empty_subtree_source" mktree)
+empty_subtree_commit=$(printf '%s\n' empty-subtree |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$empty_subtree_source" \
+    commit-tree "$empty_subtree_tree")
+git_clean --git-dir="$empty_subtree_source" update-ref refs/heads/main "$empty_subtree_commit"
+empty_subtree_input="$tmp/empty-subtree-input.json"
+input_for_source "$input_file" "$empty_subtree_input" sha1 \
+  "$empty_subtree_commit" "$empty_subtree_tree"
+expect_error source-empty-subtree E_SOURCE_TREE "$empty_subtree_input" "$empty_subtree_source"
 
 newline_source="$tmp/source-newline.git"
 /bin/mkdir -m 700 "$newline_source"

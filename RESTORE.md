@@ -521,7 +521,8 @@ becomes a deterministic bare child commit and path-free receipt. The negative
 matrix rejects moved identities, unsafe directories and paths, hooks, filters,
 remotes, worktrees, alternates, shallow or partial repositories, replace state,
 binary patches, symlinks, submodules, host Git templates, and reachable source
-history above the fixed 65,536-object or 256 MiB import budget. It proves empty-patch
+history above the fixed 65,536-object or 256 MiB import budget. Copy/rename patch
+metadata and source trees containing empty subtrees also fail closed. It proves empty-patch
 `no-change` and rejects tree scans above 65,536 entries, 64 path components, or a
 16 MiB encoded listing. It also checks that the source stays unchanged and scratch
 is removed. A shared-large-blob fixture proves the 256 MiB pre-apply candidate
