@@ -265,6 +265,27 @@ make_verified_receipt "$moved_receipt" "$mismatched_request_pair"
 expect_stage_result_reject receipt-request-mismatch changed \
   "$moved_receipt" "$mismatched_request_pair"
 
+nested_source_input="$tmp/nested-source-input.json"
+"$jq_bin" -S -c '
+  (.stage_request.content.body.inputs[] |
+    select(.input_id=="input.source-tree") | .value.value.value.location) =
+    {kind:"path",value:"nested"} |
+  .stage_request.content.body.source.value.location={kind:"path",value:"nested"} |
+  .stage_request.sha256=("9"*64)
+' "$input" > "$nested_source_input"
+nested_source_receipt="$tmp/nested-source-receipt.json"
+"$jq_bin" -S -c '.request_ref.sha256=("9"*64)' \
+  "$receipt" > "$nested_source_receipt"
+nested_source_pair="$tmp/nested-source-pair.json"
+make_verified_receipt "$nested_source_receipt" "$nested_source_pair"
+if "$jq_bin" -L "$modules" --arg command stage-result --arg outcome changed \
+    --arg receipt_json "$(<"$nested_source_receipt")" \
+    --arg verified_receipt_json "$(<"$nested_source_pair")" \
+    -f "$protocol" "$nested_source_input" >/dev/null 2>&1; then
+  fail receipt-nested-source-tree
+fi
+pass 'receipt source must be the repository root tree'
+
 mismatched_attempt="$tmp/mismatched-attempt-receipt.json"
 "$jq_bin" -S -c '.attempt.attempt_number += 1' "$receipt" > "$mismatched_attempt"
 mismatched_attempt_pair="$tmp/mismatched-attempt-pair.json"

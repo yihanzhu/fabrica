@@ -326,6 +326,7 @@ def receipt_relations_ok($input; $value):
   $value.materialization_contract_ref ==
     input_content_ref($request_body;$contract_id) and
   $value.patch_ref == input_content_ref($request_body;"input.producer-patch") and
+  $source_ref.location == {kind:"root"} and
   $value.source == {
     repository_id:$request_body.target_repository_id,
     hash_algorithm:$target_revision.hash_algorithm,
