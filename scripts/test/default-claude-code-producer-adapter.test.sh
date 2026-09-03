@@ -26,7 +26,13 @@ jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$asset"
 jq_cmd=("$jq_bin")
 [ "$platform" != Darwin:arm64 ] || jq_cmd=(/usr/bin/arch -x86_64 "$jq_bin")
 [ "$("${jq_cmd[@]}" --version)" = jq-1.6 ] || exit 1
-generation=$("${jq_cmd[@]}" -r '.[-1].generation_id' "$root/core/v2/generation-registry.json")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\\{64\\}\)'$/\\1/p" \
+  "$root/scripts/core-contract.sh")
+[ -n "$generation" ] &&
+  [ "$("${jq_cmd[@]}" -r --arg generation "$generation" \
+      '[.[] | select(.generation_id==$generation)] | length' \
+      "$root/core/v2/generation-registry.json")" -eq 1 ] || exit 1
 modules="$root/core/v2/generations/$generation/modules"
 [ -d "$modules" ] || exit 1
 

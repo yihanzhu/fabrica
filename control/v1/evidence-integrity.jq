@@ -99,7 +99,7 @@ def expected_core:
      "6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
    package_ref:{content_id:"core-contract-package.v2",
      media_type:"application/vnd.ystack.core-contract+json",
-     sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"}};
+     sha256:"2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"}};
 
 def policy_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and

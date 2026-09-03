@@ -110,9 +110,13 @@ expect_reject() {
   }
 ' >"$tmp/baseline.json"
 
-generation=$("${jq_command[@]}" -er \
-  'select(type=="array" and length==1) | .[0].generation_id' \
-  "$root/core/v2/generation-registry.json")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\\{64\\}\)'$/\\1/p" \
+  "$root/scripts/core-contract.sh")
+[ -n "$generation" ] &&
+  [ "$("${jq_command[@]}" -r --arg generation "$generation" \
+      '[.[] | select(.generation_id==$generation)] | length' \
+      "$root/core/v2/generation-registry.json")" -eq 1 ] || fail 'selected generation'
 modules="$root/core/v2/generations/$generation/modules"
 
 expect_state open-ready '.' open-ready

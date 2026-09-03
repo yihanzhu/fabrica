@@ -436,10 +436,11 @@ check protected-profile-separation expect_v2_error protected-profile-separation 
 
 check registry-canonical cmp -s "$registry" \
   <("${jq_command[@]}" -S -c . "$registry")
-check registry-single-unique "${jq_command[@]}" -e --arg generation "$generation_id" \
-  'type == "array" and length == 1 and
+check registry-prefix-unique "${jq_command[@]}" -e --arg generation "$generation_id" \
+  'type == "array" and length == 2 and
    (map(.generation_id) | length == (unique | length)) and
    .[0].generation_id == $generation and
+   .[1].parent_generation_id == $generation and
    .[0].semantic_identity == "core.contracts.v2"' "$registry"
 registered_generations="$("${jq_command[@]}" -r \
   '.[].generation_id' "$registry" | LC_ALL=C sort)"

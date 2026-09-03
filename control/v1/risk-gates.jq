@@ -65,7 +65,7 @@ def expected_core:
      "6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
    package_ref:{content_id:"core-contract-package.v2",
      media_type:"application/vnd.ystack.core-contract+json",
-     sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"}};
+     sha256:"2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"}};
 
 def expected_tier_rules:
   [
@@ -101,11 +101,11 @@ def policy_ok:
     .duty_separation == {
       decision_ref:{content_id:"control-decision.duty-separation",
         media_type:"application/vnd.ystack.control-decision+json",
-        sha256:"08f8b496a689ab6fefa976de495fa13e1f9d954cd2b33ee44acd3c70022b4697"},
+        sha256:"25a513104dc08de8e22727901555d0a3fb6008dd8b222f7a604ed50734d4e23e"},
       evaluation_kind:"duty_separation_evaluation",
       policy_ref:{content_id:"control-policy.duty-separation",
         media_type:"application/vnd.ystack.control-policy+json",
-        sha256:"b33a4022c74c8a1ccb06674c080adf2fc106561c426a7d1dd30fdb9865531dbb"},
+        sha256:"6a86ddbe4432dae9e6e3748295b4b1da7280aa7ca410515531d0059ba2e1d566"},
       required_verdict:"satisfied"});
 
 def claim_shape_ok:

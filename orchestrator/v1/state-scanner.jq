@@ -20,7 +20,7 @@ def expected_core:
     package_ref:{
       content_id:"core-contract-package.v2",
       media_type:"application/vnd.ystack.core-contract+json",
-      sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"
+      sha256:"2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"
     },
     semantic_identity:"core.contracts.v2"
   };
@@ -28,7 +28,7 @@ def expected_core:
 def expected_core_closure:
   [
     {path:"core/v2/generation-registry.json",
-     sha256:"f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1"},
+     sha256:"3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94"},
     {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq",
      sha256:"65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a"},
     {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh",

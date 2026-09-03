@@ -92,9 +92,9 @@ expect_class() {
       (.body.evaluator.content.body.bootstrap_ref.sha256 |
         test("^[0-9a-f]{64}$")) and
       .body.evaluator.content.body.program_ref.sha256 ==
-        "8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80" and
+        "43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7" and
       .body.evaluator.content.body.driver_ref.sha256 ==
-        "3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a" and
+        "10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3" and
       .body.evaluator.content.body.runtime.host_architecture == $host_arch and
       .body.evaluator.content.body.runtime.execution_mode == $execution_mode and
       (.body.evaluator.content.body.core_closure | length) == 9 and
@@ -232,7 +232,7 @@ make_snapshot() {
             generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
             package_ref:{content_id:"core-contract-package.v2",
               media_type:"application/vnd.ystack.core-contract+json",
-              sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"},
+              sha256:"2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"},
             semantic_identity:"core.contracts.v2"
           },
           items:[{
