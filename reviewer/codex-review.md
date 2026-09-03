@@ -75,7 +75,7 @@ every `gh` call, so a `GH_REPO` in the environment can't redirect the comment to
    (approval is already `never` for review); the script deliberately does **not** pass
    `--dangerously-bypass-approvals-and-sandbox`, and avoids `--ignore-user-config` so the
    operator's model/effort defaults still apply. See **model policy** below for how `<effort>`
-   and the optional `-m <model>` are resolved (#110) — the gate's reasoning effort is **always**
+   and the optional `-m <model>` are resolved — the gate's reasoning effort is **always**
    pinned explicitly, never left to inherit whatever the operator's personal Codex config
    happens to default to.
 3. Posts Codex's review to the PR **verbatim**: `gh pr comment <PR#> --body-file <tmpfile>`,
@@ -111,7 +111,7 @@ the repo, and are cleaned up via the `trap ... EXIT` (removed even on failure) �
 `<tmpfile>` exists only to capture Codex's clean final review off the noisy exec trace.
 Neither is **ever** committed; the **PR comment is the durable reviewer output**.
 
-## Model policy (#110)
+## Model policy
 
 The review gate is a **max-capability decision point** (spend-by-leverage — see
 [`config/models.conf`](../config/models.conf) and README.md's "Model policy" section), so it
@@ -126,8 +126,7 @@ own** config — operator-owned and doctor-validated — so sourcing it directly
 If the **reviewed repo** has committed its own [`.ystack/models.conf`](../templates/.ystack/models.conf)
 (same format/keys, an opt-in per-target override), it may override the **producer/model keys
 only**. A target that has not renamed yet may still keep it at the legacy `.fabrica/models.conf` path — the harness still reads it there.
-Two properties are security-critical here (a P1 finding from an adversarial review of
-PR #115 — the original design got both wrong):
+Two properties are security-critical here:
 
 - **Trust anchor: the gh-bound DEFAULT branch, fetched fresh — never the PR head.** The PR head
   is the untrusted diff *under review*; reading a config override off it would let a malicious
@@ -164,7 +163,7 @@ Applying the resolved config:
   pinned) — so every review documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the PR history, not just in a log nobody reads.
 
-## Degraded-review detection (#117, hardened in #119)
+## Degraded-review detection
 
 The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
 "clean" verdict. Real incident (2026-07-11): `codex-code-mode-host` failed to spawn (missing
@@ -208,7 +207,7 @@ NO `Reviewed-head`/`Reviewed-base` markers. That means the marker parser in the 
 never mistake a degraded run for a completed review — belt-and-suspenders on top of yshifu
 reading the comment text before it labels anything `merge-ready`.
 
-**The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix).** The
+**The DEGRADED comment never embeds codex's raw output verbatim.** The
 DEGRADED comment is posted by, and so is authored as, the same gh-authenticated operator the
 operator's own `scripts/merge-pr.sh` trusts — so it is exactly the kind of comment that
 parser's author+header

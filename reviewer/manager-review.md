@@ -19,7 +19,7 @@ The north star is **per target**: the debate is judged against the **target repo
 committed `.ystack/north-star.md`** — set, committed, and operator-approved in that repo.
 `manager-review.sh` resolves it via the shared resolver (`scripts/lib/north-star.sh`) from
 the cwd's checkout and reads the **committed** copy pinned to the **gh-bound remote's
-default-branch commit, fetched fresh** (#102) — not raw local HEAD. The default branch is
+default-branch commit, fetched fresh** — not raw local HEAD. The default branch is
 where reviewed changes land via the loop, so its committed star is the *integrated* one (the
 best available proxy for operator approval); anchoring there stops a star committed on a
 **feature branch** from authorizing proactive work. The gate selects the git remote whose URL
@@ -34,7 +34,7 @@ does **not** authorize proactive work — nor does one still carrying the shippe
 (`ystack-shipped-default`; the legacy `fabrica-shipped-default` marker is treated the same way):
 the gate FAILs before invoking Codex, with a pointer back here.
 
-The anchor is **gh-authoritative and fail-closed** (an adversarial sweep, #102 round-2): every
+The anchor is **gh-authoritative and fail-closed** (an adversarial sweep): every
 input that decides *what* the gate reads is proven against the **same `gh` binding the verdict
 posts to**, and any step not provable → **FAIL**. (1) The **default-branch NAME** comes from
 gh's `defaultBranchRef` (`gh repo view --json defaultBranchRef`), *not* the stale/locally-
@@ -167,8 +167,7 @@ the issue is closed.
   what consensus filtered out and override it if they want. Default-drop is the floor, not
   a silent shredder.
 
-> **Front gate at the north-star altitude (#49).** Per the user-authorized front-gate
-> change in **#49**, the manager-debate consensus **is** the intake gate for proactive issues:
+> **Front gate at the north-star altitude.** The manager-debate consensus **is** the intake gate for proactive issues:
 > on consensus yshifu removes `debating` and records exact-revision intake acceptance —
 > **no per-issue user approval.** G1, G2-with-risk, and the plan gate still precede `ready`.
 > The user's gate moved up an altitude: the user approves the **north star /
@@ -191,7 +190,7 @@ explicit `--repo` to every `gh` call, so a `GH_REPO` in the environment can't re
 comment to a *different* repo's issue. Then:
 
 1. **Reads the target's committed north star at the gh-bound default-branch commit, fetched
-   fresh** (#102) — resolved *for the target this run operates on* via the shared resolver
+   fresh** — resolved *for the target this run operates on* via the shared resolver
    (`scripts/lib/north-star.sh`, located from the script's own location by following symlinks
    then `dirname/..`, the same derivation `install.sh`/`doctor.sh` use). It selects the git
    remote matching the repo `gh` resolves (shared `scripts/lib/gh-remote.sh` — the same gh-bound
@@ -221,7 +220,7 @@ comment to a *different* repo's issue. Then:
    sandbox so the review can't inherit a writable default from the operator's Codex config;
    the script deliberately does **not** pass `--dangerously-bypass-approvals-and-sandbox`,
    and avoids `--ignore-user-config` so the operator's model/effort defaults still apply. See
-   **model policy** below for how `<effort>` and the optional `-m <model>` are resolved (#110) —
+   **model policy** below for how `<effort>` and the optional `-m <model>` are resolved —
    the gate's reasoning effort is **always** pinned explicitly, never left to inherit whatever
    the operator's personal Codex config happens to default to.
    Codex grounds its judgment by reading a **clean detached temp worktree at the same anchored
@@ -258,7 +257,7 @@ comment to a *different* repo's issue. Then:
 #   manager-review.sh <issue#>
 ```
 
-## Model policy (#110)
+## Model policy
 
 The manager-debate gate is a **max-capability decision point** (spend-by-leverage — see
 [`config/models.conf`](../config/models.conf) and README.md's "Model policy" section), so it
@@ -274,14 +273,12 @@ If the **target repo** has committed its own [`.ystack/models.conf`](../template
 (same format/keys, an opt-in per-target override), it may override the **producer/model keys
 only**, applied on top of the shipped defaults. A target that has not renamed yet may still
 keep the override at the legacy `.fabrica/models.conf` path — the harness still reads it there.
-This script's trust anchor was already correct —
-the override is read from the **same anchored worktree the debate runs against** (the detached
+The override is read from the **same anchored worktree the debate runs against** (the detached
 worktree checked out at the fetched default-branch commit, step 2 above), never the operator's
 possibly-stale or dirty cwd checkout, so the override always reflects the SAME integrated commit
-the north star was read from and Codex is grounding its judgment in — but an adversarial review
-of PR #115 found a P1: the override used to be **`source`d directly into this non-sandboxed
-harness shell**, so a target-committed file could run as arbitrary shell with the operator's own
-`gh`/`codex` credentials. It is now read as **data**, via a strict line-by-line parser
+the north star was read from and Codex is grounding its judgment in. A target-committed file
+must never run as shell in this non-sandboxed harness (it would execute with the operator's own
+`gh`/`codex` credentials), so it is read as **data**, via a strict line-by-line parser
 (`mc_parse_target_override` in [`scripts/lib/models-conf.sh`](../scripts/lib/models-conf.sh)) —
 never `source`/`.`/`eval`. Only a line matching exactly `YSTACK_<allowedkey>=<value>` is
 recognized (value charset-restricted, optionally quoted); every other line — comments, blank
@@ -308,10 +305,10 @@ Applying the resolved config:
   pinned) — so every debate documents on the record exactly what gated it, and any drift from
   a stray personal config is visible in the issue history, not just in a log nobody reads.
 
-## Degraded-review detection (#117, hardened in #119)
+## Degraded-review detection
 
 The script FAILS LOUDLY on a degraded/non-substantive Codex run instead of posting a fake
-`PROCEED`/`REFINE`/`DROP` verdict — the same hardening as `codex-review.sh` (#117), sharing its
+`PROCEED`/`REFINE`/`DROP` verdict — the same hardening as `codex-review.sh`, sharing its
 detector so the two gates can't diverge on what counts as degraded (real incident and rationale:
 see `codex-review.sh`'s **Degraded-review detection** section and
 [`scripts/lib/codex-degraded.sh`](../scripts/lib/codex-degraded.sh)).
@@ -336,8 +333,8 @@ On detection: the script exits non-zero and posts `VERDICT: DEGRADED` (never
 manager-reviewer (cross-vendor, read-only)` one, so yshifu's "proceed only on consensus" rule can
 never read this as a `PROCEED`.
 
-**The DEGRADED comment never embeds codex's raw output verbatim (#119 P2 integrity fix, same
-as `codex-review.sh`).** It never embeds the `-o` verdict answer (untrustworthy on a degraded
+**The DEGRADED comment never embeds codex's raw output verbatim (same as
+`codex-review.sh`).** It never embeds the `-o` verdict answer (untrustworthy on a degraded
 run), **never embeds JSONL** (it contains private agent/command/repository payloads), and embeds
 only a bounded, sanitized raw-stderr tail via `cd_sanitize_snippet` — every line prefixed `> `,
 which breaks the line anchors a marker parser like the one in the operator's

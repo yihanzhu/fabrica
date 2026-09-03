@@ -40,7 +40,14 @@ done
 jq_bin=$(command -v jq 2>/dev/null) || emit_error E_DEPENDENCY
 [ -f "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
   [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_DEPENDENCY
-generation=$($jq_bin -r '.[-1].generation_id' "$registry") || emit_error E_PACKAGE
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$core") ||
+  emit_error E_PACKAGE
+[[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || emit_error E_PACKAGE
+$jq_bin -e --arg generation "$generation" '
+  [.[] | select(.generation_id == $generation and
+    .semantic_identity == "core.contracts.v2")] | length == 1
+' "$registry" >/dev/null || emit_error E_PACKAGE
 modules="$repo_root/core/v2/generations/$generation/modules"
 [ -d "$modules" ] && [ ! -L "$modules" ] || emit_error E_PACKAGE
 
@@ -162,10 +169,11 @@ contract_sha=$(sha_file "$contract_file")
 patch_sha=$(sha_file "$patch_file")
 expected_contract_sha=$("$jq_bin" -r '
   .stage_request.content.body.operation.arguments.materialization_contract.input_id as $id |
-  .payloads[] | select(.input_id == $id) | .sha256
+  .trust_context.verified_payloads[] | select(.input_id == $id) | .sha256
 ' "$input_snapshot") || emit_error E_DIGEST
 expected_patch_sha=$("$jq_bin" -r \
-  '.payloads[] | select(.input_id == "input.producer-patch") | .sha256' \
+  '.trust_context.verified_payloads[] |
+   select(.input_id == "input.producer-patch") | .sha256' \
   "$input_snapshot") || emit_error E_DIGEST
 [ "$contract_sha" = "$expected_contract_sha" ] &&
   [ "$patch_sha" = "$expected_patch_sha" ] || emit_error E_DIGEST
@@ -319,18 +327,24 @@ changed_paths_json="$run_root/changed-paths.json"
   "$jq_bin" -S -c . > "$changed_paths_json" || emit_error E_RUNTIME
 changed_paths_sha=$(sha_file "$changed_paths_json")
 
-commit_time=$("$jq_bin" -r '.attempt.started_at' "$input_snapshot") || emit_error E_INPUT
-candidate_commit=$(printf '%s\n' 'ystack local candidate' |
-  "${git_env[@]}" GIT_AUTHOR_NAME='ystack local materializer' \
-  GIT_AUTHOR_EMAIL='materializer@example.invalid' GIT_COMMITTER_NAME='ystack local materializer' \
-  GIT_COMMITTER_EMAIL='materializer@example.invalid' GIT_AUTHOR_DATE="$commit_time" \
-  GIT_COMMITTER_DATE="$commit_time" /usr/bin/git --no-replace-objects \
-  --git-dir="$staging_repo" commit-tree "$candidate_tree" -p "$source_commit") ||
-  emit_error E_CANDIDATE_GIT
+if [ "$candidate_tree" = "$source_tree" ]; then
+  candidate_commit=$source_commit
+else
+  commit_time=$("$jq_bin" -r '.attempt.started_at' "$input_snapshot") || emit_error E_INPUT
+  candidate_commit=$(printf '%s\n' 'ystack local candidate' |
+    "${git_env[@]}" GIT_AUTHOR_NAME='ystack local materializer' \
+    GIT_AUTHOR_EMAIL='materializer@example.invalid' \
+    GIT_COMMITTER_NAME='ystack local materializer' \
+    GIT_COMMITTER_EMAIL='materializer@example.invalid' GIT_AUTHOR_DATE="$commit_time" \
+    GIT_COMMITTER_DATE="$commit_time" /usr/bin/git --no-replace-objects \
+    --git-dir="$staging_repo" commit-tree "$candidate_tree" -p "$source_commit") ||
+    emit_error E_CANDIDATE_GIT
+fi
 git_dir "$staging_repo" update-ref refs/heads/candidate "$candidate_commit" ||
   emit_error E_CANDIDATE_GIT
-[ "$(git_dir "$staging_repo" rev-parse "$candidate_commit^" 2>/dev/null)" = "$source_commit" ] &&
-  [ "$(git_dir "$staging_repo" rev-parse "$candidate_commit^{tree}" 2>/dev/null)" = "$candidate_tree" ] &&
+[ "$(git_dir "$staging_repo" rev-parse "$candidate_commit^{tree}" 2>/dev/null)" = "$candidate_tree" ] &&
+  { [ "$candidate_commit" = "$source_commit" ] ||
+    [ "$(git_dir "$staging_repo" rev-parse "$candidate_commit^" 2>/dev/null)" = "$source_commit" ]; } &&
   [ "$(git_dir "$staging_repo" rev-parse --is-bare-repository 2>/dev/null)" = true ] ||
   emit_error E_CANDIDATE_GIT
 git_dir "$staging_repo" fsck --strict --no-progress >/dev/null 2>&1 || emit_error E_CANDIDATE_GIT
@@ -346,9 +360,13 @@ receipt_file="$run_root/receipt.json"
 receipt_sha=$(sha_file "$receipt_file")
 outcome=changed
 [ "$candidate_tree" != "$source_tree" ] || outcome=no-change
+verified_receipt="$run_root/verified-receipt.json"
+"$jq_bin" -S -c -n --slurpfile receipt "$receipt_file" --arg sha "$receipt_sha" \
+  '{content:$receipt[0],sha256:$sha}' > "$verified_receipt" 2>/dev/null || emit_error E_RESULT
 result_file="$run_root/stage-result.json"
 "$jq_bin" -S -c -L "$modules" --arg command stage-result \
-  --arg receipt_sha256 "$receipt_sha" --arg outcome "$outcome" \
+  --arg receipt_json "$(<"$receipt_file")" \
+  --arg verified_receipt_json "$(<"$verified_receipt")" --arg outcome "$outcome" \
   -f "$protocol" "$input_snapshot" > "$result_file" 2>/dev/null || emit_error E_RESULT
 "$core" validate-stage-run "$request_file" "$resolved_file" "$result_file" \
   >/dev/null 2>&1 || emit_error E_CORE_RESULT

@@ -295,9 +295,10 @@ descriptor-3 receipt, ordinary-call compatibility, cleanup, and byte-for-byte co
 of the unchanged exports. It performs no install, activation, networked validation,
 or target use.
 
-`core/v2/` is the append-only inactive fake-forge generation selected by the stable
-wrapper and inactive profile resolver. Restore its registry and complete generation
-from one commit, then run:
+`core/v2/` contains append-only inactive generations, including the unchanged
+fake-forge generation. The stable wrapper and inactive profile resolver select the
+evidence-identity correction. Restore the registry and both complete generations from
+one commit, then run:
 
 ```sh
 bash scripts/test/portable-core-v2-fake-forge.test.sh
@@ -307,6 +308,19 @@ This proof validates the atomic wrapper selection and deterministic fake candida
 materialization in a caller-disposable repository. The package is not qualified for a real forge.
 It grants no credential, network, publish, push, merge, or remote branch-write
 capability. The switch does not install the resolver or select a live profile.
+
+Restore the complete selected v2 evidence-identity generation, its dedicated ledger,
+and its focused test from the manifest, then run:
+
+```sh
+bash scripts/test/portable-core-v2-evidence-identity.test.sh
+```
+
+This proof requires passed evidence to retain the exact selected performer,
+binding, environment, capability, and metadata projection. It also proves that
+all-non-passing incident mismatches remain preservable. Its selection is bound to
+the reviewed generation merge and publisher receipt and grants no authority,
+qualification, credential, network, activation, or external effect.
 
 Restore every path in the manifest's inactive fake adapter matrix block, then run:
 
@@ -464,6 +478,21 @@ durable main commit and add default-set wiring. The pure jq payload is offline a
 unqualified. It does not call GitHub, use a credential, change a repository or
 request, grant authority or qualification, or activate a profile.
 
+Restore the two paths in the manifest's inactive Codex native reviewer
+normalizer payload block, then run:
+
+```sh
+bash scripts/test/default-codex-native-reviewer-adapter.test.sh
+```
+
+This checks exact caller bindings, deterministic clean and finding states,
+opaque provider severity, explicit hidden-execution unavailability, and
+fail-closed malformed or stale input. This stage intentionally has no adapter
+manifest. A later assembly PR can bind the payload through a durable main commit
+and add default-set wiring. The pure jq payload is offline, read-only, and
+unqualified. It does not invoke a model or CLI, use a credential or network,
+post a review, grant authority or qualification, or activate a profile.
+
 Restore the two paths in the manifest's inactive GitHub Actions CI normalizer
 payload block, then run:
 
@@ -500,6 +529,81 @@ materializer, not a GitHub or GitLab operation. Restoring it does not qualify an
 adapter, select or activate a profile, read a credential, contact a provider or
 real target during construction, or permit push, publish, merge, or another
 external write.
+
+Restore the two paths in the manifest's inactive Claude Code producer normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-claude-code-producer-adapter.test.sh
+```
+
+This checks the caller-supplied core request, resolved profile, manifest, target,
+package, config, prompt, skills, tools, model, effort, and execution boundary. The
+test manifest is synthetic fixture data; no adapter manifest ships in this unit.
+A caller constructs the trust context only after canonical SHA-256 verification
+of the snapshot pair. The proof rejects moved untrusted content, changed attempt
+identity, and non-diff output for a changed git-patch request.
+A later assembly PR can bind the durable main payload into the default profile.
+The pure jq payload is inactive, offline, and unqualified. It does not call Claude
+Code, invoke a model, use a credential or network, write a target, publish, or
+activate a profile.
+
+Restore the three paths in the manifest's inactive local Git materializer protocol
+block, then run:
+
+```sh
+bash scripts/test/local-git-materializer-protocol.test.sh
+```
+
+This builds only synthetic JSON fixtures. It validates the exact portable-core v2
+profile, request, manifest, contract, payload, receipt, and result relations. The
+negative matrix rejects malformed, stale, duplicate, relabelled, unsafe-path,
+expanded-mode, and weakened-limit inputs, and repeat checks require canonical
+output. It also requires caller-verified content-and-digest payload pairs, binds the
+source repository, commit, and tree to the request, enforces patch and changed-path
+limits, and revalidates the envelope before every projection. A stage result also
+requires a caller-verified receipt pair whose request, attempt, source, limits, and
+changed/no-change outcome all match before the receipt digest can back passing
+evidence.
+
+There is no materialization executable in this stage. Restoring it cannot read or
+write a Git repository, create a candidate, run provider tooling, use a credential
+or network, grant authority or qualification, or perform an external effect. A
+later runtime PR may consume the protocol and test fixture; only a still-later
+assembly may add a manifest after the complete package has a durable main commit.
+
+Restore the two paths in the manifest's inactive dormant publisher normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-dormant-publisher-adapter.test.sh
+```
+
+This checks exact attempt, idempotency, repository, change-request, candidate,
+path, evidence, decision, terminal-time, observation-time, and boundary bindings.
+The caller supplies a canonical, SHA-256-verified claim pair, and changed content
+is rejected. Permit, deny, and inconclusive claims all remain inert; malformed
+input is rejected and moved input becomes stale. This stage has no adapter manifest.
+A later assembly PR can bind its durable main payload with empty capability,
+permission, and tool sets. It is separate from the temporary construction
+publisher gate and performs no credential, network, merge, external write,
+authority, qualification, or profile activation.
+
+Restore the two paths in the manifest's inactive deterministic verifier normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-deterministic-verifier-adapter.test.sh
+```
+
+This validates exact core-v2 verifier request/profile/result relations, the
+deterministic role and permission ceiling, candidate and verification-plan binding,
+exact caller-verified snapshot and result pairs, attempt identity, timestamp and
+evidence precedence, stale inputs, and the boundary that keeps CI observations out
+of verifier evidence. This stage intentionally has no adapter manifest. The pure jq
+payload is offline and unqualified. It does not execute a candidate or tool, read
+proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
+authority or qualification, or activate a profile.
 
 ---
 

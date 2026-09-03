@@ -6,13 +6,17 @@ schema_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 schema_generation="g-14b7ad8ce54c3b8c585ff92063d71551ffc7394cc2294d0297bc7d2b8da2c386"
 schema_selected_generation="g-71433a31f52f37041a41b5a8812f79c4c0f5f26c79265788c8d625a9c6f9686b"
 schema_v2_generation="g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e"
+schema_v2_corrective_generation="g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43"
 schema_base="38a26f5f046897c0455fef24874c5dbb40c20926"
 schema_module_dir="$schema_root/core/v1/generations/$schema_generation/modules"
 schema_module="$schema_module_dir/schema.jq"
 schema_registry="$schema_root/core/v1/generation-registry.json"
 schema_v2_registry="$schema_root/core/v2/generation-registry.json"
 schema_v2_root="$schema_root/core/v2/generations/$schema_v2_generation"
+schema_v2_corrective_root="$schema_root/core/v2/generations/$schema_v2_corrective_generation"
 schema_v2_test="$schema_root/scripts/test/portable-core-v2-fake-forge.test.sh"
+schema_v2_corrective_test="$schema_root/scripts/test/portable-core-v2-evidence-identity.test.sh"
+schema_v2_corrective_ledger="$schema_root/scripts/test/portable-core-v2-evidence-identity-ledger.tsv"
 schema_fixture="$schema_root/scripts/test/portable-core-schema-fixtures.json"
 schema_ledger="$schema_root/scripts/test/portable-core-schema-ledger.tsv"
 schema_manifest="$schema_root/ci/required-files.txt"
@@ -574,7 +578,14 @@ v2_generation_path_ok() {
     "core/v2/generations/$schema_v2_generation/modules/profile_graph.jq"|\
     "core/v2/generations/$schema_v2_generation/modules/stage_request.jq"|\
     "core/v2/generations/$schema_v2_generation/modules/result_facts.jq"|\
-    "core/v2/generations/$schema_v2_generation/modules/result_truth.jq") return 0 ;;
+    "core/v2/generations/$schema_v2_generation/modules/result_truth.jq"|\
+    "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh"|\
+    "core/v2/generations/$schema_v2_corrective_generation/contracts.jq"|\
+    "core/v2/generations/$schema_v2_corrective_generation/modules/schema.jq"|\
+    "core/v2/generations/$schema_v2_corrective_generation/modules/profile_graph.jq"|\
+    "core/v2/generations/$schema_v2_corrective_generation/modules/stage_request.jq"|\
+    "core/v2/generations/$schema_v2_corrective_generation/modules/result_facts.jq"|\
+    "core/v2/generations/$schema_v2_corrective_generation/modules/result_truth.jq") return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -621,7 +632,7 @@ schema_activation_state_ok() {
     [ "$(grep -Ec "^PORTABLE_CORE_SCHEMA_MAJOR='[12]'$" "$wrapper")" -eq 1 ] &&
     [ "$(grep -Ec "^PORTABLE_CORE_GENERATION='g-[0-9a-f]{64}'$" "$wrapper")" -eq 1 ] &&
     [ "$selected_major" = 2 ] &&
-    [ "$selected_generation" = "$schema_v2_generation" ] &&
+    [ "$selected_generation" = "$schema_v2_corrective_generation" ] &&
     grep -Fq "\"generation_id\":\"$selected_generation\"" "$selected_registry" &&
     [ -d "$selected_root/modules" ] && [ ! -L "$selected_root/modules" ] &&
     [ -f "$selected_root/contracts.jq" ] && [ ! -L "$selected_root/contracts.jq" ] &&
@@ -635,7 +646,7 @@ schema_activation_state_ok() {
     [ -z "$(find "$selected_root" -type l -print -quit)" ]
 }
 
-schema_guard_total=39
+schema_guard_total=41
 schema_generation_files="$schema_test_tmp/generation-files"
 find "$schema_root/core/v1/generations/$schema_generation" -type f -print | \
   sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_generation_files"
@@ -670,6 +681,26 @@ if v2_generation_paths_ok "$schema_v2_generation_files" &&
 else
   fail_case "core v2 generation has an unknown, missing, or symlink member"
 fi
+schema_v2_corrective_files="$schema_test_tmp/v2-corrective-files"
+schema_v2_corrective_expected="$schema_test_tmp/v2-corrective-expected"
+find "$schema_v2_corrective_root" -type f -print |
+  sed "s#^$schema_root/##" | LC_ALL=C sort > "$schema_v2_corrective_files"
+printf '%s\n' \
+  "core/v2/generations/$schema_v2_corrective_generation/contracts.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/profile_graph.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/result_facts.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/result_truth.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/schema.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/stage_request.jq" > \
+  "$schema_v2_corrective_expected"
+if v2_generation_paths_ok "$schema_v2_corrective_files" &&
+   cmp -s "$schema_v2_corrective_files" "$schema_v2_corrective_expected" &&
+   [ -z "$(find "$schema_v2_corrective_root" -type l -print -quit)" ]; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "corrective core v2 generation has an unknown, missing, or symlink member"
+fi
 schema_v2_manifest_paths="core/v2/generation-registry.json
 core/v2/generations/$schema_v2_generation/contracts.jq
 core/v2/generations/$schema_v2_generation/core-ingress.sh
@@ -678,7 +709,16 @@ core/v2/generations/$schema_v2_generation/modules/result_facts.jq
 core/v2/generations/$schema_v2_generation/modules/result_truth.jq
 core/v2/generations/$schema_v2_generation/modules/schema.jq
 core/v2/generations/$schema_v2_generation/modules/stage_request.jq
-scripts/test/portable-core-v2-fake-forge.test.sh"
+scripts/test/portable-core-v2-fake-forge.test.sh
+core/v2/generations/$schema_v2_corrective_generation/contracts.jq
+core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh
+core/v2/generations/$schema_v2_corrective_generation/modules/profile_graph.jq
+core/v2/generations/$schema_v2_corrective_generation/modules/result_facts.jq
+core/v2/generations/$schema_v2_corrective_generation/modules/result_truth.jq
+core/v2/generations/$schema_v2_corrective_generation/modules/schema.jq
+core/v2/generations/$schema_v2_corrective_generation/modules/stage_request.jq
+scripts/test/portable-core-v2-evidence-identity-ledger.tsv
+scripts/test/portable-core-v2-evidence-identity.test.sh"
 schema_v2_manifest_ok=true
 while IFS= read -r schema_v2_required_path; do
   [ "$(grep -Fxc "$schema_v2_required_path" "$schema_manifest" || true)" -eq 1 ] &&
@@ -693,17 +733,25 @@ if "$schema_jq" -s -S -c \
    "$schema_jq" -e \
      --arg generation "$schema_v2_generation" \
      --arg parent "$schema_selected_generation" '
-       length == 1 and
+       length == 2 and
        .[0] == {
          authorization_comment_id:5476938197,
          concern:"fake-forge-materialization-contract",
          generation_id:$generation,
          parent_generation_id:$parent,
          semantic_identity:"core.contracts.v2"
+       } and
+       .[1] == {
+         authorization_comment_id:5517944082,
+         concern:"incident-mismatch-nonpassing-evidence",
+         generation_id:"g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43",
+         parent_generation_id:$generation,
+         semantic_identity:"core.contracts.v2"
        }
      ' "$schema_v2_registry" >/dev/null &&
    [ "$schema_v2_manifest_ok" = true ] &&
-   [ -x "$schema_v2_test" ]; then
+   [ -x "$schema_v2_test" ] && [ -x "$schema_v2_corrective_test" ] &&
+   [ -f "$schema_v2_corrective_ledger" ] && [ ! -L "$schema_v2_corrective_ledger" ]; then
   schema_guard_passed=$((schema_guard_passed + 1))
 else
   fail_case "core v2 registry, restore manifest, or focused runner is incomplete"
@@ -767,6 +815,7 @@ v2_activation_path_ok() {
     scripts/core-contract.sh|scripts/lib/profile-resolution.sh|\
     scripts/test/orchestrator-state-scanner.test.sh|\
     scripts/test/portable-core-schema.test.sh|\
+    scripts/test/portable-core-v2-evidence-identity.test.sh|\
     scripts/test/portable-core-v2-fake-forge.test.sh) ;;
     *) v2_generation_path_ok "$1" || return 1 ;;
   esac
@@ -776,7 +825,12 @@ schema_import_path_ok() {
   local import_path="$1"
   local test_path
   case "$import_path" in
+    adapters/local-git-materializer/v1/protocol.jq|\
+    adapters/deterministic-verifier/v1/normalize.jq|\
     orchestrator/v1/reconciliation-plan.jq|orchestrator/v1/state-scanner.jq) ;;
+    scripts/test/default-codex-native-reviewer-adapter.test.sh|\
+    scripts/test/default-dormant-publisher-adapter.test.sh|\
+    scripts/test/default-deterministic-verifier-adapter.test.sh|\
     scripts/test/default-github-forge-adapter.test.sh) ;;
     scripts/test/portable-core-*)
       test_path="${import_path#scripts/test/}"
@@ -845,16 +899,10 @@ fi
 schema_v2_expected_live_hits="$schema_test_tmp/v2-expected-live-hits"
 printf '%s\n' \
   ci/required-files.txt \
-  control/v1/control-policy-set.json \
   core/v2/generation-registry.json \
   "core/v2/generations/$schema_v2_generation/core-ingress.sh" \
-  orchestrator/v1/state-scanner-driver.sh \
-  orchestrator/v1/state-scanner-launcher.sh \
-  orchestrator/v1/state-scanner.jq \
-  scripts/core-contract.sh \
-  scripts/lib/profile-resolution.sh \
-  scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-evidence-identity.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > \
   "$schema_v2_expected_live_hits"
 if cmp -s "$schema_v2_live_hits" "$schema_v2_expected_live_hits" &&
@@ -862,6 +910,34 @@ if cmp -s "$schema_v2_live_hits" "$schema_v2_expected_live_hits" &&
   schema_guard_passed=$((schema_guard_passed + 1))
 else
   fail_case "v2 generation ID appears outside its closed tracked-path allowlist"
+fi
+schema_v2_corrective_live_hits="$schema_test_tmp/v2-corrective-live-hits"
+: > "$schema_v2_corrective_live_hits"
+while IFS= read -r -d '' schema_tracked_path; do
+  if git -C "$schema_root" show ":$schema_tracked_path" 2>/dev/null |
+       /usr/bin/grep -F "$schema_v2_corrective_generation" >/dev/null; then
+    printf '%s\n' "$schema_tracked_path" >> "$schema_v2_corrective_live_hits"
+  fi
+done < <(git -C "$schema_root" ls-files -z)
+schema_v2_corrective_expected_hits="$schema_test_tmp/v2-corrective-expected-hits"
+printf '%s\n' \
+  ci/required-files.txt \
+  control/v1/control-policy-set.json \
+  core/v2/generation-registry.json \
+  "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \
+  orchestrator/v1/state-scanner-driver.sh \
+  orchestrator/v1/state-scanner-launcher.sh \
+  orchestrator/v1/state-scanner.jq \
+  scripts/core-contract.sh \
+  scripts/lib/profile-resolution.sh \
+  scripts/test/orchestrator-state-scanner.test.sh \
+  scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-evidence-identity.test.sh > \
+  "$schema_v2_corrective_expected_hits"
+if cmp -s "$schema_v2_corrective_live_hits" "$schema_v2_corrective_expected_hits"; then
+  schema_guard_passed=$((schema_guard_passed + 1))
+else
+  fail_case "corrective v2 generation ID appears outside its closed tracked-path allowlist"
 fi
 if activation_paths_ok "$schema_import_hits" schema_import_path_ok; then
   schema_guard_passed=$((schema_guard_passed + 1))
@@ -900,6 +976,13 @@ printf '%s\n' \
   "core/v2/generations/$schema_v2_generation/modules/result_truth.jq" \
   "core/v2/generations/$schema_v2_generation/modules/schema.jq" \
   "core/v2/generations/$schema_v2_generation/modules/stage_request.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/contracts.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/core-ingress.sh" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/profile_graph.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/result_facts.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/result_truth.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/schema.jq" \
+  "core/v2/generations/$schema_v2_corrective_generation/modules/stage_request.jq" \
   orchestrator/v1/state-scanner-driver.sh \
   orchestrator/v1/state-scanner-launcher.sh \
   orchestrator/v1/state-scanner.jq \
@@ -907,6 +990,7 @@ printf '%s\n' \
   scripts/lib/profile-resolution.sh \
   scripts/test/orchestrator-state-scanner.test.sh \
   scripts/test/portable-core-schema.test.sh \
+  scripts/test/portable-core-v2-evidence-identity.test.sh \
   scripts/test/portable-core-v2-fake-forge.test.sh > "$schema_v2_allowed_paths"
 schema_v2_injected_source="$schema_test_tmp/v2-injected-source"
 schema_v2_injected_hits="$schema_test_tmp/v2-injected-hits"

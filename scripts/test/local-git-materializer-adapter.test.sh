@@ -37,7 +37,14 @@ else
 fi
 /bin/chmod 0555 "$runtime_bin/jq"
 export PATH="$runtime_bin:/usr/bin:/bin"
-generation=$("${jq_cmd[@]}" -r '.[-1].generation_id' "$root/core/v2/generation-registry.json")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" \
+  "$root/scripts/core-contract.sh")
+[[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || exit 1
+"${jq_cmd[@]}" -e --arg generation "$generation" '
+  [.[] | select(.generation_id == $generation and
+    .semantic_identity == "core.contracts.v2")] | length == 1
+' "$root/core/v2/generation-registry.json" >/dev/null || exit 1
 modules="$root/core/v2/generations/$generation/modules"
 core="$root/scripts/core-contract.sh"
 
@@ -225,9 +232,15 @@ input_file="$tmp/input.json"
      {content:$verifier[0],sha256:$shas.verifier}] | sort_by(.content.id)),
    stage_request:{content:$request[0],sha256:$request_sha},
    payloads:([
-     {input_id:"input.materialize",media_type:"application/json",sha256:$contract_sha,data:$contract},
-     {input_id:"input.producer-patch",media_type:"text/x-diff",sha256:$patch_sha,data:$patch}]
-     | sort_by(.input_id))}
+     {input_id:"input.materialize",media_type:"application/json",data:$contract},
+     {input_id:"input.producer-patch",media_type:"text/x-diff",data:$patch}]
+     | sort_by(.input_id)),
+   trust_context:{verified_payloads:([
+     {input_id:"input.materialize",content:{media_type:"application/json",data:$contract},
+      sha256:$contract_sha},
+     {input_id:"input.producer-patch",content:{media_type:"text/x-diff",data:$patch},
+      sha256:$patch_sha}]
+     | sort_by(.input_id))}}
 ' > "$input_file"
 
 for document in "$profile_file" "$resolved_file" "$forge_manifest" \
@@ -337,7 +350,10 @@ input_with_patch() {
   sha=$(sha_file "$patch")
   "${jq_cmd[@]}" -S -c --rawfile patch "$patch" --arg sha "$sha" '
     (.payloads[] | select(.input_id=="input.producer-patch")) |=
-      (.data=$patch | .sha256=$sha) |
+      (.data=$patch) |
+    (.trust_context.verified_payloads[] |
+      select(.input_id=="input.producer-patch")) |=
+      (.content.data=$patch | .sha256=$sha) |
     (.stage_request.content.body.inputs[] | select(.input_id=="input.producer-patch") |
       .value.value.value.sha256)=$sha
   ' "$source" > "$intermediate"
@@ -349,7 +365,10 @@ input_with_contract() {
   sha=$(sha_file "$contract")
   "${jq_cmd[@]}" -S -c --rawfile contract "$contract" --arg sha "$sha" '
     (.payloads[] | select(.input_id=="input.materialize")) |=
-      (.data=$contract | .sha256=$sha) |
+      (.data=$contract) |
+    (.trust_context.verified_payloads[] |
+      select(.input_id=="input.materialize")) |=
+      (.content.data=$contract | .sha256=$sha) |
     (.stage_request.content.body.inputs[] | select(.input_id=="input.materialize") |
       .value.value.value.sha256)=$sha |
     .stage_request.content.body.operation.arguments.materialization_contract.ref.subject_ref.value.value.sha256=$sha
@@ -358,7 +377,8 @@ input_with_contract() {
 }
 
 bad_digest="$tmp/bad-digest.json"
-"${jq_cmd[@]}" -S -c '.payloads[0].sha256=("0"*64)' "$input_file" > "$bad_digest"
+"${jq_cmd[@]}" -S -c '.trust_context.verified_payloads[0].sha256=("0"*64)' \
+  "$input_file" > "$bad_digest"
 expect_error bad-digest E_CONTRACT "$bad_digest"
 
 wrong_repository="$tmp/wrong-repository.json"
