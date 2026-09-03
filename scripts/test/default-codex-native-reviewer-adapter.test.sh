@@ -28,9 +28,13 @@ if [ "$platform" = Darwin:arm64 ]; then jq_command=(/usr/bin/arch -x86_64 "$jq_b
 runtime_bin="$tmp/bin"
 /bin/mkdir -m 700 "$runtime_bin"
 /bin/ln -s "$jq_bin" "$runtime_bin/jq"
-generation=$("${jq_command[@]}" -er \
-  'select(type=="array" and length==1) | .[0].generation_id' \
-  "$root/core/v2/generation-registry.json")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\\{64\\}\)'$/\\1/p" \
+  "$root/scripts/core-contract.sh")
+[ -n "$generation" ] &&
+  [ "$("${jq_command[@]}" -r --arg generation "$generation" \
+      '[.[] | select(.generation_id==$generation)] | length' \
+      "$root/core/v2/generation-registry.json")" -eq 1 ] || fail 'selected generation'
 modules="$root/core/v2/generations/$generation/modules"
 
 check() {

@@ -54,9 +54,9 @@ program="$runtime/program.jq"
 jq_bin="$runtime/jq"
 work="$runtime_parent/work"
 verify_runtime() {
-  verify_hash 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
+  verify_hash 43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 \
     "$program" &&
-  verify_hash f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1 \
+  verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
     "$runtime/core/v2/generations/$generation/contracts.jq" &&

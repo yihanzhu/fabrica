@@ -129,12 +129,12 @@ snapshot_file "$source_dir/scan-state.sh" "$runtime/bootstrap.sh" 1048576 0400 |
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
 snapshot_file "$self" "$runtime/launcher.sh" 1048576 0400 || emit_error E_RUNTIME
 launcher_sha=$(sha256_path "$runtime/launcher.sh") || emit_error E_RUNTIME
-snapshot_expected 3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a \
+snapshot_expected 10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3 \
   "$source_dir/state-scanner-driver.sh" "$runtime/driver.sh" 0400 ||
   emit_error E_STALE
-snapshot_expected 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
+snapshot_expected 43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 \
   "$source_dir/state-scanner.jq" "$runtime/program.jq" 0400 || emit_error E_STALE
-snapshot_expected f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1 \
+snapshot_expected 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
   "$repo/core/v2/generation-registry.json" \
   "$runtime/core/v2/generation-registry.json" 0400 || emit_error E_STALE
 snapshot_expected 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -168,8 +168,8 @@ snapshot_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
 
 "$runtime/jq" -S -c -n \
   --arg bootstrap_sha "$bootstrap_sha" --arg launcher_sha "$launcher_sha" \
-  --arg driver_sha 3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a \
-  --arg program_sha 8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 \
+  --arg driver_sha 10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3 \
+  --arg program_sha 43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 \
   --arg jq_sha "$jq_sha" --arg bash_sha "$bash_sha" \
   --arg host_os "$host_os" --arg host_arch "$host_arch" \
   --arg jq_arch "$jq_arch" --arg execution_mode "$execution_mode" '
@@ -182,11 +182,11 @@ snapshot_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
         generation_id_sha256:"6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
         package_ref:ref("core-contract-package.v2";
           "application/vnd.ystack.core-contract+json";
-          "005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"),
+          "2742f9c097943bb140cc0f19feda1e3b653ce95e699c570f9e9fc48825137c6c"),
         semantic_identity:"core.contracts.v2"
       },
       core_closure:[
-        {path:"core/v2/generation-registry.json",sha256:"f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1"},
+        {path:"core/v2/generation-registry.json",sha256:"3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94"},
         {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/contracts.jq",sha256:"65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a"},
         {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/core-ingress.sh",sha256:"db87c6e97e93dc2a6eebd83087878c04f5528badc620d57fc9d883694e2ac28b"},
         {path:"core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/profile_graph.jq",sha256:"c00f9cfbe88df5cb1dbcfbead61288ff7d68684d43d095e74f26e7820f0d7207"},
@@ -213,7 +213,7 @@ evaluator_sha=$(sha256_path "$runtime/evaluator.json") || emit_error E_RUNTIME
 
 verify_private_core() {
   [ "$(sha256_path "$runtime/core/v2/generation-registry.json")" = \
-      f55b697716dc13a6d2c71bde7769493b3f4b091fd7a94d3280c5d417974df3a1 ] &&
+      3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 ] &&
   [ "$(sha256_path "$generation_runtime/contracts.jq")" = \
       65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a ] &&
   [ "$(sha256_path "$generation_runtime/core-ingress.sh")" = \
@@ -280,9 +280,9 @@ verify_private_core || emit_error E_STALE
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
 [ "$(sha256_path "$runtime/driver.sh")" = \
-    3f0b14cddd27ef7638b3227159af686defa5f5662c893096cc6711a692d57d1a ] &&
+    10d3ad263f5757fc403ae6eb758fef630570e594b029cf2e314cda08dfb37de3 ] &&
 [ "$(sha256_path "$runtime/program.jq")" = \
-    8838c85aae5a2ed9ada659ae1a13c5cf8f561463789d1d5d9f28370d479f6c80 ] &&
+    43f6e3fabe1bec7025fb6068ccbe3b034d3c16a0ac33d1a9d7de5757e1b92fa7 ] &&
 [ "$(sha256_path "$runtime/jq")" = "$jq_sha" ] &&
 [ "$(sha256_path /bin/bash)" = "$bash_sha" ] &&
 [ "$(sha256_path "$scratch/input.json")" = "$snapshot_sha" ] &&
