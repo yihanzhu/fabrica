@@ -155,6 +155,17 @@ core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa9218
 core/v2/generations/g-392d20099dfa99872764009b268c8871914b4dbc0da467ec346baa921818ae3e/modules/stage_request.jq
 scripts/test/portable-core-v2-fake-forge.test.sh
 
+# Inactive portable core v2 evidence-identity correction
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/contracts.jq
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/core-ingress.sh
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/profile_graph.jq
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/result_facts.jq
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/result_truth.jq
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq
+core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/stage_request.jq
+scripts/test/portable-core-v2-evidence-identity-ledger.tsv
+scripts/test/portable-core-v2-evidence-identity.test.sh
+
 # Inactive fake producer/forge adapter contract matrix
 adapter-tests/v1/runner.sh
 adapter-tests/v1/contract.jq
@@ -248,3 +259,7 @@ scripts/test/default-claude-code-producer-adapter.test.sh
 # Inactive dormant publisher normalizer payload
 adapters/dormant-publisher/v1/normalize.jq
 scripts/test/default-dormant-publisher-adapter.test.sh
+
+# Inactive deterministic verifier normalizer payload
+adapters/deterministic-verifier/v1/normalize.jq
+scripts/test/default-deterministic-verifier-adapter.test.sh

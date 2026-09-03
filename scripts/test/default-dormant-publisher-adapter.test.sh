@@ -287,9 +287,15 @@ check verified-claim-binding "${jq_command[@]}" -e \
       .trust_context.expected_idempotency_key_sha256
   ' "$tmp/repeat-a.json"
 
-generation=$("${jq_command[@]}" -er \
-  'select(type=="array" and length==1) | .[0].generation_id' \
-  "$root/core/v2/generation-registry.json")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" \
+  "$root/scripts/core-contract.sh")
+[[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || fail 'selected core generation'
+"${jq_command[@]}" -e --arg generation "$generation" '
+  [.[] | select(.generation_id == $generation and
+    .semantic_identity == "core.contracts.v2")] | length == 1
+' "$root/core/v2/generation-registry.json" >/dev/null ||
+  fail 'selected core registry identity'
 modules="$root/core/v2/generations/$generation/modules"
 
 check public-reference-shapes "${jq_command[@]}" -L "$modules" -e \

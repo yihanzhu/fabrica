@@ -436,10 +436,11 @@ check protected-profile-separation expect_v2_error protected-profile-separation 
 
 check registry-canonical cmp -s "$registry" \
   <("${jq_command[@]}" -S -c . "$registry")
-check registry-single-unique "${jq_command[@]}" -e --arg generation "$generation_id" \
-  'type == "array" and length == 1 and
+check registry-prefix-unique "${jq_command[@]}" -e --arg generation "$generation_id" \
+  'type == "array" and length == 2 and
    (map(.generation_id) | length == (unique | length)) and
    .[0].generation_id == $generation and
+   .[1].parent_generation_id == $generation and
    .[0].semantic_identity == "core.contracts.v2"' "$registry"
 registered_generations="$("${jq_command[@]}" -r \
   '.[].generation_id' "$registry" | LC_ALL=C sort)"
@@ -469,11 +470,13 @@ check v1-tree-unchanged test \
   4af76e02fc8b86ead009156bf165ee700aabe7f8
 check wrapper-known test \
   "$(git -C "$test_root" hash-object scripts/core-contract.sh)" = \
-  dcb0e8500e52dd129c6aae9451049d563720b2ee
+  18748127ead49a22717723e9860210940010d84e
 check schema-major-selected grep -Fxq \
   "PORTABLE_CORE_SCHEMA_MAJOR='2'" "$wrapper"
-check generation-selected grep -Fxq \
-  "PORTABLE_CORE_GENERATION='${generation_id}'" "$wrapper"
+selected_generation_id="$(sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$wrapper")"
+check generation-selected "${jq_command[@]}" -e \
+  --arg selected "$selected_generation_id" '.[1].generation_id == $selected' "$registry"
 check wrapper-document "$wrapper" validate-document "$forge_manifest"
 check wrapper-profile-set "$wrapper" validate-profile-set \
   "$profile_file" "$resolved_file" "${manifest_files[@]}"
@@ -532,7 +535,7 @@ done
 check readme-inactive grep -Fq \
   'Inactive portable core v2 fake-forge contract' "$test_root/README.md"
 check restore-inactive grep -Eq \
-  'core/v2/.*inactive.*fake-forge|inactive.*fake-forge.*core/v2/' \
+  'core/v2/.*append-only inactive generations' \
   "$test_root/RESTORE.md"
 check readme-no-real-qualification grep -Fq \
   'not qualified for a real forge' "$test_root/README.md"

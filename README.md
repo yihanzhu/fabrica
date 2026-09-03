@@ -47,6 +47,12 @@ The stable `scripts/core-contract.sh` wrapper and inactive resolver select this 
 generation together. This is a repo-only compatibility switch. It does not install
 the resolver, select a live profile, or qualify a real forge.
 
+The v2 registry also carries the selected evidence-identity correction. It requires
+every passed evidence item to come from the exact selected execution; incident
+mismatches remain valid only when all evidence is non-passing. The stable wrapper,
+inactive resolver, Control closure, and scanner select it together. The prior
+generation remains immutable and restorable.
+
 ## Inactive fake adapter contract matrix
 
 `adapter-tests/v1/` runs a fixed 2×2 producer/forge matrix against one unrelated
@@ -296,6 +302,24 @@ the durable main payload as the default profile's deterministic publisher with n
 capabilities, permissions, or tools. The payload is not the temporary construction
 publisher gate and cannot call it. It uses no credential or network, performs no
 merge or external write, and activates no profile.
+
+## Inactive deterministic verifier normalizer payload
+
+`adapters/deterministic-verifier/v1/normalize.jq` validates an already-supplied
+portable-core v2 verifier request, resolved profile, adapter contract, and stage
+result. It reuses the core's request, profile, and result relations, then returns
+one canonical observation. It does not interpret provider or CI status as verifier
+evidence. GitHub Actions remains a separate CI observation boundary. The caller
+first canonicalizes and hashes the snapshot and stage result, supplies those
+verified content-and-digest pairs, and fixes the expected attempt ID and number.
+The normalizer rejects any mismatch before emitting their references.
+
+This payload is offline and unqualified. It does not execute a candidate or tool,
+read proof bytes, enforce a sandbox, use a credential or network, write evidence,
+grant authority or qualification, or activate a profile. A later assembly PR may
+add its manifest and inactive default-set binding only after the payload has a
+durable commit on main. A runnable verifier still requires a separately qualified
+sandbox launcher and fixed verification implementation.
 
 ## The current default team
 

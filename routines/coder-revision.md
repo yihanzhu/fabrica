@@ -101,9 +101,9 @@ You are the Coder, spawned under one exact fix claim to handle review feedback o
    follow-up issue yshifu opens, not more rounds). This scoped-down change is TERMINAL and is
    allowed only when the brief names newly re-accepted current intent/spec-with-risk/plan
    blobs whose scope is exactly that core plus the recorded deferred issue. Missing or
-   stale artifacts stop before edits.
-   still subject to the **step-3 command discovery, the step-3.5 PR-CI-presence gate, and
-   step-5 verify-locally-before-push**: run the step-3 discovery and the step-3.5 gate first
+   stale artifacts stop before edits. The scoped-down change remains subject to the step-3
+   command discovery, the step-3.5 PR-CI-presence gate, and step-5 verify-locally-before-push:
+   run the step-3 discovery and the step-3.5 gate first
    (escalate with the SHORT reason `ambiguous-spec` / `failure`, verify `ready` absent,
    then add and verify `needs-human`; stop only if no source yields runnable
    commands, or if no PR-triggered CI is detectable), make exactly that change, verify
@@ -135,8 +135,7 @@ You are the Coder, spawned under one exact fix claim to handle review feedback o
    `tox.ini`, etc.).
    (d) **Only if none** of (a)–(c) yield runnable commands → do NOT guess: comment with
    the SHORT reason `ambiguous-spec`, add and verify `needs-human`, then verify
-   `ready` absent; stop before editing or pushing — the #54 guard, now the last resort,
-   not a prerequisite (`CLAUDE.md` is an
+   `ready` absent; stop before editing or pushing (`CLAUDE.md` is an
    optional supplement). A docs/trivial repo with no toolchain has nothing to discover and
    proceeds normally. **EXCEPTION — a designated greenfield-bootstrap PR** (mirrors
    `coder.md`): when yshifu has briefed this fix-mode spawn as the greenfield-bootstrap PR — the
@@ -187,7 +186,7 @@ You are the Coder, spawned under one exact fix claim to handle review feedback o
    `<target>/.ystack/north-star.md`** carries the **yshifu-provided** north star (an active
    `status: active` heading, the operator's goal + a done-signal, **NO `ystack-shipped-default`
    marker**, **no invented approval token**) — **commit the text yshifu's brief provides; do not
-   invent the goal** (the post-98a gate reads the committed file and FAILs on missing /
+   invent the goal** (the gate reads the committed file and FAILs on missing /
    marker-carrying / no-active-entry). Also **narrow + sole-purpose** —
    only the greenfield-bootstrap PR; any other PR on a command-less / CI-less repo still
    escalates and stops per this gate. (This bootstrap PR is operator-approved + human-merged —
@@ -242,10 +241,11 @@ You are the Coder, spawned under one exact fix claim to handle review feedback o
    same branch. **Match CI's pinned tool versions:** when CI pins a linter/formatter/toolchain
    to a specific version, lint with **that exact version** locally — a different local
    version reports different findings/codes for the same code (e.g. shellcheck SC2317 vs
-   SC2329) and can be "clean locally" yet land CI-red. In **this repo (ystack itself)**
-   shellcheck is pinned to **`0.11.0`** (`SHELLCHECK_VERSION` in `.github/workflows/ci.yml`);
-   lint with `shellcheck -x -S style` over `find . -name '*.sh' -not -path './.git/*'` using
-   0.11.0, grabbing that static release if your local version differs.
+   SC2329) and can be "clean locally" yet land CI-red. Read the pinned version from the CI
+   config and install it the same way CI does (npm, pip, a setup action, or whatever the
+   workflow uses). In ystack itself the pin is `SHELLCHECK_VERSION` in
+   `.github/workflows/ci.yml`, and the matching static binary comes from the shellcheck
+   GitHub releases.
    Local green is necessary but not sufficient — the PR's own CI is the ultimate gate,
    but you don't wait on it: **yshifu checks PR CI before it hands the PR to the operator**
    (no `merge-ready` label until CI is green). Your job is the local green, then the push —

@@ -96,10 +96,10 @@ def evidence_ref_ok:
 def expected_core:
   {semantic_identity:"core.contracts.v2",
    generation_id_sha256:
-     "6f6acbbd0cf40ab3c913328d6c0070635424ffe920bcdb900fbd0718345d7137",
+     "84a153ba1d60f1763d5424c872256fc3337209678f4105cb0802958798bd19f5",
    package_ref:{content_id:"core-contract-package.v2",
      media_type:"application/vnd.ystack.core-contract+json",
-     sha256:"005431c5c7e3a39dc3ab75dfcafd0f09359331667fdcacb140514a4384592716"}};
+     sha256:"eff044bdd6de0de71d5f8c5a58d889a122cd9efdf717b9f68713b47842fb0963"}};
 
 def policy_ok:
   exact(["body","id","kind","schema_version"]) and .schema_version == 1 and

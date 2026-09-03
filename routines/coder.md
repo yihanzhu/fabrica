@@ -138,10 +138,9 @@ active claim authorizes only this spawn when the plan tuple below also matches.
      the package manager from the lockfile — `package-lock.json`→npm, `pnpm-lock.yaml`→pnpm,
      `yarn.lock`→yarn), `Makefile` targets, `pyproject.toml` / `tox.ini`, etc.
    - (d) **Only if none** of (a)–(c) yield runnable install/check commands → do NOT
-     guess: comment on the issue (lead with the SHORT reason `ambiguous-spec`), remove and
-     add and verify `needs-human`, then verify `ready` absent; stop **before creating a
-     branch or making any edit**. This is the
-     #54 no-guess guard, now the last resort rather than the first requirement — a
+     guess: comment on the issue (lead with the SHORT reason `ambiguous-spec`), add and verify
+     `needs-human`, then remove `ready` if present and verify it absent; stop **before creating a
+     branch or making any edit**. A
      filled-in `CLAUDE.md` is an optional supplement, not a prerequisite. (A
      **docs/trivial repo with no toolchain** has no commands to run and nothing to
      discover: proceed normally — just make whatever checks exist pass, and if there are
@@ -198,8 +197,8 @@ active claim authorizes only this spawn when the plan tuple below also matches.
      greenfield-bootstrap issue** — the **first change on an empty target** (no source yet, no
      commands to discover, no PR-CI, possibly no prior code/base) — this sole-purpose issue is
      **permitted** despite finding nothing in step-3 command-discovery and having no PR-CI:
-     neither the step-3 "discover commands else escalate" (#78) nor the step-4 "no PR-CI →
-     escalate" (#81/#86) gate applies to it, because it is *establishing* the toolchain **AND**
+     neither the step-3 "discover commands else escalate" nor the step-4 "no PR-CI →
+     escalate" gate applies to it, because it is *establishing* the toolchain **AND**
      the gate in one stroke. **This is a gate decision only** (like the add-CI exception above):
      it does **not** authorize you to scaffold here on the default branch. **The actual
      scaffolding happens in the implementation step (step 6), AFTER step 5 creates the branch**
@@ -210,7 +209,7 @@ active claim authorizes only this spawn when the plan tuple below also matches.
      first test, and author a `pull_request`-triggered workflow that installs and runs the lint /
      build / test for that skeleton; run those same commands locally (step 9) so the workflow you
      author is green. **Also create + commit `<target>/.ystack/north-star.md` with the
-     yshifu-provided north star:** post-98a the manager-debate gate reads the target's
+     yshifu-provided north star:** the manager-debate gate reads the target's
      **committed** `.ystack/north-star.md` and FAILs on missing / `ystack-shipped-default`-marker /
      no-`status: active`-entry, so the 0→1 bootstrap must leave a real committed one. **yshifu's
      brief gives you the exact north-star text + done-signal** (drafted from the operator's command
@@ -360,11 +359,11 @@ active claim authorizes only this spawn when the plan tuple below also matches.
      a specific version, run **that exact version** locally — not whatever your local
      install happens to be. Different versions of the same tool report different findings
      and codes for the same code (e.g. shellcheck SC2317 vs SC2329), so a different local
-     version can be "clean locally" yet land CI-red. In **this repo (ystack itself)**
-     shellcheck is pinned to **`0.11.0`** (`SHELLCHECK_VERSION` in `.github/workflows/ci.yml`,
-     asserted before the sweep); lint with `shellcheck -x -S style` over
-     `find . -name '*.sh' -not -path './.git/*'` using 0.11.0 — grab that static release
-     from the shellcheck GitHub releases if your local version differs.
+     version can be "clean locally" yet land CI-red. Read the pinned version from the CI
+     config and install it the same way CI does (npm, pip, a setup action, or whatever the
+     workflow uses) so your local run matches. In ystack itself the pin is `SHELLCHECK_VERSION`
+     in `.github/workflows/ci.yml`, and the matching static binary comes from the shellcheck
+     GitHub releases.
 10. Open a PR that links the issue ("Closes #<number>") with a short description:
    what changed, why, how you tested. Add and verify exactly one round label:
    `round-0`. If that fails, add and verify `needs-human`, then remove `ready` if present
