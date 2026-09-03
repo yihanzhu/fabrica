@@ -305,6 +305,18 @@ repeat_root=$(run_case repeat)
 /usr/bin/cmp -s "$case_root/out" "$repeat_root/out" || fail deterministic-response
 pass 'same exact input produces the same receipt and commit'
 
+wide_time_input="$tmp/wide-time-input.json"
+"${jq_cmd[@]}" -S -c '
+  .attempt.started_at="2100-01-01T00:00:01Z" |
+  .attempt.finished_at="2100-01-01T00:00:02Z" |
+  .attempt.recorded_at="2100-01-01T00:00:03Z"
+' "$input_file" > "$wide_time_input"
+wide_time_root=$(run_case wide-time "$wide_time_input")
+[ ! -s "$wide_time_root/err" ] || fail wide-time-stderr
+[ "$(git_clean --git-dir="$wide_time_root/candidate/repository.git" rev-parse refs/heads/candidate)" = \
+  "$candidate_commit" ] || fail wide-time-candidate-identity
+pass 'contract-valid timestamps outside Git date range keep deterministic candidate identity'
+
 expect_error() {
   local name=$1 expected=$2 input=${3:-$input_file} source=${4:-$tmp/source.git}
   local case_root="$tmp/error-$name"
@@ -505,6 +517,43 @@ git_clean --git-dir="$newline_source" update-ref refs/heads/main "$newline_commi
 newline_input="$tmp/newline-input.json"
 input_for_source "$input_file" "$newline_input" sha1 "$newline_commit" "$newline_tree"
 expect_error source-newline-path E_SOURCE_TREE "$newline_input" "$newline_source"
+
+c1_source="$tmp/source-c1.git"
+/bin/mkdir -m 700 "$c1_source"
+git_clean init -q --bare --object-format=sha1 "$c1_source"
+c1_blob=$(printf '%s\n' value | git_clean --git-dir="$c1_source" hash-object -w --stdin)
+c1_tree=$(printf '100644 blob %s\tfoo\302\200bar\0' "$c1_blob" |
+  git_clean --git-dir="$c1_source" mktree -z)
+c1_commit=$(printf '%s\n' c1-control |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$c1_source" commit-tree "$c1_tree")
+git_clean --git-dir="$c1_source" update-ref refs/heads/main "$c1_commit"
+c1_input="$tmp/c1-input.json"
+input_for_source "$input_file" "$c1_input" sha1 "$c1_commit" "$c1_tree"
+expect_error source-c1-control-path E_SOURCE_TREE "$c1_input" "$c1_source"
+
+malformed_source="$tmp/source-malformed-utf8.git"
+/bin/mkdir -m 700 "$malformed_source"
+git_clean init -q --bare --object-format=sha1 "$malformed_source"
+malformed_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$malformed_source" hash-object -w --stdin)
+malformed_tree=$(printf '100644 blob %s\tfoo\200bar\0' "$malformed_blob" |
+  git_clean --git-dir="$malformed_source" mktree -z)
+malformed_commit=$(printf '%s\n' malformed-utf8 |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$malformed_source" commit-tree "$malformed_tree")
+git_clean --git-dir="$malformed_source" update-ref refs/heads/main "$malformed_commit"
+malformed_input="$tmp/malformed-input.json"
+input_for_source "$input_file" "$malformed_input" sha1 "$malformed_commit" "$malformed_tree"
+expect_error source-malformed-utf8-path E_SOURCE_TREE "$malformed_input" "$malformed_source"
 
 sha256_source="$tmp/source-sha256.git"
 read -r sha256_commit sha256_tree < <(make_bare_source "$sha256_source" sha256)

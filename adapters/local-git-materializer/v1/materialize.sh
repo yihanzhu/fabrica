@@ -273,7 +273,10 @@ safe_repo_path() {
   case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
   bytes=$(printf '%s' "$value" | wc -c | /usr/bin/tr -d ' ')
   [ "$bytes" -le 4096 ] || return 1
-  if printf '%s' "$value" | LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then return 1; fi
+  printf '%s' "$value" | /usr/bin/iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || return 1
+  printf '%s' "$value" |
+    "$jq_bin" -Rse 'test("[\\x{0000}-\\x{001f}\\x{007f}-\\x{009f}]") | not' \
+      >/dev/null 2>&1 || return 1
   old_ifs=$IFS
   IFS=/
   read -r -a path_components <<< "$value"
@@ -348,7 +351,7 @@ changed_paths_sha=$(sha_file "$changed_paths_json")
 if [ "$candidate_tree" = "$source_tree" ]; then
   candidate_commit=$source_commit
 else
-  commit_time=$("$jq_bin" -r '.attempt.started_at' "$input_snapshot") || emit_error E_INPUT
+  commit_time=2000-01-01T00:00:00Z
   candidate_commit=$(printf '%s\n' 'ystack local candidate' |
     "${git_env[@]}" GIT_AUTHOR_NAME='ystack local materializer' \
     GIT_AUTHOR_EMAIL='materializer@example.invalid' \
