@@ -392,6 +392,10 @@ missing_revision="$tmp/missing-revision.json"
 refresh_request_pair "$missing_revision.next" "$missing_revision"
 expect_error missing-revision E_CONTRACT "$missing_revision"
 
+oversize_input="$tmp/oversize-input.json"
+/bin/dd if=/dev/zero of="$oversize_input" bs=8388609 count=1 2>/dev/null
+expect_error oversize-input E_INPUT "$oversize_input"
+
 /usr/bin/printf '%s\n' '/invalid/alternate' > "$tmp/source.git/objects/info/alternates"
 expect_error alternates E_SOURCE_GIT
 /bin/rm "$tmp/source.git/objects/info/alternates"
@@ -481,6 +485,26 @@ git_clean --git-dir="$submodule_source" update-ref refs/heads/main "$outer_commi
 submodule_input="$tmp/submodule-input.json"
 input_for_source "$input_file" "$submodule_input" sha1 "$outer_commit" "$outer_tree"
 expect_error source-submodule-mode E_SOURCE_TREE "$submodule_input" "$submodule_source"
+
+newline_source="$tmp/source-newline.git"
+/bin/mkdir -m 700 "$newline_source"
+git_clean init -q --bare --object-format=sha1 "$newline_source"
+newline_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$newline_source" hash-object -w --stdin)
+newline_tree=$(printf '100644 blob %s\tfoo\nbar\0' "$newline_blob" |
+  git_clean --git-dir="$newline_source" mktree -z)
+newline_commit=$(printf '%s\n' newline |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$newline_source" \
+    commit-tree "$newline_tree")
+git_clean --git-dir="$newline_source" update-ref refs/heads/main "$newline_commit"
+newline_input="$tmp/newline-input.json"
+input_for_source "$input_file" "$newline_input" sha1 "$newline_commit" "$newline_tree"
+expect_error source-newline-path E_SOURCE_TREE "$newline_input" "$newline_source"
 
 sha256_source="$tmp/source-sha256.git"
 read -r sha256_commit sha256_tree < <(make_bare_source "$sha256_source" sha256)
@@ -601,6 +625,12 @@ pass 'symlink candidate boundary rejected'
 
 if /usr/bin/grep -Eq 'curl|wget|gh |glab |github[.]com|gitlab[.]com|git (clone|fetch|pull|push)' \
     "$adapter" "$protocol"; then fail network-command; fi
+if [ "$(/usr/bin/grep -Fc -- '--accounted-validation' "$adapter")" -ne 1 ] ||
+   /usr/bin/grep -Eq '"\$core" (validate-document|validate-profile-set|validate-stage-run)' \
+     "$adapter"; then
+  fail unaccounted-core-validation
+fi
+pass 'core validation is routed through caller-owned accounted scratch'
 pass 'payload has no provider, transport, credential, authority or qualification path'
 
 printf 'local Git materializer: %s focused checks passed\n' "$passed"

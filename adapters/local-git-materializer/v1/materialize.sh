@@ -91,6 +91,10 @@ overlaps() {
 }
 
 [ -f "$input_path" ] && [ ! -L "$input_path" ] || emit_error E_INPUT
+input_bytes=$(/usr/bin/wc -c < "$input_path" | /usr/bin/tr -d ' ') || emit_error E_INPUT
+case "$input_bytes" in ''|*[!0-9]*) emit_error E_INPUT ;; esac
+[ "${#input_bytes}" -le 7 ] || emit_error E_INPUT
+[ "$input_bytes" -le 8388608 ] || emit_error E_INPUT
 physical_dir "$source_git_dir" || emit_error E_SOURCE_GIT
 empty_private_dir "$candidate_root" || emit_error E_CANDIDATE_ROOT
 empty_private_dir "$scratch_root" || emit_error E_SCRATCH_ROOT
@@ -155,9 +159,19 @@ while [ "$manifest_index" -lt "$manifest_count" ]; do
   manifest_index=$((manifest_index + 1))
 done
 
-"$core" validate-profile-set "$profile_file" "$resolved_file" \
-  "${manifest_files[@]}" >/dev/null 2>&1 || emit_error E_CORE_PROFILE
-"$core" validate-document "$request_file" >/dev/null 2>&1 || emit_error E_CORE_REQUEST
+core_validate() {
+  local validation_id=$1 validation_root receipt_path
+  shift
+  validation_root="$run_root/core-$validation_id"
+  receipt_path="$run_root/core-$validation_id.receipt"
+  /bin/mkdir -m 700 "$validation_root" || return 1
+  "$core" --accounted-validation "$validation_root" 536870912 "$@" \
+    3> "$receipt_path" >/dev/null 2>&1
+}
+
+core_validate profile validate-profile-set "$profile_file" "$resolved_file" \
+  "${manifest_files[@]}" || emit_error E_CORE_PROFILE
+core_validate request validate-document "$request_file" || emit_error E_CORE_REQUEST
 
 contract_file="$run_root/materialization-contract.json"
 patch_file="$run_root/producer.patch"
@@ -256,6 +270,7 @@ safe_repo_path() {
   local value=$1 component lowered bytes
   [ -n "$value" ] || return 1
   case "$value" in /*|*\\*) return 1 ;; esac
+  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
   bytes=$(printf '%s' "$value" | wc -c | /usr/bin/tr -d ' ')
   [ "$bytes" -le 4096 ] || return 1
   if printf '%s' "$value" | LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then return 1; fi
@@ -371,8 +386,8 @@ result_file="$run_root/stage-result.json"
   --arg receipt_json "$(<"$receipt_file")" \
   --arg verified_receipt_json "$(<"$verified_receipt")" --arg outcome "$outcome" \
   -f "$protocol" "$input_snapshot" > "$result_file" 2>/dev/null || emit_error E_RESULT
-"$core" validate-stage-run "$request_file" "$resolved_file" "$result_file" \
-  >/dev/null 2>&1 || emit_error E_CORE_RESULT
+core_validate result validate-stage-run "$request_file" "$resolved_file" \
+  "$result_file" || emit_error E_CORE_RESULT
 
 /bin/mv "$staging_repo" "$final_repo" || emit_error E_CANDIDATE_ROOT
 response_file="$run_root/response.json"
