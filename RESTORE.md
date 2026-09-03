@@ -526,6 +526,22 @@ The pure jq payload is inactive, offline, and unqualified. It does not call Clau
 Code, invoke a model, use a credential or network, write a target, publish, or
 activate a profile.
 
+Restore the two paths in the manifest's inactive deterministic verifier normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-deterministic-verifier-adapter.test.sh
+```
+
+This validates exact core-v2 verifier request/profile/result relations, the
+deterministic role and permission ceiling, candidate and verification-plan binding,
+exact caller-verified snapshot and result pairs, attempt identity, timestamp and
+evidence precedence, stale inputs, and the boundary that keeps CI observations out
+of verifier evidence. This stage intentionally has no adapter manifest. The pure jq
+payload is offline and unqualified. It does not execute a candidate or tool, read
+proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
+authority or qualification, or activate a profile.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
