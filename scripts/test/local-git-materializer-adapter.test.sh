@@ -416,10 +416,28 @@ expect_error shallow E_SOURCE_GIT
 expect_error replace-ref E_SOURCE_GIT
 /bin/rm -rf "$tmp/source.git/refs/replace"
 
+packed_replace_source="$tmp/source-packed-replace.git"
+/bin/cp -R "$tmp/source.git" "$packed_replace_source"
+git_clean --git-dir="$packed_replace_source" update-ref \
+  "refs/replace/$source_tree" "$source_tree"
+git_clean --git-dir="$packed_replace_source" pack-refs --all --prune
+/bin/rmdir "$packed_replace_source/refs/replace" 2>/dev/null || :
+[ ! -d "$packed_replace_source/refs/replace" ] || fail packed-replace-fixture
+expect_error packed-replace-ref E_SOURCE_GIT "$input_file" "$packed_replace_source"
+
 normal_repo="$tmp/normal"
 /bin/mkdir -m 700 "$normal_repo"
 git_clean init -q "$normal_repo"
 expect_error linked-worktree E_SOURCE_WORKTREE "$input_file" "$normal_repo/.git"
+
+linked_source="$tmp/source-with-worktree.git"
+/bin/cp -R "$tmp/source.git" "$linked_source"
+linked_path="$tmp/source-linked"
+git_clean --git-dir="$linked_source" worktree add --detach "$linked_path" \
+  "$source_commit" >/dev/null
+[ -d "$linked_source/worktrees" ] || fail bare-linked-worktree-fixture
+expect_error bare-linked-worktree-metadata E_SOURCE_GIT "$input_file" "$linked_source"
+git_clean --git-dir="$linked_source" worktree remove --force "$linked_path"
 
 promisor="$tmp/source.git/objects/pack/test.promisor"
 /usr/bin/touch "$promisor"
@@ -547,6 +565,18 @@ if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixtur
 [ "$(cat "$tmp/overlap.err")" = E_BOUNDARY ] || fail overlapping-boundary-error
 /bin/rmdir "$overlap_candidate"
 pass 'source, candidate, and scratch boundaries cannot overlap'
+
+closed_output="$tmp/closed-output"
+/bin/mkdir -m 700 "$closed_output" "$closed_output/candidate" "$closed_output/scratch"
+if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
+    "$tmp/source.git" "$closed_output/candidate" "$closed_output/scratch" \
+    >&- 2> "$closed_output/err"; then
+  fail closed-output-accepted
+fi
+[ -z "$(find "$closed_output/candidate" -mindepth 1 -print -quit)" ] &&
+  [ -z "$(find "$closed_output/scratch" -mindepth 1 -print -quit)" ] ||
+  fail closed-output-cleanup
+pass 'response failure removes candidate and scratch state'
 
 outside="$tmp/outside-sentinel"
 /usr/bin/printf '%s\n' unchanged > "$outside"

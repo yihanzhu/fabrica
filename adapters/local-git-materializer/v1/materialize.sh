@@ -230,12 +230,15 @@ done < "$source_config"
 [ "$(git_dir "$source_git_dir" rev-parse --is-bare-repository 2>/dev/null)" = true ] ||
   emit_error E_SOURCE_WORKTREE
 [ ! -e "$source_git_dir/commondir" ] && [ ! -e "$source_git_dir/shallow" ] &&
+  [ -z "$(find "$source_git_dir/worktrees" -mindepth 1 -print -quit 2>/dev/null)" ] &&
   [ ! -e "$source_git_dir/info/grafts" ] &&
   [ ! -e "$source_git_dir/objects/info/alternates" ] &&
   [ ! -d "$source_git_dir/refs/replace" ] &&
   [ -z "$(find "$source_git_dir" -type l -print -quit)" ] &&
   [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
   emit_error E_SOURCE_GIT
+[ -z "$(git_dir "$source_git_dir" for-each-ref --format='%(refname)' \
+  refs/replace/ 2>/dev/null)" ] || emit_error E_SOURCE_GIT
 if find "$source_git_dir/hooks" -type f ! -name '*.sample' -print -quit 2>/dev/null |
    /usr/bin/grep -q .; then
   emit_error E_SOURCE_HOOK
@@ -390,5 +393,5 @@ response_file="$run_root/response.json"
     effects:["caller-disposable-candidate-repository"]
   }
 ' > "$response_file" || emit_error E_RESULT
+/bin/cat "$response_file" || emit_error E_RESULT
 success=1
-/bin/cat "$response_file"
