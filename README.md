@@ -278,6 +278,8 @@ Reachable source history is limited to 65,536 objects and 256 MiB of uncompresse
 object data; the streamed pack is capped at the same byte limit.
 Each tree scan is limited to 65,536 entries, 64 path components, and a 16 MiB
 encoded listing, and validates UTF-8 once before its bounded built-in path walk.
+Before mutating the index, patch paths must already fit the contract and their
+cumulative source blob sizes plus patch bytes must fit a 256 MiB candidate budget.
 
 The fixed `materialize` command accepts only caller-named physical source,
 candidate, and scratch boundaries. It rejects worktrees, alternates, shallow or

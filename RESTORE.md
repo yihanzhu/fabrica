@@ -524,7 +524,8 @@ binary patches, symlinks, submodules, host Git templates, and reachable source
 history above the fixed 65,536-object or 256 MiB import budget. It proves empty-patch
 `no-change` and rejects tree scans above 65,536 entries, 64 path components, or a
 16 MiB encoded listing. It also checks that the source stays unchanged and scratch
-is removed.
+is removed. A shared-large-blob fixture proves the 256 MiB pre-apply candidate
+budget blocks path fan-out before Git writes changed blobs.
 
 This payload has no adapter manifest. A later assembly PR may bind the directory
 tree through the payload's durable main commit. It is an inactive, local-only

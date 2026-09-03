@@ -363,6 +363,58 @@ while IFS=' ' read -r object_id object_type object_size extra; do
   source_object_bytes=$((source_object_bytes + object_size))
 done < "$source_object_sizes"
 
+max_changed=$("$jq_bin" -r '.max_changed_paths' "$contract_file") || emit_error E_CONTRACT
+patch_paths="$run_root/patch-paths"
+: > "$patch_paths"
+if [ "$patch_bytes" -gt 0 ]; then
+  patch_numstat="$run_root/patch-numstat"
+  git_dir "$source_git_dir" apply --numstat -z --whitespace=nowarn \
+    "$patch_file" > "$patch_numstat" 2>/dev/null || emit_error E_PATCH
+  exec 4< "$patch_numstat"
+  while IFS= builtin read -r -d '' patch_record <&4; do
+    case "$patch_record" in *$'\t'*$'\t'*) ;; *) emit_error E_PATCH ;; esac
+    patch_stat_tail=${patch_record#*$'\t'}
+    patch_stat_tail=${patch_stat_tail#*$'\t'}
+    if [ -n "$patch_stat_tail" ]; then
+      safe_repo_path "$patch_stat_tail" || emit_error E_PATCH_PATH
+      printf '%s\n' "$patch_stat_tail" >> "$patch_paths"
+    else
+      IFS= builtin read -r -d '' patch_old_path <&4 || emit_error E_PATCH
+      IFS= builtin read -r -d '' patch_new_path <&4 || emit_error E_PATCH
+      if ! safe_repo_path "$patch_old_path" || ! safe_repo_path "$patch_new_path"; then
+        emit_error E_PATCH_PATH
+      fi
+      printf '%s\n%s\n' "$patch_old_path" "$patch_new_path" >> "$patch_paths"
+    fi
+  done
+  exec 4<&-
+fi
+LC_ALL=C /usr/bin/sort -u "$patch_paths" -o "$patch_paths"
+patch_path_count=$(/usr/bin/wc -l < "$patch_paths" | /usr/bin/tr -d ' ')
+[ "$patch_path_count" -le "$max_changed" ] || emit_error E_PATCH_LIMIT
+candidate_mutation_byte_limit=268435456
+candidate_source_bytes=0
+while IFS= read -r patch_path; do
+  "$jq_bin" -e --arg path "$patch_path" '.allowed_paths | index($path) != null' \
+    "$contract_file" >/dev/null || emit_error E_PATCH_SCOPE
+  source_path_bytes=0
+  if source_path_object=$(git_dir "$source_git_dir" rev-parse --verify \
+      "$source_tree:$patch_path" 2>/dev/null); then
+    [ "$(git_dir "$source_git_dir" cat-file -t "$source_path_object" 2>/dev/null)" = blob ] ||
+      emit_error E_PATCH_PATH
+    source_path_bytes=$(git_dir "$source_git_dir" cat-file -s \
+      "$source_path_object" 2>/dev/null) || emit_error E_SOURCE_GIT
+  fi
+  case "$source_path_bytes" in ''|*[!0-9]*) emit_error E_SOURCE_GIT ;; esac
+  [ "${#source_path_bytes}" -le 9 ] &&
+    [ "$source_path_bytes" -le "$candidate_mutation_byte_limit" ] &&
+    [ "$candidate_source_bytes" -le "$((candidate_mutation_byte_limit - source_path_bytes))" ] ||
+    emit_error E_CANDIDATE_LIMIT
+  candidate_source_bytes=$((candidate_source_bytes + source_path_bytes))
+done < "$patch_paths"
+[ "$patch_bytes" -le "$((candidate_mutation_byte_limit - candidate_source_bytes))" ] ||
+  emit_error E_CANDIDATE_LIMIT
+
 "${git_env[@]}" /usr/bin/git init --template="$empty_template" --bare \
   --object-format="$source_algorithm" \
   "$staging_repo" >/dev/null 2>&1 || emit_error E_CANDIDATE_GIT
@@ -404,7 +456,6 @@ while IFS= read -r -d '' changed_path; do
 done < <(git_dir "$staging_repo" diff-tree -r --name-only -z "$source_tree" "$candidate_tree")
 LC_ALL=C /usr/bin/sort -u "$changed_paths" -o "$changed_paths"
 changed_count=$(wc -l < "$changed_paths" | /usr/bin/tr -d ' ')
-max_changed=$("$jq_bin" -r '.max_changed_paths' "$contract_file") || emit_error E_CONTRACT
 [ "$changed_count" -le "$max_changed" ] || emit_error E_PATCH_LIMIT
 while IFS= read -r changed_path; do
   "$jq_bin" -e --arg path "$changed_path" '.allowed_paths | index($path) != null' \

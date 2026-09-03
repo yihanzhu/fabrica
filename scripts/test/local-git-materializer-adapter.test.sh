@@ -544,6 +544,45 @@ input_for_source "$input_file" "$large_listing_input" sha1 \
 expect_error source-tree-byte-limit E_SOURCE_TREE \
   "$large_listing_input" "$large_listing_source"
 
+shared_source="$tmp/source-shared-large-blob.git"
+/bin/mkdir -m 700 "$shared_source"
+git_clean init -q --bare --object-format=sha1 "$shared_source"
+shared_blob=$(
+  { printf 'alpha\n'; /bin/dd if=/dev/zero bs=1048576 count=8 2>/dev/null |
+      /usr/bin/tr '\000' a; } |
+    git_clean --git-dir="$shared_source" hash-object -w --stdin
+)
+shared_contract="$tmp/shared-contract.json"
+"${jq_cmd[@]}" -S -c '
+  .allowed_paths=([range(1;34) | "shared-" + tostring] | sort) |
+  .max_changed_paths=33
+' "$contract_file" > "$shared_contract"
+shared_paths="$tmp/shared-paths"
+"${jq_cmd[@]}" -r '.allowed_paths[]' "$shared_contract" > "$shared_paths"
+shared_tree=$(while IFS= read -r path; do
+  printf '100644 blob %s\t%s\n' "$shared_blob" "$path"
+done < "$shared_paths" | git_clean --git-dir="$shared_source" mktree)
+shared_commit=$(printf '%s\n' shared-large-blob |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$shared_source" commit-tree "$shared_tree")
+git_clean --git-dir="$shared_source" update-ref refs/heads/main "$shared_commit"
+shared_patch="$tmp/shared.patch"
+while IFS= read -r path; do
+  printf '%s\n' "diff --git a/$path b/$path" "--- a/$path" "+++ b/$path" \
+    '@@ -1 +1 @@' '-alpha' '+beta'
+done < "$shared_paths" > "$shared_patch"
+shared_source_input="$tmp/shared-source-input.json"
+input_for_source "$input_file" "$shared_source_input" sha1 "$shared_commit" "$shared_tree"
+shared_contract_input="$tmp/shared-contract-input.json"
+input_with_contract "$shared_source_input" "$shared_contract" "$shared_contract_input"
+shared_input="$tmp/shared-input.json"
+input_with_patch "$shared_contract_input" "$shared_patch" "$shared_input"
+expect_error candidate-mutation-budget E_CANDIDATE_LIMIT "$shared_input" "$shared_source"
+
 /usr/bin/printf '%s\n' '/invalid/alternate' > "$tmp/source.git/objects/info/alternates"
 expect_error alternates E_SOURCE_GIT
 /bin/rm "$tmp/source.git/objects/info/alternates"
@@ -841,7 +880,7 @@ traversal_patch="$tmp/traversal.patch"
   > "$traversal_patch"
 traversal_input="$tmp/traversal-input.json"
 input_with_patch "$input_file" "$traversal_patch" "$traversal_input"
-expect_error traversal E_PATCH "$traversal_input"
+expect_error traversal E_PATCH_PATH "$traversal_input"
 [ "$(cat "$outside")" = unchanged ] || fail traversal-write
 
 symlink_boundary="$tmp/candidate-link"
