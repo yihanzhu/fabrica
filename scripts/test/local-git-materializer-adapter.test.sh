@@ -317,6 +317,27 @@ wide_time_root=$(run_case wide-time "$wide_time_input")
   "$candidate_commit" ] || fail wide-time-candidate-identity
 pass 'contract-valid timestamps outside Git date range keep deterministic candidate identity'
 
+host_template="$tmp/host-template"
+empty_template="$tmp/empty-template"
+/bin/mkdir -m 700 "$host_template" "$empty_template" "$host_template/hooks"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$host_template/hooks/post-checkout"
+/bin/chmod 0755 "$host_template/hooks/post-checkout"
+host_template_repo="$tmp/host-template-repo.git"
+empty_template_repo="$tmp/empty-template-repo.git"
+/usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TEMPLATE_DIR="$host_template" \
+  /usr/bin/git init -q --bare "$host_template_repo"
+[ -x "$host_template_repo/hooks/post-checkout" ] || fail host-template-fixture
+/usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TEMPLATE_DIR="$host_template" \
+  /usr/bin/git init -q --template="$empty_template" --bare "$empty_template_repo"
+[ ! -e "$empty_template_repo/hooks/post-checkout" ] || fail explicit-empty-template
+/usr/bin/grep -Fq 'git init --template="$empty_template" --bare' "$adapter" ||
+  fail materializer-empty-template-option
+[ -z "$(find "$candidate_repo/hooks" -type f -print -quit 2>/dev/null)" ] ||
+  fail candidate-template-content
+pass 'explicit empty template prevents host Git template contamination'
+
 expect_error() {
   local name=$1 expected=$2 input=${3:-$input_file} source=${4:-$tmp/source.git}
   local case_root="$tmp/error-$name"
@@ -407,6 +428,25 @@ expect_error missing-revision E_CONTRACT "$missing_revision"
 oversize_input="$tmp/oversize-input.json"
 /bin/dd if=/dev/zero of="$oversize_input" bs=8388609 count=1 2>/dev/null
 expect_error oversize-input E_INPUT "$oversize_input"
+
+large_source="$tmp/source-large.git"
+/bin/mkdir -m 700 "$large_source"
+git_clean init -q --bare --object-format=sha1 "$large_source"
+large_blob=$(/bin/dd if=/dev/zero bs=1048576 count=257 2>/dev/null |
+  git_clean --git-dir="$large_source" hash-object -w --stdin)
+large_tree=$(printf '100644 blob %s\tsource.txt\n' "$large_blob" |
+  git_clean --git-dir="$large_source" mktree)
+large_commit=$(printf '%s\n' large-source |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$large_source" commit-tree "$large_tree")
+git_clean --git-dir="$large_source" update-ref refs/heads/main "$large_commit"
+large_input="$tmp/large-input.json"
+input_for_source "$input_file" "$large_input" sha1 "$large_commit" "$large_tree"
+expect_error source-import-budget E_SOURCE_LIMIT "$large_input" "$large_source"
 
 /usr/bin/printf '%s\n' '/invalid/alternate' > "$tmp/source.git/objects/info/alternates"
 expect_error alternates E_SOURCE_GIT

@@ -120,6 +120,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 /bin/mkdir -m 700 "$run_root" || emit_error E_SCRATCH_ROOT
 /bin/mkdir -m 500 "$run_root/no-hooks" || emit_error E_SCRATCH_ROOT
+/bin/mkdir -m 500 "$run_root/empty-template" || emit_error E_SCRATCH_ROOT
 
 input_snapshot="$run_root/input.json"
 /bin/cp "$input_path" "$input_snapshot" || emit_error E_INPUT
@@ -306,12 +307,47 @@ scan_tree() {
 source_paths="$run_root/source-paths"
 scan_tree "$source_git_dir" "$source_tree" "$source_paths" || emit_error E_SOURCE_TREE
 
-"${git_env[@]}" /usr/bin/git init --bare --object-format="$source_algorithm" \
+empty_template="$run_root/empty-template"
+source_import_byte_limit=268435456
+source_import_count_limit=65536
+source_objects="$run_root/source.objects"
+if ! git_dir "$source_git_dir" rev-list --objects --no-object-names "$source_commit" |
+  /usr/bin/awk -v limit="$source_import_count_limit" \
+    'NR > limit { exit 2 } { print }' > "$source_objects"; then
+  emit_error E_SOURCE_LIMIT
+fi
+source_object_sizes="$run_root/source-object-sizes"
+git_dir "$source_git_dir" cat-file \
+  --batch-check='%(objectname) %(objecttype) %(objectsize)' \
+  < "$source_objects" > "$source_object_sizes" || emit_error E_SOURCE_LIMIT
+source_object_bytes=0
+while IFS=' ' read -r object_id object_type object_size extra; do
+  [ -z "$extra" ] || emit_error E_SOURCE_LIMIT
+  case "$source_algorithm" in
+    sha1) [[ "$object_id" =~ ^[0-9a-f]{40}$ ]] || emit_error E_SOURCE_LIMIT ;;
+    sha256) [[ "$object_id" =~ ^[0-9a-f]{64}$ ]] || emit_error E_SOURCE_LIMIT ;;
+    *) emit_error E_SOURCE_LIMIT ;;
+  esac
+  case "$object_type" in blob|tree|commit) ;; *) emit_error E_SOURCE_LIMIT ;; esac
+  case "$object_size" in ''|*[!0-9]*) emit_error E_SOURCE_LIMIT ;; esac
+  [ "${#object_size}" -le 9 ] && [ "$object_size" -le "$source_import_byte_limit" ] &&
+    [ "$source_object_bytes" -le "$((source_import_byte_limit - object_size))" ] ||
+    emit_error E_SOURCE_LIMIT
+  source_object_bytes=$((source_object_bytes + object_size))
+done < "$source_object_sizes"
+
+"${git_env[@]}" /usr/bin/git init --template="$empty_template" --bare \
+  --object-format="$source_algorithm" \
   "$staging_repo" >/dev/null 2>&1 || emit_error E_CANDIDATE_GIT
 source_pack="$run_root/source.pack"
-printf '%s\n' "$source_commit" |
-  git_dir "$source_git_dir" pack-objects --quiet --stdout --revs > "$source_pack" ||
-  emit_error E_SOURCE_GIT
+source_pack_ceiling=$((source_import_byte_limit + 1))
+if ! git_dir "$source_git_dir" pack-objects --quiet --stdout < "$source_objects" |
+  /usr/bin/head -c "$source_pack_ceiling" > "$source_pack"; then
+  emit_error E_SOURCE_LIMIT
+fi
+source_pack_bytes=$(/usr/bin/wc -c < "$source_pack" | /usr/bin/tr -d ' ') ||
+  emit_error E_SOURCE_LIMIT
+[ "$source_pack_bytes" -le "$source_import_byte_limit" ] || emit_error E_SOURCE_LIMIT
 git_dir "$staging_repo" index-pack --stdin --fix-thin < "$source_pack" >/dev/null 2>&1 ||
   emit_error E_CANDIDATE_GIT
 git_dir "$staging_repo" cat-file -e "$source_commit^{commit}" >/dev/null 2>&1 ||

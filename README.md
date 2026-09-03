@@ -274,12 +274,15 @@ grant authority or qualification, or activate a profile.
 exact, sanitized bare source repository and one contract-bound patch. It imports
 reachable objects into a caller-disposable bare repository, applies the patch to a
 scratch-only index, and returns a canonical receipt and validated stage result.
+Reachable source history is limited to 65,536 objects and 256 MiB of uncompressed
+object data; the streamed pack is capped at the same byte limit.
 
 The fixed `materialize` command accepts only caller-named physical source,
 candidate, and scratch boundaries. It rejects worktrees, alternates, shallow or
 partial repositories, replace or graft state, active hooks and filters, remote
 configuration, unsafe paths, binary patches, symlinks, and submodules. It never
-checks out a worktree or runs a transport command. Tests cover both SHA-1 and
+inherits host Git templates, checks out a worktree, or runs a transport command.
+Tests cover both SHA-1 and
 SHA-256 object formats with disposable local fixtures.
 
 This PR lands only the inactive package payload. A later assembly PR may add a
