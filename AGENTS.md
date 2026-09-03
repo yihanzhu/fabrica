@@ -134,7 +134,7 @@ Two goals drive the backlog:
   from the thread. Proactive work cites a passed manager-review verdict
   whose `Intake-title-sha256` and `Intake-body-sha256` markers match those digests. The
   reviewer must see both unchanged before and after its run or post no verdict. Authenticate the source like merge
-  evidence: first select the newest comment by the current `gh` operator with the exact
+  evidence: first select the newest comment by the current `gh` operator with
   exactly one manager-reviewer clean header and one matching anchored 64-hex marker for
   each digest, without filtering by
   verdict. Then require exactly one anchored `VERDICT:` line and require it to be
@@ -266,7 +266,7 @@ Two goals drive the backlog:
   plans and human merge; they are the only process exceptions to a `work/<slug>/plan.md`.
   This gate is manually enforced by the manager, coder, and reviewer today; no hook
   or workflow may be claimed until one lands.
-- **Plain language, always** (operator rule, 2026-08-26): every artifact
+- **Plain language, always**: every artifact
   (intent/spec/plan), PR title/description, and review comment is written for a
   tired human. Short sentences. Everyday words. No jargon where a plain word
   works. If two phrasings say the same thing, use the shorter one.
@@ -353,9 +353,9 @@ must remain in source or move to an accepted sidecar/metadata mechanism.
   PR description when a prompt changes.
 - **Never weaken the safety rails without explicit human sign-off:** reviewer stays
   read-only / comments-only. Outside the active, identity-matching ystack-self
-  construction overlay, **merging is the operator's, always** — the in-session
-  auto-merge v1 was retired when the branch ruleset landed, and no agent has a
-  merge path. The overlay above is the sole narrow exception and authorizes only
+  construction overlay, **merging is the operator's, always** — this is policy, and it binds every
+  agent whatever its harness; `.claude/hooks/no-merge-guard.sh` is only defense-in-depth inside this repo, for
+  known Claude Bash merge and direct-main-push commands; targets do not get it. The overlay above is the sole narrow exception and authorizes only
   the publisher named by the matching mode record after the exact gates above
   pass. The rounds cap and `needs-human` escalation stay
   intact. yshifu never writes code/opens PRs and **never self-approves acting alone** — a

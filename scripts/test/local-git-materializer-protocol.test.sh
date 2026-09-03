@@ -36,7 +36,14 @@ fi
 jq_bin="$bin/jq"
 export PATH="$bin:/usr/bin:/bin"
 [ "$($jq_bin --version)" = jq-1.6 ] || exit 1
-generation=$($jq_bin -r '.[-1].generation_id' "$root/core/v2/generation-registry.json")
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" \
+  "$root/scripts/core-contract.sh")
+[[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || exit 1
+$jq_bin -e --arg generation "$generation" '
+  [.[] | select(.generation_id == $generation and
+    .semantic_identity == "core.contracts.v2")] | length == 1
+' "$root/core/v2/generation-registry.json" >/dev/null || exit 1
 modules="$root/core/v2/generations/$generation/modules"
 core="$root/scripts/core-contract.sh"
 

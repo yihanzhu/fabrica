@@ -295,9 +295,10 @@ descriptor-3 receipt, ordinary-call compatibility, cleanup, and byte-for-byte co
 of the unchanged exports. It performs no install, activation, networked validation,
 or target use.
 
-`core/v2/` is the append-only inactive fake-forge generation selected by the stable
-wrapper and inactive profile resolver. Restore its registry and complete generation
-from one commit, then run:
+`core/v2/` contains append-only inactive generations, including the unchanged
+fake-forge generation. The stable wrapper and inactive profile resolver select the
+evidence-identity correction. Restore the registry and both complete generations from
+one commit, then run:
 
 ```sh
 bash scripts/test/portable-core-v2-fake-forge.test.sh
@@ -307,6 +308,19 @@ This proof validates the atomic wrapper selection and deterministic fake candida
 materialization in a caller-disposable repository. The package is not qualified for a real forge.
 It grants no credential, network, publish, push, merge, or remote branch-write
 capability. The switch does not install the resolver or select a live profile.
+
+Restore the complete selected v2 evidence-identity generation, its dedicated ledger,
+and its focused test from the manifest, then run:
+
+```sh
+bash scripts/test/portable-core-v2-evidence-identity.test.sh
+```
+
+This proof requires passed evidence to retain the exact selected performer,
+binding, environment, capability, and metadata projection. It also proves that
+all-non-passing incident mismatches remain preservable. Its selection is bound to
+the reviewed generation merge and publisher receipt and grants no authority,
+qualification, credential, network, activation, or external effect.
 
 Restore every path in the manifest's inactive fake adapter matrix block, then run:
 
@@ -530,6 +544,39 @@ write a Git repository, create a candidate, run provider tooling, use a credenti
 or network, grant authority or qualification, or perform an external effect. A
 later runtime PR may consume the protocol and test fixture; only a still-later
 assembly may add a manifest after the complete package has a durable main commit.
+
+Restore the two paths in the manifest's inactive dormant publisher normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-dormant-publisher-adapter.test.sh
+```
+
+This checks exact attempt, idempotency, repository, change-request, candidate,
+path, evidence, decision, terminal-time, observation-time, and boundary bindings.
+The caller supplies a canonical, SHA-256-verified claim pair, and changed content
+is rejected. Permit, deny, and inconclusive claims all remain inert; malformed
+input is rejected and moved input becomes stale. This stage has no adapter manifest.
+A later assembly PR can bind its durable main payload with empty capability,
+permission, and tool sets. It is separate from the temporary construction
+publisher gate and performs no credential, network, merge, external write,
+authority, qualification, or profile activation.
+
+Restore the two paths in the manifest's inactive deterministic verifier normalizer
+payload block, then run:
+
+```sh
+bash scripts/test/default-deterministic-verifier-adapter.test.sh
+```
+
+This validates exact core-v2 verifier request/profile/result relations, the
+deterministic role and permission ceiling, candidate and verification-plan binding,
+exact caller-verified snapshot and result pairs, attempt identity, timestamp and
+evidence precedence, stale inputs, and the boundary that keeps CI observations out
+of verifier evidence. This stage intentionally has no adapter manifest. The pure jq
+payload is offline and unqualified. It does not execute a candidate or tool, read
+proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
+authority or qualification, or activate a profile.
 
 ---
 
