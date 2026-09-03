@@ -1,5 +1,17 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # shellcheck disable=SC2016
+
+clean_path=${PATH:-/usr/bin:/bin}
+while IFS= builtin read -r inherited_function; do
+  builtin unset -f "$inherited_function" 2>/dev/null || :
+done < <(builtin compgen -A function)
+while IFS= builtin read -r exported_name; do
+  case "$exported_name" in PATH) ;; *) builtin unset "$exported_name" 2>/dev/null || : ;; esac
+done < <(builtin compgen -e)
+PATH=$clean_path
+LC_ALL=C
+export PATH LC_ALL
+
 set -euo pipefail
 
 emit_error() {
@@ -291,7 +303,7 @@ safe_repo_path() {
 scan_tree() {
   local repository=$1 tree=$2 output=$3 raw_output entry metadata mode type object path
   local raw_bytes entry_count tree_scan_byte_limit tree_scan_entry_limit tree_scan_ceiling
-  tree_scan_byte_limit=67108864
+  tree_scan_byte_limit=16777216
   tree_scan_entry_limit=65536
   tree_scan_ceiling=$((tree_scan_byte_limit + 1))
   raw_output="$output.raw"

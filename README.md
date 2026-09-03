@@ -276,7 +276,7 @@ reachable objects into a caller-disposable bare repository, applies the patch to
 scratch-only index, and returns a canonical receipt and validated stage result.
 Reachable source history is limited to 65,536 objects and 256 MiB of uncompressed
 object data; the streamed pack is capped at the same byte limit.
-Each tree scan is limited to 65,536 entries, 64 path components, and a 64 MiB
+Each tree scan is limited to 65,536 entries, 64 path components, and a 16 MiB
 encoded listing, and validates UTF-8 once before its bounded built-in path walk.
 
 The fixed `materialize` command accepts only caller-named physical source,

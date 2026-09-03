@@ -353,6 +353,27 @@ expect_error() {
   pass "$name"
 }
 
+direct_case="$tmp/direct-clean-worker"
+/bin/mkdir -m 700 "$direct_case" "$direct_case/candidate" "$direct_case/scratch"
+/usr/bin/touch "$direct_case/candidate/occupied"
+printf '%s\n' "/usr/bin/touch '$direct_case/bash-env-ran'" > "$direct_case/bash-env"
+if (
+  # shellcheck disable=SC2329
+  find() { return 0; }
+  export -f find
+  PATH="$runtime_bin:/usr/bin:/bin" GH_TOKEN=must-not-read BASH_ENV="$direct_case/bash-env" \
+    "$adapter" __materialize_clean "$input_file" fixture.target "$tmp/source.git" \
+    "$direct_case/candidate" "$direct_case/scratch" \
+    > "$direct_case/out" 2> "$direct_case/err"
+); then
+  fail direct-clean-worker-accepted
+fi
+[ ! -s "$direct_case/out" ] &&
+  [ "$(cat "$direct_case/err")" = E_CANDIDATE_ROOT ] &&
+  [ -f "$direct_case/candidate/occupied" ] && [ ! -e "$direct_case/bash-env-ran" ] ||
+  fail direct-clean-worker-sanitization
+pass 'direct worker entry blocks startup files and strips hostile environment state'
+
 refresh_request_pair() {
   local source=$1 destination=$2 request_snapshot="$tmp/request-refresh"
   "${jq_cmd[@]}" -S -c '.stage_request.content' "$source" > "$request_snapshot"
@@ -462,6 +483,66 @@ git_clean --git-dir="$large_source" update-ref refs/heads/main "$large_commit"
 large_input="$tmp/large-input.json"
 input_for_source "$input_file" "$large_input" sha1 "$large_commit" "$large_tree"
 expect_error source-import-budget E_SOURCE_LIMIT "$large_input" "$large_source"
+
+many_objects_source="$tmp/source-many-objects.git"
+/bin/mkdir -m 700 "$many_objects_source"
+git_clean init -q --bare --object-format=sha1 "$many_objects_source"
+/usr/bin/awk 'BEGIN {
+  for (i=1; i<=32768; i++) {
+    data=sprintf("blob-%05d",i)
+    print "blob"
+    printf "mark :%d\n",i
+    printf "data %d\n%s\n",length(data),data
+  }
+  print "commit refs/heads/main"
+  print "mark :40000"
+  print "author fixture <fixture@example.invalid> 946684800 +0000"
+  print "committer fixture <fixture@example.invalid> 946684800 +0000"
+  print "data 11"
+  print "count-limit"
+  for (i=1; i<=32768; i++)
+    printf "M 100644 :%d dir-%05d/file\n",i,i
+  print ""
+}' | git_clean --git-dir="$many_objects_source" fast-import --quiet
+many_objects_commit=$(git_clean --git-dir="$many_objects_source" rev-parse refs/heads/main)
+many_objects_tree=$(git_clean --git-dir="$many_objects_source" \
+  rev-parse "$many_objects_commit^{tree}")
+many_objects_count=$(git_clean --git-dir="$many_objects_source" rev-list \
+  --objects --no-object-names "$many_objects_commit" | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+[ "$many_objects_count" -gt 65536 ] || fail many-objects-fixture
+many_objects_input="$tmp/many-objects-input.json"
+input_for_source "$input_file" "$many_objects_input" sha1 \
+  "$many_objects_commit" "$many_objects_tree"
+expect_error source-import-object-count E_SOURCE_LIMIT \
+  "$many_objects_input" "$many_objects_source"
+
+large_listing_source="$tmp/source-large-listing.git"
+/bin/mkdir -m 700 "$large_listing_source"
+git_clean init -q --bare --object-format=sha1 "$large_listing_source"
+large_listing_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$large_listing_source" hash-object -w --stdin)
+large_listing_prefix=$(/usr/bin/awk 'BEGIN { for (i=1; i<=4088; i++) printf "a" }')
+large_listing_tree=$(/usr/bin/awk -v object="$large_listing_blob" \
+  -v prefix="$large_listing_prefix" 'BEGIN {
+    for (i=1; i<=4097; i++)
+      printf "100644 blob %s\t%s%05d\n",object,prefix,i
+  }' | git_clean --git-dir="$large_listing_source" mktree)
+[ "$(git_clean --git-dir="$large_listing_source" cat-file -s "$large_listing_tree")" \
+  -gt 16777216 ] || fail large-listing-fixture
+large_listing_commit=$(printf '%s\n' large-listing |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$large_listing_source" \
+    commit-tree "$large_listing_tree")
+git_clean --git-dir="$large_listing_source" update-ref refs/heads/main "$large_listing_commit"
+large_listing_input="$tmp/large-listing-input.json"
+input_for_source "$input_file" "$large_listing_input" sha1 \
+  "$large_listing_commit" "$large_listing_tree"
+expect_error source-tree-byte-limit E_SOURCE_TREE \
+  "$large_listing_input" "$large_listing_source"
 
 /usr/bin/printf '%s\n' '/invalid/alternate' > "$tmp/source.git/objects/info/alternates"
 expect_error alternates E_SOURCE_GIT
