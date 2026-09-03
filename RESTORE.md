@@ -539,7 +539,10 @@ negative matrix rejects malformed, stale, duplicate, relabelled, unsafe-path,
 expanded-mode, and weakened-limit inputs, and repeat checks require canonical
 output. It also requires caller-verified content-and-digest payload pairs, binds the
 source repository, commit, and tree to the request, enforces patch and changed-path
-limits, and revalidates the envelope before every projection.
+limits, and revalidates the envelope before every projection. A stage result also
+requires a caller-verified receipt pair whose request, attempt, source, limits, and
+changed/no-change outcome all match before the receipt digest can back passing
+evidence.
 
 There is no materialization executable in this stage. Restoring it cannot read or
 write a Git repository, create a candidate, run provider tooling, use a credential

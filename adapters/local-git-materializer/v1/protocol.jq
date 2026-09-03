@@ -287,19 +287,92 @@ def recorded($value; $source_ref):
   {state:"recorded",value:$value,source_ref:$source_ref};
 def not_applicable: {state:"not-applicable"};
 
+def oid_ok($algorithm):
+  type == "string" and
+  if $algorithm == "sha1" then test("\\A[0-9a-f]{40}\\z")
+  elif $algorithm == "sha256" then test("\\A[0-9a-f]{64}\\z")
+  else false
+  end;
+
+def verified_receipt_pair_ok:
+  exact(["content","sha256"];[]) and
+  (.content | type == "object") and (.sha256 | schema::sha256_ok);
+
+def receipt_relations_ok($input; $value):
+  $input.stage_request.content.body as $request_body |
+  $request_body.operation.arguments as $arguments |
+  $arguments.materialization_contract.input_id as $contract_id |
+  (payload_for($input;$contract_id).data | fromjson) as $contract |
+  git_object_input($request_body;$arguments.source_tree_input_id) as $source_ref |
+  $request_body.target_revision.value as $target_revision |
+  selected_binding($input)[0].binding as $binding |
+  ($value | exact(
+    ["schema_version","kind","adapter","attempt","request_ref",
+     "resolved_profile_ref","manifest_ref","materialization_contract_ref",
+     "patch_ref","source","candidate","changed_paths"];
+    [])) and
+  $value.schema_version == 1 and
+  $value.kind == "candidate_materialization_receipt" and
+  $value.adapter == {
+    id:"adapter.local-git-materializer.v1",version:"v1",status:"inactive"
+  } and
+  $value.attempt == {
+    attempt_id:$input.attempt.attempt_id,
+    attempt_number:$input.attempt.attempt_number
+  } and
+  $value.request_ref == document_ref($input.stage_request) and
+  $value.resolved_profile_ref == document_ref($input.resolved_profile) and
+  $value.manifest_ref == $binding.manifest_ref and
+  $value.materialization_contract_ref ==
+    input_content_ref($request_body;$contract_id) and
+  $value.patch_ref == input_content_ref($request_body;"input.producer-patch") and
+  $value.source == {
+    repository_id:$request_body.target_repository_id,
+    hash_algorithm:$target_revision.hash_algorithm,
+    commit_id:$target_revision.commit_id,
+    tree_id:$source_ref.object_id
+  } and
+  ($value.candidate |
+   exact(["repository_kind","hash_algorithm","commit_id","tree_id",
+          "parent_commit_id"];[]) and
+   .repository_kind == "bare" and
+   .hash_algorithm == $target_revision.hash_algorithm and
+   (.commit_id | oid_ok($target_revision.hash_algorithm)) and
+   (.tree_id | oid_ok($target_revision.hash_algorithm)) and
+   .parent_commit_id == $target_revision.commit_id) and
+  ($value.changed_paths |
+   exact(["count","sha256"];[]) and
+   (.count | schema::int_ok) and .count <= $contract.max_changed_paths and
+   (.sha256 | schema::sha256_ok));
+
+def receipt_outcome_ok($value; $outcome):
+  if $outcome == "changed" then
+    $value.changed_paths.count >= 1 and
+    ($value.candidate.commit_id != $value.source.commit_id or
+     $value.candidate.tree_id != $value.source.tree_id)
+  elif $outcome == "no-change" then
+    $value.changed_paths.count == 0 and
+    $value.candidate.commit_id == $value.source.commit_id and
+    $value.candidate.tree_id == $value.source.tree_id
+  else false
+  end;
+
 def stage_result:
   . as $input |
-  ($ARGS.named.receipt_sha256 // "") as $receipt_sha256 |
+  ($ARGS.named.receipt_json // "" | try fromjson catch null) as $receipt |
+  ($ARGS.named.verified_receipt_json // "" | try fromjson catch null) as $verified |
   ($ARGS.named.outcome // "") as $outcome |
   request::expected_execution_projection(
     $input.stage_request.content.body;$input.resolved_profile.content.body) as $projection |
   {
     content_id:"candidate.materialization.receipt",
     media_type:"application/json",
-    sha256:$receipt_sha256
+    sha256:$verified.sha256
   } as $receipt_ref |
-  ($outcome == "changed" or $outcome == "no-change") as $outcome_ok |
-  if $outcome_ok and ($receipt_sha256 | schema::sha256_ok) and $projection != null then
+  if input_ok and ($verified | verified_receipt_pair_ok) and
+     $receipt == $verified.content and
+     receipt_relations_ok($input;$receipt) and
+     receipt_outcome_ok($receipt;$outcome) and $projection != null then
     {
       schema_version:2,
       kind:"stage_result",
@@ -357,6 +430,5 @@ elif $command == "contract" then
 elif $command == "patch" then
   if input_ok then payload_for(.;"input.producer-patch").data else error("E_INPUT") end
 elif $command == "receipt" then receipt
-elif $command == "stage-result" then
-  if input_ok then stage_result else error("E_INPUT") end
+elif $command == "stage-result" then stage_result
 else error("E_COMMAND") end

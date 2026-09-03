@@ -169,7 +169,7 @@ for projection_command in contract patch receipt stage-result; do
     receipt) projection_args=("${receipt_args[@]}") ;;
     stage-result)
       projection_args=(--arg command stage-result --arg outcome changed
-        --arg receipt_sha256 "$(printf '%064d' 0 | /usr/bin/tr 0 6)")
+        --arg receipt_json '{}' --arg verified_receipt_json '{}')
       ;;
   esac
   if "$jq_bin" -L "$modules" "${projection_args[@]}" -f "$protocol" \
@@ -211,9 +211,18 @@ expect_receipt_reject changed-path-limit fixture.target \
   "$source_commit" "$source_tree" 2
 
 receipt_sha=$(sha_file "$receipt")
+verified_receipt="$tmp/verified-receipt.json"
+"$jq_bin" -S -c -n --slurpfile receipt "$receipt" --arg sha "$receipt_sha" \
+  '{content:$receipt[0],sha256:$sha}' > "$verified_receipt"
+stage_result_args=(
+  --arg command stage-result
+  --arg outcome changed
+  --arg receipt_json "$(<"$receipt")"
+  --arg verified_receipt_json "$(<"$verified_receipt")"
+)
 result="$tmp/result.json"
-"$jq_bin" -S -c -L "$modules" --arg command stage-result --arg outcome changed \
-  --arg receipt_sha256 "$receipt_sha" -f "$protocol" "$input" > "$result"
+"$jq_bin" -S -c -L "$modules" "${stage_result_args[@]}" \
+  -f "$protocol" "$input" > "$result"
 "$core" validate-stage-run "$fixture/stage-request.json" "$fixture/resolved-profile.json" \
   "$result" || fail core-stage-result
 "$jq_bin" -e '
@@ -224,10 +233,72 @@ result="$tmp/result.json"
   ([..|objects|keys[]] | index("effects")==null) and
   ([..|objects|keys[]] | index("qualification")==null)
 ' "$result" >/dev/null || fail result-surface
-"$jq_bin" -S -c -L "$modules" --arg command stage-result --arg outcome changed \
-  --arg receipt_sha256 "$receipt_sha" -f "$protocol" "$input" > "$tmp/result-repeat"
+"$jq_bin" -S -c -L "$modules" "${stage_result_args[@]}" \
+  -f "$protocol" "$input" > "$tmp/result-repeat"
 /usr/bin/cmp -s "$result" "$tmp/result-repeat" || fail result-repeat
 pass 'pure result projection passes the exact core v2 stage relation'
+
+make_verified_receipt() {
+  local source_file=$1 output_file=$2 digest
+  digest=$(sha_file "$source_file")
+  "$jq_bin" -S -c -n --slurpfile receipt "$source_file" --arg sha "$digest" \
+    '{content:$receipt[0],sha256:$sha}' > "$output_file"
+}
+expect_stage_result_reject() {
+  local name=$1 outcome=$2 raw_file=$3 pair_file=$4
+  if "$jq_bin" -L "$modules" --arg command stage-result --arg outcome "$outcome" \
+      --arg receipt_json "$(<"$raw_file")" \
+      --arg verified_receipt_json "$(<"$pair_file")" \
+      -f "$protocol" "$input" >/dev/null 2>&1; then
+    fail "$name"
+  fi
+  pass "$name"
+}
+
+moved_receipt="$tmp/moved-receipt.json"
+"$jq_bin" -S -c '.request_ref.sha256=("6"*64)' "$receipt" > "$moved_receipt"
+expect_stage_result_reject receipt-changed-after-verification changed \
+  "$moved_receipt" "$verified_receipt"
+
+mismatched_request_pair="$tmp/mismatched-request-pair.json"
+make_verified_receipt "$moved_receipt" "$mismatched_request_pair"
+expect_stage_result_reject receipt-request-mismatch changed \
+  "$moved_receipt" "$mismatched_request_pair"
+
+mismatched_attempt="$tmp/mismatched-attempt-receipt.json"
+"$jq_bin" -S -c '.attempt.attempt_number += 1' "$receipt" > "$mismatched_attempt"
+mismatched_attempt_pair="$tmp/mismatched-attempt-pair.json"
+make_verified_receipt "$mismatched_attempt" "$mismatched_attempt_pair"
+expect_stage_result_reject receipt-attempt-mismatch changed \
+  "$mismatched_attempt" "$mismatched_attempt_pair"
+
+malformed_digest_pair="$tmp/malformed-receipt-digest-pair.json"
+"$jq_bin" -S -c '.sha256="invalid"' "$verified_receipt" > "$malformed_digest_pair"
+expect_stage_result_reject receipt-digest-shape changed \
+  "$receipt" "$malformed_digest_pair"
+expect_stage_result_reject receipt-outcome-mismatch no-change \
+  "$receipt" "$verified_receipt"
+
+no_change_receipt="$tmp/no-change-receipt.json"
+"$jq_bin" -S -c -L "$modules" --arg command receipt \
+  --arg source_repository_id fixture.target --arg source_hash_algorithm sha1 \
+  --arg source_commit "$source_commit" --arg source_tree "$source_tree" \
+  --arg candidate_commit "$source_commit" --arg candidate_tree "$source_tree" \
+  --arg changed_path_count 0 --arg changed_paths_sha256 "$changed_paths_sha" \
+  -f "$protocol" "$input" > "$no_change_receipt"
+no_change_pair="$tmp/no-change-pair.json"
+make_verified_receipt "$no_change_receipt" "$no_change_pair"
+no_change_result="$tmp/no-change-result.json"
+"$jq_bin" -S -c -L "$modules" --arg command stage-result --arg outcome no-change \
+  --arg receipt_json "$(<"$no_change_receipt")" \
+  --arg verified_receipt_json "$(<"$no_change_pair")" \
+  -f "$protocol" "$input" > "$no_change_result"
+"$core" validate-stage-run "$fixture/stage-request.json" "$fixture/resolved-profile.json" \
+  "$no_change_result" || fail core-no-change-result
+"$jq_bin" -e '.body.outcome.value=="no-change" and .body.outputs==[] and
+  .body.evidence[0].proof_ref.sha256 == .body.execution.metadata.tools.source_ref.sha256' \
+  "$no_change_result" >/dev/null || fail no-change-result-surface
+pass 'verified no-change receipt binds the no-change result'
 
 if "$jq_bin" -L "$modules" --arg command receipt --arg source_hash_algorithm sha1 \
     --arg source_commit INVALID --arg source_tree "$source_tree" \

@@ -297,6 +297,11 @@ result. The caller first canonicalizes and hashes both payloads, supplies those
 verified content-and-digest pairs in the trust context, and keeps raw payloads
 separate; changed bytes are rejected before any projection.
 
+Successful result projection likewise requires the raw materialization receipt and
+its caller-verified content-and-digest pair. The protocol rechecks the receipt's
+request, attempt, source, candidate, path count, and changed/no-change relation
+before its digest may back passing evidence.
+
 This stage contains no materialization executable. Its fixture builder is test-only
 and creates synthetic JSON under a caller-owned test directory; it is not a product
 execution seam. The protocol cannot read a repository, write a candidate, invoke a
