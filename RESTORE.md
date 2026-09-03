@@ -521,8 +521,10 @@ becomes a deterministic bare child commit and path-free receipt. The negative
 matrix rejects moved identities, unsafe directories and paths, hooks, filters,
 remotes, worktrees, alternates, shallow or partial repositories, replace state,
 binary patches, symlinks, submodules, host Git templates, and reachable source
-history above the fixed 65,536-object or 256 MiB import budget. It also checks that
-the source stays unchanged and scratch is removed.
+history above the fixed 65,536-object or 256 MiB import budget. It proves empty-patch
+`no-change` and rejects tree scans above 65,536 entries, 64 path components, or a
+64 MiB encoded listing. It also checks that the source stays unchanged and scratch
+is removed.
 
 This payload has no adapter manifest. A later assembly PR may bind the directory
 tree through the payload's durable main commit. It is an inactive, local-only

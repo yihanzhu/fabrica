@@ -409,6 +409,21 @@ input_with_contract() {
   refresh_request_pair "$intermediate" "$destination"
 }
 
+empty_patch="$tmp/empty.patch"
+: > "$empty_patch"
+no_change_input="$tmp/no-change-input.json"
+input_with_patch "$input_file" "$empty_patch" "$no_change_input"
+no_change_root=$(run_case no-change "$no_change_input")
+[ ! -s "$no_change_root/err" ] || fail no-change-stderr
+"${jq_cmd[@]}" -e --arg commit "$source_commit" --arg tree "$source_tree" '
+  .stage_result.body.status=="completed" and
+  .stage_result.body.outcome=={family:"change",value:"no-change"} and
+  (.payloads[0].data | fromjson |
+    .candidate.commit_id==$commit and .candidate.tree_id==$tree and
+    .changed_paths.count==0)
+' "$no_change_root/out" >/dev/null || fail no-change-response
+pass 'empty patch returns the canonical no-change result'
+
 bad_digest="$tmp/bad-digest.json"
 "${jq_cmd[@]}" -S -c '.trust_context.verified_payloads[0].sha256=("0"*64)' \
   "$input_file" > "$bad_digest"
@@ -594,6 +609,52 @@ git_clean --git-dir="$malformed_source" update-ref refs/heads/main "$malformed_c
 malformed_input="$tmp/malformed-input.json"
 input_for_source "$input_file" "$malformed_input" sha1 "$malformed_commit" "$malformed_tree"
 expect_error source-malformed-utf8-path E_SOURCE_TREE "$malformed_input" "$malformed_source"
+
+many_paths_source="$tmp/source-many-paths.git"
+/bin/mkdir -m 700 "$many_paths_source"
+git_clean init -q --bare --object-format=sha1 "$many_paths_source"
+many_paths_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$many_paths_source" hash-object -w --stdin)
+many_paths_tree=$(/usr/bin/awk -v object="$many_paths_blob" \
+  'BEGIN { for (i=1; i<=65537; i++) printf "100644 blob %s\tpath-%05d\n", object, i }' |
+  git_clean --git-dir="$many_paths_source" mktree)
+many_paths_commit=$(printf '%s\n' many-paths |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$many_paths_source" \
+    commit-tree "$many_paths_tree")
+git_clean --git-dir="$many_paths_source" update-ref refs/heads/main "$many_paths_commit"
+many_paths_input="$tmp/many-paths-input.json"
+input_for_source "$input_file" "$many_paths_input" sha1 \
+  "$many_paths_commit" "$many_paths_tree"
+expect_error source-tree-entry-limit E_SOURCE_TREE "$many_paths_input" "$many_paths_source"
+
+deep_path_source="$tmp/source-deep-path.git"
+/bin/mkdir -m 700 "$deep_path_source"
+git_clean init -q --bare --object-format=sha1 "$deep_path_source"
+deep_path_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$deep_path_source" hash-object -w --stdin)
+deep_path_tree=$(printf '100644 blob %s\tleaf\n' "$deep_path_blob" |
+  git_clean --git-dir="$deep_path_source" mktree)
+for _ in {1..64}; do
+  deep_path_tree=$(printf '040000 tree %s\td\n' "$deep_path_tree" |
+    git_clean --git-dir="$deep_path_source" mktree)
+done
+deep_path_commit=$(printf '%s\n' deep-path |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$deep_path_source" \
+    commit-tree "$deep_path_tree")
+git_clean --git-dir="$deep_path_source" update-ref refs/heads/main "$deep_path_commit"
+deep_path_input="$tmp/deep-path-input.json"
+input_for_source "$input_file" "$deep_path_input" sha1 "$deep_path_commit" "$deep_path_tree"
+expect_error source-tree-component-limit E_SOURCE_TREE "$deep_path_input" "$deep_path_source"
 
 sha256_source="$tmp/source-sha256.git"
 read -r sha256_commit sha256_tree < <(make_bare_source "$sha256_source" sha256)

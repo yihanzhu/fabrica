@@ -198,7 +198,7 @@ contract_canonical="$run_root/materialization-contract.canonical"
 
 patch_bytes=$(wc -c < "$patch_file" | /usr/bin/tr -d ' ')
 max_patch_bytes=$("$jq_bin" -r '.max_patch_bytes' "$contract_file") || emit_error E_CONTRACT
-[ "$patch_bytes" -gt 0 ] && [ "$patch_bytes" -le "$max_patch_bytes" ] || emit_error E_PATCH_LIMIT
+[ "$patch_bytes" -le "$max_patch_bytes" ] || emit_error E_PATCH_LIMIT
 patch_without_nul=$(LC_ALL=C /usr/bin/tr -d '\000' < "$patch_file" | wc -c | /usr/bin/tr -d ' ')
 [ "$patch_without_nul" = "$patch_bytes" ] || emit_error E_BINARY_PATCH
 if /usr/bin/grep -aEq '^(GIT binary patch|Binary files .+ differ)$' "$patch_file"; then
@@ -268,32 +268,45 @@ actual_source_tree=$(git_dir "$source_git_dir" rev-parse "$source_commit^{tree}"
 [ "$actual_source_tree" = "$source_tree" ] || emit_error E_SOURCE_IDENTITY
 
 safe_repo_path() {
-  local value=$1 component lowered bytes
+  local value=$1 component component_count old_ifs
   [ -n "$value" ] || return 1
+  [ "${#value}" -le 4096 ] || return 1
   case "$value" in /*|*\\*) return 1 ;; esac
-  case "$value" in *$'\n'*|*$'\r'*) return 1 ;; esac
-  bytes=$(printf '%s' "$value" | wc -c | /usr/bin/tr -d ' ')
-  [ "$bytes" -le 4096 ] || return 1
-  printf '%s' "$value" | /usr/bin/iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1 || return 1
-  printf '%s' "$value" |
-    "$jq_bin" -Rse 'test("[\\x{0000}-\\x{001f}\\x{007f}-\\x{009f}]") | not' \
-      >/dev/null 2>&1 || return 1
+  [[ ! "$value" =~ [[:cntrl:]] ]] || return 1
+  case "$value" in *$'\302'[$'\200'-$'\237']*) return 1 ;; esac
   old_ifs=$IFS
   IFS=/
   read -r -a path_components <<< "$value"
   IFS=$old_ifs
+  component_count=0
   for component in "${path_components[@]}"; do
+    component_count=$((component_count + 1))
+    [ "$component_count" -le 64 ] || return 1
     [ -n "$component" ] && [ "$component" != . ] && [ "$component" != .. ] || return 1
-    lowered=$(printf '%s' "$component" | /usr/bin/tr '[:upper:]' '[:lower:]')
-    [ "$lowered" != .git ] || return 1
+    case "$component" in .[gG][iI][tT]) return 1 ;; esac
     case "$component" in *.|*' ') return 1 ;; esac
   done
 }
 
 scan_tree() {
-  local repository=$1 tree=$2 output=$3 entry metadata mode type object path
+  local repository=$1 tree=$2 output=$3 raw_output entry metadata mode type object path
+  local raw_bytes entry_count tree_scan_byte_limit tree_scan_entry_limit tree_scan_ceiling
+  tree_scan_byte_limit=67108864
+  tree_scan_entry_limit=65536
+  tree_scan_ceiling=$((tree_scan_byte_limit + 1))
+  raw_output="$output.raw"
+  if ! git_dir "$repository" ls-tree -rz -r "$tree" |
+    /usr/bin/head -c "$tree_scan_ceiling" > "$raw_output"; then
+    return 1
+  fi
+  raw_bytes=$(/usr/bin/wc -c < "$raw_output" | /usr/bin/tr -d ' ') || return 1
+  [ "$raw_bytes" -le "$tree_scan_byte_limit" ] || return 1
+  /usr/bin/iconv -f UTF-8 -t UTF-8 "$raw_output" >/dev/null 2>&1 || return 1
   : > "$output"
+  entry_count=0
   while IFS= read -r -d '' entry; do
+    entry_count=$((entry_count + 1))
+    [ "$entry_count" -le "$tree_scan_entry_limit" ] || return 1
     metadata=${entry%%$'\t'*}
     path=${entry#*$'\t'}
     read -r mode type object <<< "$metadata"
@@ -301,11 +314,13 @@ scan_tree() {
     case "$mode:$type" in 100644:blob|100755:blob) ;; *) return 1 ;; esac
     safe_repo_path "$path" || return 1
     printf '%s\n' "$path" >> "$output"
-  done < <(git_dir "$repository" ls-tree -rz -r "$tree")
+  done < "$raw_output"
+  /bin/rm -f -- "$raw_output"
 }
 
 source_paths="$run_root/source-paths"
 scan_tree "$source_git_dir" "$source_tree" "$source_paths" || emit_error E_SOURCE_TREE
+/bin/rm -f -- "$source_paths"
 
 empty_template="$run_root/empty-template"
 source_import_byte_limit=268435456
@@ -350,20 +365,24 @@ source_pack_bytes=$(/usr/bin/wc -c < "$source_pack" | /usr/bin/tr -d ' ') ||
 [ "$source_pack_bytes" -le "$source_import_byte_limit" ] || emit_error E_SOURCE_LIMIT
 git_dir "$staging_repo" index-pack --stdin --fix-thin < "$source_pack" >/dev/null 2>&1 ||
   emit_error E_CANDIDATE_GIT
+/bin/rm -f -- "$source_pack"
 git_dir "$staging_repo" cat-file -e "$source_commit^{commit}" >/dev/null 2>&1 ||
   emit_error E_CANDIDATE_GIT
 
 index_file="$run_root/index"
 GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" read-tree "$source_tree" ||
   emit_error E_CANDIDATE_GIT
-GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached --check \
-  --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
-GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached \
-  --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
+if [ "$patch_bytes" -gt 0 ]; then
+  GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached --check \
+    --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
+  GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" apply --cached \
+    --whitespace=nowarn "$patch_file" >/dev/null 2>&1 || emit_error E_PATCH
+fi
 candidate_tree=$(GIT_INDEX_FILE="$index_file" git_dir "$staging_repo" write-tree 2>/dev/null) ||
   emit_error E_CANDIDATE_GIT
 candidate_paths="$run_root/candidate-paths"
 scan_tree "$staging_repo" "$candidate_tree" "$candidate_paths" || emit_error E_CANDIDATE_TREE
+/bin/rm -f -- "$candidate_paths"
 
 changed_paths="$run_root/changed-paths"
 : > "$changed_paths"

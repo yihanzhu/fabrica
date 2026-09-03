@@ -276,14 +276,16 @@ reachable objects into a caller-disposable bare repository, applies the patch to
 scratch-only index, and returns a canonical receipt and validated stage result.
 Reachable source history is limited to 65,536 objects and 256 MiB of uncompressed
 object data; the streamed pack is capped at the same byte limit.
+Each tree scan is limited to 65,536 entries, 64 path components, and a 64 MiB
+encoded listing, and validates UTF-8 once before its bounded built-in path walk.
 
 The fixed `materialize` command accepts only caller-named physical source,
 candidate, and scratch boundaries. It rejects worktrees, alternates, shallow or
 partial repositories, replace or graft state, active hooks and filters, remote
 configuration, unsafe paths, binary patches, symlinks, and submodules. It never
 inherits host Git templates, checks out a worktree, or runs a transport command.
-Tests cover both SHA-1 and
-SHA-256 object formats with disposable local fixtures.
+An empty producer patch returns the explicit `no-change` result. Tests cover both
+SHA-1 and SHA-256 object formats with disposable local fixtures.
 
 This PR lands only the inactive package payload. A later assembly PR may add a
 manifest whose package reference points to this payload's durable commit on main.
