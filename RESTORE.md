@@ -55,6 +55,19 @@ with the restored `scripts/core-contract.sh`. No compiled helper is installed or
 restored. A future activation must separately qualify and bind a production trusted
 parent; restoring these files does not select a live profile.
 
+### Restore the inactive default producer config
+
+Restore the two paths listed under “Inactive default producer config” in
+[`ci/required-files.txt`](ci/required-files.txt), then run:
+
+```sh
+bash scripts/test/default-producer-config.test.sh
+```
+
+The payload records an inactive producer preference. It does not select or
+activate a profile and performs no model, credential, provider, publish, or
+target operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)

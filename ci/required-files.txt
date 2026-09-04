@@ -261,6 +261,10 @@ scripts/test/local-git-materializer-adapter.test.sh
 adapters/claude-code-producer/v1/normalize.jq
 scripts/test/default-claude-code-producer-adapter.test.sh
 
+# Inactive default producer config
+profiles/default/v1/producer-config.json
+scripts/test/default-producer-config.test.sh
+
 # Inactive provider-neutral local Git materializer protocol
 adapters/local-git-materializer/v1/protocol.jq
 scripts/test/local-git-materializer-fixtures.sh
