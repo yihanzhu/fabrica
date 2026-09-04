@@ -29,7 +29,7 @@ jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$jq_asset"
 jq_cmd=("$jq_bin")
 [ "$platform" != Darwin:arm64 ] || jq_cmd=(/usr/bin/arch -x86_64 "$jq_bin")
 [ "$("${jq_cmd[@]}" --version)" = jq-1.6 ] || exit 1
-runtime_bin="$tmp/bin"
+runtime_bin="$tmp/runtime tools"
 /bin/mkdir -m 700 "$runtime_bin"
 if [ "$platform" = Darwin:arm64 ]; then
   printf '%s\n' '#!/bin/bash' "exec /usr/bin/arch -x86_64 '$jq_bin' \"\$@\"" > "$runtime_bin/jq"

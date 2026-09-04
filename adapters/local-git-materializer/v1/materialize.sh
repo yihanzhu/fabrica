@@ -61,7 +61,7 @@ generation=$(/usr/bin/sed -n \
   "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$core") ||
   emit_error E_PACKAGE
 [[ "$generation" =~ ^g-[0-9a-f]{64}$ ]] || emit_error E_PACKAGE
-$jq_bin -e --arg generation "$generation" '
+"$jq_bin" -e --arg generation "$generation" '
   [.[] | select(.generation_id == $generation and
     .semantic_identity == "core.contracts.v2")] | length == 1
 ' "$registry" >/dev/null || emit_error E_PACKAGE
