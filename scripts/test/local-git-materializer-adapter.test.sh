@@ -1116,4 +1116,15 @@ if /usr/bin/grep -Fq '/bin/cp "$input_path"' "$adapter" ||
 fi
 pass 'input, config, and tree bounds precede copying or recursive parsing'
 
+scan_tree_body=$(/usr/bin/sed -n '/^scan_tree() {$/,/^}$/p' "$adapter")
+for checked_write in \
+  'printf '\''%s\t\n'\'' "$tree" > "$queue" || return 1' \
+  ': > "$output" || return 1' \
+  'printf '\''%s\n'\'' "$full_path" >> "$output" || return 1' \
+  'printf '\''%s\t%s\n'\'' "$object" "$full_path" >> "$queue" || return 1'; do
+  /usr/bin/grep -Fq "$checked_write" <<< "$scan_tree_body" ||
+    fail tree-scan-write-status
+done
+pass 'tree scan scratch writes fail closed'
+
 printf 'local Git materializer: %s focused checks passed\n' "$passed"

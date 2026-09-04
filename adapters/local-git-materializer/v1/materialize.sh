@@ -393,8 +393,8 @@ scan_tree() {
   tree_scan_tree_limit=1024
   empty_tree=$(git_dir "$repository" hash-object -t tree --stdin </dev/null) || return 1
   queue="$output.queue"
-  printf '%s\t\n' "$tree" > "$queue"
-  : > "$output"
+  printf '%s\t\n' "$tree" > "$queue" || return 1
+  : > "$output" || return 1
   entry_count=0
   tree_count=0
   total_bytes=0
@@ -429,13 +429,18 @@ scan_tree() {
       [ -z "$prefix" ] || full_path="$prefix/$path"
       safe_repo_path "$full_path" || return 1
       case "$mode:$type" in
-        100644:blob|100755:blob) printf '%s\n' "$full_path" >> "$output" ;;
-        040000:tree) printf '%s\t%s\n' "$object" "$full_path" >> "$queue" ;;
+        100644:blob|100755:blob)
+          printf '%s\n' "$full_path" >> "$output" || return 1
+          ;;
+        040000:tree)
+          printf '%s\t%s\n' "$object" "$full_path" >> "$queue" || return 1
+          ;;
         *) return 1 ;;
       esac
     done < "$raw_output"
   done < "$queue"
-  /bin/rm -f -- "$queue" "$raw_output"
+  /bin/rm -f -- "$queue" "$raw_output" || return 1
+  return 0
 }
 
 source_paths="$run_root/source-paths"
