@@ -87,6 +87,16 @@ read -r source_commit source_tree < <(make_bare_source "$tmp/source.git" sha1)
 source_fingerprint=$(find "$tmp/source.git" -type f -print0 | LC_ALL=C sort -z |
   xargs -0 /usr/bin/shasum -a 256 | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
 
+limited_closure="$tmp/limited-closure"
+(
+  ulimit -S -t 1
+  ulimit -H -t 1
+  "$closure_helper" walk "$tmp/source.git" sha1 "$source_commit" "$limited_closure"
+)
+[ "$(/usr/bin/wc -l < "$limited_closure" | /usr/bin/tr -d ' ')" -eq 3 ] ||
+  fail inherited-resource-ceiling
+pass 'stricter inherited resource ceilings remain valid'
+
 contract_file="$tmp/contract.json"
 "${jq_cmd[@]}" -S -c -n '{
   schema_version:1,kind:"local_git_materialization_contract",

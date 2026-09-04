@@ -35,15 +35,22 @@ static void fail(const char *code)
     exit(1);
 }
 
+static void cap_limit(int resource, rlim_t ceiling)
+{
+    struct rlimit limit;
+    if (getrlimit(resource, &limit) != 0) _exit(126);
+    if (limit.rlim_cur > ceiling) limit.rlim_cur = ceiling;
+    if (limit.rlim_max > ceiling) limit.rlim_max = ceiling;
+    if (setrlimit(resource, &limit) != 0) _exit(126);
+}
+
 static void limit_child(void)
 {
-    struct rlimit cpu = { 120U, 120U };
-    if (setrlimit(RLIMIT_CPU, &cpu) != 0) _exit(126);
+    cap_limit(RLIMIT_CPU, 120U);
 #if !defined(__APPLE__)
-    struct rlimit memory = { 536870912U, 536870912U };
-    if (setrlimit(RLIMIT_DATA, &memory) != 0) _exit(126);
+    cap_limit(RLIMIT_DATA, 536870912U);
 #if defined(RLIMIT_AS)
-    if (setrlimit(RLIMIT_AS, &memory) != 0) _exit(126);
+    cap_limit(RLIMIT_AS, 536870912U);
 #endif
 #endif
 }
