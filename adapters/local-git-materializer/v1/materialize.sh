@@ -393,12 +393,15 @@ scan_tree() {
   tree_scan_tree_limit=1024
   empty_tree=$(git_dir "$repository" hash-object -t tree --stdin </dev/null) || return 1
   queue="$output.queue"
+  expanded_bytes=0
+  path_bytes=$((${#tree} + 2))
+  [ "$path_bytes" -le "$tree_scan_byte_limit" ] || return 1
   printf '%s\t\n' "$tree" > "$queue" || return 1
+  expanded_bytes=$path_bytes
   : > "$output" || return 1
   entry_count=0
   tree_count=0
   total_bytes=0
-  expanded_bytes=0
   while IFS=$'\t' read -r current_tree prefix; do
     tree_count=$((tree_count + 1))
     [ "$tree_count" -le "$tree_scan_tree_limit" ] || return 1
@@ -437,7 +440,10 @@ scan_tree() {
           expanded_bytes=$((expanded_bytes + path_bytes))
           ;;
         040000:tree)
+          path_bytes=$((${#object} + ${#full_path} + 2))
+          [ "$path_bytes" -le "$((tree_scan_byte_limit - expanded_bytes))" ] || return 1
           printf '%s\t%s\n' "$object" "$full_path" >> "$queue" || return 1
+          expanded_bytes=$((expanded_bytes + path_bytes))
           ;;
         *) return 1 ;;
       esac

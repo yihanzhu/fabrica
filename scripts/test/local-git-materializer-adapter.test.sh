@@ -1130,6 +1130,7 @@ pass 'tree scan scratch writes fail closed'
 for expanded_limit in \
   'expanded_bytes=0' \
   'path_bytes=$((${#full_path} + 1))' \
+  'path_bytes=$((${#object} + ${#full_path} + 2))' \
   '[ "$path_bytes" -le "$((tree_scan_byte_limit - expanded_bytes))" ] || return 1' \
   'expanded_bytes=$((expanded_bytes + path_bytes))'; do
   /usr/bin/grep -Fq "$expanded_limit" <<< "$scan_tree_body" ||
