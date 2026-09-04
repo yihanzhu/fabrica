@@ -386,7 +386,7 @@ safe_repo_path() {
 scan_tree() {
   local repository=$1 tree=$2 output=$3 queue current_tree prefix raw_output
   local entry metadata mode type object path full_path empty_tree tree_type tree_bytes
-  local raw_bytes entry_count tree_count total_bytes remaining
+  local raw_bytes entry_count tree_count total_bytes expanded_bytes remaining path_bytes
   local tree_scan_byte_limit tree_scan_entry_limit tree_scan_tree_limit
   tree_scan_byte_limit=16777216
   tree_scan_entry_limit=65536
@@ -398,6 +398,7 @@ scan_tree() {
   entry_count=0
   tree_count=0
   total_bytes=0
+  expanded_bytes=0
   while IFS=$'\t' read -r current_tree prefix; do
     tree_count=$((tree_count + 1))
     [ "$tree_count" -le "$tree_scan_tree_limit" ] || return 1
@@ -430,7 +431,10 @@ scan_tree() {
       safe_repo_path "$full_path" || return 1
       case "$mode:$type" in
         100644:blob|100755:blob)
+          path_bytes=$((${#full_path} + 1))
+          [ "$path_bytes" -le "$((tree_scan_byte_limit - expanded_bytes))" ] || return 1
           printf '%s\n' "$full_path" >> "$output" || return 1
+          expanded_bytes=$((expanded_bytes + path_bytes))
           ;;
         040000:tree)
           printf '%s\t%s\n' "$object" "$full_path" >> "$queue" || return 1

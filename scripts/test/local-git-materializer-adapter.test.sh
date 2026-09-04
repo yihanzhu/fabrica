@@ -1127,4 +1127,14 @@ for checked_write in \
 done
 pass 'tree scan scratch writes fail closed'
 
+for expanded_limit in \
+  'expanded_bytes=0' \
+  'path_bytes=$((${#full_path} + 1))' \
+  '[ "$path_bytes" -le "$((tree_scan_byte_limit - expanded_bytes))" ] || return 1' \
+  'expanded_bytes=$((expanded_bytes + path_bytes))'; do
+  /usr/bin/grep -Fq "$expanded_limit" <<< "$scan_tree_body" ||
+    fail expanded-tree-path-limit
+done
+pass 'expanded tree path output shares the fixed byte ceiling'
+
 printf 'local Git materializer: %s focused checks passed\n' "$passed"
