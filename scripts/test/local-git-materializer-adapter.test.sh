@@ -406,6 +406,8 @@ fi
   fail relative-input-path
 pass 'each filesystem argument must be independently absolute'
 
+expect_error root-source-boundary E_BOUNDARY "$input_file" /
+
 refresh_request_pair() {
   local source=$1 destination=$2 request_snapshot="$tmp/request-refresh"
   "${jq_cmd[@]}" -S -c '.stage_request.content' "$source" > "$request_snapshot"
