@@ -41,6 +41,7 @@ fi
   -o "$runtime_bin/object-closure"
 /bin/chmod 0555 "$runtime_bin/object-closure"
 closure_helper="$runtime_bin/object-closure"
+jq_dependency="$runtime_bin/jq"
 export PATH="$runtime_bin:/usr/bin:/bin"
 generation=$(/usr/bin/sed -n \
   "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" \
@@ -279,7 +280,7 @@ run_case() {
   PATH="$runtime_bin:/usr/bin:/bin" GH_TOKEN=must-not-read GITHUB_TOKEN=must-not-read \
     AWS_SECRET_ACCESS_KEY=must-not-read SSH_AUTH_SOCK=/must/not/read \
     "$adapter" materialize "$input" fixture.target "$source" "$candidate" "$scratch" \
-    "$closure_helper" \
+    "$closure_helper" "$jq_dependency" \
     > "$case_root/out" 2> "$case_root/err"
   printf '%s\n' "$case_root"
 }
@@ -360,7 +361,7 @@ expect_error() {
   local candidate="$case_root/candidate" scratch="$case_root/scratch"
   /bin/mkdir -m 700 "$case_root" "$candidate" "$scratch"
   if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input" fixture.target \
-      "$source" "$candidate" "$scratch" "$closure_helper" \
+      "$source" "$candidate" "$scratch" "$closure_helper" "$jq_dependency" \
       > "$case_root/out" 2> "$case_root/err"; then
     fail "$name accepted"
   fi
@@ -380,7 +381,7 @@ if (
   export -f find
   PATH="$runtime_bin:/usr/bin:/bin" GH_TOKEN=must-not-read BASH_ENV="$direct_case/bash-env" \
     "$adapter" __materialize_clean "$input_file" fixture.target "$tmp/source.git" \
-    "$direct_case/candidate" "$direct_case/scratch" "$closure_helper" \
+    "$direct_case/candidate" "$direct_case/scratch" "$closure_helper" "$jq_dependency" \
     > "$direct_case/out" 2> "$direct_case/err"
 ); then
   fail direct-clean-worker-accepted
@@ -391,13 +392,28 @@ fi
   fail direct-clean-worker-sanitization
 pass 'direct worker entry blocks startup files and strips hostile environment state'
 
+hostile_path_case="$tmp/hostile-path"
+/bin/mkdir -m 700 "$hostile_path_case" "$hostile_path_case/bin" \
+  "$hostile_path_case/candidate" "$hostile_path_case/scratch"
+printf '%s\n' '#!/bin/bash' "/usr/bin/touch '$hostile_path_case/ran'" 'exit 99' \
+  > "$hostile_path_case/bin/jq"
+/bin/chmod 0555 "$hostile_path_case/bin/jq"
+PATH="$hostile_path_case/bin:$runtime_bin:/usr/bin:/bin" \
+  "$adapter" materialize "$input_file" fixture.target "$tmp/source.git" \
+  "$hostile_path_case/candidate" "$hostile_path_case/scratch" \
+  "$closure_helper" "$jq_dependency" \
+  > "$hostile_path_case/out" 2> "$hostile_path_case/err"
+[ ! -e "$hostile_path_case/ran" ] && [ ! -s "$hostile_path_case/err" ] ||
+  fail hostile-path-execution
+pass 'inherited executable search path is ignored'
+
 relative_case="$tmp/relative-path"
 /bin/mkdir -m 700 "$relative_case" "$relative_case/candidate" "$relative_case/scratch"
 if (
   cd "$tmp"
   PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize 'relative:/input.json' \
     fixture.target "$tmp/source.git" "$relative_case/candidate" "$relative_case/scratch" \
-    "$closure_helper" \
+    "$closure_helper" "$jq_dependency" \
     > "$relative_case/out" 2> "$relative_case/err"
 ); then
   fail relative-input-path-accepted
@@ -1024,7 +1040,7 @@ case_nonempty="$tmp/nonempty"
 /usr/bin/touch "$case_nonempty/candidate/existing"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$case_nonempty/candidate" "$case_nonempty/scratch" \
-    "$closure_helper" \
+    "$closure_helper" "$jq_dependency" \
     > "$case_nonempty/out" 2> "$case_nonempty/err"; then fail nonempty-candidate; fi
 [ "$(cat "$case_nonempty/err")" = E_CANDIDATE_ROOT ] || fail nonempty-candidate-error
 pass 'non-empty candidate root rejected'
@@ -1034,7 +1050,7 @@ overlap_scratch="$tmp/overlap-scratch"
 /bin/mkdir -m 700 "$overlap_candidate" "$overlap_scratch"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$overlap_candidate" "$overlap_scratch" \
-    "$closure_helper" \
+    "$closure_helper" "$jq_dependency" \
     > "$tmp/overlap.out" 2> "$tmp/overlap.err"; then fail overlapping-boundary; fi
 [ "$(cat "$tmp/overlap.err")" = E_BOUNDARY ] || fail overlapping-boundary-error
 /bin/rmdir "$overlap_candidate"
@@ -1044,7 +1060,7 @@ closed_output="$tmp/closed-output"
 /bin/mkdir -m 700 "$closed_output" "$closed_output/candidate" "$closed_output/scratch"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$closed_output/candidate" "$closed_output/scratch" \
-    "$closure_helper" \
+    "$closure_helper" "$jq_dependency" \
     >&- 2> "$closed_output/err"; then
   fail closed-output-accepted
 fi
@@ -1070,7 +1086,7 @@ boundary_scratch="$tmp/boundary-scratch"
 /bin/mkdir -m 700 "$boundary_scratch"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$symlink_boundary" "$boundary_scratch" \
-    "$closure_helper" \
+    "$closure_helper" "$jq_dependency" \
     > "$tmp/boundary.out" 2> "$tmp/boundary.err"; then fail candidate-symlink; fi
 [ "$(cat "$tmp/boundary.err")" = E_CANDIDATE_ROOT ] || fail candidate-symlink-error
 pass 'symlink candidate boundary rejected'

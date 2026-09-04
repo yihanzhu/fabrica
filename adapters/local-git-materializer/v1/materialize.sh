@@ -1,7 +1,7 @@
 #!/bin/bash -p
 # shellcheck disable=SC2016
 
-clean_path=${PATH:-/usr/bin:/bin}
+clean_path=/usr/bin:/bin
 while IFS= builtin read -r inherited_function; do
   builtin unset -f "$inherited_function" 2>/dev/null || :
 done < <(builtin compgen -A function)
@@ -19,12 +19,12 @@ emit_error() {
   exit 1
 }
 
-[ "$#" -eq 7 ] || emit_error E_USAGE
+[ "$#" -eq 8 ] || emit_error E_USAGE
 script_path=${BASH_SOURCE[0]}
 case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac
 if [ "$1" = materialize ]; then
   exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
-    /bin/bash "$script_path" __materialize_clean "$2" "$3" "$4" "$5" "$6" "$7"
+    /bin/bash "$script_path" __materialize_clean "$2" "$3" "$4" "$5" "$6" "$7" "$8"
 fi
 [ "$1" = __materialize_clean ] || emit_error E_USAGE
 export LC_ALL=C
@@ -35,15 +35,18 @@ source_git_dir=$4
 candidate_root=$5
 scratch_root=$6
 closure_helper=$7
+jq_bin=$8
 
 for absolute_path in "$script_path" "$input_path" "$source_git_dir" \
-  "$candidate_root" "$scratch_root" "$closure_helper"; do
+  "$candidate_root" "$scratch_root" "$closure_helper" "$jq_bin"; do
   case "$absolute_path" in /*) ;; *) emit_error E_USAGE ;; esac
 done
 [ -f "$closure_helper" ] && [ -x "$closure_helper" ] && [ ! -L "$closure_helper" ] ||
   emit_error E_DEPENDENCY
 [ "$("$closure_helper" version 2>/dev/null)" = ystack-object-closure-v1 ] ||
   emit_error E_DEPENDENCY
+[ -f "$jq_bin" ] && [ -x "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
+  [ "$("$jq_bin" --version 2>/dev/null)" = jq-1.6 ] || emit_error E_DEPENDENCY
 [ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_PACKAGE
 script_dir=$(CDPATH='' cd -P -- "${script_path%/*}" && pwd -P) || emit_error E_PACKAGE
 repo_root=$(CDPATH='' cd -P -- "$script_dir/../../.." && pwd -P) || emit_error E_PACKAGE
@@ -54,9 +57,6 @@ for required in "$protocol" "$core" "$registry"; do
   [ -f "$required" ] && [ ! -L "$required" ] || emit_error E_PACKAGE
 done
 
-jq_bin=$(command -v jq 2>/dev/null) || emit_error E_DEPENDENCY
-[ -f "$jq_bin" ] && [ ! -L "$jq_bin" ] &&
-  [ "$($jq_bin --version 2>/dev/null)" = jq-1.6 ] || emit_error E_DEPENDENCY
 generation=$(/usr/bin/sed -n \
   "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$core") ||
   emit_error E_PACKAGE
@@ -129,6 +129,9 @@ staging_repo="$candidate_root/.staging.git"
 final_repo="$candidate_root/repository.git"
 success=0
 cleanup() {
+  if [ -n "${dependency_bin:-}" ]; then
+    /bin/chmod 0700 "$dependency_bin" 2>/dev/null || :
+  fi
   /bin/rm -rf -- "$run_root" 2>/dev/null || :
   if [ "$success" -ne 1 ]; then
     /bin/rm -rf -- "$staging_repo" "$final_repo" 2>/dev/null || :
@@ -141,6 +144,13 @@ trap 'exit 143' TERM
 /bin/mkdir -m 700 "$run_root" || emit_error E_SCRATCH_ROOT
 /bin/mkdir -m 500 "$run_root/no-hooks" || emit_error E_SCRATCH_ROOT
 /bin/mkdir -m 500 "$run_root/empty-template" || emit_error E_SCRATCH_ROOT
+dependency_bin="$run_root/dependencies"
+/bin/mkdir -m 700 "$dependency_bin" || emit_error E_SCRATCH_ROOT
+/bin/cp "$jq_bin" "$dependency_bin/jq" || emit_error E_DEPENDENCY
+/bin/chmod 0500 "$dependency_bin/jq" || emit_error E_DEPENDENCY
+[ "$("$dependency_bin/jq" --version 2>/dev/null)" = jq-1.6 ] ||
+  emit_error E_DEPENDENCY
+/bin/chmod 0500 "$dependency_bin" || emit_error E_DEPENDENCY
 
 input_snapshot="$run_root/input.json"
 input_copy_ceiling=8388609
@@ -192,7 +202,8 @@ core_validate() {
   validation_root="$run_root/core-$validation_id"
   receipt_path="$run_root/core-$validation_id.receipt"
   /bin/mkdir -m 700 "$validation_root" || return 1
-  "$core" --accounted-validation "$validation_root" 536870912 "$@" \
+  /usr/bin/env -i PATH="$dependency_bin:/usr/bin:/bin" LC_ALL=C \
+    "$core" --accounted-validation "$validation_root" 536870912 "$@" \
     3> "$receipt_path" >/dev/null 2>&1
 }
 

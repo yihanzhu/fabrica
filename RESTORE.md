@@ -533,7 +533,8 @@ fixture proves the 256 MiB pre-apply candidate
 budget blocks path fan-out before Git writes changed blobs.
 The test compiles the private object-closure helper with strict warnings. It proves
 that an oversized historical tree and an oversized packed-refs file fail before
-recursive traversal or parsing.
+recursive traversal or parsing. The runtime takes the pinned jq 1.6 executable as
+an explicit dependency and ignores the caller's executable search path.
 
 This payload has no adapter manifest. A later assembly PR may bind the directory
 tree through the payload's durable main commit. It is an inactive, local-only
