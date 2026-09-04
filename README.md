@@ -276,10 +276,12 @@ reachable objects into a caller-disposable bare repository, applies the patch to
 scratch-only index, and returns a canonical receipt and validated stage result.
 Reachable source history is limited to 65,536 objects and 256 MiB of uncompressed
 object data; the streamed pack is capped at the same byte limit.
-The complete source filesystem inventory is capped at 65,536 entries and 8 MiB
-before Git reads it.
-Each tree scan is limited to 65,536 entries, 64 path components, and a 16 MiB
-encoded listing, and validates UTF-8 once before its bounded built-in path walk.
+The complete source filesystem inventory is capped at 65,536 entries and 8 MiB,
+and repository config is snapshotted at 1 MiB before parsing.
+Each tree scan is limited to 65,536 entries, 1,024 tree objects, 64 path
+components, and a 16 MiB encoded listing. Each commit or tree is size-checked
+before a non-recursive tree step, and each step validates UTF-8 before its bounded
+built-in path walk.
 Before mutating the index, patch paths must already fit the contract and their
 cumulative source blob sizes plus patch bytes must fit a 256 MiB candidate budget.
 

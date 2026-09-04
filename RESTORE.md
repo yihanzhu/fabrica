@@ -525,8 +525,11 @@ history above the fixed 65,536-object or 256 MiB import budget. Copy/rename patc
 metadata and source trees containing empty subtrees also fail closed. It proves empty-patch
 `no-change` and rejects tree scans above 65,536 entries, 64 path components, or a
 16 MiB encoded listing. It also checks that the source stays unchanged and scratch
-is removed. The complete source filesystem scan is capped at 65,536 entries and
-8 MiB. A shared-large-blob fixture proves the 256 MiB pre-apply candidate
+is removed. Input and config snapshots are stream-capped before parsing. The
+complete source filesystem scan is capped at 65,536 entries and 8 MiB. Tree scans
+are capped at 1,024 tree objects, with each object size-checked before non-recursive
+expansion. A shared-large-blob
+fixture proves the 256 MiB pre-apply candidate
 budget blocks path fan-out before Git writes changed blobs.
 
 This payload has no adapter manifest. A later assembly PR may bind the directory

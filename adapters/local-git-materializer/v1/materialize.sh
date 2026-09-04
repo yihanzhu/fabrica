@@ -135,7 +135,13 @@ trap 'exit 143' TERM
 /bin/mkdir -m 500 "$run_root/empty-template" || emit_error E_SCRATCH_ROOT
 
 input_snapshot="$run_root/input.json"
-/bin/cp "$input_path" "$input_snapshot" || emit_error E_INPUT
+input_copy_ceiling=8388609
+if ! /usr/bin/head -c "$input_copy_ceiling" "$input_path" > "$input_snapshot"; then
+  emit_error E_INPUT
+fi
+input_snapshot_bytes=$(/usr/bin/wc -c < "$input_snapshot" | /usr/bin/tr -d ' ') ||
+  emit_error E_INPUT
+[ "$input_snapshot_bytes" -le 8388608 ] || emit_error E_INPUT
 /bin/chmod 0400 "$input_snapshot" || emit_error E_INPUT
 input_canonical="$run_root/input.canonical"
 "$jq_bin" -S -c . "$input_snapshot" > "$input_canonical" 2>/dev/null || emit_error E_INPUT
@@ -273,9 +279,22 @@ while IFS= builtin read -r -d '' source_entry; do
 done < "$source_inventory"
 /bin/rm -f -- "$source_inventory"
 
+source_config_input="$source_git_dir/config"
+[ -f "$source_config_input" ] && [ ! -L "$source_config_input" ] ||
+  emit_error E_SOURCE_CONFIG
+source_config_snapshot="$run_root/source-config.snapshot"
+source_config_ceiling=1048577
+if ! /usr/bin/head -c "$source_config_ceiling" "$source_config_input" \
+  > "$source_config_snapshot"; then
+  emit_error E_SOURCE_CONFIG
+fi
+source_config_bytes=$(/usr/bin/wc -c < "$source_config_snapshot" | /usr/bin/tr -d ' ') ||
+  emit_error E_SOURCE_CONFIG
+[ "$source_config_bytes" -le 1048576 ] || emit_error E_SOURCE_CONFIG
 source_config="$run_root/source-config"
-git_dir "$source_git_dir" config --local --name-only --list --no-includes \
-  > "$source_config" 2>/dev/null || emit_error E_SOURCE_GIT
+"${git_env[@]}" /usr/bin/git config --file "$source_config_snapshot" \
+  --name-only --list --no-includes > "$source_config" 2>/dev/null ||
+  emit_error E_SOURCE_CONFIG
 while IFS= read -r config_key; do
   case "$config_key" in
     core.repositoryformatversion|core.filemode|core.bare|core.logallrefupdates|core.ignorecase|core.precomposeunicode|extensions.objectformat) ;;
@@ -301,8 +320,12 @@ fi
 actual_algorithm=$(git_dir "$source_git_dir" rev-parse --show-object-format 2>/dev/null) ||
   emit_error E_SOURCE_GIT
 [ "$actual_algorithm" = "$source_algorithm" ] || emit_error E_SOURCE_IDENTITY
-git_dir "$source_git_dir" cat-file -e "$source_commit^{commit}" >/dev/null 2>&1 ||
+source_commit_type=$(git_dir "$source_git_dir" cat-file -t "$source_commit" 2>/dev/null) ||
   emit_error E_SOURCE_IDENTITY
+source_commit_size=$(git_dir "$source_git_dir" cat-file -s "$source_commit" 2>/dev/null) ||
+  emit_error E_SOURCE_IDENTITY
+[ "$source_commit_type" = commit ] && [ "$source_commit_size" -le 1048576 ] ||
+  emit_error E_SOURCE_LIMIT
 actual_source_tree=$(git_dir "$source_git_dir" rev-parse "$source_commit^{tree}" 2>/dev/null) ||
   emit_error E_SOURCE_IDENTITY
 [ "$actual_source_tree" = "$source_tree" ] || emit_error E_SOURCE_IDENTITY
@@ -329,37 +352,58 @@ safe_repo_path() {
 }
 
 scan_tree() {
-  local repository=$1 tree=$2 output=$3 raw_output entry metadata mode type object path empty_tree
-  local raw_bytes entry_count tree_scan_byte_limit tree_scan_entry_limit tree_scan_ceiling
+  local repository=$1 tree=$2 output=$3 queue current_tree prefix raw_output
+  local entry metadata mode type object path full_path empty_tree tree_type tree_bytes
+  local raw_bytes entry_count tree_count total_bytes remaining
+  local tree_scan_byte_limit tree_scan_entry_limit tree_scan_tree_limit
   tree_scan_byte_limit=16777216
   tree_scan_entry_limit=65536
-  tree_scan_ceiling=$((tree_scan_byte_limit + 1))
-  raw_output="$output.raw"
-  if ! git_dir "$repository" ls-tree -rz -r -t "$tree" |
-    /usr/bin/head -c "$tree_scan_ceiling" > "$raw_output"; then
-    return 1
-  fi
-  raw_bytes=$(/usr/bin/wc -c < "$raw_output" | /usr/bin/tr -d ' ') || return 1
-  [ "$raw_bytes" -le "$tree_scan_byte_limit" ] || return 1
-  /usr/bin/iconv -f UTF-8 -t UTF-8 "$raw_output" >/dev/null 2>&1 || return 1
+  tree_scan_tree_limit=1024
   empty_tree=$(git_dir "$repository" hash-object -t tree --stdin </dev/null) || return 1
+  queue="$output.queue"
+  printf '%s\t\n' "$tree" > "$queue"
   : > "$output"
   entry_count=0
-  while IFS= read -r -d '' entry; do
-    entry_count=$((entry_count + 1))
-    [ "$entry_count" -le "$tree_scan_entry_limit" ] || return 1
-    metadata=${entry%%$'\t'*}
-    path=${entry#*$'\t'}
-    read -r mode type object <<< "$metadata"
-    [ -n "$object" ] || return 1
-    safe_repo_path "$path" || return 1
-    case "$mode:$type" in
-      100644:blob|100755:blob) printf '%s\n' "$path" >> "$output" ;;
-      040000:tree) [ "$object" != "$empty_tree" ] || return 1 ;;
-      *) return 1 ;;
-    esac
-  done < "$raw_output"
-  /bin/rm -f -- "$raw_output"
+  tree_count=0
+  total_bytes=0
+  while IFS=$'\t' read -r current_tree prefix; do
+    tree_count=$((tree_count + 1))
+    [ "$tree_count" -le "$tree_scan_tree_limit" ] || return 1
+    tree_type=$(git_dir "$repository" cat-file -t "$current_tree" 2>/dev/null) || return 1
+    tree_bytes=$(git_dir "$repository" cat-file -s "$current_tree" 2>/dev/null) || return 1
+    [ "$tree_type" = tree ] || return 1
+    case "$tree_bytes" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#tree_bytes}" -le 8 ] && [ "$tree_bytes" -le "$tree_scan_byte_limit" ] || return 1
+    [ -z "$prefix" ] || [ "$current_tree" != "$empty_tree" ] || return 1
+    remaining=$((tree_scan_byte_limit - total_bytes))
+    [ "$tree_bytes" -le "$remaining" ] || return 1
+    raw_output="$output.raw"
+    if ! git_dir "$repository" ls-tree -z "$current_tree" |
+      /usr/bin/head -c "$((remaining + 1))" > "$raw_output"; then
+      return 1
+    fi
+    raw_bytes=$(/usr/bin/wc -c < "$raw_output" | /usr/bin/tr -d ' ') || return 1
+    [ "$raw_bytes" -le "$remaining" ] || return 1
+    total_bytes=$((total_bytes + raw_bytes))
+    /usr/bin/iconv -f UTF-8 -t UTF-8 "$raw_output" >/dev/null 2>&1 || return 1
+    while IFS= read -r -d '' entry; do
+      entry_count=$((entry_count + 1))
+      [ "$entry_count" -le "$tree_scan_entry_limit" ] || return 1
+      metadata=${entry%%$'\t'*}
+      path=${entry#*$'\t'}
+      read -r mode type object <<< "$metadata"
+      [ -n "$object" ] || return 1
+      full_path=$path
+      [ -z "$prefix" ] || full_path="$prefix/$path"
+      safe_repo_path "$full_path" || return 1
+      case "$mode:$type" in
+        100644:blob|100755:blob) printf '%s\n' "$full_path" >> "$output" ;;
+        040000:tree) printf '%s\t%s\n' "$object" "$full_path" >> "$queue" ;;
+        *) return 1 ;;
+      esac
+    done < "$raw_output"
+  done < "$queue"
+  /bin/rm -f -- "$queue" "$raw_output"
 }
 
 source_paths="$run_root/source-paths"

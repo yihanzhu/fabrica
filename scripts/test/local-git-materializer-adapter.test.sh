@@ -507,16 +507,15 @@ git_clean init -q --bare --object-format=sha1 "$many_objects_source"
     print "blob"
     printf "mark :%d\n",i
     printf "data %d\n%s\n",length(data),data
+    print "commit refs/heads/main"
+    printf "mark :%d\n",40000+i
+    print "author fixture <fixture@example.invalid> 946684800 +0000"
+    print "committer fixture <fixture@example.invalid> 946684800 +0000"
+    print "data 5"
+    print "count"
+    if (i>1) printf "from :%d\n",40000+i-1
+    printf "M 100644 :%d file\n\n",i
   }
-  print "commit refs/heads/main"
-  print "mark :40000"
-  print "author fixture <fixture@example.invalid> 946684800 +0000"
-  print "committer fixture <fixture@example.invalid> 946684800 +0000"
-  print "data 11"
-  print "count-limit"
-  for (i=1; i<=32768; i++)
-    printf "M 100644 :%d dir-%05d/file\n",i,i
-  print ""
 }' | git_clean --git-dir="$many_objects_source" fast-import --quiet
 many_objects_commit=$(git_clean --git-dir="$many_objects_source" rev-parse refs/heads/main)
 many_objects_tree=$(git_clean --git-dir="$many_objects_source" \
@@ -827,6 +826,30 @@ deep_path_input="$tmp/deep-path-input.json"
 input_for_source "$input_file" "$deep_path_input" sha1 "$deep_path_commit" "$deep_path_tree"
 expect_error source-tree-component-limit E_SOURCE_TREE "$deep_path_input" "$deep_path_source"
 
+many_trees_source="$tmp/source-many-trees.git"
+/bin/mkdir -m 700 "$many_trees_source"
+git_clean init -q --bare --object-format=sha1 "$many_trees_source"
+many_trees_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$many_trees_source" hash-object -w --stdin)
+many_trees_leaf=$(printf '100644 blob %s\tfile\n' "$many_trees_blob" |
+  git_clean --git-dir="$many_trees_source" mktree)
+many_trees_root=$(/usr/bin/awk -v tree="$many_trees_leaf" \
+  'BEGIN { for (i=1; i<=1024; i++) printf "040000 tree %s\tdir-%04d\n",tree,i }' |
+  git_clean --git-dir="$many_trees_source" mktree)
+many_trees_commit=$(printf '%s\n' many-trees |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$many_trees_source" \
+    commit-tree "$many_trees_root")
+git_clean --git-dir="$many_trees_source" update-ref refs/heads/main "$many_trees_commit"
+many_trees_input="$tmp/many-trees-input.json"
+input_for_source "$input_file" "$many_trees_input" sha1 \
+  "$many_trees_commit" "$many_trees_root"
+expect_error source-tree-object-limit E_SOURCE_TREE "$many_trees_input" "$many_trees_source"
+
 sha256_source="$tmp/source-sha256.git"
 read -r sha256_commit sha256_tree < <(make_bare_source "$sha256_source" sha256)
 sha256_input="$tmp/sha256-input.json"
@@ -960,5 +983,13 @@ if /usr/bin/grep -Fq 'done < <(git_dir "$staging_repo" diff-tree' "$adapter" ||
   fail changed-path-status-capture
 fi
 pass 'changed-path enumeration is captured before evidence processing'
+
+if /usr/bin/grep -Fq '/bin/cp "$input_path"' "$adapter" ||
+   ! /usr/bin/grep -Fq 'input_copy_ceiling=8388609' "$adapter" ||
+   ! /usr/bin/grep -Fq 'source_config_ceiling=1048577' "$adapter" ||
+   /usr/bin/grep -Fq 'ls-tree -rz -r' "$adapter"; then
+  fail preparse-resource-bounds
+fi
+pass 'input, config, and tree bounds precede copying or recursive parsing'
 
 printf 'local Git materializer: %s focused checks passed\n' "$passed"
