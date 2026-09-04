@@ -100,15 +100,6 @@ def atomic_json(path, value):
             os.unlink(temporary)
 
 
-def load_state(path):
-    if not path.exists():
-        return None
-    value, _ = read_json(path, MAX_OBSERVATION_BYTES)
-    if not isinstance(value, dict):
-        raise ReplayError("state journal is malformed")
-    return value
-
-
 def safe_path(value):
     if not isinstance(value, str) or not value or len(value) > 4096:
         raise ReplayError("verification path is invalid")
@@ -250,7 +241,11 @@ def replay(arguments):
         lock_descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
         with os.fdopen(lock_descriptor, "a+b") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            state = load_state(state_path)
+            state = None
+            if state_path.exists():
+                state, _ = read_json(state_path, MAX_OBSERVATION_BYTES)
+                if not isinstance(state, dict):
+                    raise ReplayError("state journal is malformed")
             if state is not None and state.get("identity", {}).get("run_key") != identity["run_key"]:
                 result({"phase": "stale", "reason": "run identity changed"})
                 return 2
