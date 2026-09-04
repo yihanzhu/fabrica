@@ -508,6 +508,41 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
+Restore the four paths in the manifest's inactive local Git materializer block,
+then run:
+
+```sh
+bash scripts/test/local-git-materializer-adapter.test.sh
+```
+
+This builds disposable SHA-1 and SHA-256 source repositories, validates a complete
+portable-core v2 profile and stage request, and proves that a contract-bound patch
+becomes a deterministic bare child commit and path-free receipt. The negative
+matrix rejects moved identities, unsafe directories and paths, hooks, filters,
+remotes, worktrees, alternates, shallow or partial repositories, replace state,
+binary patches, symlinks, submodules, host Git templates, and reachable source
+history above the fixed 65,536-object or 256 MiB import budget. Copy/rename patch
+metadata and source trees containing empty subtrees also fail closed. It proves empty-patch
+`no-change` and rejects tree scans above 65,536 entries, 64 path components, or a
+16 MiB encoded listing. It also checks that the source stays unchanged and scratch
+is removed. Input and config snapshots are stream-capped before parsing. The
+complete source filesystem scan is capped at 65,536 entries and 8 MiB. Tree scans
+are capped at 1,024 tree objects, with each object size-checked before non-recursive
+expansion. A shared-large-blob
+fixture proves the 256 MiB pre-apply candidate
+budget blocks path fan-out before Git writes changed blobs.
+The test compiles the private object-closure helper with strict warnings. It proves
+that an oversized historical tree and an oversized packed-refs file fail before
+recursive traversal or parsing. The runtime takes the pinned jq 1.6 executable as
+an explicit dependency and ignores the caller's executable search path.
+
+This payload has no adapter manifest. A later assembly PR may bind the directory
+tree through the payload's durable main commit. It is an inactive, local-only
+materializer, not a GitHub or GitLab operation. Restoring it does not qualify an
+adapter, select or activate a profile, read a credential, contact a provider or
+real target during construction, or permit push, publish, merge, or another
+external write.
+
 Restore the two paths in the manifest's inactive Claude Code producer normalizer
 payload block, then run:
 

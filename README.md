@@ -267,6 +267,45 @@ main. The payload is offline and unqualified. It does not call GitHub or a CLI,
 use a credential, rerun or cancel work, dispatch a workflow, change a repository,
 grant authority or qualification, or activate a profile.
 
+## Inactive local Git candidate materializer
+
+`adapters/local-git-materializer/v1/` implements the existing portable-core v2
+`core.forge.materialize-candidate.v2` capability without a Git forge. It reads one
+exact, sanitized bare source repository and one contract-bound patch. It imports
+reachable objects into a caller-disposable bare repository, applies the patch to a
+scratch-only index, and returns a canonical receipt and validated stage result.
+Reachable source history is limited to 65,536 objects and 256 MiB of uncompressed
+object data; the streamed pack is capped at the same byte limit.
+The complete source filesystem inventory is capped at 65,536 entries and 8 MiB,
+and repository config is snapshotted at 1 MiB before parsing.
+Each tree scan is limited to 65,536 entries, 1,024 tree objects, 64 path
+components, and a 16 MiB encoded listing. Each commit or tree is size-checked
+before a non-recursive tree step, and each step validates UTF-8 before its bounded
+built-in path walk.
+Before mutating the index, patch paths must already fit the contract and their
+cumulative source blob sizes plus patch bytes must fit a 256 MiB candidate budget.
+
+The fixed `materialize` command accepts only caller-named physical source,
+candidate, and scratch boundaries, with every path independently absolute. It
+also receives the execution boundary's compiled `ystack-object-closure-v1` helper,
+whose source is private to this adapter package, and an explicit pinned jq 1.6
+executable. It ignores the caller's executable search path.
+It rejects worktrees, alternates, shallow or
+partial repositories, replace or graft state, active hooks and filters, remote
+configuration, unsafe paths, binary or copy/rename patches, empty subtrees,
+symlinks, and submodules. It never
+inherits host Git templates, checks out a worktree, or runs a transport command.
+An empty producer patch returns the explicit `no-change` result. Tests cover both
+SHA-1 and SHA-256 object formats with disposable local fixtures.
+
+This PR lands only the inactive package payload. A later assembly PR may add a
+manifest whose package reference points to this payload's durable commit on main.
+GitHub and later GitLab change-request normalizers remain separate observation
+inputs; they do not claim this materialization capability. The package is not
+qualified, selected, installed, or activated. It reads no credential, contacts no
+provider or real target during construction, and cannot push, publish, merge, or
+grant authority.
+
 ## Inactive Claude Code producer normalizer payload
 
 `adapters/claude-code-producer/v1/normalize.jq` validates one untrusted producer
