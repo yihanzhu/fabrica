@@ -235,7 +235,8 @@ int main(int argc, char **argv)
         char type[16]; unsigned long long size; unsigned char *body = NULL;
         const char *oid = queue[cursor++].oid;
         command(input, "info", oid); read_header(output, oid, type, &size);
-        if (size > BYTE_MAX - total) fail("E_SOURCE_LIMIT"); total += size;
+        if (size > BYTE_MAX - total) fail("E_SOURCE_LIMIT");
+        total += size;
         if (strcmp(type, "commit") == 0) {
             if (size > COMMIT_MAX) fail("E_SOURCE_LIMIT");
             body = read_contents(input, output, oid, type, size);
