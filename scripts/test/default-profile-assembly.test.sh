@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 export LC_ALL=C
 
@@ -14,6 +15,58 @@ pass=0
 ok() { pass=$((pass + 1)); printf 'ok %s - %s\n' "$pass" "$1"; }
 sha_file() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 
+tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-default-profile.XXXXXX")
+download=''
+cleanup() {
+  if [ -n "$download" ] && [ -f "$download" ]; then
+    /bin/rm -f -- "$download"
+  fi
+  /bin/rm -rf -- "$tmp"
+}
+trap cleanup EXIT
+
+platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m)
+case "$platform" in
+  Linux:x86_64)
+    asset='jq-linux64'
+    asset_sha='af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44'
+    ;;
+  Darwin:x86_64|Darwin:arm64)
+    asset='jq-osx-amd64'
+    asset_sha='5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef'
+    ;;
+  *) fail "unsupported jq 1.6 proof platform: $platform" ;;
+esac
+
+cache="${TMPDIR:-/tmp}/ystack-portable-core-jq16"
+/bin/mkdir -p "$cache"
+jq_bin="$cache/$asset"
+if [ ! -f "$jq_bin" ] || [ -L "$jq_bin" ] ||
+   [ "$(sha_file "$jq_bin")" != "$asset_sha" ]; then
+  download=$(/usr/bin/mktemp "$cache/.jq-1.6.XXXXXX")
+  /usr/bin/curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/jqlang/jq/releases/download/jq-1.6/$asset" \
+    -o "$download"
+  [ "$(sha_file "$download")" = "$asset_sha" ] || fail jq-download-digest
+  /bin/chmod 0555 "$download"
+  /bin/mv "$download" "$jq_bin"
+  download=''
+fi
+
+jq_runtime="$tmp/bin"
+/bin/mkdir "$jq_runtime"
+if [ "$platform" = Darwin:arm64 ]; then
+  /bin/ln -s "$jq_bin" "$jq_runtime/jq-real"
+  /usr/bin/printf '%s\n' '#!/bin/sh' \
+    'exec /usr/bin/arch -x86_64 "${0%/*}/jq-real" "$@"' >"$jq_runtime/jq"
+  /bin/chmod 0555 "$jq_runtime/jq"
+else
+  /bin/ln -s "$jq_bin" "$jq_runtime/jq"
+fi
+export PATH="$jq_runtime:$PATH"
+
+[ ! -L "$jq_bin" ] && [ "$(sha_file "$jq_bin")" = "$asset_sha" ] ||
+  fail jq-cache-digest
 [ "$(jq --version)" = jq-1.6 ] || fail jq-version
 [ "${#manifests[@]}" -eq 7 ] || fail manifest-count
 scripts_core="$root/scripts/core-contract.sh"
