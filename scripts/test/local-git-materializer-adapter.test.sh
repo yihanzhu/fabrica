@@ -610,6 +610,55 @@ copy_input="$tmp/copy-input.json"
 input_with_patch "$copy_contract_input" "$copy_patch" "$copy_input"
 expect_error copy-metadata E_PATCH "$copy_input"
 
+directory_file_source="$tmp/source-directory-file.git"
+/bin/mkdir -m 700 "$directory_file_source"
+git_clean init -q --bare --object-format=sha1 "$directory_file_source"
+directory_file_blob=$(printf '%s\n' value |
+  git_clean --git-dir="$directory_file_source" hash-object -w --stdin)
+directory_file_child=$(printf '100644 blob %s\tfile\n' "$directory_file_blob" |
+  git_clean --git-dir="$directory_file_source" mktree)
+directory_file_tree=$(printf '040000 tree %s\tdir\n' "$directory_file_child" |
+  git_clean --git-dir="$directory_file_source" mktree)
+directory_file_commit=$(printf '%s\n' directory-file |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$directory_file_source" \
+    commit-tree "$directory_file_tree")
+git_clean --git-dir="$directory_file_source" update-ref refs/heads/main "$directory_file_commit"
+directory_file_contract="$tmp/directory-file-contract.json"
+"${jq_cmd[@]}" -S -c \
+  '.allowed_paths=["dir","dir/file"] | .max_changed_paths=2' \
+  "$contract_file" > "$directory_file_contract"
+directory_file_patch="$tmp/directory-file.patch"
+printf '%s\n' 'diff --git a/dir/file b/dir/file' 'deleted file mode 100644' \
+  '--- a/dir/file' '+++ /dev/null' '@@ -1 +0,0 @@' '-value' \
+  'diff --git a/dir b/dir' 'new file mode 100644' '--- /dev/null' '+++ b/dir' \
+  '@@ -0,0 +1 @@' '+replacement' > "$directory_file_patch"
+directory_file_source_input="$tmp/directory-file-source-input.json"
+input_for_source "$input_file" "$directory_file_source_input" sha1 \
+  "$directory_file_commit" "$directory_file_tree"
+directory_file_contract_input="$tmp/directory-file-contract-input.json"
+input_with_contract "$directory_file_source_input" "$directory_file_contract" \
+  "$directory_file_contract_input"
+directory_file_input="$tmp/directory-file-input.json"
+input_with_patch "$directory_file_contract_input" "$directory_file_patch" \
+  "$directory_file_input"
+directory_file_root=$(run_case directory-file "$directory_file_input" "$directory_file_source")
+[ ! -s "$directory_file_root/err" ] || fail directory-file-stderr
+directory_file_candidate="$directory_file_root/candidate/repository.git"
+directory_file_candidate_commit=$(git_clean --git-dir="$directory_file_candidate" \
+  rev-parse refs/heads/candidate)
+if [ "$(git_clean --git-dir="$directory_file_candidate" show \
+    "$directory_file_candidate_commit:dir")" != replacement ] ||
+   git_clean --git-dir="$directory_file_candidate" cat-file -e \
+     "$directory_file_candidate_commit:dir/file" 2>/dev/null; then
+  fail directory-file-result
+fi
+pass 'directory-to-file transition preserves preflight accounting and applies cleanly'
+
 /usr/bin/printf '%s\n' '/invalid/alternate' > "$tmp/source.git/objects/info/alternates"
 expect_error alternates E_SOURCE_GIT
 /bin/rm "$tmp/source.git/objects/info/alternates"

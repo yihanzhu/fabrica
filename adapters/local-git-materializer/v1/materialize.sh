@@ -476,10 +476,16 @@ while IFS= read -r patch_path; do
   source_path_bytes=0
   if source_path_object=$(git_dir "$source_git_dir" rev-parse --verify \
       "$source_tree:$patch_path" 2>/dev/null); then
-    [ "$(git_dir "$source_git_dir" cat-file -t "$source_path_object" 2>/dev/null)" = blob ] ||
-      emit_error E_PATCH_PATH
-    source_path_bytes=$(git_dir "$source_git_dir" cat-file -s \
+    source_path_type=$(git_dir "$source_git_dir" cat-file -t \
       "$source_path_object" 2>/dev/null) || emit_error E_SOURCE_GIT
+    case "$source_path_type" in
+      blob)
+        source_path_bytes=$(git_dir "$source_git_dir" cat-file -s \
+          "$source_path_object" 2>/dev/null) || emit_error E_SOURCE_GIT
+        ;;
+      tree) source_path_bytes=0 ;;
+      *) emit_error E_PATCH_PATH ;;
+    esac
   fi
   case "$source_path_bytes" in ''|*[!0-9]*) emit_error E_SOURCE_GIT ;; esac
   [ "${#source_path_bytes}" -le 9 ] &&
