@@ -273,3 +273,14 @@ scripts/test/default-dormant-publisher-adapter.test.sh
 # Inactive deterministic verifier normalizer payload
 adapters/deterministic-verifier/v1/normalize.jq
 scripts/test/default-deterministic-verifier-adapter.test.sh
+
+# Inactive default profile assembly
+profiles/default/v1/profile.json
+profiles/default/v1/manifests/claude-code-producer.json
+profiles/default/v1/manifests/codex-native-reviewer.json
+profiles/default/v1/manifests/deterministic-verifier.json
+profiles/default/v1/manifests/dormant-publisher.json
+profiles/default/v1/manifests/github-actions-ci.json
+profiles/default/v1/manifests/github-forge.json
+profiles/default/v1/manifests/local-git-materializer.json
+scripts/test/default-profile-assembly.test.sh

@@ -35,6 +35,19 @@ The private native snapshot helper is the exception recorded in
 `work/portable-profile-resolution/spec.md`. Remove it only when every supported
 runtime has an equivalent accepted descriptor-relative no-follow API.
 
+## Inactive default profile assembly
+
+`profiles/default/v1/` binds the seven default adapter packages to exact Git
+objects from one durable main commit. Protected roles keep distinct principals,
+execution boundaries, and authority scopes; their decision records cite the exact
+accepted `ROADMAP.md` content. The profile requests no adapter tools, and the CI,
+identity, and dormant-publisher roles request no capability or permission.
+
+This is source data only. It is not selected, resolved, qualified, installed, or
+activated, and it cannot invoke a model, use a credential, contact a provider,
+publish, or touch a target. Run
+`bash scripts/test/default-profile-assembly.test.sh` for the focused proof.
+
 ## Inactive portable core v2 fake-forge contract
 
 `core/v2/` contains an inactive, repo-only contract for deterministic candidate

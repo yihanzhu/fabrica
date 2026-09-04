@@ -55,6 +55,21 @@ with the restored `scripts/core-contract.sh`. No compiled helper is installed or
 restored. A future activation must separately qualify and bind a production trusted
 parent; restoring these files does not select a live profile.
 
+### Restore the inactive default profile assembly
+
+Restore the nine paths listed under “Inactive default profile assembly” in
+[`ci/required-files.txt`](ci/required-files.txt) from one commit, then run:
+
+```sh
+bash scripts/test/default-profile-assembly.test.sh
+```
+
+The proof validates the profile and seven manifests, their exact main package
+objects, the accepted Roadmap decision record, role separation, and empty tool
+grants. Restoring these records does not select, resolve, qualify, install, or
+activate the profile and performs no model, credential, provider, publish, or
+target operation.
+
 ---
 
 ## 1. Recreate yshifu (the manager)
