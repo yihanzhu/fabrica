@@ -318,6 +318,13 @@ def replay(arguments):
                 state["phase"] = "publish-wait"
                 atomic_json(state_path, state)
             if state["phase"] == "publish-wait":
+                verify_candidate(arguments.candidate_root, state["identity"]["candidate_tree_id"],
+                                 identity["verifier"]["path"], identity["verifier"]["expected_sha256"])
+                if arguments.review_observation is not None and (
+                    observation(arguments.review_observation, "delivery_replay_review_observation",
+                                state["identity"], "verdict") != state.get("review")
+                ):
+                    raise ReplayError("supplied offline review changed after review wait")
                 publisher = observation(arguments.publisher_observation, "delivery_replay_publisher_observation", state["identity"], "disposition")
                 if publisher is None:
                     result(state)

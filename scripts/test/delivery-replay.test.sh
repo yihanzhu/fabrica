@@ -88,6 +88,13 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
   --review-observation "$tmp/review.json" >"$tmp/publish-wait.out"
 jq -e '.state.phase=="publish-wait"' "$tmp/publish-wait.out" >/dev/null || fail missing-publisher-waits
+jq -S -c '.note="changed after review wait"' "$tmp/review.json" >"$tmp/changed-review.json"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --review-observation "$tmp/changed-review.json" --publisher-observation "$tmp/publisher.json" >"$tmp/changed-review.out" 2>&1; then fail changed-review-after-wait; fi
+grep -Fq 'review changed after review wait' "$tmp/changed-review.out" || fail changed-review-after-wait-error
+pass 'a changed supplied review cannot advance publish wait'
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
