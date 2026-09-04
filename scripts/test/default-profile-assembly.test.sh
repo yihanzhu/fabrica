@@ -130,7 +130,7 @@ for manifest in "${manifests[@]}"; do
   oid=$(jq -r .body.package_ref.object_id "$manifest")
   mode=$(jq -r .body.package_ref.mode "$manifest")
   type=$(jq -r .body.package_ref.object_type "$manifest")
-  record=$(git -C "$root" ls-tree "$commit" "$path")
+  record=$(git -C "$root" ls-tree HEAD "$path")
   [ "$record" = "$mode $type $oid"$'\t'"$path" ] || fail "package-object-$id"
 done
 while IFS= read -r ref; do
@@ -140,7 +140,7 @@ while IFS= read -r ref; do
   oid=$(jq -r .object_id <<<"$ref")
   mode=$(jq -r .mode <<<"$ref")
   type=$(jq -r .object_type <<<"$ref")
-  record=$(git -C "$root" ls-tree "$commit" "$path")
+  record=$(git -C "$root" ls-tree HEAD "$path")
   [ "$record" = "$mode $type $oid"$'\t'"$path" ] || fail "prompt-object-$path"
 done < <(jq -c '.body.bindings[] | .prompt_ref? // empty' "$profile")
 ok 'every manifest graph and selected Git object is exact'
