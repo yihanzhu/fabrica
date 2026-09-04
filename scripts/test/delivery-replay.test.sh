@@ -110,6 +110,84 @@ jq -e '.state.phase=="review-wait" and .state.identity.input_sha256==$sha' --arg
   "$tmp/mutation.out" >/dev/null || fail input-snapshot-output
 pass 'replacement of the original input after snapshot cannot change materialization'
 
+kill_wrapper="$tmp/kill-after-materialize.py"
+printf '%s\n' \
+  'import importlib.util, os, signal, sys' \
+  'path, arguments = sys.argv[1], sys.argv[2:]' \
+  'spec = importlib.util.spec_from_file_location("replay", path)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'spec.loader.exec_module(module)' \
+  'original = module.run_materializer' \
+  'def stop_after_materialization(*args, **kwargs):' \
+  '    result = original(*args, **kwargs)' \
+  '    os.kill(os.getpid(), signal.SIGKILL)' \
+  '    return result' \
+  'module.run_materializer = stop_after_materialization' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$kill_wrapper"
+mkdir -m 700 "$tmp/reconcile-state" "$tmp/reconcile-candidate" "$tmp/reconcile-scratch"
+if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/reconcile-killed.out" 2>&1; then fail reconcile-kill; fi
+[ "$(jq -r '.phase' "$tmp/reconcile-state/run.json")" = materializing ] && [ -d "$tmp/reconcile-candidate/repository.git" ] ||
+  fail reconcile-window
+python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/reconcile-retry.out"
+jq -e '.state.phase=="review-wait"' "$tmp/reconcile-retry.out" >/dev/null || fail reconcile-retry
+pass 'SIGKILL after materializer output reconciles the existing candidate once'
+
+mkdir -m 700 "$tmp/reconcile-bad-state" "$tmp/reconcile-bad-candidate" "$tmp/reconcile-bad-scratch"
+if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-bad-candidate" --scratch-root "$tmp/reconcile-bad-scratch" --state-dir "$tmp/reconcile-bad-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/reconcile-bad-killed.out" 2>&1; then fail reconcile-bad-kill; fi
+bad_repo="$tmp/reconcile-bad-candidate/repository.git"
+bad_commit=$(printf '%s\n' mismatch | /usr/bin/env -i HOME="$tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture \
+  GIT_COMMITTER_EMAIL=fixture@example.invalid /usr/bin/git --git-dir="$bad_repo" commit-tree "$source_tree" -p "$source_commit")
+/usr/bin/git --git-dir="$bad_repo" update-ref refs/heads/candidate "$bad_commit"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-bad-candidate" --scratch-root "$tmp/reconcile-bad-scratch" --state-dir "$tmp/reconcile-bad-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/reconcile-bad.out" 2>&1; then fail reconcile-mismatch; fi
+jq -e '.state.phase=="failed" and (.state.reason|contains("does not match frozen"))' "$tmp/reconcile-bad.out" >/dev/null ||
+  fail reconcile-mismatch-state
+pass 'a mismatched interrupted candidate is rejected without cleanup'
+
+printf '\377' >"$tmp/invalid-input.json"
+mkdir -m 700 "$tmp/invalid-input-state" "$tmp/invalid-input-candidate" "$tmp/invalid-input-scratch"
+if python3 "$replay" --input "$tmp/invalid-input.json" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/invalid-input-candidate" --scratch-root "$tmp/invalid-input-scratch" --state-dir "$tmp/invalid-input-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/invalid-input.out" 2>&1; then fail invalid-utf8-input; fi
+if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/invalid-input.out" ||
+   grep -Fq Traceback "$tmp/invalid-input.out"; then
+  fail invalid-utf8-input-error
+fi
+printf '\377' >"$tmp/reconcile-state/invalid-review.json"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --review-observation "$tmp/reconcile-state/invalid-review.json" >"$tmp/invalid-review.out" 2>&1; then fail invalid-utf8-review; fi
+if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/invalid-review.out" ||
+   grep -Fq Traceback "$tmp/invalid-review.out"; then
+  fail invalid-utf8-review-error
+fi
+mkdir -m 700 "$tmp/invalid-journal-state" "$tmp/invalid-journal-candidate" "$tmp/invalid-journal-scratch"
+printf '\377' >"$tmp/invalid-journal-state/run.json"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/invalid-journal-candidate" --scratch-root "$tmp/invalid-journal-scratch" --state-dir "$tmp/invalid-journal-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/invalid-journal.out" 2>&1; then fail invalid-utf8-journal; fi
+if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/invalid-journal.out" ||
+   grep -Fq Traceback "$tmp/invalid-journal.out"; then
+  fail invalid-utf8-journal-error
+fi
+pass 'invalid UTF-8 input, review, and journal records fail without a traceback'
+
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/review.json"
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":"test.publisher","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/publisher.json"
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \

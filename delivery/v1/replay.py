@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,7 +56,7 @@ def read_bytes(path, limit):
 def parse_json(data):
     try:
         return json.loads(data)
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ReplayError("input is not JSON") from error
 
 
@@ -168,11 +169,13 @@ def input_identity(input_value, input_sha, arguments, materializer):
     return identity
 
 
-def run_materializer(arguments, materializer, input_path, identity):
+def run_materializer(arguments, materializer, input_path, identity, candidate_root=None, scratch_root=None):
+    candidate_root = Path(arguments.candidate_root).resolve() if candidate_root is None else candidate_root
+    scratch_root = Path(arguments.scratch_root).resolve() if scratch_root is None else scratch_root
     command = [
         str(materializer), "materialize", str(input_path),
         arguments.source_repository_id, str(Path(arguments.source_git_dir).resolve()),
-        str(Path(arguments.candidate_root).resolve()), str(Path(arguments.scratch_root).resolve()),
+        str(candidate_root), str(scratch_root),
         str(Path(arguments.closure_helper).resolve()), str(Path(arguments.jq_bin).resolve()),
     ]
     environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
@@ -203,9 +206,50 @@ def run_materializer(arguments, materializer, input_path, identity):
             "receipt_sha256": receipt_sha,
             "candidate_commit_id": candidate["commit_id"],
             "candidate_tree_id": candidate["tree_id"],
+            "candidate_parent_commit_id": candidate["parent_commit_id"],
         }
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
         raise ReplayError("materializer response is malformed") from error
+
+
+def candidate_identity(candidate_root):
+    repository = Path(candidate_root).resolve() / "repository.git"
+    if not repository.is_dir() or repository.is_symlink():
+        return None
+    environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
+                   "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
+    values = []
+    for revision in ("refs/heads/candidate", "refs/heads/candidate^{tree}", "refs/heads/candidate^"):
+        result = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "rev-parse", revision],
+                                env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+        value = result.stdout.decode().strip()
+        if result.returncode != 0 or not OID.fullmatch(value):
+            return None
+        values.append(value)
+    return {"candidate_commit_id": values[0], "candidate_tree_id": values[1],
+            "candidate_parent_commit_id": values[2]}
+
+
+def reconcile_materialization(arguments, materializer, input_path, identity, state_dir):
+    existing = candidate_identity(arguments.candidate_root)
+    if existing is None:
+        return None
+    recovery_candidate = Path(tempfile.mkdtemp(prefix="reconcile-candidate-", dir=state_dir))
+    recovery_scratch = Path(tempfile.mkdtemp(prefix="reconcile-scratch-", dir=state_dir))
+    try:
+        recomputed = run_materializer(arguments, materializer, input_path, identity,
+                                      recovery_candidate, recovery_scratch)
+    finally:
+        shutil.rmtree(recovery_candidate, ignore_errors=True)
+        shutil.rmtree(recovery_scratch, ignore_errors=True)
+    if existing != {
+        "candidate_commit_id": recomputed["candidate_commit_id"],
+        "candidate_tree_id": recomputed["candidate_tree_id"],
+        "candidate_parent_commit_id": recomputed["candidate_parent_commit_id"],
+    }:
+        raise ReplayError("existing candidate does not match frozen materialization input")
+    return recomputed
 
 
 def verify_candidate(candidate_root, candidate_tree, path, expected):
@@ -306,7 +350,11 @@ def replay(arguments):
                 return 0
             if state["phase"] == "materializing":
                 try:
-                    state["materialization"] = run_materializer(arguments, materializer, input_snapshot_path, identity)
+                    reconciled = reconcile_materialization(arguments, materializer, input_snapshot_path,
+                                                           identity, state_dir)
+                    state["materialization"] = reconciled or run_materializer(
+                        arguments, materializer, input_snapshot_path, identity
+                    )
                 except ReplayError as error:
                     state.update({"phase": "failed", "recoverable": True, "reason": str(error)})
                     atomic_json(state_path, state)
