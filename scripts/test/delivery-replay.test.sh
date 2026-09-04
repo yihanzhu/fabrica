@@ -81,6 +81,35 @@ request_sha=$(jq -r '.identity.request_sha256' "$tmp/changed-state/run.json")
 candidate_tree=$(jq -r '.identity.candidate_tree_id' "$tmp/changed-state/run.json")
 pass 'changed materialization and fixed read-only verification wait for review'
 
+cp "$base_input" "$tmp/mutable-input.json"
+mkdir -m 700 "$tmp/mutation-state" "$tmp/mutation-candidate" "$tmp/mutation-scratch"
+python3 "$replay" --input "$tmp/mutable-input.json" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/mutation-candidate" --scratch-root "$tmp/mutation-scratch" --state-dir "$tmp/mutation-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/mutation.out" &
+mutation_pid=$!
+mutation_wait=0
+while [ ! -f "$tmp/mutation-state/materialization-input.json" ]; do
+  if ! kill -0 "$mutation_pid" 2>/dev/null; then
+    wait "$mutation_pid" || :
+    sed -n '1,12p' "$tmp/mutation.out" >&2
+    fail input-snapshot-start
+  fi
+  mutation_wait=$((mutation_wait + 1))
+  if [ "$mutation_wait" -gt 100 ]; then
+    kill -TERM "$mutation_pid" 2>/dev/null || :
+    wait "$mutation_pid" || :
+    fail input-snapshot-timeout
+  fi
+  sleep 0.1
+done
+printf '%s\n' '{"replaced":"after snapshot"}' >"$tmp/mutable-input.json"
+wait "$mutation_pid" || fail input-snapshot-run
+[ "$(sha_file "$tmp/mutation-state/materialization-input.json")" = "$(sha_file "$base_input")" ] || fail input-snapshot-bytes
+jq -e '.state.phase=="review-wait" and .state.identity.input_sha256==$sha' --arg sha "$(sha_file "$base_input")" \
+  "$tmp/mutation.out" >/dev/null || fail input-snapshot-output
+pass 'replacement of the original input after snapshot cannot change materialization'
+
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/review.json"
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":"test.publisher","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/publisher.json"
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \

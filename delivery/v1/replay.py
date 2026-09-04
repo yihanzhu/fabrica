@@ -33,7 +33,7 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
-def read_json(path, limit):
+def read_bytes(path, limit):
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         chunks = []
@@ -49,10 +49,19 @@ def read_json(path, limit):
         os.close(descriptor)
     if len(data) > limit:
         raise ReplayError("input exceeds its size limit")
+    return data
+
+
+def parse_json(data):
     try:
-        return json.loads(data), digest_bytes(data)
+        return json.loads(data)
     except json.JSONDecodeError as error:
         raise ReplayError("input is not JSON") from error
+
+
+def read_json(path, limit):
+    data = read_bytes(path, limit)
+    return parse_json(data), digest_bytes(data)
 
 
 def private_directory(path):
@@ -82,7 +91,10 @@ def disjoint(*paths):
 
 
 def atomic_json(path, value):
-    encoded = canonical(value) + b"\n"
+    atomic_bytes(path, canonical(value) + b"\n")
+
+
+def atomic_bytes(path, encoded):
     descriptor, temporary = tempfile.mkstemp(prefix=".replay-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -141,6 +153,7 @@ def input_identity(input_value, input_sha, arguments, materializer):
         "request_sha256": request_sha,
         "source_commit_id": source["commit_id"],
         "source_tree_id": source_tree_id,
+        "source_hash_algorithm": source.get("hash_algorithm"),
         "verifier": {
             "id": "delivery.fixed-content-sha256.v1",
             "path": safe_path(arguments.verify_path),
@@ -155,9 +168,9 @@ def input_identity(input_value, input_sha, arguments, materializer):
     return identity
 
 
-def run_materializer(arguments, materializer):
+def run_materializer(arguments, materializer, input_path, identity):
     command = [
-        str(materializer), "materialize", str(Path(arguments.input).resolve()),
+        str(materializer), "materialize", str(input_path),
         arguments.source_repository_id, str(Path(arguments.source_git_dir).resolve()),
         str(Path(arguments.candidate_root).resolve()), str(Path(arguments.scratch_root).resolve()),
         str(Path(arguments.closure_helper).resolve()), str(Path(arguments.jq_bin).resolve()),
@@ -172,9 +185,22 @@ def run_materializer(arguments, materializer):
         receipt_text = response["payloads"][0]["data"]
         receipt = json.loads(receipt_text)
         candidate = receipt["candidate"]
+        receipt_sha = response["payloads"][0]["sha256"]
+        if (
+            receipt_sha != digest_bytes(receipt_text.encode()) or
+            receipt["request_ref"]["sha256"] != identity["request_sha256"] or
+            response["stage_result"]["body"]["request_ref"]["sha256"] != identity["request_sha256"] or
+            receipt["source"] != {
+                "repository_id": identity["source_repository_id"],
+                "hash_algorithm": identity["source_hash_algorithm"],
+                "commit_id": identity["source_commit_id"],
+                "tree_id": identity["source_tree_id"],
+            }
+        ):
+            raise ReplayError("materializer response does not match the input snapshot")
         return {
             "response_sha256": digest_bytes(result.stdout),
-            "receipt_sha256": response["payloads"][0]["sha256"],
+            "receipt_sha256": receipt_sha,
             "candidate_commit_id": candidate["commit_id"],
             "candidate_tree_id": candidate["tree_id"],
         }
@@ -226,12 +252,15 @@ def result(state):
 def replay(arguments):
     repository = Path(__file__).resolve().parents[2]
     materializer = trusted_file(repository / "adapters/local-git-materializer/v1/materialize.sh")
-    input_value, input_sha = read_json(arguments.input, MAX_INPUT_BYTES)
-    identity = input_identity(input_value, input_sha, arguments, materializer)
     state_dir = private_directory(arguments.state_dir)
     disjoint(state_dir, arguments.source_git_dir, arguments.candidate_root, arguments.scratch_root)
     state_path = state_dir / "run.json"
+    input_snapshot_path = state_dir / "materialization-input.json"
     lock_path = state_dir / "replay.lock"
+    input_bytes = read_bytes(arguments.input, MAX_INPUT_BYTES)
+    input_value = parse_json(input_bytes)
+    input_sha = digest_bytes(input_bytes)
+    identity = input_identity(input_value, input_sha, arguments, materializer)
     interrupted = {"value": False}
     previous_term = signal.getsignal(signal.SIGTERM)
     previous_int = signal.getsignal(signal.SIGINT)
@@ -252,7 +281,12 @@ def replay(arguments):
             if state is None:
                 state = {"schema_version": 1, "kind": "delivery_replay_state", "identity": identity,
                          "phase": "materializing", "authority": "none", "qualification": "unavailable"}
+                atomic_bytes(input_snapshot_path, input_bytes)
                 atomic_json(state_path, state)
+            elif not input_snapshot_path.is_file() or input_snapshot_path.is_symlink() or (
+                digest_bytes(read_bytes(input_snapshot_path, MAX_INPUT_BYTES)) != identity["input_sha256"]
+            ):
+                raise ReplayError("saved materialization input snapshot is unavailable")
             if state["phase"] == "failed":
                 if state.get("recoverable"):
                     state["recovery"] = "start a new replay with fresh empty candidate, scratch, and state directories"
@@ -272,7 +306,7 @@ def replay(arguments):
                 return 0
             if state["phase"] == "materializing":
                 try:
-                    state["materialization"] = run_materializer(arguments, materializer)
+                    state["materialization"] = run_materializer(arguments, materializer, input_snapshot_path, identity)
                 except ReplayError as error:
                     state.update({"phase": "failed", "recoverable": True, "reason": str(error)})
                     atomic_json(state_path, state)
