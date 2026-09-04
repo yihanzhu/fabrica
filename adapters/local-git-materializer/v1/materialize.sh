@@ -19,12 +19,12 @@ emit_error() {
   exit 1
 }
 
-[ "$#" -eq 6 ] || emit_error E_USAGE
+[ "$#" -eq 7 ] || emit_error E_USAGE
 script_path=${BASH_SOURCE[0]}
 case "$script_path" in /*) ;; *) emit_error E_USAGE ;; esac
 if [ "$1" = materialize ]; then
   exec /usr/bin/env -i PATH="${PATH:-/usr/bin:/bin}" LC_ALL=C \
-    /bin/bash "$script_path" __materialize_clean "$2" "$3" "$4" "$5" "$6"
+    /bin/bash "$script_path" __materialize_clean "$2" "$3" "$4" "$5" "$6" "$7"
 fi
 [ "$1" = __materialize_clean ] || emit_error E_USAGE
 export LC_ALL=C
@@ -34,11 +34,16 @@ source_repository_id=$3
 source_git_dir=$4
 candidate_root=$5
 scratch_root=$6
+closure_helper=$7
 
 for absolute_path in "$script_path" "$input_path" "$source_git_dir" \
-  "$candidate_root" "$scratch_root"; do
+  "$candidate_root" "$scratch_root" "$closure_helper"; do
   case "$absolute_path" in /*) ;; *) emit_error E_USAGE ;; esac
 done
+[ -f "$closure_helper" ] && [ -x "$closure_helper" ] && [ ! -L "$closure_helper" ] ||
+  emit_error E_DEPENDENCY
+[ "$("$closure_helper" version 2>/dev/null)" = ystack-object-closure-v1 ] ||
+  emit_error E_DEPENDENCY
 [ -f "$script_path" ] && [ ! -L "$script_path" ] || emit_error E_PACKAGE
 script_dir=$(CDPATH='' cd -P -- "${script_path%/*}" && pwd -P) || emit_error E_PACKAGE
 repo_root=$(CDPATH='' cd -P -- "$script_dir/../../.." && pwd -P) || emit_error E_PACKAGE
@@ -311,8 +316,21 @@ done < "$source_config"
   [ ! -d "$source_git_dir/refs/replace" ] &&
   [ -z "$(find "$source_git_dir/objects/pack" -type f -name '*.promisor' -print -quit 2>/dev/null)" ] ||
   emit_error E_SOURCE_GIT
-[ -z "$(git_dir "$source_git_dir" for-each-ref --format='%(refname)' \
-  refs/replace/ 2>/dev/null)" ] || emit_error E_SOURCE_GIT
+packed_refs="$source_git_dir/packed-refs"
+if [ -e "$packed_refs" ]; then
+  [ -f "$packed_refs" ] && [ ! -L "$packed_refs" ] || emit_error E_SOURCE_GIT
+  packed_refs_snapshot="$run_root/packed-refs"
+  if ! /usr/bin/head -c 1048577 "$packed_refs" > "$packed_refs_snapshot"; then
+    emit_error E_SOURCE_LIMIT
+  fi
+  packed_refs_bytes=$(/usr/bin/wc -c < "$packed_refs_snapshot" | /usr/bin/tr -d ' ') ||
+    emit_error E_SOURCE_LIMIT
+  [ "$packed_refs_bytes" -le 1048576 ] || emit_error E_SOURCE_LIMIT
+  if /usr/bin/grep -aEq '^[0-9a-f]{40} refs/replace/|^[0-9a-f]{64} refs/replace/' \
+      "$packed_refs_snapshot"; then
+    emit_error E_SOURCE_GIT
+  fi
+fi
 if find "$source_git_dir/hooks" -type f ! -name '*.sample' -print -quit 2>/dev/null |
    /usr/bin/grep -q .; then
   emit_error E_SOURCE_HOOK
@@ -412,32 +430,10 @@ scan_tree "$source_git_dir" "$source_tree" "$source_paths" || emit_error E_SOURC
 
 empty_template="$run_root/empty-template"
 source_import_byte_limit=268435456
-source_import_count_limit=65536
 source_objects="$run_root/source.objects"
-if ! git_dir "$source_git_dir" rev-list --objects --no-object-names "$source_commit" |
-  /usr/bin/awk -v limit="$source_import_count_limit" \
-    'NR > limit { exit 2 } { print }' > "$source_objects"; then
+"${git_env[@]}" "$closure_helper" walk "$source_git_dir" \
+  "$source_algorithm" "$source_commit" "$source_objects" 2>/dev/null ||
   emit_error E_SOURCE_LIMIT
-fi
-source_object_sizes="$run_root/source-object-sizes"
-git_dir "$source_git_dir" cat-file \
-  --batch-check='%(objectname) %(objecttype) %(objectsize)' \
-  < "$source_objects" > "$source_object_sizes" || emit_error E_SOURCE_LIMIT
-source_object_bytes=0
-while IFS=' ' read -r object_id object_type object_size extra; do
-  [ -z "$extra" ] || emit_error E_SOURCE_LIMIT
-  case "$source_algorithm" in
-    sha1) [[ "$object_id" =~ ^[0-9a-f]{40}$ ]] || emit_error E_SOURCE_LIMIT ;;
-    sha256) [[ "$object_id" =~ ^[0-9a-f]{64}$ ]] || emit_error E_SOURCE_LIMIT ;;
-    *) emit_error E_SOURCE_LIMIT ;;
-  esac
-  case "$object_type" in blob|tree|commit) ;; *) emit_error E_SOURCE_LIMIT ;; esac
-  case "$object_size" in ''|*[!0-9]*) emit_error E_SOURCE_LIMIT ;; esac
-  [ "${#object_size}" -le 9 ] && [ "$object_size" -le "$source_import_byte_limit" ] &&
-    [ "$source_object_bytes" -le "$((source_import_byte_limit - object_size))" ] ||
-    emit_error E_SOURCE_LIMIT
-  source_object_bytes=$((source_object_bytes + object_size))
-done < "$source_object_sizes"
 
 max_changed=$("$jq_bin" -r '.max_changed_paths' "$contract_file") || emit_error E_CONTRACT
 patch_paths="$run_root/patch-paths"

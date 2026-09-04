@@ -287,7 +287,9 @@ cumulative source blob sizes plus patch bytes must fit a 256 MiB candidate budge
 
 The fixed `materialize` command accepts only caller-named physical source,
 candidate, and scratch boundaries, with every path independently absolute. It
-rejects worktrees, alternates, shallow or
+also receives the execution boundary's compiled `ystack-object-closure-v1` helper,
+whose source is private to this adapter package.
+It rejects worktrees, alternates, shallow or
 partial repositories, replace or graft state, active hooks and filters, remote
 configuration, unsafe paths, binary or copy/rename patches, empty subtrees,
 symlinks, and submodules. It never

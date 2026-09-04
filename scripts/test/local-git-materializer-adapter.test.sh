@@ -6,6 +6,7 @@ umask 077
 
 root=$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 adapter="$root/adapters/local-git-materializer/v1/materialize.sh"
+closure_source="$root/adapters/local-git-materializer/v1/object-closure.c"
 protocol="$root/adapters/local-git-materializer/v1/protocol.jq"
 test_tmp_base=${TMPDIR:-/tmp}
 tmp=$(/usr/bin/mktemp -d "${test_tmp_base%/}/ystack-local-materializer.XXXXXX")
@@ -36,6 +37,10 @@ else
   /bin/cp "$jq_bin" "$runtime_bin/jq"
 fi
 /bin/chmod 0555 "$runtime_bin/jq"
+/usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 "$closure_source" \
+  -o "$runtime_bin/object-closure"
+/bin/chmod 0555 "$runtime_bin/object-closure"
+closure_helper="$runtime_bin/object-closure"
 export PATH="$runtime_bin:/usr/bin:/bin"
 generation=$(/usr/bin/sed -n \
   "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" \
@@ -264,6 +269,7 @@ run_case() {
   PATH="$runtime_bin:/usr/bin:/bin" GH_TOKEN=must-not-read GITHUB_TOKEN=must-not-read \
     AWS_SECRET_ACCESS_KEY=must-not-read SSH_AUTH_SOCK=/must/not/read \
     "$adapter" materialize "$input" fixture.target "$source" "$candidate" "$scratch" \
+    "$closure_helper" \
     > "$case_root/out" 2> "$case_root/err"
   printf '%s\n' "$case_root"
 }
@@ -344,7 +350,8 @@ expect_error() {
   local candidate="$case_root/candidate" scratch="$case_root/scratch"
   /bin/mkdir -m 700 "$case_root" "$candidate" "$scratch"
   if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input" fixture.target \
-      "$source" "$candidate" "$scratch" > "$case_root/out" 2> "$case_root/err"; then
+      "$source" "$candidate" "$scratch" "$closure_helper" \
+      > "$case_root/out" 2> "$case_root/err"; then
     fail "$name accepted"
   fi
   [ ! -s "$case_root/out" ] && [ "$(cat "$case_root/err")" = "$expected" ] || fail "$name error"
@@ -363,7 +370,7 @@ if (
   export -f find
   PATH="$runtime_bin:/usr/bin:/bin" GH_TOKEN=must-not-read BASH_ENV="$direct_case/bash-env" \
     "$adapter" __materialize_clean "$input_file" fixture.target "$tmp/source.git" \
-    "$direct_case/candidate" "$direct_case/scratch" \
+    "$direct_case/candidate" "$direct_case/scratch" "$closure_helper" \
     > "$direct_case/out" 2> "$direct_case/err"
 ); then
   fail direct-clean-worker-accepted
@@ -380,6 +387,7 @@ if (
   cd "$tmp"
   PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize 'relative:/input.json' \
     fixture.target "$tmp/source.git" "$relative_case/candidate" "$relative_case/scratch" \
+    "$closure_helper" \
     > "$relative_case/out" 2> "$relative_case/err"
 ); then
   fail relative-input-path-accepted
@@ -557,6 +565,23 @@ input_for_source "$input_file" "$large_listing_input" sha1 \
 expect_error source-tree-byte-limit E_SOURCE_TREE \
   "$large_listing_input" "$large_listing_source"
 
+historical_blob=$(printf '%s\n' alpha beta |
+  git_clean --git-dir="$large_listing_source" hash-object -w --stdin)
+historical_tip_tree=$(printf '100644 blob %s\tsource.txt\n' "$historical_blob" |
+  git_clean --git-dir="$large_listing_source" mktree)
+historical_tip=$(printf '%s\n' historical-tip |
+  /usr/bin/env -i HOME="$tmp/home" TMPDIR="$tmp" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid \
+    GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid \
+    GIT_AUTHOR_DATE=2000-01-01T00:00:00Z GIT_COMMITTER_DATE=2000-01-01T00:00:00Z \
+    /usr/bin/git --no-replace-objects --git-dir="$large_listing_source" \
+    commit-tree "$historical_tip_tree" -p "$large_listing_commit")
+git_clean --git-dir="$large_listing_source" update-ref refs/heads/main "$historical_tip"
+historical_input="$tmp/historical-input.json"
+input_for_source "$input_file" "$historical_input" sha1 "$historical_tip" "$historical_tip_tree"
+expect_error oversized-historical-tree E_SOURCE_LIMIT "$historical_input" "$large_listing_source"
+
 shared_source="$tmp/source-shared-large-blob.git"
 /bin/mkdir -m 700 "$shared_source"
 git_clean init -q --bare --object-format=sha1 "$shared_source"
@@ -691,6 +716,12 @@ git_clean --git-dir="$packed_replace_source" pack-refs --all --prune
 /bin/rmdir "$packed_replace_source/refs/replace" 2>/dev/null || :
 [ ! -d "$packed_replace_source/refs/replace" ] || fail packed-replace-fixture
 expect_error packed-replace-ref E_SOURCE_GIT "$input_file" "$packed_replace_source"
+
+large_packed_refs_source="$tmp/source-large-packed-refs.git"
+/bin/cp -R "$tmp/source.git" "$large_packed_refs_source"
+/usr/bin/awk 'BEGIN { for (i=0; i<524289; i++) print "#" }' \
+  > "$large_packed_refs_source/packed-refs"
+expect_error packed-refs-limit E_SOURCE_LIMIT "$input_file" "$large_packed_refs_source"
 
 normal_repo="$tmp/normal"
 /bin/mkdir -m 700 "$normal_repo"
@@ -969,6 +1000,7 @@ case_nonempty="$tmp/nonempty"
 /usr/bin/touch "$case_nonempty/candidate/existing"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$case_nonempty/candidate" "$case_nonempty/scratch" \
+    "$closure_helper" \
     > "$case_nonempty/out" 2> "$case_nonempty/err"; then fail nonempty-candidate; fi
 [ "$(cat "$case_nonempty/err")" = E_CANDIDATE_ROOT ] || fail nonempty-candidate-error
 pass 'non-empty candidate root rejected'
@@ -978,6 +1010,7 @@ overlap_scratch="$tmp/overlap-scratch"
 /bin/mkdir -m 700 "$overlap_candidate" "$overlap_scratch"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$overlap_candidate" "$overlap_scratch" \
+    "$closure_helper" \
     > "$tmp/overlap.out" 2> "$tmp/overlap.err"; then fail overlapping-boundary; fi
 [ "$(cat "$tmp/overlap.err")" = E_BOUNDARY ] || fail overlapping-boundary-error
 /bin/rmdir "$overlap_candidate"
@@ -987,6 +1020,7 @@ closed_output="$tmp/closed-output"
 /bin/mkdir -m 700 "$closed_output" "$closed_output/candidate" "$closed_output/scratch"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$closed_output/candidate" "$closed_output/scratch" \
+    "$closure_helper" \
     >&- 2> "$closed_output/err"; then
   fail closed-output-accepted
 fi
@@ -1012,6 +1046,7 @@ boundary_scratch="$tmp/boundary-scratch"
 /bin/mkdir -m 700 "$boundary_scratch"
 if PATH="$runtime_bin:/usr/bin:/bin" "$adapter" materialize "$input_file" fixture.target \
     "$tmp/source.git" "$symlink_boundary" "$boundary_scratch" \
+    "$closure_helper" \
     > "$tmp/boundary.out" 2> "$tmp/boundary.err"; then fail candidate-symlink; fi
 [ "$(cat "$tmp/boundary.err")" = E_CANDIDATE_ROOT ] || fail candidate-symlink-error
 pass 'symlink candidate boundary rejected'

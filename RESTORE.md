@@ -508,7 +508,7 @@ default-set wiring. The pure jq payload is offline and unqualified. It does not
 call GitHub, use a credential, rerun, cancel, or dispatch work, change a
 repository, grant authority or qualification, or activate a profile.
 
-Restore the three paths in the manifest's inactive local Git materializer block,
+Restore the four paths in the manifest's inactive local Git materializer block,
 then run:
 
 ```sh
@@ -531,6 +531,9 @@ are capped at 1,024 tree objects, with each object size-checked before non-recur
 expansion. A shared-large-blob
 fixture proves the 256 MiB pre-apply candidate
 budget blocks path fan-out before Git writes changed blobs.
+The test compiles the private object-closure helper with strict warnings. It proves
+that an oversized historical tree and an oversized packed-refs file fail before
+recursive traversal or parsing.
 
 This payload has no adapter manifest. A later assembly PR may bind the directory
 tree through the payload's durable main commit. It is an inactive, local-only

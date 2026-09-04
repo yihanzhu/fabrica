@@ -254,6 +254,7 @@ scripts/test/default-github-actions-ci-adapter.test.sh
 
 # Inactive provider-neutral local Git candidate materializer
 adapters/local-git-materializer/v1/materialize.sh
+adapters/local-git-materializer/v1/object-closure.c
 scripts/test/local-git-materializer-adapter.test.sh
 
 # Inactive Claude Code producer normalizer payload
