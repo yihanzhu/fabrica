@@ -326,7 +326,7 @@ if [ -e "$packed_refs" ]; then
   packed_refs_bytes=$(/usr/bin/wc -c < "$packed_refs_snapshot" | /usr/bin/tr -d ' ') ||
     emit_error E_SOURCE_LIMIT
   [ "$packed_refs_bytes" -le 1048576 ] || emit_error E_SOURCE_LIMIT
-  if /usr/bin/grep -aEq '^[0-9a-f]{40} refs/replace/|^[0-9a-f]{64} refs/replace/' \
+  if /usr/bin/grep -aEq '^[0-9A-Fa-f]{40} refs/replace/|^[0-9A-Fa-f]{64} refs/replace/' \
       "$packed_refs_snapshot"; then
     emit_error E_SOURCE_GIT
   fi

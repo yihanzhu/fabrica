@@ -717,6 +717,18 @@ git_clean --git-dir="$packed_replace_source" pack-refs --all --prune
 [ ! -d "$packed_replace_source/refs/replace" ] || fail packed-replace-fixture
 expect_error packed-replace-ref E_SOURCE_GIT "$input_file" "$packed_replace_source"
 
+uppercase_packed_replace_source="$tmp/source-uppercase-packed-replace.git"
+/bin/cp -R "$packed_replace_source" "$uppercase_packed_replace_source"
+/usr/bin/awk '/^[0-9a-f]+ / {$1=toupper($1)} {print}' \
+  "$uppercase_packed_replace_source/packed-refs" \
+  > "$uppercase_packed_replace_source/packed-refs.upper"
+/bin/mv "$uppercase_packed_replace_source/packed-refs.upper" \
+  "$uppercase_packed_replace_source/packed-refs"
+git_clean --git-dir="$uppercase_packed_replace_source" show-ref --verify \
+  "refs/replace/$source_tree" >/dev/null || fail uppercase-packed-replace-fixture
+expect_error uppercase-packed-replace-ref E_SOURCE_GIT "$input_file" \
+  "$uppercase_packed_replace_source"
+
 large_packed_refs_source="$tmp/source-large-packed-refs.git"
 /bin/cp -R "$tmp/source.git" "$large_packed_refs_source"
 /usr/bin/awk 'BEGIN { for (i=0; i<524289; i++) print "#" }' \
