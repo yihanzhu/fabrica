@@ -257,6 +257,11 @@ adapters/local-git-materializer/v1/materialize.sh
 adapters/local-git-materializer/v1/object-closure.c
 scripts/test/local-git-materializer-adapter.test.sh
 
+# Inactive offline delivery replay
+delivery/v1/replay.py
+scripts/test/delivery-replay.test.sh
+work/delivery-loop-first/plan.md
+
 # Inactive Claude Code producer normalizer payload
 adapters/claude-code-producer/v1/normalize.jq
 scripts/test/default-claude-code-producer-adapter.test.sh
