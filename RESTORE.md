@@ -618,15 +618,19 @@ payload is offline and unqualified. It does not execute a candidate or tool, rea
 proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
 authority or qualification, or activate a profile.
 
-Restore the seven paths in the manifest's inactive eval and trace framework block
-from the same commit. With the same pinned, architecture-bound jq 1.6 runtime used
-by the portable core, run:
+Restore the nine paths in the manifest's inactive eval and trace framework block
+from the same commit, plus the inactive state scanner block it replays. With the
+same pinned, architecture-bound jq 1.6 runtime used by the portable core, run:
 
 ```sh
 bash scripts/test/evals-framework.test.sh
+bash scripts/test/evals-events.test.sh
 ```
 
-This checks the canonical catalog (nine roadmap families, two seeded), the exact
+The second suite replays the seeded orchestrator snapshots through the real state
+scanner inside the private runtime and checks the events family end to end.
+
+The first checks the canonical catalog (nine roadmap families, three seeded), the exact
 program, catalog, and driver digest pins, a full deterministic pass of the seeded
 core replays through the real portable core, byte-identical repeat runs, honest
 grading (a wrong expectation fails; a model-only family stays inconclusive), and

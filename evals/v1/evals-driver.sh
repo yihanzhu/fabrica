@@ -50,14 +50,16 @@ modules="$runtime/core/v2/generations/$generation/modules"
 program="$runtime/program.jq"
 catalog="$runtime/catalog.json"
 core_front_door="$runtime/scripts/core-contract.sh"
+scanner="$runtime/orchestrator/v1/scan-state.sh"
+scanner_sha256=556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=4e519644f21b1b7df3c7a5cc5c6002437b4168fa3d90cd6eb0bf8e1f7d86e5a1
+program_sha256=88e2bf8ae9a3e97d7d043f97f854fa5ef79dae6794a8c762abe35ee8d6641e4f
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
-  verify_hash 8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc "$catalog" &&
+  verify_hash bbb210598791b9c80d29bc1edf362c44525fc1c308544a3a2c56d5f8f10a1234 "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -76,6 +78,13 @@ verify_runtime() {
     "$modules/stage_request.jq" &&
   verify_hash b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     "$core_front_door" &&
+  verify_hash "$scanner_sha256" "$scanner" &&
+  verify_hash 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b \
+    "$runtime/orchestrator/v1/state-scanner-driver.sh" &&
+  verify_hash 9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb \
+    "$runtime/orchestrator/v1/state-scanner-launcher.sh" &&
+  verify_hash 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae \
+    "$runtime/orchestrator/v1/state-scanner.jq" &&
   verify_hash "$evaluator_sha256" "$evaluator" &&
   verify_hash "$seed_set_sha256" "$input"
 }
@@ -88,10 +97,11 @@ run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
-    --arg catalog_sha256 8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc \
+    --arg catalog_sha256 bbb210598791b9c80d29bc1edf362c44525fc1c308544a3a2c56d5f8f10a1234 \
     --arg evaluator_sha256 "$evaluator_sha256" \
     --arg seed_set_sha256 "$seed_set_sha256" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+    --arg scanner_sha256 "$scanner_sha256" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$input" \
@@ -113,19 +123,91 @@ run_program() {
 [ "$(run_program validate-seed-set "$work/empty-observations.json" \
       "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
 
+seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
+case "$seed_source" in core.stage-run.v2|orchestrator.state-scanner.v1) ;; *) emit_error E_SHAPE ;; esac
+case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
+[[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
+observations="$work/observations.json"
+/usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
+
+record_observation() {
+  if [ "$i" -gt 0 ]; then /usr/bin/printf ',' >> "$observations" || emit_error E_RUNTIME; fi
+  /usr/bin/printf '%s' "$1" >> "$observations" || emit_error E_RUNTIME
+}
+
+# Orchestrator snapshots replay through the real state scanner. The scanner
+# finds its jq under TMPDIR and its core under its own repo root, so both are
+# staged inside the private runtime; nothing outside it is read.
+replay_scanner_cases() {
+  local platform jq_asset scanner_tmp snapshot_doc repository_id commit_id
+  local scan_out scan_err scan_status classification token observation
+  platform=$(/usr/bin/uname -s):$(/usr/bin/uname -m) || emit_error E_RUNTIME
+  case "$platform" in
+    Linux:x86_64) jq_asset=jq-linux64 ;;
+    Darwin:x86_64|Darwin:arm64) jq_asset=jq-osx-amd64 ;;
+    *) emit_error E_RUNTIME ;;
+  esac
+  scanner_tmp="$work/scanner-tmp"
+  /bin/mkdir -m 0700 "$scanner_tmp" "$scanner_tmp/ystack-portable-core-jq16" ||
+    emit_error E_RUNTIME
+  /bin/cp "$jq_bin" "$scanner_tmp/ystack-portable-core-jq16/$jq_asset" || emit_error E_RUNTIME
+  /bin/chmod 0500 "$scanner_tmp/ystack-portable-core-jq16/$jq_asset" || emit_error E_RUNTIME
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    snapshot_doc="$work/snapshot-$i.json"
+    "$jq_bin" -S -c ".body.cases[$i].snapshot.content" "$input" > "$snapshot_doc" ||
+      emit_error E_RUNTIME
+    [ "$(sha256_path "$snapshot_doc")" = \
+      "$("$jq_bin" -r ".body.cases[$i].snapshot.sha256" "$input")" ] || emit_error E_RELATION
+    repository_id=$("$jq_bin" -r ".body.cases[$i].expected_revision.repository_id" "$input") ||
+      emit_error E_RUNTIME
+    commit_id=$("$jq_bin" -r ".body.cases[$i].expected_revision.commit_id" "$input") ||
+      emit_error E_RUNTIME
+    scan_out="$work/scan-$i.out"
+    scan_err="$work/scan-$i.err"
+    /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin TMPDIR="$scanner_tmp" \
+      /bin/bash "$scanner" scan "$repository_id" "$commit_id" "$snapshot_doc" \
+      </dev/null >"$scan_out" 2>"$scan_err"
+    scan_status=$?
+    if [ "$scan_status" -eq 0 ]; then
+      [ ! -s "$scan_err" ] || emit_error E_RUNTIME
+      classification=$("$jq_bin" -S -c '
+        if (.body.classifications | length) == 1 then
+          .body.classifications[0] |
+          {action:.recovery.action,class:.class,reason_id:.recovery.reason_id}
+        else empty end' "$scan_out") || emit_error E_RUNTIME
+      [ -n "$classification" ] || emit_error E_RELATION
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
+        --argjson classification "$classification" \
+        '{case_id:$case_id,disposition:"observed",
+          classification:{state:"present",value:$classification},
+          error_token:{state:"absent"}}') || emit_error E_RUNTIME
+    else
+      [ ! -s "$scan_out" ] || emit_error E_RUNTIME
+      token=$(/bin/cat "$scan_err" 2>/dev/null) || emit_error E_RUNTIME
+      case "$token" in
+        E_CANONICAL|E_LIMIT|E_PARSE|E_RELATION|E_RUNTIME|E_SHAPE|E_STALE|E_USAGE) ;;
+        *) emit_error E_RUNTIME ;;
+      esac
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --arg token "$token" \
+        '{case_id:$case_id,disposition:"rejected",classification:{state:"absent"},
+          error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
+    fi
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
 # Canonical documents for one case, each checked against its recorded digest
 # before the core sees it. The core is the only judge; the driver only records.
+replay_stage_run_cases() {
 resolved_doc="$work/resolved.json"
 "$jq_bin" -S -c '.body.shared.resolved_profile.content' "$input" > "$resolved_doc" ||
   emit_error E_RUNTIME
 [ "$(sha256_path "$resolved_doc")" = \
   "$("$jq_bin" -r '.body.shared.resolved_profile.sha256' "$input")" ] ||
   emit_error E_RELATION
-
-case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
-[[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
-observations="$work/observations.json"
-/usr/bin/printf '[' > "$observations" || emit_error E_RUNTIME
 i=0
 while [ "$i" -lt "$case_count" ]; do
   case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
@@ -170,10 +252,16 @@ while [ "$i" -lt "$case_count" ]; do
       '{case_id:$case_id,disposition:"rejected",status:{state:"absent"},
         error_token:{state:"present",value:$token}}') || emit_error E_RUNTIME
   fi
-  if [ "$i" -gt 0 ]; then /usr/bin/printf ',' >> "$observations" || emit_error E_RUNTIME; fi
-  /usr/bin/printf '%s' "$observation" >> "$observations" || emit_error E_RUNTIME
+  record_observation "$observation"
   i=$((i + 1))
 done
+}
+
+if [ "$seed_source" = core.stage-run.v2 ]; then
+  replay_stage_run_cases
+else
+  replay_scanner_cases
+fi
 /usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
 
 result="$work/run-result.json"

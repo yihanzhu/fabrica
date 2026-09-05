@@ -110,16 +110,17 @@ trap cleanup EXIT
 trap signal_exit HUP INT TERM
 runtime="$scratch/runtime"
 /bin/mkdir -m 0700 "$runtime" "$runtime/bin" "$runtime/core" "$runtime/core/v2" \
-  "$runtime/core/v2/generations" "$runtime/scripts" "$scratch/work" ||
+  "$runtime/core/v2/generations" "$runtime/scripts" "$runtime/orchestrator" \
+  "$runtime/orchestrator/v1" "$scratch/work" ||
   emit_error E_RUNTIME
 generation=g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43
 generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=4e519644f21b1b7df3c7a5cc5c6002437b4168fa3d90cd6eb0bf8e1f7d86e5a1
-catalog_sha=8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc
-driver_sha=71b271d414565adf94f1791058299b0a8c2607939514ac7b9919ef7f1a9f001c
+program_sha=88e2bf8ae9a3e97d7d043f97f854fa5ef79dae6794a8c762abe35ee8d6641e4f
+catalog_sha=bbb210598791b9c80d29bc1edf362c44525fc1c308544a3a2c56d5f8f10a1234
+driver_sha=383a134504ef74343c5b40fe86cc22fbb8beed6ce27168747707d0aaa90f304c
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -154,6 +155,17 @@ done
 snapshot_expected b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
   "$repo/scripts/core-contract.sh" "$runtime/scripts/core-contract.sh" 0400 ||
   emit_error E_STALE
+# The inactive state scanner, replayed for the events family from inside the
+# private runtime. It reads its core from this runtime's mirror, never the repo.
+for member in \
+  'scan-state.sh 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5' \
+  'state-scanner-driver.sh 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b' \
+  'state-scanner-launcher.sh 9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb' \
+  'state-scanner.jq 722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae'; do
+  read -r name digest <<<"$member"
+  snapshot_expected "$digest" "$repo/orchestrator/v1/$name" \
+    "$runtime/orchestrator/v1/$name" 0400 || emit_error E_STALE
+done
 snapshot_expected "$jq_sha" "$jq_source" "$runtime/bin/jq" 0500 || emit_error E_RUNTIME
 bash_sha=$(sha256_path /bin/bash) || emit_error E_RUNTIME
 snapshot_file "$input" "$scratch/input.json" 1048576 0400 || {
@@ -191,6 +203,12 @@ seed_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
         {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/schema.jq",sha256:"8d1d02d36ac7ada778f05248f9413062b3fc251499914c15d79f003bbd009ade"},
         {path:"core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules/stage_request.jq",sha256:"6572a6ecbac332dc9c4a8ef35acd1feebdc2e8aab04941fc0b756f3a5cbcf29e"},
         {path:"scripts/core-contract.sh",sha256:"b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9"}
+      ],
+      orchestrator_closure:[
+        {path:"orchestrator/v1/scan-state.sh",sha256:"556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5"},
+        {path:"orchestrator/v1/state-scanner-driver.sh",sha256:"5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b"},
+        {path:"orchestrator/v1/state-scanner-launcher.sh",sha256:"9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb"},
+        {path:"orchestrator/v1/state-scanner.jq",sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
       ],
       bootstrap_ref:ref("evals-framework-bootstrap.v1";"text/x-shellscript";$bootstrap_sha),
       launcher_ref:ref("evals-framework-launcher.v1";"text/x-shellscript";$launcher_sha),
@@ -235,6 +253,7 @@ fi
     --arg catalog_sha256 "$catalog_sha" --arg evaluator_sha256 "$evaluator_sha" \
     --arg seed_set_sha256 "$seed_sha" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+    --arg scanner_sha256 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$scratch/input.json" \
@@ -246,6 +265,14 @@ fi
   emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/scan-state.sh")" = \
+    556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/state-scanner-driver.sh")" = \
+    5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/state-scanner-launcher.sh")" = \
+    9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/state-scanner.jq")" = \
+    722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae ] &&
 [ "$(sha256_path "$runtime/driver.sh")" = "$driver_sha" ] &&
 [ "$(sha256_path "$runtime/program.jq")" = "$program_sha" ] &&
 [ "$(sha256_path "$runtime/catalog.json")" = "$catalog_sha" ] &&

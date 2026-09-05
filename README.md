@@ -402,8 +402,8 @@ cancelled, and missed events; approval invalidation; actor and re-run identity;
 malicious instructions; protected-path, credential, network, and publisher
 boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
 adapter contract compliance). Each family declares which grader kinds may judge
-it, its trial policy, and the core evidence kinds it produces. Two families are
-seeded in this unit; the other seven are declared and wait for their own seeds.
+it, its trial policy, and the core evidence kinds it produces. Three families are
+seeded; the other six are declared and wait for their own seeds.
 
 The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
 through the real portable core (`scripts/core-contract.sh validate-stage-run`).
@@ -411,6 +411,16 @@ The core is the only judge: the framework records whether the core accepted or
 rejected each run and with which token, then grades that observation against the
 case's expectation. A wrong expectation is graded `failed`. A family that only a
 model or a human can grade is graded `inconclusive`, never guessed.
+
+The repeated, cancelled, and missed events family is seeded from
+`evals/v1/seed-set-events.json`. Its cases replay canonical orchestrator state
+snapshots through the real inactive state scanner (`orchestrator/v1/scan-state.sh`),
+staged inside the same private runtime: a missed attempt deadline must classify as
+stranded, a cancelled stage must stay terminal even when the target moves, a
+failed stage must be retryable until its retry limit and blocked after it, and a
+snapshot that repeats a stage or mixes a live attempt with a terminal result must
+be refused. The scanner is the only judge; the framework records its
+classification or refusal token and grades that against the case's expectation.
 
 Every run result carries the exact catalog, seed set, program, driver, launcher,
 and core-closure digests, plus one trace event per case in the shape the
@@ -691,7 +701,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
-evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core replays, canonical run results
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core and state-scanner replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
