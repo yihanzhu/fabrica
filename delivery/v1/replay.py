@@ -180,11 +180,18 @@ def execution_source_bytes(repository, arguments):
         read_bytes(trusted_file(repository / relative), MAX_INPUT_BYTES)
         for relative in package_paths(generation)
     }
+    dependency_sources = {
+        ".dependencies/object-closure": trusted_file(arguments.closure_helper),
+        ".dependencies/jq": trusted_file(arguments.jq_bin),
+    }
+    for source in dependency_sources.values():
+        # The snapshot copies dependencies with execute permission, so the caller
+        # must already hold an executable file; bytes alone never confer that.
+        if not os.access(source, os.X_OK) or not (os.stat(source).st_mode & 0o111):
+            raise ReplayError("dependency is not executable")
     dependencies = {
-        ".dependencies/object-closure": read_bytes(
-            trusted_file(arguments.closure_helper), MAX_INPUT_BYTES
-        ),
-        ".dependencies/jq": read_bytes(trusted_file(arguments.jq_bin), MAX_INPUT_BYTES),
+        relative: read_bytes(source, MAX_INPUT_BYTES)
+        for relative, source in dependency_sources.items()
     }
     if any(not data.startswith(NATIVE_EXECUTABLE_MAGICS) for data in dependencies.values()):
         raise ReplayError("dependency is not a native executable")
