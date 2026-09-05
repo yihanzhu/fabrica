@@ -141,7 +141,8 @@ expect_candidate_move_rejected() {
     fail "candidate-moved-$phase"
   fi
   /usr/bin/git --git-dir="$tmp/changed-candidate/repository.git" update-ref refs/heads/candidate "$candidate_commit"
-  grep -Fq 'candidate repository no longer matches saved materialization' "$tmp/candidate-moved-$phase.out" ||
+  grep -Eq 'candidate repository no longer matches saved materialization|candidate repository identity guard failed' \
+    "$tmp/candidate-moved-$phase.out" ||
     fail "candidate-moved-$phase-error"
 }
 pass 'changed materialization and fixed read-only verification wait for review'
@@ -177,11 +178,12 @@ pass 'replacement of the original input after snapshot cannot change materializa
 
 kill_wrapper="$tmp/kill-after-materialize.py"
 printf '%s\n' \
-  'import importlib.util, os, signal, sys' \
+  'import importlib.util, os, pathlib, signal, sys' \
   'path, arguments = sys.argv[1], sys.argv[2:]' \
   'spec = importlib.util.spec_from_file_location("replay", path)' \
   'module = importlib.util.module_from_spec(spec)' \
-  'spec.loader.exec_module(module)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)' \
   'original = module.run_materializer' \
   'def stop_after_materialization(*args, **kwargs):' \
   '    result = original(*args, **kwargs)' \
@@ -204,6 +206,25 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
 jq -e '.state.phase=="review-wait"' "$tmp/reconcile-retry.out" >/dev/null || fail reconcile-retry
 pass 'SIGKILL after materializer output reconciles the existing candidate once'
 
+mkdir -m 700 "$tmp/repeated-kill-state" "$tmp/repeated-kill-candidate" "$tmp/repeated-kill-scratch"
+for kill_round in 1 2 3; do
+  if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target \
+    --source-git-dir "$tmp/source.git" --candidate-root "$tmp/repeated-kill-candidate" \
+    --scratch-root "$tmp/repeated-kill-scratch" --state-dir "$tmp/repeated-kill-state" \
+    --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+    --expected-sha256 "$expected_changed" >"$tmp/repeated-kill-$kill_round.out" 2>&1; then
+    fail "repeated-kill-$kill_round"
+  fi
+  [ "$(find "$tmp/repeated-kill-state" -maxdepth 1 -type d -name 'execution*' | wc -l | tr -d ' ')" = 1 ] ||
+    fail "repeated-kill-snapshot-count-$kill_round"
+done
+python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/repeated-kill-candidate" --scratch-root "$tmp/repeated-kill-scratch" \
+  --state-dir "$tmp/repeated-kill-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/repeated-kill-resume.out"
+jq -e '.state.phase=="review-wait"' "$tmp/repeated-kill-resume.out" >/dev/null || fail repeated-kill-resume
+pass 'repeated SIGKILL recovery reuses one bounded execution bundle'
+
 mkdir -m 700 "$tmp/reconcile-bad-state" "$tmp/reconcile-bad-candidate" "$tmp/reconcile-bad-scratch"
 if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/reconcile-bad-candidate" --scratch-root "$tmp/reconcile-bad-scratch" --state-dir "$tmp/reconcile-bad-state" \
@@ -224,12 +245,13 @@ pass 'a mismatched interrupted candidate is rejected without cleanup'
 
 group_interrupt_wrapper="$tmp/materialization-group-interrupt.py"
 printf '%s\n' \
-  'import importlib.util, os, signal, sys' \
+  'import importlib.util, os, pathlib, signal, sys' \
   'path, point, signal_name, arguments = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]' \
   'os.setsid()' \
   'spec = importlib.util.spec_from_file_location("replay", path)' \
   'module = importlib.util.module_from_spec(spec)' \
-  'spec.loader.exec_module(module)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)' \
   'original = module.run_materializer' \
   'def interrupt_materialization(*args, **kwargs):' \
   '    if point == "before":' \
@@ -426,7 +448,8 @@ printf '%s\n' \
   'path, marker, arguments = sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3:]' \
   'spec = importlib.util.spec_from_file_location("replay", path)' \
   'module = importlib.util.module_from_spec(spec)' \
-  'spec.loader.exec_module(module)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)' \
   'original = module.fcntl.flock' \
   'def marked_flock(*args, **kwargs):' \
   '    marker.write_text("waiting")' \
@@ -456,11 +479,12 @@ jq -e '(.phase=="review-wait") and (has("review")|not)' "$tmp/lock-state/run.jso
 
 observation_wrapper="$tmp/observation-interrupt.py"
 printf '%s\n' \
-  'import importlib.util, os, signal, sys' \
+  'import importlib.util, os, pathlib, signal, sys' \
   'path, signal_name, arguments = sys.argv[1], sys.argv[2], sys.argv[3:]' \
   'spec = importlib.util.spec_from_file_location("replay", path)' \
   'module = importlib.util.module_from_spec(spec)' \
-  'spec.loader.exec_module(module)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)' \
   'original = module.observation' \
   'def interrupt_after_observation(*args, **kwargs):' \
   '    result = original(*args, **kwargs)' \
@@ -496,6 +520,19 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --review-observation "$tmp/review.json" >"$tmp/publish-wait.out"
 jq -e '.state.phase=="publish-wait"' "$tmp/publish-wait.out" >/dev/null || fail missing-publisher-waits
 expect_candidate_move_rejected publish-wait --publisher-observation "$tmp/publisher.json"
+git_clean --git-dir="$tmp/changed-candidate/repository.git" update-ref refs/heads/alternate "$candidate_commit"
+git_clean --git-dir="$tmp/changed-candidate/repository.git" symbolic-ref refs/heads/candidate refs/heads/alternate
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/candidate-symref.out" 2>&1; then
+  fail candidate-symref
+fi
+git_clean --git-dir="$tmp/changed-candidate/repository.git" symbolic-ref --delete refs/heads/candidate
+git_clean --git-dir="$tmp/changed-candidate/repository.git" update-ref refs/heads/candidate "$candidate_commit"
+git_clean --git-dir="$tmp/changed-candidate/repository.git" update-ref -d refs/heads/alternate
+grep -Fq 'candidate repository identity guard failed' "$tmp/candidate-symref.out" || fail candidate-symref-error
+pass 'candidate completion guard rejects a symbolic candidate ref'
 mkdir -m 700 "$tmp/publish-cancel-state"
 cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/publish-cancel-state/"
 if python3 "$observation_wrapper" "$replay" SIGTERM \
@@ -511,6 +548,63 @@ fi
 jq -e '(.phase=="publish-wait") and (has("publisher")|not)' "$tmp/publish-cancel-state/run.json" >/dev/null ||
   fail publish-cancel-state
 pass 'SIGTERM at the lock and SIGINT or SIGTERM after wait observations do not advance state'
+
+atomic_wrapper="$tmp/atomic-candidate-observation.py"
+printf '%s\n' \
+  'import importlib.util, os, pathlib, signal, subprocess, sys' \
+  'path, mode, marker, moved, arguments = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3]), sys.argv[4], sys.argv[5:]' \
+  'spec = importlib.util.spec_from_file_location("replay", path)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)' \
+  'original = module.observation' \
+  'def act_during_publisher(*args, **kwargs):' \
+  '    result = original(*args, **kwargs)' \
+  '    if args[1] == "delivery_replay_publisher_observation":' \
+  '        if mode == "move":' \
+  '            candidate = pathlib.Path(arguments[arguments.index("--candidate-root") + 1]) / "repository.git"' \
+  '            attempt = subprocess.run(["/usr/bin/git", f"--git-dir={candidate}", "-c", "core.hooksPath=/dev/null", "update-ref", "refs/heads/candidate", moved], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)' \
+  '            marker.write_text(str(attempt.returncode))' \
+  '        else:' \
+  '            os.kill(os.getpid(), signal.SIGKILL)' \
+  '    return result' \
+  'module.observation = act_during_publisher' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$atomic_wrapper"
+mkdir -m 700 "$tmp/atomic-move-state"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/atomic-move-state/"
+python3 "$atomic_wrapper" "$replay" move "$tmp/atomic-move-status" "$moved_candidate" \
+  --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/atomic-move-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/atomic-move.out"
+jq -e '.state.phase=="completed-offline"' "$tmp/atomic-move.out" >/dev/null || fail atomic-move-completion
+[ "$(cat "$tmp/atomic-move-status")" != 0 ] || fail atomic-move-lock
+[ "$(git_clean --git-dir="$tmp/changed-candidate/repository.git" rev-parse refs/heads/candidate)" = "$candidate_commit" ] ||
+  fail atomic-move-ref
+
+mkdir -m 700 "$tmp/atomic-kill-state"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/atomic-kill-state/"
+if python3 "$atomic_wrapper" "$replay" kill "$tmp/unused-kill-status" "$moved_candidate" \
+  --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/atomic-kill-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/atomic-kill.out" 2>&1; then
+  fail atomic-kill-status
+fi
+atomic_lock="$tmp/changed-candidate/repository.git/refs/heads/candidate.lock"
+atomic_wait=0
+while [ -e "$atomic_lock" ]; do
+  atomic_wait=$((atomic_wait + 1))
+  [ "$atomic_wait" -le 100 ] || fail atomic-kill-lock-release
+  sleep 0.01
+done
+python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/atomic-kill-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/atomic-kill-resume.out"
+jq -e '.state.phase=="completed-offline"' "$tmp/atomic-kill-resume.out" >/dev/null || fail atomic-kill-resume
+pass 'candidate ref guard blocks publisher-time moves and releases after SIGKILL'
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/numeric-publisher.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
@@ -734,36 +828,33 @@ driver_wrapper="$tmp/driver-identity.py"
 printf '%s\n' \
   'import hashlib, importlib.util, pathlib, sys' \
   'driver = pathlib.Path(sys.argv[1])' \
+  'saved = driver.read_bytes()' \
   'spec = importlib.util.spec_from_file_location("replay", driver)' \
   'module = importlib.util.module_from_spec(spec)' \
-  'spec.loader.exec_module(module)' \
-  'saved = driver.read_bytes()' \
+  'module._REPLAY_DRIVER_BYTES = saved' \
+  'exec(compile(saved, str(driver), "exec"), module.__dict__)' \
   'assert module.driver_identity() == hashlib.sha256(saved).hexdigest()' \
-  'for changed, expected in ((saved + b"\nCHANGED_EXECUTABLE_STATEMENT = True\n", "changed during startup"), (saved + b"\nif\n", "identity is unavailable"), (saved + b"\n\\xff\n", "identity is unavailable")):' \
+  'for changed in (saved + b"\n# comment after load\n", saved + b"\n\n", saved + b"\nCHANGED_EXECUTABLE_STATEMENT = True\n", saved + b"\n\\xff\n"):' \
   '    driver.write_bytes(changed)' \
-  '    try:' \
-  '        module.driver_identity()' \
-  '    except module.ReplayError as error:' \
-  '        assert expected in str(error)' \
-  '    else:' \
-  '        raise AssertionError("changed driver was accepted")' \
+  '    assert module.driver_identity() == hashlib.sha256(saved).hexdigest()' \
   'driver.write_bytes(saved)' >"$driver_wrapper"
 python3 "$driver_wrapper" "$package_replay" || fail driver-loaded-identity
-pass 'driver identity binds normal loaded code and rejects changed, invalid, or undecodable source'
+pass 'driver identity remains bound to the exact source buffer loaded once'
 
 /bin/cp "$runtime/object-closure" "$tmp/race-object-closure"
 /bin/cp "$jq_bin" "$tmp/race-jq"
 /bin/chmod 0555 "$tmp/race-object-closure" "$tmp/race-jq"
 race_wrapper="$tmp/snapshot-race.py"
 printf '%s\n' \
-  'import argparse, importlib.util, pathlib, shutil, stat, sys' \
+  'import argparse, importlib.util, pathlib, stat, sys' \
   'driver, repository, state_dir, helper, jq_bin, *arguments = sys.argv[1:]' \
   'spec = importlib.util.spec_from_file_location("replay", driver)' \
   'module = importlib.util.module_from_spec(spec)' \
-  'spec.loader.exec_module(module)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(driver).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, driver, "exec"), module.__dict__)' \
   'value = lambda name: arguments[arguments.index(name) + 1]' \
   'values = argparse.Namespace(input=value("--input"), source_repository_id=value("--source-repository-id"), source_git_dir=value("--source-git-dir"), candidate_root=value("--candidate-root"), scratch_root=value("--scratch-root"), state_dir=value("--state-dir"), closure_helper=helper, jq_bin=jq_bin, verify_path=value("--verify-path"), expected_sha256=value("--expected-sha256"), review_observation=None, publisher_observation=None)' \
-  'snapshot = module.create_execution_snapshot(pathlib.Path(repository), values, pathlib.Path(state_dir))' \
+  'module.create_execution_snapshot(pathlib.Path(repository), values, pathlib.Path(state_dir))' \
   'targets = [pathlib.Path(repository) / "adapters/local-git-materializer/v1/protocol.jq", pathlib.Path(helper), pathlib.Path(jq_bin)]' \
   'saved = [target.read_bytes() for target in targets]' \
   'modes = [stat.S_IMODE(target.stat().st_mode) for target in targets]' \
@@ -771,13 +862,16 @@ printf '%s\n' \
   '    for target in targets:' \
   '        target.chmod(0o700)' \
   '        target.write_bytes(b"replaced after execution snapshot\n")' \
-  '    status = module.replay_locked(values, snapshot, pathlib.Path(state_dir))' \
+  '    try:' \
+  '        module.replay_locked(values, pathlib.Path(state_dir))' \
+  '    except module.ReplayError as error:' \
+  '        assert "execution bundle does not match current dependencies" in str(error)' \
+  '    else:' \
+  '        raise AssertionError("changed execution sources were accepted")' \
   'finally:' \
   '    for target, data, mode in zip(targets, saved, modes):' \
   '        target.write_bytes(data)' \
-  '        target.chmod(mode)' \
-  '    shutil.rmtree(snapshot, ignore_errors=True)' \
-  'raise SystemExit(status)' >"$race_wrapper"
+  '        target.chmod(mode)' >"$race_wrapper"
 /bin/mkdir -m 700 "$tmp/race-state" "$tmp/race-candidate" "$tmp/race-scratch"
 driver_sha=$(sha_file "$package_replay")
 package_sha=$(sha_file "$package_root/adapters/local-git-materializer/v1/protocol.jq")
@@ -788,6 +882,10 @@ python3 "$race_wrapper" "$package_replay" "$package_root" "$tmp/race-state" \
   --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/race-candidate" --scratch-root "$tmp/race-scratch" --state-dir "$tmp/race-state" \
   --closure-helper "$tmp/race-object-closure" --jq-bin "$tmp/race-jq" \
+  --verify-path source.txt --expected-sha256 "$expected_changed"
+python3 "$package_replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/race-candidate" --scratch-root "$tmp/race-scratch" --state-dir "$tmp/race-state" \
+  --closure-helper "$tmp/race-object-closure" --jq-bin "$tmp/race-jq" \
   --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/race.out"
 jq -e '.state.phase=="review-wait" and
   .state.identity.driver_sha256==$driver and
@@ -795,6 +893,6 @@ jq -e '.state.phase=="review-wait" and
   .state.identity.closure_helper_sha256==$helper and .state.identity.jq_sha256==$jq' \
   --arg driver "$driver_sha" --arg package "$package_sha" --arg helper "$helper_sha" --arg jq "$jq_sha" \
   "$tmp/race.out" >/dev/null || fail immutable-execution-snapshot
-pass 'replacement after the private execution snapshot cannot change executed or recorded bytes'
+pass 'the one state-owned execution bundle rejects drift and records its exact bytes'
 
 printf 'delivery replay: %s focused checks passed\n' "$passed"
