@@ -208,26 +208,40 @@ def scanner_expectation_shape:
    .disposition == "rejected" and
    (.error_token as $token | scanner_error_tokens | index($token) != null));
 
-# A plan is graded on what it would deliver, defer, suppress, or hand to an
-# operator; provenance and refs stay the planner's own concern.
-def plan_summary_shape:
+# A plan is graded on exactly which stage, request, operation, and attempt it
+# would deliver, defer, or suppress, and which stages it hands to an operator.
+# Provenance and document refs stay the planner's own concern.
+def plan_stage_key_shape:
+  schema::exact_fields(["initiative_id","stage_id","task_class_id","workflow_id"];[]) and
+  all(.[]; schema::id_ok);
+
+def plan_item_shape($extra):
   schema::exact_fields(
-    ["deferred_count","deliveries","operator_message_count","suppressed_count"];[]) and
+    ["attempt_number","operation","request_sha256","stage_key"] + [$extra];[]) and
+  (.attempt_number | schema::int_ok) and .attempt_number >= 1 and .attempt_number <= 10 and
+  (.operation as $o | plan_operations | index($o) != null) and
+  (.request_sha256 | schema::sha256_ok) and
+  (.stage_key | plan_stage_key_shape);
+
+def plan_summary_shape:
+  schema::exact_fields(["deferred","deliveries","operator_messages","suppressed"];[]) and
   (.deliveries | type == "array" and length <= 64 and
+   all(.[]; plan_item_shape("delivery_mode") and
+            (.delivery_mode as $m | delivery_modes | index($m) != null))) and
+  (.deferred | type == "array" and length <= 64 and
+   all(.[]; plan_item_shape("reason_id") and (.reason_id | schema::id_ok))) and
+  (.suppressed | type == "array" and length <= 64 and
+   all(.[]; plan_item_shape("reason_id") and (.reason_id | schema::id_ok))) and
+  (.operator_messages | type == "array" and length <= 64 and
    all(.[];
-     schema::exact_fields(
-       ["attempt_number","delivery_mode","initiative_id","operation"];[]) and
-     (.attempt_number | schema::int_ok) and .attempt_number >= 1 and .attempt_number <= 10 and
-     (.delivery_mode as $m | delivery_modes | index($m) != null) and
-     (.initiative_id | schema::id_ok) and
-     (.operation as $o | plan_operations | index($o) != null))) and
-  all(.deferred_count, .operator_message_count, .suppressed_count;
-      schema::int_ok and . >= 0 and . <= 64);
+     schema::exact_fields(["action","class","stage_key"];[]) and
+     (.action as $a | scanner_actions | index($a) != null) and
+     (.class as $c | scanner_classes | index($c) != null) and
+     (.stage_key | plan_stage_key_shape)));
 
 def planner_expectation_shape:
   (schema::exact_fields(
-     ["deferred_count","deliveries","disposition","operator_message_count",
-      "suppressed_count"];[]) and
+     ["deferred","deliveries","disposition","operator_messages","suppressed"];[]) and
    .disposition == "planned" and (del(.disposition) | plan_summary_shape)) or
   (schema::exact_fields(["disposition","error_token"];[]) and
    .disposition == "rejected" and

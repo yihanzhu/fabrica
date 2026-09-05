@@ -56,7 +56,7 @@ planner="$runtime/orchestrator/v1/reconciliation-plan.jq"
 planner_sha256=03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=4676b2a63e94c8c4ed0c53e2dfe182196de4750f4a9e015b761bfcc7a26e5e49
+program_sha256=c141ed838ec480e27a2bc9f6535b99b686100c613a1a1e3ff7f21cd161823776
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
@@ -206,8 +206,9 @@ replay_scanner_cases() {
 }
 
 # Planner bundles replay through the real reconciliation planner, pure jq over
-# the private modules. Only what it would deliver, defer, suppress, or hand to
-# an operator is recorded; a refusal is recorded by its one token.
+# the private modules. Exactly which stage, request, operation, and attempt it
+# would deliver, defer, or suppress, and which stages it hands to an operator,
+# is recorded; a refusal is recorded by its one token.
 replay_planner_cases() {
   local input_doc plan_out plan_err plan_status summary observation
   i=0
@@ -226,12 +227,13 @@ replay_planner_cases() {
     if [ "$plan_status" -eq 0 ]; then
       [ ! -s "$plan_err" ] || emit_error E_RUNTIME
       summary=$("$jq_bin" -S -c '
-        {deferred_count:(.body.deferred | length),
-         deliveries:[.body.deliveries[] |
-           {attempt_number:.delivery_key.attempt_number,delivery_mode,
-            initiative_id:.stage_key.initiative_id,operation}],
-         operator_message_count:(.body.operator_messages | length),
-         suppressed_count:(.body.suppressed | length)}' "$plan_out") || emit_error E_RUNTIME
+        def item: .delivery_key |
+          {attempt_number,operation,request_sha256,stage_key};
+        {deliveries:[.body.deliveries[] | item + {delivery_mode}],
+         deferred:[.body.deferred[] | item + {reason_id}],
+         suppressed:[.body.suppressed[] | item + {reason_id}],
+         operator_messages:[.body.operator_messages[] |
+           {action:.recovery.action,class,stage_key}]}' "$plan_out") || emit_error E_RUNTIME
       observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --argjson plan "$summary" \
         '{case_id:$case_id,disposition:"planned",plan:{state:"present",value:$plan},
           error_token:{state:"absent"}}') || emit_error E_RUNTIME

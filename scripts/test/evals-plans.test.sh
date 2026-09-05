@@ -99,22 +99,33 @@ pass 'all thirteen plan cases pass through the real reconciliation planner'
 "$jq_bin" -e '
   def planned($id): .body.cases[] | select(.case_id == $id) | .observation.value.plan.value;
   def refused($id): .body.cases[] | select(.case_id == $id) | .observation.value.error_token.value;
+  def key($name): {initiative_id:("initiative." + $name),workflow_id:"workflow.example",
+                   stage_id:"stage.example",task_class_id:"task.example"};
   (planned("plan.pending-redelivery-same-key") |
-    .deliveries == [{attempt_number:1,delivery_mode:"redelivery",
-                     initiative_id:"initiative.a",operation:"dispatch-stage"}]) and
+    .deliveries == [{attempt_number:1,delivery_mode:"redelivery",operation:"dispatch-stage",
+                     request_sha256:("a" * 64),stage_key:key("a")}]) and
   (planned("plan.acknowledged-suppressed") |
-    .deliveries == [] and .suppressed_count == 1) and
+    .deliveries == [] and .suppressed ==
+      [{attempt_number:1,operation:"dispatch-stage",reason_id:"planner.delivery-acknowledged",
+        request_sha256:("a" * 64),stage_key:key("a")}]) and
   (planned("plan.failed-stage-retry") | .deliveries[0].attempt_number == 2) and
   (planned("plan.stranded-recovery") | .deliveries[0].operation == "recover-stranded-attempt") and
-  (planned("plan.backpressure-full-deferred") | .deliveries == [] and .deferred_count == 1) and
+  (planned("plan.backpressure-full-deferred") |
+    .deliveries == [] and .deferred[0].stage_key == key("a") and
+    .deferred[0].reason_id == "planner.backpressure-slots-exhausted") and
   (planned("plan.redelivery-priority") |
-    .deliveries[0].initiative_id == "initiative.b" and .deferred_count == 1) and
-  (planned("plan.operator-only-messages") | .operator_message_count == 5) and
+    .deliveries[0].stage_key == key("b") and .deliveries[0].delivery_mode == "redelivery" and
+    .deferred[0].stage_key == key("a")) and
+  (planned("plan.operator-only-messages") |
+    [.operator_messages[] | .stage_key.initiative_id] ==
+      ["initiative.a","initiative.b","initiative.c","initiative.d","initiative.e"] and
+    [.operator_messages[] | .action] ==
+      ["none","operator-reconcile","refresh-stage-inputs","resolve-stage-blocker","wait-for-attempt"]) and
   refused("plan.retry-limit-refused") == "E_RECONCILIATION_INPUT" and
   refused("plan.duplicate-classifications-refused") == "E_RECONCILIATION_INPUT" and
   refused("plan.duplicate-ledger-refused") == "E_RECONCILIATION_INPUT"
 ' "$first" > /dev/null || fail 'redelivery, suppression, retry, or backpressure misplanned'
-pass 'repeats redeliver once, acknowledgements suppress, retries stop at the limit, overflow defers'
+pass 'repeats redeliver once, acknowledgements suppress, retries stop at the limit, overflow defers, each by exact stage'
 
 second="$tmp/second.json"
 run_framework "$second" "$tmp/second.err" "$seed_set" || fail 'second run failed'
@@ -144,15 +155,28 @@ run_framework "$tmp/wrong.out" "$tmp/wrong.err" "$wrong" || fail 'wrong-expectat
 flipped="$tmp/flipped.json"
 "$jq_bin" -S -c '
   .body.cases |= map(if .case_id == "plan.retry-limit-refused"
-    then .expectation = {disposition:"planned",deliveries:[],deferred_count:0,
-                         suppressed_count:0,operator_message_count:0} else . end)
+    then .expectation = {disposition:"planned",deliveries:[],deferred:[],
+                         suppressed:[],operator_messages:[]} else . end)
 ' "$seed_set" > "$flipped"
 run_framework "$tmp/flipped.out" "$tmp/flipped.err" "$flipped" || fail 'flipped-disposition run errored'
 "$jq_bin" -e '
   .body.cases[] | select(.case_id == "plan.retry-limit-refused") |
   .verdict == "failed" and .reason_id == "evals.disposition-mismatch"
 ' "$tmp/flipped.out" > /dev/null || fail 'a refusal expected to plan was not failed'
-pass 'a wrong plan or disposition is graded failed, never silently passed'
+swapped="$tmp/swapped.json"
+"$jq_bin" -S -c '
+  .body.cases |= map(if .case_id == "plan.backpressure-partial-deferred"
+    then .expectation.deliveries[0].stage_key.initiative_id = "initiative.b" |
+         .expectation.deliveries[0].request_sha256 = ("b" * 64) |
+         .expectation.deferred[0].stage_key.initiative_id = "initiative.a" |
+         .expectation.deferred[0].request_sha256 = ("a" * 64) else . end)
+' "$seed_set" > "$swapped"
+run_framework "$tmp/swapped.out" "$tmp/swapped.err" "$swapped" || fail 'swapped-stage run errored'
+"$jq_bin" -e '
+  .body.cases[] | select(.case_id == "plan.backpressure-partial-deferred") |
+  .verdict == "failed" and .reason_id == "evals.plan-mismatch"
+' "$tmp/swapped.out" > /dev/null || fail 'deferring the other stage with the same counts was accepted'
+pass 'a wrong plan, a wrong disposition, or the wrong stage deferred is graded failed'
 
 # --- fail closed on bad, moved, or misfiled input ----------------------------------
 expect_error() {
