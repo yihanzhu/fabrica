@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
 set -euo pipefail
 export LC_ALL=C
 export PYTHONDONTWRITEBYTECODE=1
@@ -57,6 +58,36 @@ make_source() {
     GIT_COMMITTER_DATE=2000-01-01T00:00:00Z /usr/bin/git --git-dir="$destination" commit-tree "$tree")
   git_clean --git-dir="$destination" update-ref refs/heads/main "$commit"
   printf '%s %s\n' "$commit" "$tree"
+}
+
+make_source_with_ancestor() {
+  local destination=$1 blob tree base commit
+  /bin/mkdir -m 700 "$destination"
+  git_clean init -q --bare "$destination"
+  blob=$(printf '%s\n' alpha beta | git_clean --git-dir="$destination" hash-object -w --stdin)
+  tree=$(printf '100644 blob %s\tsource.txt\n' "$blob" | git_clean --git-dir="$destination" mktree)
+  base=$(printf '%s\n' base | /usr/bin/env -i HOME="$tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME=fixture \
+    GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture \
+    GIT_COMMITTER_EMAIL=fixture@example.invalid /usr/bin/git --git-dir="$destination" commit-tree "$tree")
+  commit=$(printf '%s\n' source | /usr/bin/env -i HOME="$tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME=fixture \
+    GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture \
+    GIT_COMMITTER_EMAIL=fixture@example.invalid /usr/bin/git --git-dir="$destination" commit-tree "$tree" -p "$base")
+  git_clean --git-dir="$destination" update-ref refs/heads/main "$commit"
+  printf '%s %s\n' "$commit" "$tree"
+}
+
+make_empty_input() {
+  local input=$1 output=$2
+  local intermediate="$output.intermediate" request="$output.request"
+  "$jq_bin" -S -c '(.stage_request.content.body.inputs[] | select(.input_id=="input.producer-patch") | .value.value.value.sha256) = $sha |
+    (.payloads[] | select(.input_id=="input.producer-patch") | .data) = "" |
+    (.trust_context.verified_payloads[] | select(.input_id=="input.producer-patch") | .content.data) = "" |
+    (.trust_context.verified_payloads[] | select(.input_id=="input.producer-patch") | .sha256) = $sha' \
+    --arg sha "$(printf '' | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')" "$input" >"$intermediate"
+  "$jq_bin" -S -c '.stage_request.content' "$intermediate" >"$request"
+  "$jq_bin" -S -c --arg sha "$(sha_file "$request")" '.stage_request.sha256=$sha' "$intermediate" >"$output"
 }
 
 read -r source_commit source_tree < <(make_source "$tmp/source.git")
@@ -195,6 +226,29 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
   --review-observation "$tmp/review.json" >"$tmp/publish-wait.out"
 jq -e '.state.phase=="publish-wait"' "$tmp/publish-wait.out" >/dev/null || fail missing-publisher-waits
+expect_malformed_state() {
+  local name=$1 filter=$2
+  local state_root="$tmp/malformed-$name-state"
+  /bin/mkdir -m 700 "$state_root"
+  cp "$tmp/changed-state/materialization-input.json" "$state_root/materialization-input.json"
+  jq -S -c "$filter" "$tmp/changed-state/run.json" >"$state_root/run.json"
+  if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$state_root" \
+    --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+    >"$tmp/malformed-$name.out" 2>&1; then fail "malformed-$name"; fi
+  if ! grep -Fq 'delivery replay: state journal' "$tmp/malformed-$name.out" ||
+     grep -Fq Traceback "$tmp/malformed-$name.out"; then
+    fail "malformed-$name-error"
+  fi
+}
+expect_malformed_state identity-type '.identity=[]'
+expect_malformed_state missing-phase 'del(.phase)'
+expect_malformed_state invalid-phase '.phase="unknown"'
+expect_malformed_state missing-materialization '(.phase="verifying") | del(.materialization)'
+expect_malformed_state missing-verification '(.phase="review-wait") | del(.verification)'
+expect_malformed_state missing-review '(.phase="publish-wait") | del(.review)'
+expect_malformed_state missing-publisher '(.phase="completed-offline") | del(.publisher)'
+pass 'malformed state phases and nested records fail without a traceback'
 jq -S -c '.note="changed after review wait"' "$tmp/review.json" >"$tmp/changed-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
@@ -234,21 +288,35 @@ if python3 "$replay" --input "$base_input" --source-repository-id fixture.target
 grep -Fq 'does not match this candidate' "$tmp/mismatch.out" || fail mismatched-review-error
 pass 'mismatched supplied review cannot complete the replay'
 
-empty_input="$tmp/empty-input.json"
-jq -S -c '(.stage_request.content.body.inputs[] | select(.input_id=="input.producer-patch") | .value.value.value.sha256) = $sha |
-  (.payloads[] | select(.input_id=="input.producer-patch") | .data) = "" |
-  (.trust_context.verified_payloads[] | select(.input_id=="input.producer-patch") | .content.data) = "" |
-  (.trust_context.verified_payloads[] | select(.input_id=="input.producer-patch") | .sha256) = $sha' \
-  --arg sha "$(printf '' | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')" "$base_input" >"$empty_input"
-empty_request="$tmp/empty-request.json"
-jq -S -c '.stage_request.content' "$empty_input" >"$empty_request"
-empty_request_sha=$(sha_file "$empty_request")
-jq -S -c --arg sha "$empty_request_sha" '.stage_request.sha256=$sha' "$empty_input" >"$tmp/empty-final.json"
+make_empty_input "$base_input" "$tmp/empty-final.json"
 source_digest=$(printf '%s\n' alpha beta | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
 run_replay no-change "$tmp/empty-final.json" "$source_digest" >"$tmp/no-change.out"
 jq -e '.state.phase=="review-wait" and .state.materialization.candidate_tree_id==.state.identity.source_tree_id' "$tmp/no-change.out" >/dev/null ||
   fail no-change
 pass 'empty producer patch records a no-change candidate before review'
+
+recover_no_change() {
+  local name=$1 input=$2 source=$3
+  local state="$tmp/$name-state" candidate="$tmp/$name-candidate" scratch="$tmp/$name-scratch"
+  /bin/mkdir -m 700 "$state" "$candidate" "$scratch"
+  if python3 "$kill_wrapper" "$replay" --input "$input" --source-repository-id fixture.target --source-git-dir "$source" \
+    --candidate-root "$candidate" --scratch-root "$scratch" --state-dir "$state" \
+    --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$source_digest" \
+    >"$tmp/$name-killed.out" 2>&1; then fail "$name-kill"; fi
+  [ "$(jq -r '.phase' "$state/run.json")" = materializing ] && [ -d "$candidate/repository.git" ] || fail "$name-window"
+  python3 "$replay" --input "$input" --source-repository-id fixture.target --source-git-dir "$source" \
+    --candidate-root "$candidate" --scratch-root "$scratch" --state-dir "$state" \
+    --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$source_digest" \
+    >"$tmp/$name-retry.out"
+  jq -e '.state.phase=="review-wait" and .state.materialization.candidate_commit_id==.state.identity.source_commit_id' \
+    "$tmp/$name-retry.out" >/dev/null || fail "$name-retry"
+}
+recover_no_change no-change-root "$tmp/empty-final.json" "$tmp/source.git"
+read -r ancestor_commit ancestor_tree < <(make_source_with_ancestor "$tmp/ancestor-source.git")
+"$fixture_builder" build "$tmp/ancestor-fixture" "$jq_bin" sha1 "$ancestor_commit" "$ancestor_tree"
+make_empty_input "$tmp/ancestor-fixture/input.json" "$tmp/ancestor-empty.json"
+recover_no_change no-change-ancestor "$tmp/ancestor-empty.json" "$tmp/ancestor-source.git"
+pass 'SIGKILL no-change recovery accepts both root and ancestor source commits'
 
 mkdir -m 700 "$tmp/interrupted-state" "$tmp/interrupted-candidate" "$tmp/interrupted-scratch"
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \

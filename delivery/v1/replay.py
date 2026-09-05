@@ -212,7 +212,7 @@ def run_materializer(arguments, materializer, input_path, identity, candidate_ro
         raise ReplayError("materializer response is malformed") from error
 
 
-def candidate_identity(candidate_root):
+def candidate_identity(candidate_root, source_commit):
     repository = Path(candidate_root).resolve() / "repository.git"
     if not repository.is_dir() or repository.is_symlink():
         return None
@@ -220,19 +220,27 @@ def candidate_identity(candidate_root):
                    "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
                    "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
     values = []
-    for revision in ("refs/heads/candidate", "refs/heads/candidate^{tree}", "refs/heads/candidate^"):
+    for revision in ("refs/heads/candidate", "refs/heads/candidate^{tree}"):
         result = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "rev-parse", revision],
                                 env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
         value = result.stdout.decode().strip()
         if result.returncode != 0 or not OID.fullmatch(value):
             return None
         values.append(value)
+    if values[0] == source_commit:
+        return {"candidate_commit_id": values[0], "candidate_tree_id": values[1],
+                "candidate_parent_commit_id": source_commit}
+    result = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "rev-parse", "refs/heads/candidate^"],
+                            env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+    parent = result.stdout.decode().strip()
+    if result.returncode != 0 or not OID.fullmatch(parent):
+        return None
     return {"candidate_commit_id": values[0], "candidate_tree_id": values[1],
-            "candidate_parent_commit_id": values[2]}
+            "candidate_parent_commit_id": parent}
 
 
 def reconcile_materialization(arguments, materializer, input_path, identity, state_dir):
-    existing = candidate_identity(arguments.candidate_root)
+    existing = candidate_identity(arguments.candidate_root, identity["source_commit_id"])
     if existing is None:
         return None
     recovery_candidate = Path(tempfile.mkdtemp(prefix="reconcile-candidate-", dir=state_dir))
@@ -287,6 +295,61 @@ def observation(path, kind, identity, field):
     return {"actor_id": value["actor_id"], field: value.get(field), "sha256": source_sha}
 
 
+def validate_state(state, identity):
+    if not isinstance(state, dict) or state.get("schema_version") != 1 or \
+       state.get("kind") != "delivery_replay_state" or state.get("authority") != "none" or \
+       state.get("qualification") != "unavailable":
+        raise ReplayError("state journal is malformed")
+    saved = state.get("identity")
+    if not isinstance(saved, dict) or any(
+        not isinstance(saved.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", saved[name])
+        for name in ("input_sha256", "request_sha256", "materializer_sha256", "closure_helper_sha256", "jq_sha256", "run_key")
+    ) or not isinstance(saved.get("source_repository_id"), str) or \
+       saved.get("source_hash_algorithm") not in {"sha1", "sha256"} or \
+       any(not isinstance(saved.get(name), str) or not OID.fullmatch(saved[name])
+           for name in ("source_commit_id", "source_tree_id")) or \
+       not isinstance(saved.get("verifier"), dict) or \
+       not isinstance(saved["verifier"].get("id"), str) or \
+       not isinstance(saved["verifier"].get("path"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", str(saved["verifier"].get("expected_sha256", ""))):
+        raise ReplayError("state journal identity is malformed")
+    for name in ("candidate_commit_id", "candidate_tree_id"):
+        if name in saved and (not isinstance(saved[name], str) or not OID.fullmatch(saved[name])):
+            raise ReplayError("state journal candidate identity is malformed")
+    phase = state.get("phase")
+    if phase not in {"materializing", "verifying", "review-wait", "publish-wait", "completed-offline", "failed"}:
+        raise ReplayError("state journal phase is malformed")
+    needs_materialization = phase in {"verifying", "review-wait", "publish-wait", "completed-offline"}
+    materialization = state.get("materialization")
+    if needs_materialization and (not isinstance(materialization, dict) or any(
+        not isinstance(materialization.get(name), str) or not OID.fullmatch(materialization[name])
+        for name in ("candidate_commit_id", "candidate_tree_id", "candidate_parent_commit_id")
+    ) or any(
+        not isinstance(materialization.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", materialization[name])
+        for name in ("response_sha256", "receipt_sha256")
+    )):
+        raise ReplayError("state journal materialization is malformed")
+    if phase in {"review-wait", "publish-wait", "completed-offline"}:
+        verification = state.get("verification")
+        if not isinstance(verification, dict) or not isinstance(verification.get("id"), str) or \
+           not isinstance(verification.get("path"), str) or \
+           not re.fullmatch(r"[0-9a-f]{64}", str(verification.get("sha256", ""))):
+            raise ReplayError("state journal verification is malformed")
+    if phase in {"publish-wait", "completed-offline"}:
+        review = state.get("review")
+        if not isinstance(review, dict) or not ACTOR.fullmatch(str(review.get("actor_id", ""))) or \
+           review.get("verdict") != "clean" or not re.fullmatch(r"[0-9a-f]{64}", str(review.get("sha256", ""))):
+            raise ReplayError("state journal review is malformed")
+    if phase == "completed-offline":
+        publisher = state.get("publisher")
+        if not isinstance(publisher, dict) or not ACTOR.fullmatch(str(publisher.get("actor_id", ""))) or \
+           publisher.get("disposition") != "offline-simulated" or \
+           not re.fullmatch(r"[0-9a-f]{64}", str(publisher.get("sha256", ""))):
+            raise ReplayError("state journal publisher is malformed")
+    if phase == "failed" and not isinstance(state.get("reason"), str):
+        raise ReplayError("state journal failure is malformed")
+
+
 def result(state):
     print(json.dumps({"kind": "delivery_replay_receipt", "authority": "none",
                       "qualification": "unavailable", "offline_simulation": True,
@@ -317,9 +380,8 @@ def replay(arguments):
             state = None
             if state_path.exists():
                 state, _ = read_json(state_path, MAX_OBSERVATION_BYTES)
-                if not isinstance(state, dict):
-                    raise ReplayError("state journal is malformed")
-            if state is not None and state.get("identity", {}).get("run_key") != identity["run_key"]:
+                validate_state(state, identity)
+            if state is not None and any(state["identity"].get(name) != value for name, value in identity.items()):
                 result({"phase": "stale", "reason": "run identity changed"})
                 return 2
             if state is None:
