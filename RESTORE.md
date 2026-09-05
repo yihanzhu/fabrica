@@ -618,6 +618,22 @@ payload is offline and unqualified. It does not execute a candidate or tool, rea
 proof bytes, enforce a sandbox, use a credential or network, write evidence, grant
 authority or qualification, or activate a profile.
 
+Restore the seven paths in the manifest's inactive eval and trace framework block
+from the same commit. With the same pinned, architecture-bound jq 1.6 runtime used
+by the portable core, run:
+
+```sh
+bash scripts/test/evals-framework.test.sh
+```
+
+This checks the canonical catalog (nine roadmap families, two seeded), the exact
+program, catalog, and driver digest pins, a full deterministic pass of the seeded
+core replays through the real portable core, byte-identical repeat runs, honest
+grading (a wrong expectation fails; a model-only family stays inconclusive), and
+fail-closed handling of malformed, moved, or edited inputs. The framework remains
+inactive and observation only. It does not run a candidate or adapter, invoke a
+model, use a credential or network, grant qualification, or activate a profile.
+
 ---
 
 ## 5. Smoke test — prove the rebuilt team is alive
