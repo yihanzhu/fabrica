@@ -119,10 +119,15 @@ def evaluator_shape:
    .core_contract == expected_core and .core_closure == expected_core_closure and
    (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
    (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
-   (.driver_ref | ref_shape("evals-framework-driver.v1";"text/x-shellscript")) and
-   (.program_ref | ref_shape("evals-framework-program.v1";"text/x-jq")) and
+   # Shipped artifacts are pinned to the digests the launcher and driver verified,
+   # so an archived result cannot claim a program, driver, or catalog that never ran.
+   (.driver_ref | ref_shape("evals-framework-driver.v1";"text/x-shellscript") and
+    .sha256 == $driver_sha256) and
+   (.program_ref | ref_shape("evals-framework-program.v1";"text/x-jq") and
+    .sha256 == $program_sha256) and
    (.catalog_ref |
-    ref_shape("evals-catalog.v1";"application/vnd.ystack.eval-catalog+json")) and
+    ref_shape("evals-catalog.v1";"application/vnd.ystack.eval-catalog+json") and
+    .sha256 == $catalog_sha256) and
    (.runtime |
     schema::exact_fields(
       ["execution_mode","host_architecture","host_os","jq_architecture",

@@ -52,9 +52,11 @@ catalog="$runtime/catalog.json"
 core_front_door="$runtime/scripts/core-contract.sh"
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
+program_sha256=4e519644f21b1b7df3c7a5cc5c6002437b4168fa3d90cd6eb0bf8e1f7d86e5a1
+driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
-  verify_hash 37aec3957a5d3f322f63591414bdb10678172a5c74c47d575e777022c38f5006 "$program" &&
+  verify_hash "$program_sha256" "$program" &&
   verify_hash 8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
@@ -85,6 +87,7 @@ verify_runtime || emit_error E_STALE
 run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
+    --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
     --arg catalog_sha256 8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc \
     --arg evaluator_sha256 "$evaluator_sha256" \
     --arg seed_set_sha256 "$seed_set_sha256" \

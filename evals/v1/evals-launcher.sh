@@ -117,9 +117,9 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=37aec3957a5d3f322f63591414bdb10678172a5c74c47d575e777022c38f5006
+program_sha=4e519644f21b1b7df3c7a5cc5c6002437b4168fa3d90cd6eb0bf8e1f7d86e5a1
 catalog_sha=8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc
-driver_sha=0981349b15c4e7979cd94ad2532a617bf68ff2a9e30533916147cbf512abf2c2
+driver_sha=71b271d414565adf94f1791058299b0a8c2607939514ac7b9919ef7f1a9f001c
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -231,6 +231,7 @@ fi
 # private program and core, after the driver has exited.
 [ "$("$runtime/bin/jq" -S -c -n -L "$generation_runtime/modules" \
     --arg evals_operation validate-run-result \
+    --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
     --arg catalog_sha256 "$catalog_sha" --arg evaluator_sha256 "$evaluator_sha" \
     --arg seed_set_sha256 "$seed_sha" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \

@@ -72,7 +72,7 @@ driver_sha=$(sha_file "$driver")
 /usr/bin/grep -qF "program_sha=$program_sha" "$launcher" || fail 'launcher pins program digest'
 /usr/bin/grep -qF "catalog_sha=$catalog_sha" "$launcher" || fail 'launcher pins catalog digest'
 /usr/bin/grep -qF "driver_sha=$driver_sha" "$launcher" || fail 'launcher pins driver digest'
-/usr/bin/grep -qF "verify_hash $program_sha" "$driver" || fail 'driver pins program digest'
+/usr/bin/grep -qF "program_sha256=$program_sha" "$driver" || fail 'driver pins program digest'
 /usr/bin/grep -qF "verify_hash $catalog_sha" "$driver" || fail 'driver pins catalog digest'
 pass 'launcher and driver pin the exact shipped program, catalog, and driver'
 
@@ -211,8 +211,9 @@ modules="$root/core/v2/generations/$generation/modules"
 validate_result() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation validate-run-result \
+    --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
     --arg catalog_sha256 "$catalog_sha" \
-    --arg evaluator_sha256 "$("$jq_bin" -r .body.evaluator.sha256 "$first")" \
+    --arg evaluator_sha256 "$("$jq_bin" -r .body.evaluator.sha256 "$1")" \
     --arg seed_set_sha256 "$(sha_file "$seed_set")" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg observed_at "$observed_at" \
@@ -234,6 +235,23 @@ for mutation in '.body.catalog_ref.sha256 = ("a" * 64)' \
   [ "$(validate_result "$tmp/rebound.json")" = false ] ||
     fail "run result with moved ref or altered derivation accepted: $mutation"
 done
+# An archived result may not claim a program, driver, or catalog that never ran,
+# even when the embedded evaluator's own digest is recomputed to match.
+for ref in program_ref driver_ref catalog_ref; do
+  "$jq_bin" -S -c --arg ref "$ref" '.body.evaluator.content.body[$ref].sha256 = ("b" * 64)' \
+    "$first" > "$tmp/rebound.json"
+  evaluator_sha=$("$jq_bin" -S -c '.body.evaluator.content' "$tmp/rebound.json" |
+    /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+  "$jq_bin" -S -c --arg sha "$evaluator_sha" '.body.evaluator.sha256 = $sha' \
+    "$tmp/rebound.json" > "$tmp/rebound-evaluator.json"
+  "$jq_bin" -S -c '.body.evaluator.content' "$tmp/rebound-evaluator.json" > "$tmp/evaluator.json"
+  [ "$(validate_result "$tmp/rebound-evaluator.json")" = false ] ||
+    fail "evaluator claiming an unshipped $ref was accepted"
+done
+"$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/evaluator.json"
+"$jq_bin" -S -c '.body.evaluator.sha256 = ("c" * 64)' "$first" > "$tmp/rebound.json"
+[ "$(validate_result "$tmp/rebound.json")" = false ] ||
+  fail 'run result with a moved evaluator digest accepted'
 pass 'a run result must be exactly what the program derives from its bound inputs'
 
 if "$framework" run "$seed_set" "not-a-time" >"$tmp/badtime.out" 2>"$tmp/badtime.err"; then
