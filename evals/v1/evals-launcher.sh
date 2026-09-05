@@ -118,9 +118,9 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=88e2bf8ae9a3e97d7d043f97f854fa5ef79dae6794a8c762abe35ee8d6641e4f
-catalog_sha=bbb210598791b9c80d29bc1edf362c44525fc1c308544a3a2c56d5f8f10a1234
-driver_sha=383a134504ef74343c5b40fe86cc22fbb8beed6ce27168747707d0aaa90f304c
+program_sha=c141ed838ec480e27a2bc9f6535b99b686100c613a1a1e3ff7f21cd161823776
+catalog_sha=b8d8bfeb88c13bebb35f3f4112298db7d3505d3f4085d0c7712769576720d083
+driver_sha=ec70799595775e646a2af5a9bd33a5158685c874180de00ded3f1a88e4fc6cbb
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -158,6 +158,7 @@ snapshot_expected b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fe
 # The inactive state scanner, replayed for the events family from inside the
 # private runtime. It reads its core from this runtime's mirror, never the repo.
 for member in \
+  'reconciliation-plan.jq 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4' \
   'scan-state.sh 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5' \
   'state-scanner-driver.sh 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b' \
   'state-scanner-launcher.sh 9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb' \
@@ -205,6 +206,7 @@ seed_sha=$(sha256_path "$scratch/input.json") || emit_error E_RUNTIME
         {path:"scripts/core-contract.sh",sha256:"b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9"}
       ],
       orchestrator_closure:[
+        {path:"orchestrator/v1/reconciliation-plan.jq",sha256:"03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4"},
         {path:"orchestrator/v1/scan-state.sh",sha256:"556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5"},
         {path:"orchestrator/v1/state-scanner-driver.sh",sha256:"5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b"},
         {path:"orchestrator/v1/state-scanner-launcher.sh",sha256:"9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb"},
@@ -254,6 +256,7 @@ fi
     --arg seed_set_sha256 "$seed_sha" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 \
+    --arg planner_sha256 03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$scratch/input.json" \
@@ -265,6 +268,8 @@ fi
   emit_error E_CANONICAL
 [ "$(sha256_path "$runtime/bootstrap.sh")" = "$bootstrap_sha" ] &&
 [ "$(sha256_path "$runtime/launcher.sh")" = "$launcher_sha" ] &&
+[ "$(sha256_path "$runtime/orchestrator/v1/reconciliation-plan.jq")" = \
+    03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4 ] &&
 [ "$(sha256_path "$runtime/orchestrator/v1/scan-state.sh")" = \
     556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5 ] &&
 [ "$(sha256_path "$runtime/orchestrator/v1/state-scanner-driver.sh")" = \

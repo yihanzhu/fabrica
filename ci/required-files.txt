@@ -282,5 +282,7 @@ evals/v1/evals.jq
 evals/v1/eval-catalog.json
 evals/v1/seed-set.json
 evals/v1/seed-set-events.json
+evals/v1/seed-set-plans.json
 scripts/test/evals-framework.test.sh
 scripts/test/evals-events.test.sh
+scripts/test/evals-plans.test.sh

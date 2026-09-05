@@ -52,14 +52,16 @@ catalog="$runtime/catalog.json"
 core_front_door="$runtime/scripts/core-contract.sh"
 scanner="$runtime/orchestrator/v1/scan-state.sh"
 scanner_sha256=556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5
+planner="$runtime/orchestrator/v1/reconciliation-plan.jq"
+planner_sha256=03904cef1e06acf207ee7a6cf8666f7dd7a6360acd95bb1e8ce34bd6409ddbe4
 jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
-program_sha256=88e2bf8ae9a3e97d7d043f97f854fa5ef79dae6794a8c762abe35ee8d6641e4f
+program_sha256=c141ed838ec480e27a2bc9f6535b99b686100c613a1a1e3ff7f21cd161823776
 driver_sha256=$(sha256_path "$self") || emit_error E_RUNTIME
 
 verify_runtime() {
   verify_hash "$program_sha256" "$program" &&
-  verify_hash bbb210598791b9c80d29bc1edf362c44525fc1c308544a3a2c56d5f8f10a1234 "$catalog" &&
+  verify_hash b8d8bfeb88c13bebb35f3f4112298db7d3505d3f4085d0c7712769576720d083 "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&
   verify_hash 65eb40b9afb9b4f1d809ed66d0f2ca625f656c34e856cedcde9cbbde857f0f0a \
@@ -79,6 +81,7 @@ verify_runtime() {
   verify_hash b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     "$core_front_door" &&
   verify_hash "$scanner_sha256" "$scanner" &&
+  verify_hash "$planner_sha256" "$planner" &&
   verify_hash 5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b \
     "$runtime/orchestrator/v1/state-scanner-driver.sh" &&
   verify_hash 9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb \
@@ -97,11 +100,11 @@ run_program() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation "$1" \
     --arg program_sha256 "$program_sha256" --arg driver_sha256 "$driver_sha256" \
-    --arg catalog_sha256 bbb210598791b9c80d29bc1edf362c44525fc1c308544a3a2c56d5f8f10a1234 \
+    --arg catalog_sha256 b8d8bfeb88c13bebb35f3f4112298db7d3505d3f4085d0c7712769576720d083 \
     --arg evaluator_sha256 "$evaluator_sha256" \
     --arg seed_set_sha256 "$seed_set_sha256" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
-    --arg scanner_sha256 "$scanner_sha256" \
+    --arg scanner_sha256 "$scanner_sha256" --arg planner_sha256 "$planner_sha256" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" \
     --slurpfile seed_set_docs "$input" \
@@ -124,7 +127,10 @@ run_program() {
       "$work/empty-candidate.json" 2>/dev/null)" = true ] || emit_error E_SHAPE
 
 seed_source=$("$jq_bin" -r '.body.seed_source // empty' "$input") || emit_error E_RUNTIME
-case "$seed_source" in core.stage-run.v2|orchestrator.state-scanner.v1) ;; *) emit_error E_SHAPE ;; esac
+case "$seed_source" in
+  core.stage-run.v2|orchestrator.reconciliation-plan.v1|orchestrator.state-scanner.v1) ;;
+  *) emit_error E_SHAPE ;;
+esac
 case_count=$("$jq_bin" -r '.body.cases | length' "$input") || emit_error E_RUNTIME
 [[ "$case_count" =~ ^[1-9][0-9]?$ ]] && [ "$case_count" -le 64 ] || emit_error E_SHAPE
 observations="$work/observations.json"
@@ -199,6 +205,53 @@ replay_scanner_cases() {
   done
 }
 
+# Planner bundles replay through the real reconciliation planner, pure jq over
+# the private modules. Exactly which stage, request, operation, and attempt it
+# would deliver, defer, or suppress, and which stages it hands to an operator,
+# is recorded; a refusal is recorded by its one token.
+replay_planner_cases() {
+  local input_doc plan_out plan_err plan_status summary observation
+  i=0
+  while [ "$i" -lt "$case_count" ]; do
+    case_id=$("$jq_bin" -r ".body.cases[$i].case_id" "$input") || emit_error E_RUNTIME
+    input_doc="$work/plan-input-$i.json"
+    "$jq_bin" -S -c ".body.cases[$i].input.content" "$input" > "$input_doc" ||
+      emit_error E_RUNTIME
+    [ "$(sha256_path "$input_doc")" = \
+      "$("$jq_bin" -r ".body.cases[$i].input.sha256" "$input")" ] || emit_error E_RELATION
+    plan_out="$work/plan-$i.out"
+    plan_err="$work/plan-$i.err"
+    "$jq_bin" -L "$modules" -S -c -f "$planner" "$input_doc" \
+      </dev/null >"$plan_out" 2>"$plan_err"
+    plan_status=$?
+    if [ "$plan_status" -eq 0 ]; then
+      [ ! -s "$plan_err" ] || emit_error E_RUNTIME
+      summary=$("$jq_bin" -S -c '
+        def item: .delivery_key |
+          {attempt_number,operation,request_sha256,stage_key};
+        {deliveries:[.body.deliveries[] | item + {delivery_mode}],
+         deferred:[.body.deferred[] | item + {reason_id}],
+         suppressed:[.body.suppressed[] | item + {reason_id}],
+         operator_messages:[.body.operator_messages[] |
+           {action:.recovery.action,class,stage_key}]}' "$plan_out") || emit_error E_RUNTIME
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" --argjson plan "$summary" \
+        '{case_id:$case_id,disposition:"planned",plan:{state:"present",value:$plan},
+          error_token:{state:"absent"}}') || emit_error E_RUNTIME
+    else
+      [ ! -s "$plan_out" ] || emit_error E_RUNTIME
+      case "$(/bin/cat "$plan_err" 2>/dev/null)" in
+        *E_RECONCILIATION_INPUT*) ;;
+        *) emit_error E_RUNTIME ;;
+      esac
+      observation=$("$jq_bin" -S -c -n --arg case_id "$case_id" \
+        '{case_id:$case_id,disposition:"rejected",plan:{state:"absent"},
+          error_token:{state:"present",value:"E_RECONCILIATION_INPUT"}}') || emit_error E_RUNTIME
+    fi
+    record_observation "$observation"
+    i=$((i + 1))
+  done
+}
+
 # Canonical documents for one case, each checked against its recorded digest
 # before the core sees it. The core is the only judge; the driver only records.
 replay_stage_run_cases() {
@@ -257,11 +310,11 @@ while [ "$i" -lt "$case_count" ]; do
 done
 }
 
-if [ "$seed_source" = core.stage-run.v2 ]; then
-  replay_stage_run_cases
-else
-  replay_scanner_cases
-fi
+case "$seed_source" in
+  core.stage-run.v2) replay_stage_run_cases ;;
+  orchestrator.state-scanner.v1) replay_scanner_cases ;;
+  *) replay_planner_cases ;;
+esac
 /usr/bin/printf ']\n' >> "$observations" || emit_error E_RUNTIME
 
 result="$work/run-result.json"
