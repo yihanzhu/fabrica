@@ -188,6 +188,45 @@ expect_error unknown-request-role E_SHAPE "$tmp/badrole.json"
 expect_error missing-expectation E_SHAPE "$tmp/noexp.json"
 pass 'malformed, moved, and mis-shaped seed sets fail closed with one token'
 
+# A seed id must leave room for the "evals.run." prefix inside the id limit,
+# otherwise the run result would be built and then refused as mis-shaped.
+long_id=$(/usr/bin/printf 'seed.%0117d' 0)
+"$jq_bin" -S -c --arg id "$long_id" '.id = $id' "$seed_set" > "$tmp/longid.json"
+[ "${#long_id}" -eq 122 ] || fail 'long id fixture'
+expect_error long-seed-id E_SHAPE "$tmp/longid.json"
+fit_id=$(/usr/bin/printf 'seed.%0113d' 0)
+"$jq_bin" -S -c --arg id "$fit_id" '.id = $id' "$seed_set" > "$tmp/fitid.json"
+run_framework "$tmp/fitid.out" "$tmp/fitid.err" "$tmp/fitid.json" || fail 'longest fitting seed id errored'
+[ "$("$jq_bin" -r .id "$tmp/fitid.out")" = "evals.run.$fit_id" ] || fail 'run id prefix'
+pass 'a seed id too long to prefix is refused before any case runs'
+
+# validate-run-result binds every ref to the exact catalog, evaluator, and seed
+# set it was handed, not merely to well-formed digests.
+modules="$root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules"
+"$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/evaluator.json"
+validate_result() {
+  "$jq_bin" -S -c -n -L "$modules" \
+    --arg evals_operation validate-run-result \
+    --arg catalog_sha256 "$catalog_sha" \
+    --arg evaluator_sha256 "$("$jq_bin" -r .body.evaluator.sha256 "$first")" \
+    --arg seed_set_sha256 "$(sha_file "$seed_set")" \
+    --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+    --arg observed_at "$observed_at" \
+    --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
+    --argjson observation_docs '[[]]' --slurpfile evaluator_docs "$tmp/evaluator.json" \
+    --slurpfile candidate_docs "$1" -f "$program" 2>/dev/null
+}
+[ "$(validate_result "$first")" = true ] || fail 'shipped run result does not validate'
+for mutation in '.body.catalog_ref.sha256 = ("a" * 64)' \
+  '.body.seed_set_ref.sha256 = ("a" * 64)' \
+  '.body.evaluator.sha256 = ("a" * 64)' \
+  '.body.seed_set_ref.id = "other.seed" | .id = "evals.run.other.seed"'; do
+  "$jq_bin" -S -c "$mutation" "$first" > "$tmp/rebound.json"
+  [ "$(validate_result "$tmp/rebound.json")" = false ] ||
+    fail "run result with moved ref accepted: $mutation"
+done
+pass 'a run result is bound to the exact catalog, evaluator, and seed set digests'
+
 if "$framework" run "$seed_set" "not-a-time" >"$tmp/badtime.out" 2>"$tmp/badtime.err"; then
   fail 'observed_at is not validated'
 fi

@@ -158,9 +158,14 @@ def seed_case_shape:
   (.expectation | expectation_shape) and
   (.result | pair_shape("stage_result"));
 
+# The run id is "evals.run." + seed id, so a seed id must leave room for the
+# prefix inside the shared 128-character id limit.
+def run_id_prefix: "evals.run.";
+def seed_set_id_ok: schema::id_ok and ((run_id_prefix + .) | schema::id_ok);
+
 def seed_set_shape:
   schema::exact_fields(["body","id","kind","schema_version"];[]) and
-  .schema_version == 1 and .kind == "eval_seed_set" and (.id | schema::id_ok) and
+  .schema_version == 1 and .kind == "eval_seed_set" and (.id | seed_set_id_ok) and
   (.body |
    schema::exact_fields(["cases","core_contract","seed_source","shared"];[]) and
    .core_contract == expected_core and
@@ -260,7 +265,7 @@ def build_run_result(
   {
     schema_version:1,
     kind:"eval_run_result",
-    id:("evals.run." + $seed_set.id),
+    id:(run_id_prefix + $seed_set.id),
     body:{
       activation_state:"inactive",
       authority_effect:"none",
@@ -313,7 +318,7 @@ def trace_event_shape:
     ref_shape("evals-framework-evaluator.v1";
               "application/vnd.ystack.eval-framework-evaluator+json")));
 
-def run_result_shape:
+def run_result_shape($catalog_sha; $evaluator_sha; $seed_set; $seed_set_sha):
   . as $result |
   schema::exact_fields(["body","id","kind","schema_version"];[]) and
   .schema_version == 1 and .kind == "eval_run_result" and (.id | schema::id_ok) and
@@ -326,14 +331,15 @@ def run_result_shape:
    (.catalog_ref |
     schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
     .schema_version == 1 and .kind == "eval_catalog" and .id == "evals.catalog.v1" and
-    (.sha256 | schema::sha256_ok)) and
+    .sha256 == $catalog_sha) and
    (.seed_set_ref |
     schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
-    .schema_version == 1 and .kind == "eval_seed_set" and (.id | schema::id_ok) and
-    (.sha256 | schema::sha256_ok)) and
+    .schema_version == 1 and .kind == "eval_seed_set" and .id == $seed_set.id and
+    .sha256 == $seed_set_sha) and
    (.evaluator |
     schema::exact_fields(["content","sha256"];[]) and
-    (.content | evaluator_shape) and (.sha256 | schema::sha256_ok)) and
+    (.content | evaluator_shape) and .sha256 == $evaluator_sha) and
+   $result.id == (run_id_prefix + $seed_set.id) and
    (.observed_at | schema::time_ok) and
    (.cases | schema::bounded_set(1;64;case_result_shape;.case_id)) and
    (.trace | schema::bounded_set(1;64;trace_event_shape;.case_id)) and
@@ -370,5 +376,7 @@ elif $evals_operation == "build-run-result" then
       $observed_at)
   else error("E_SHAPE") end
 elif $evals_operation == "validate-run-result" then
-  $candidate_docs[0] | run_result_shape
+  ($seed_set_docs[0] | seed_set_shape) and
+  ($candidate_docs[0] |
+   run_result_shape($catalog_sha256; $evaluator_sha256; $seed_set_docs[0]; $seed_set_sha256))
 else error("E_RUNTIME") end
