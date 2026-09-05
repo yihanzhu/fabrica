@@ -137,6 +137,19 @@ grep -Fq 'delivery replay: dependency is not executable' "$tmp/noexec.out" || fa
 [ ! -e "$tmp/noexec-state/run.json" ] && [ ! -e "$tmp/noexec-state/execution" ] || fail dependency-noexec-state
 pass 'a non-executable native dependency is rejected before any snapshot grants it execute permission'
 
+python3 -c 'import sys; sys.stdout.write("[" * 100000 + "]" * 100000)' >"$tmp/deep.json"
+/bin/mkdir -m 700 "$tmp/deep-state" "$tmp/deep-candidate" "$tmp/deep-scratch"
+if python3 "$replay" --input "$tmp/deep.json" --source-repository-id fixture.target \
+  --source-git-dir "$tmp/source.git" --candidate-root "$tmp/deep-candidate" --scratch-root "$tmp/deep-scratch" \
+  --state-dir "$tmp/deep-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/deep.out" 2>&1; then
+  fail deep-json-accepted
+fi
+grep -Fq 'delivery replay: input is not JSON' "$tmp/deep.out" || fail deep-json-error
+! grep -Fq 'Traceback' "$tmp/deep.out" || fail deep-json-traceback
+pass 'deeply nested JSON is rejected as input, never as a crash'
+
+
 
 snapshot_interrupt_wrapper="$tmp/snapshot-interrupt.py"
 printf '%s\n' \
@@ -312,6 +325,11 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/repeated-kill-resume.out"
 jq -e '.state.phase=="review-wait"' "$tmp/repeated-kill-resume.out" >/dev/null || fail repeated-kill-resume
 pass 'repeated SIGKILL recovery reuses one bounded execution bundle'
+
+[ "$(find "$tmp/repeated-kill-state" -maxdepth 1 -name 'reconcile-*' | wc -l | tr -d ' ')" = 0 ] ||
+  fail repeated-kill-reconcile-leftovers
+pass 'crash recovery leaves no reconcile staging directories behind'
+
 
 mkdir -m 700 "$tmp/reconcile-bad-state" "$tmp/reconcile-bad-candidate" "$tmp/reconcile-bad-scratch"
 if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \

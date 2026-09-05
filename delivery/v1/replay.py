@@ -98,7 +98,9 @@ def read_bytes(path, limit):
 def parse_json(data):
     try:
         return json.loads(data)
-    except (ValueError, UnicodeDecodeError) as error:
+    except (ValueError, UnicodeDecodeError, RecursionError) as error:
+        # Deeply nested input within the byte limit raises RecursionError; it is
+        # still just input this program cannot accept, never a crash.
         raise ReplayError("input is not JSON") from error
 
 
@@ -460,8 +462,17 @@ def reconcile_materialization(arguments, execution, input_path, identity, state_
     existing = candidate_identity(arguments.candidate_root, identity["source_commit_id"])
     if existing is None:
         return None
-    recovery_candidate = Path(tempfile.mkdtemp(prefix="reconcile-candidate-", dir=state_dir))
-    recovery_scratch = Path(tempfile.mkdtemp(prefix="reconcile-scratch-", dir=state_dir))
+    # One fixed pair of staging directories, cleared on entry and on exit, so a
+    # crash mid-reconcile can never accumulate materialized repositories.
+    recovery_candidate = state_dir / "reconcile-candidate"
+    recovery_scratch = state_dir / "reconcile-scratch"
+    for stale in (recovery_candidate, recovery_scratch):
+        if stale.is_symlink() or stale.exists():
+            if stale.is_symlink() or not stale.is_dir():
+                raise ReplayError("reconcile staging is unavailable")
+            shutil.rmtree(stale)
+    os.mkdir(recovery_candidate, 0o700)
+    os.mkdir(recovery_scratch, 0o700)
     try:
         recomputed = run_materializer(arguments, execution, input_path, identity,
                                       recovery_candidate, recovery_scratch)
