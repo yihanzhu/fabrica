@@ -71,7 +71,7 @@ def read_bytes(path, limit):
 def parse_json(data):
     try:
         return json.loads(data)
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+    except (ValueError, UnicodeDecodeError) as error:
         raise ReplayError("input is not JSON") from error
 
 
@@ -139,6 +139,40 @@ def package_paths(generation):
     return PACKAGE_FILES + tuple(f"{root}/{name}" for name in GENERATION_FILES)
 
 
+def snapshot_file(source, destination, mode):
+    data = read_bytes(trusted_file(source), MAX_INPUT_BYTES)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    atomic_bytes(destination, data)
+    os.chmod(destination, mode)
+    return data
+
+
+def create_execution_snapshot(repository, arguments, state_dir):
+    root = Path(tempfile.mkdtemp(prefix="execution-", dir=state_dir))
+    try:
+        driver = root / "delivery/v1/replay.py"
+        snapshot_file(Path(__file__).resolve(), driver, 0o500)
+        core_relative = "scripts/core-contract.sh"
+        core = snapshot_file(repository / core_relative, root / core_relative, 0o500)
+        match = re.search(
+            rb"^PORTABLE_CORE_GENERATION='(g-[0-9a-f]{64})'$", core, re.MULTILINE
+        )
+        if match is None:
+            raise ReplayError("materializer package generation is unavailable")
+        generation = match.group(1).decode()
+        for relative in package_paths(generation):
+            if relative == core_relative:
+                continue
+            mode = 0o500 if relative.endswith(".sh") else 0o400
+            snapshot_file(repository / relative, root / relative, mode)
+        snapshot_file(arguments.closure_helper, root / ".dependencies/object-closure", 0o500)
+        snapshot_file(arguments.jq_bin, root / ".dependencies/jq", 0o500)
+        return root
+    except (OSError, ReplayError):
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+
+
 def materializer_package_identity(repository):
     core_path = trusted_file(repository / "scripts/core-contract.sh")
     core_bytes = core_path.read_bytes()
@@ -157,7 +191,7 @@ def materializer_package_identity(repository):
     return package
 
 
-def input_identity(input_value, input_sha, arguments, repository):
+def input_identity(input_value, input_sha, arguments, execution):
     try:
         request = input_value["stage_request"]
         request_sha = request["sha256"]
@@ -179,9 +213,7 @@ def input_identity(input_value, input_sha, arguments, repository):
     expected = arguments.expected_sha256
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ReplayError("expected verifier digest is invalid")
-    closure = trusted_file(arguments.closure_helper)
-    jq_bin = trusted_file(arguments.jq_bin)
-    package = materializer_package_identity(repository)
+    package = materializer_package_identity(execution)
     identity = {
         "input_sha256": input_sha,
         "request_sha256": request_sha,
@@ -193,25 +225,29 @@ def input_identity(input_value, input_sha, arguments, repository):
             "path": safe_path(arguments.verify_path),
             "expected_sha256": expected,
         },
-        "driver_sha256": digest_bytes(trusted_file(Path(__file__).resolve()).read_bytes()),
+        "driver_sha256": digest_bytes(read_bytes(trusted_file(Path(__file__).resolve()), MAX_INPUT_BYTES)),
         "materializer_sha256": package["files"][PACKAGE_FILES[0]],
         "materializer_package": package,
-        "closure_helper_sha256": digest_bytes(closure.read_bytes()),
-        "jq_sha256": digest_bytes(jq_bin.read_bytes()),
+        "closure_helper_sha256": digest_bytes(read_bytes(
+            trusted_file(execution / ".dependencies/object-closure"), MAX_INPUT_BYTES
+        )),
+        "jq_sha256": digest_bytes(read_bytes(
+            trusted_file(execution / ".dependencies/jq"), MAX_INPUT_BYTES
+        )),
         "source_repository_id": arguments.source_repository_id,
     }
     identity["run_key"] = digest_bytes(canonical(identity))
     return identity
 
 
-def run_materializer(arguments, materializer, input_path, identity, candidate_root=None, scratch_root=None):
+def run_materializer(arguments, execution, input_path, identity, candidate_root=None, scratch_root=None):
     candidate_root = Path(arguments.candidate_root).resolve() if candidate_root is None else candidate_root
     scratch_root = Path(arguments.scratch_root).resolve() if scratch_root is None else scratch_root
     command = [
-        str(materializer), "materialize", str(input_path),
+        str(execution / PACKAGE_FILES[0]), "materialize", str(input_path),
         arguments.source_repository_id, str(Path(arguments.source_git_dir).resolve()),
         str(candidate_root), str(scratch_root),
-        str(Path(arguments.closure_helper).resolve()), str(Path(arguments.jq_bin).resolve()),
+        str(execution / ".dependencies/object-closure"), str(execution / ".dependencies/jq"),
     ]
     environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
     result = subprocess.run(command, env=environment, stdout=subprocess.PIPE,
@@ -274,14 +310,14 @@ def candidate_identity(candidate_root, source_commit):
             "candidate_parent_commit_id": parent}
 
 
-def reconcile_materialization(arguments, materializer, input_path, identity, state_dir):
+def reconcile_materialization(arguments, execution, input_path, identity, state_dir):
     existing = candidate_identity(arguments.candidate_root, identity["source_commit_id"])
     if existing is None:
         return None
     recovery_candidate = Path(tempfile.mkdtemp(prefix="reconcile-candidate-", dir=state_dir))
     recovery_scratch = Path(tempfile.mkdtemp(prefix="reconcile-scratch-", dir=state_dir))
     try:
-        recomputed = run_materializer(arguments, materializer, input_path, identity,
+        recomputed = run_materializer(arguments, execution, input_path, identity,
                                       recovery_candidate, recovery_scratch)
     finally:
         shutil.rmtree(recovery_candidate, ignore_errors=True)
@@ -388,9 +424,11 @@ def validate_state(state, identity):
         raise ReplayError("state journal candidate identity does not match materialization")
     if phase in {"review-wait", "publish-wait", "completed-offline"}:
         verification = state.get("verification")
-        if not isinstance(verification, dict) or not isinstance(verification.get("id"), str) or \
-           not isinstance(verification.get("path"), str) or \
-           not re.fullmatch(r"[0-9a-f]{64}", str(verification.get("sha256", ""))):
+        if verification != {
+            "id": saved["verifier"]["id"],
+            "path": saved["verifier"]["path"],
+            "sha256": saved["verifier"]["expected_sha256"],
+        }:
             raise ReplayError("state journal verification is malformed")
     if phase in {"publish-wait", "completed-offline"}:
         review = state.get("review")
@@ -416,8 +454,9 @@ def result(state):
 
 
 def replay(arguments):
-    repository = Path(__file__).resolve().parents[2]
-    materializer = trusted_file(repository / "adapters/local-git-materializer/v1/materialize.sh")
+    execution = Path(arguments.execution_root).resolve()
+    if Path(__file__).resolve() != execution / "delivery/v1/replay.py":
+        raise ReplayError("execution snapshot is invalid")
     state_dir = private_directory(arguments.state_dir)
     disjoint(state_dir, arguments.source_git_dir, arguments.candidate_root, arguments.scratch_root)
     state_path = state_dir / "run.json"
@@ -426,7 +465,7 @@ def replay(arguments):
     input_bytes = read_bytes(arguments.input, MAX_INPUT_BYTES)
     input_value = parse_json(input_bytes)
     input_sha = digest_bytes(input_bytes)
-    identity = input_identity(input_value, input_sha, arguments, repository)
+    identity = input_identity(input_value, input_sha, arguments, execution)
     interrupted = {"value": False}
     previous_term = signal.getsignal(signal.SIGTERM)
     previous_int = signal.getsignal(signal.SIGINT)
@@ -471,10 +510,10 @@ def replay(arguments):
                 return 0
             if state["phase"] == "materializing":
                 try:
-                    reconciled = reconcile_materialization(arguments, materializer, input_snapshot_path,
+                    reconciled = reconcile_materialization(arguments, execution, input_snapshot_path,
                                                            identity, state_dir)
                     state["materialization"] = reconciled or run_materializer(
-                        arguments, materializer, input_snapshot_path, identity
+                        arguments, execution, input_snapshot_path, identity
                     )
                 except ReplayError as error:
                     state.update({"phase": "failed", "recoverable": True, "reason": str(error)})
@@ -563,8 +602,36 @@ def main():
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--review-observation")
     parser.add_argument("--publisher-observation")
+    parser.add_argument("--execution-root", help=argparse.SUPPRESS)
+    arguments = parser.parse_args()
     try:
-        return replay(parser.parse_args())
+        if arguments.execution_root is None:
+            state_dir = private_directory(arguments.state_dir)
+            execution = create_execution_snapshot(Path(__file__).resolve().parents[2], arguments, state_dir)
+            child = None
+            pending_signal = {"value": None}
+
+            def forward_signal(number, _frame):
+                if child is None:
+                    pending_signal["value"] = number
+                else:
+                    child.send_signal(number)
+
+            previous_term = signal.signal(signal.SIGTERM, forward_signal)
+            previous_int = signal.signal(signal.SIGINT, forward_signal)
+            try:
+                child = subprocess.Popen([
+                    sys.executable, str(execution / "delivery/v1/replay.py"),
+                    *sys.argv[1:], "--execution-root", str(execution),
+                ])
+                if pending_signal["value"] is not None:
+                    child.send_signal(pending_signal["value"])
+                return child.wait()
+            finally:
+                signal.signal(signal.SIGTERM, previous_term)
+                signal.signal(signal.SIGINT, previous_int)
+                shutil.rmtree(execution, ignore_errors=True)
+        return replay(arguments)
     except (OSError, ReplayError) as error:
         print(f"delivery replay: {error}", file=sys.stderr)
         return 1

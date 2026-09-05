@@ -9,6 +9,7 @@ root=$(CDPATH='' cd -P -- "${BASH_SOURCE[0]%/*}/../.." && pwd -P)
 replay="$root/delivery/v1/replay.py"
 fixture_builder="$root/scripts/test/local-git-materializer-fixtures.sh"
 closure_source="$root/adapters/local-git-materializer/v1/object-closure.c"
+python_with_int_limit=$(command -v python3)
 tmp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/ystack-delivery-replay.XXXXXX")
 cleanup() { /bin/rm -rf -- "$tmp"; }
 trap cleanup EXIT
@@ -146,19 +147,26 @@ pass 'replacement of the original input after snapshot cannot change materializa
 
 kill_wrapper="$tmp/kill-after-materialize.py"
 printf '%s\n' \
-  'import importlib.util, os, signal, sys' \
+  'import importlib.util, os, pathlib, signal, sys, types' \
   'path, arguments = sys.argv[1], sys.argv[2:]' \
   'spec = importlib.util.spec_from_file_location("replay", path)' \
   'module = importlib.util.module_from_spec(spec)' \
   'spec.loader.exec_module(module)' \
-  'original = module.run_materializer' \
+  'argument = lambda name: arguments[arguments.index(name) + 1]' \
+  'values = types.SimpleNamespace(closure_helper=argument("--closure-helper"), jq_bin=argument("--jq-bin"))' \
+  'snapshot = module.create_execution_snapshot(pathlib.Path(path).resolve().parents[2], values, pathlib.Path(argument("--state-dir")))' \
+  'snapshot_path = snapshot / "delivery/v1/replay.py"' \
+  'snapshot_spec = importlib.util.spec_from_file_location("snapshot_replay", snapshot_path)' \
+  'snapshot_module = importlib.util.module_from_spec(snapshot_spec)' \
+  'snapshot_spec.loader.exec_module(snapshot_module)' \
+  'original = snapshot_module.run_materializer' \
   'def stop_after_materialization(*args, **kwargs):' \
   '    result = original(*args, **kwargs)' \
   '    os.kill(os.getpid(), signal.SIGKILL)' \
   '    return result' \
-  'module.run_materializer = stop_after_materialization' \
-  'sys.argv = [path] + arguments' \
-  'raise SystemExit(module.main())' >"$kill_wrapper"
+  'snapshot_module.run_materializer = stop_after_materialization' \
+  'sys.argv = [str(snapshot_path), *arguments, "--execution-root", str(snapshot)]' \
+  'raise SystemExit(snapshot_module.main())' >"$kill_wrapper"
 mkdir -m 700 "$tmp/reconcile-state" "$tmp/reconcile-candidate" "$tmp/reconcile-scratch"
 if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \
@@ -190,6 +198,76 @@ if python3 "$replay" --input "$base_input" --source-repository-id fixture.target
 jq -e '.state.phase=="failed" and (.state.reason|contains("does not match frozen"))' "$tmp/reconcile-bad.out" >/dev/null ||
   fail reconcile-mismatch-state
 pass 'a mismatched interrupted candidate is rejected without cleanup'
+
+for tree_case in numeric list null; do
+  case "$tree_case" in
+    numeric) tree_value=123 ;;
+    list) tree_value='[]' ;;
+    null) tree_value=null ;;
+  esac
+  "$jq_bin" -S -c "(.stage_request.content.body.operation.arguments.source_tree_input_id) as \$id |
+    (.stage_request.content.body.inputs[] | select(.input_id == \$id) |
+    .value.value.value.object_id) = $tree_value" "$base_input" >"$tmp/$tree_case-tree.json"
+  mkdir -m 700 "$tmp/$tree_case-tree-state" "$tmp/$tree_case-tree-candidate" "$tmp/$tree_case-tree-scratch"
+  if python3 "$replay" --input "$tmp/$tree_case-tree.json" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/$tree_case-tree-candidate" --scratch-root "$tmp/$tree_case-tree-scratch" \
+    --state-dir "$tmp/$tree_case-tree-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+    --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/$tree_case-tree.out" 2>&1; then
+    fail "$tree_case-source-tree"
+  fi
+  if ! grep -Fq 'delivery replay: materialization input tree identity is invalid' "$tmp/$tree_case-tree.out" ||
+     grep -Fq Traceback "$tmp/$tree_case-tree.out"; then
+    fail "$tree_case-source-tree-error"
+  fi
+done
+pass 'non-string source tree identities fail without a traceback'
+
+mkdir -m 700 "$tmp/caller-execution-root" "$tmp/caller-execution-state" \
+  "$tmp/caller-execution-candidate" "$tmp/caller-execution-scratch"
+printf '%s\n' keep >"$tmp/caller-execution-root/sentinel"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/caller-execution-candidate" --scratch-root "$tmp/caller-execution-scratch" \
+  --state-dir "$tmp/caller-execution-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --execution-root "$tmp/caller-execution-root" >"$tmp/caller-execution.out" 2>&1; then
+  fail caller-execution-root
+fi
+[ "$(cat "$tmp/caller-execution-root/sentinel")" = keep ] || fail caller-execution-root-deleted
+grep -Fq 'delivery replay: execution snapshot is invalid' "$tmp/caller-execution.out" ||
+  fail caller-execution-root-error
+pass 'a caller-supplied execution root is rejected without deleting it'
+
+huge_integer=$(printf '1%.0s' {1..5000})
+printf '{"huge":%s}\n' "$huge_integer" >"$tmp/huge-input.json"
+mkdir -m 700 "$tmp/huge-input-state" "$tmp/huge-input-candidate" "$tmp/huge-input-scratch"
+if PYTHONINTMAXSTRDIGITS=4300 "$python_with_int_limit" "$replay" --input "$tmp/huge-input.json" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/huge-input-candidate" --scratch-root "$tmp/huge-input-scratch" --state-dir "$tmp/huge-input-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/huge-input.out" 2>&1; then fail huge-integer-input; fi
+if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/huge-input.out" ||
+   grep -Fq Traceback "$tmp/huge-input.out"; then
+  fail huge-integer-input-error
+fi
+printf '{"huge":%s}\n' "$huge_integer" >"$tmp/huge-observation.json"
+if PYTHONINTMAXSTRDIGITS=4300 "$python_with_int_limit" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --review-observation "$tmp/huge-observation.json" >"$tmp/huge-observation.out" 2>&1; then fail huge-integer-observation; fi
+if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/huge-observation.out" ||
+   grep -Fq Traceback "$tmp/huge-observation.out"; then
+  fail huge-integer-observation-error
+fi
+mkdir -m 700 "$tmp/huge-journal-state" "$tmp/huge-journal-candidate" "$tmp/huge-journal-scratch"
+printf '{"huge":%s}\n' "$huge_integer" >"$tmp/huge-journal-state/run.json"
+if PYTHONINTMAXSTRDIGITS=4300 "$python_with_int_limit" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/huge-journal-candidate" --scratch-root "$tmp/huge-journal-scratch" --state-dir "$tmp/huge-journal-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/huge-journal.out" 2>&1; then fail huge-integer-journal; fi
+if ! grep -Fq 'delivery replay: input is not JSON' "$tmp/huge-journal.out" ||
+   grep -Fq Traceback "$tmp/huge-journal.out"; then
+  fail huge-integer-journal-error
+fi
+pass 'huge JSON integers in input, observation, and journal fail without a traceback'
 
 printf '\377' >"$tmp/invalid-input.json"
 mkdir -m 700 "$tmp/invalid-input-state" "$tmp/invalid-input-candidate" "$tmp/invalid-input-scratch"
@@ -277,6 +355,14 @@ expect_malformed_state mismatched-candidate-tree \
 expect_malformed_state numeric-review-actor '.review.actor_id=123'
 expect_malformed_state numeric-publisher-actor \
   '(.phase="completed-offline") | .publisher={"actor_id":123,"disposition":"offline-simulated","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}'
+for verification_phase in review-wait publish-wait completed-offline; do
+  expect_malformed_state "verification-id-$verification_phase" \
+    "(.phase=\"$verification_phase\") | .verification.id=\"delivery.other.v1\""
+  expect_malformed_state "verification-path-$verification_phase" \
+    "(.phase=\"$verification_phase\") | .verification.path=\"other.txt\""
+  expect_malformed_state "verification-sha-$verification_phase" \
+    "(.phase=\"$verification_phase\") | .verification.sha256=\"0000000000000000000000000000000000000000000000000000000000000000\""
+done
 pass 'malformed state phases and nested records fail without a traceback'
 jq -S -c '.note="changed after review wait"' "$tmp/review.json" >"$tmp/changed-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
@@ -430,5 +516,54 @@ if python3 "$package_replay" --input "$base_input" --source-repository-id fixtur
   >"$tmp/package-driver-stale.out"; then fail changed-replay-driver; fi
 jq -e '.state.phase=="stale"' "$tmp/package-driver-stale.out" >/dev/null || fail changed-replay-driver-state
 pass 'changed executable package or replay driver cannot reuse a prior run'
+
+/bin/cp "$replay" "$package_replay"
+/bin/cp "$root/adapters/local-git-materializer/v1/protocol.jq" \
+  "$package_root/adapters/local-git-materializer/v1/protocol.jq"
+/bin/cp "$runtime/object-closure" "$tmp/race-object-closure"
+/bin/cp "$jq_bin" "$tmp/race-jq"
+/bin/chmod 0555 "$tmp/race-object-closure" "$tmp/race-jq"
+race_wrapper="$tmp/snapshot-race.py"
+printf '%s\n' \
+  'import argparse, importlib.util, os, pathlib, stat, subprocess, sys' \
+  'driver, repository, state_dir, helper, jq_bin, *arguments = sys.argv[1:]' \
+  'spec = importlib.util.spec_from_file_location("replay", driver)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'spec.loader.exec_module(module)' \
+  'values = argparse.Namespace(closure_helper=helper, jq_bin=jq_bin)' \
+  'snapshot = module.create_execution_snapshot(pathlib.Path(repository), values, pathlib.Path(state_dir))' \
+  'targets = [pathlib.Path(driver), pathlib.Path(repository) / "adapters/local-git-materializer/v1/protocol.jq", pathlib.Path(helper), pathlib.Path(jq_bin)]' \
+  'saved = [target.read_bytes() for target in targets]' \
+  'modes = [stat.S_IMODE(target.stat().st_mode) for target in targets]' \
+  'try:' \
+  '    for target in targets:' \
+  '        target.chmod(0o700)' \
+  '        target.write_bytes(b"replaced after execution snapshot\n")' \
+  '    result = subprocess.run([sys.executable, str(snapshot / "delivery/v1/replay.py"), *arguments, "--execution-root", str(snapshot)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)' \
+  'finally:' \
+  '    for target, data, mode in zip(targets, saved, modes):' \
+  '        target.write_bytes(data)' \
+  '        target.chmod(mode)' \
+  'sys.stdout.buffer.write(result.stdout)' \
+  'sys.stderr.buffer.write(result.stderr)' \
+  'raise SystemExit(result.returncode)' >"$race_wrapper"
+/bin/mkdir -m 700 "$tmp/race-state" "$tmp/race-candidate" "$tmp/race-scratch"
+driver_sha=$(sha_file "$package_replay")
+package_sha=$(sha_file "$package_root/adapters/local-git-materializer/v1/protocol.jq")
+helper_sha=$(sha_file "$tmp/race-object-closure")
+jq_sha=$(sha_file "$tmp/race-jq")
+python3 "$race_wrapper" "$package_replay" "$package_root" "$tmp/race-state" \
+  "$tmp/race-object-closure" "$tmp/race-jq" \
+  --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/race-candidate" --scratch-root "$tmp/race-scratch" --state-dir "$tmp/race-state" \
+  --closure-helper "$tmp/race-object-closure" --jq-bin "$tmp/race-jq" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/race.out"
+jq -e '.state.phase=="review-wait" and
+  .state.identity.driver_sha256==$driver and
+  .state.identity.materializer_package.files["adapters/local-git-materializer/v1/protocol.jq"]==$package and
+  .state.identity.closure_helper_sha256==$helper and .state.identity.jq_sha256==$jq' \
+  --arg driver "$driver_sha" --arg package "$package_sha" --arg helper "$helper_sha" --arg jq "$jq_sha" \
+  "$tmp/race.out" >/dev/null || fail immutable-execution-snapshot
+pass 'replacement after the private execution snapshot cannot change executed or recorded bytes'
 
 printf 'delivery replay: %s focused checks passed\n' "$passed"
