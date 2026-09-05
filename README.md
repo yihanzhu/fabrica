@@ -422,6 +422,16 @@ snapshot that repeats a stage or mixes a live attempt with a terminal result mus
 be refused. The scanner is the only judge; the framework records its
 classification or refusal token and grades that against the case's expectation.
 
+The same family is also seeded from `evals/v1/seed-set-plans.json`, which replays
+observation-plus-ledger bundles through the real inactive reconciliation planner
+(`orchestrator/v1/reconciliation-plan.jq`): a repeated delivery of the same key is a
+redelivery, not a second effect; an acknowledged delivery is suppressed; a retry is
+planned as the next attempt and refused past the retry limit; a stranded attempt is
+recovered; deliveries beyond the in-flight limit are deferred with redeliveries
+first; duplicate classifications or ledger entries are refused. Only what the plan
+would deliver, defer, suppress, or hand to an operator is graded. A seed set may
+only feed families the catalog says draw on its source.
+
 Every run result carries the exact catalog, seed set, program, driver, launcher,
 and core-closure digests, plus one trace event per case in the shape the
 Observability interface names (tool, adapter, gate, identity, latency, cost).
@@ -701,7 +711,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
-evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core and state-scanner replays, canonical run results
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core, state-scanner, and planner replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below

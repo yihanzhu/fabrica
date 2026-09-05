@@ -82,8 +82,8 @@ pass 'launcher and driver pin the exact shipped program, catalog, and driver'
   .body.fail_mode == "closed" and (.body.families | length) == 9 and
   ([.body.families[] | select(.seed_status == "seeded")] | length) == 3 and
   ([.body.families[] | select(.seed_status == "declared")] | length) == 6 and
-  all(.body.families[]; .seed_status == "seeded" and .seed_source.state == "present" or
-      .seed_status == "declared" and .seed_source.state == "absent") and
+  all(.body.families[]; .seed_status == "seeded" and (.seed_sources | length) >= 1 or
+      .seed_status == "declared" and .seed_sources == []) and
   all(.body.families[] | select((.grader_kinds | index("deterministic")) == null);
       .trial_policy.kind == "multi")
 ' "$catalog" > /dev/null || fail 'catalog shape'
@@ -153,12 +153,50 @@ run_framework "$tmp/wrong.json" "$tmp/wrong.err" "$wrong" || fail 'wrong-expecta
 ' "$tmp/wrong.json" > /dev/null || fail 'wrong expectation was not failed'
 pass 'a wrong expectation is graded failed, never silently passed'
 
+generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/bin/cut -d= -f2)
+[ -n "$generation" ] || fail 'launcher names one core generation'
+modules="$root/core/v2/generations/$generation/modules"
+[ -d "$modules" ] || fail "core generation modules missing: $generation"
+
 stochastic="$tmp/stochastic.json"
 "$jq_bin" -S -c '
   .body.cases |= map(if .case_id == "stale.completed-baseline"
     then .family_id = "reviewer-severity-false-positive-negative" else . end)
 ' "$seed_set" > "$stochastic"
-run_framework "$tmp/stochastic.out" "$tmp/stochastic.err" "$stochastic" || fail 'stochastic run errored'
+# The shipped catalog does not seed that family from core stage runs, so the
+# launcher refuses the misfiled set before anything runs.
+if "$framework" run "$stochastic" "$observed_at" >"$tmp/misfiled.out" 2>"$tmp/misfiled.err"; then
+  fail 'seed set filed under an unseeded family was accepted'
+fi
+[ ! -s "$tmp/misfiled.out" ] && [ "$(<"$tmp/misfiled.err")" = E_SHAPE ] ||
+  fail "misfiled seed set was not refused: [$(<"$tmp/misfiled.err")]"
+# With a catalog that does draw that model-only family from stage runs, the
+# program grades the case inconclusive: no deterministic grader, nothing guessed.
+model_only_catalog="$tmp/model-only-catalog.json"
+"$jq_bin" -S -c '
+  .body.families |= map(if .family_id == "reviewer-severity-false-positive-negative"
+    then .seed_status = "seeded" | .seed_sources = ["core.stage-run.v2"] else . end)
+' "$catalog" > "$model_only_catalog"
+model_only_catalog_sha=$(sha_file "$model_only_catalog")
+"$jq_bin" -S -c --arg sha "$model_only_catalog_sha" \
+  '.body.evaluator.content | .body.catalog_ref.sha256 = $sha' "$first" > "$tmp/stochastic-evaluator.json"
+"$jq_bin" -S -c '[.body.cases[].observation.value]' "$first" > "$tmp/stochastic-observations.json"
+"$jq_bin" -S -c -n -L "$modules" \
+  --arg evals_operation build-run-result \
+  --arg program_sha256 "$program_sha" --arg driver_sha256 "$driver_sha" \
+  --arg catalog_sha256 "$model_only_catalog_sha" \
+  --arg evaluator_sha256 "$(sha_file "$tmp/stochastic-evaluator.json")" \
+  --arg seed_set_sha256 "$(sha_file "$stochastic")" \
+  --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
+  --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+  --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
+  --arg observed_at "$observed_at" \
+  --slurpfile catalog_docs "$model_only_catalog" --slurpfile seed_set_docs "$stochastic" \
+  --slurpfile observation_docs "$tmp/stochastic-observations.json" \
+  --slurpfile evaluator_docs "$tmp/stochastic-evaluator.json" \
+  --slurpfile candidate_docs "$tmp/stochastic-observations.json" \
+  -f "$program" > "$tmp/stochastic.out" 2>"$tmp/stochastic.err" ||
+  fail "stochastic build errored: $(<"$tmp/stochastic.err")"
 "$jq_bin" -e '
   .body.summary == {total:8,passed:7,failed:0,inconclusive:1} and
   (.body.cases[] | select(.case_id == "stale.completed-baseline") |
@@ -167,7 +205,7 @@ run_framework "$tmp/stochastic.out" "$tmp/stochastic.err" "$stochastic" || fail 
   (.body.trace[] | select(.case_id == "stale.completed-baseline") | .grader_kind == "none") and
   ([.body.trace[] | select(.grader_kind == "deterministic")] | length) == 7
 ' "$tmp/stochastic.out" > /dev/null || fail 'model-only family was decided deterministically'
-pass 'a family without a deterministic grader stays inconclusive, in the case and in its trace'
+pass 'a misfiled family is refused; a seeded model-only family stays inconclusive in case and trace'
 
 # --- fail closed on bad or moved input ----------------------------------------
 expect_error() {
@@ -202,10 +240,6 @@ pass 'a seed id too long to prefix is refused before any case runs'
 
 # validate-run-result binds every ref to the exact catalog, evaluator, and seed
 # set it was handed, not merely to well-formed digests.
-generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/bin/cut -d= -f2)
-[ -n "$generation" ] || fail 'launcher names one core generation'
-modules="$root/core/v2/generations/$generation/modules"
-[ -d "$modules" ] || fail "core generation modules missing: $generation"
 "$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/evaluator.json"
 "$jq_bin" -S -c '[.body.cases[].observation.value]' "$first" > "$tmp/observations.json"
 validate_result() {
@@ -217,6 +251,7 @@ validate_result() {
     --arg seed_set_sha256 "$(sha_file "$seed_set")" \
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg scanner_sha256 "$(sha_file "$root/orchestrator/v1/scan-state.sh")" \
+    --arg planner_sha256 "$(sha_file "$root/orchestrator/v1/reconciliation-plan.jq")" \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
     --slurpfile observation_docs "$tmp/observations.json" \

@@ -62,7 +62,7 @@ done
 "$jq_bin" -e '
   .body.families[] | select(.family_id == "repeated-cancelled-missed-events") |
   .seed_status == "seeded" and
-  .seed_source == {state:"present",value:"orchestrator.state-scanner.v1"}
+  (.seed_sources | index("orchestrator.state-scanner.v1")) != null
 ' "$catalog" > /dev/null || fail 'catalog does not mark the events family seeded'
 pass 'events seed set is canonical, listed, and its catalog family is seeded'
 
@@ -94,7 +94,7 @@ run_framework "$first" "$tmp/first.err" "$seed_set" || fail "framework run faile
       .tool_ref == {content_id:"orchestrator-state-scanner-bootstrap.v1",
                     media_type:"text/x-shellscript",sha256:$scanner_sha} and
       .adapter == {state:"absent"} and .latency == {state:"absent"} and .cost == {state:"absent"}) and
-  (.body.evaluator.content.body.orchestrator_closure | length) == 4
+  (.body.evaluator.content.body.orchestrator_closure | length) == 5
 ' "$first" > /dev/null || fail 'run result shape or verdicts'
 pass 'all twelve event cases pass through the real state scanner'
 
