@@ -38,6 +38,19 @@ def expected_core_closure:
      sha256:"b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9"}
   ];
 
+# The inactive state scanner replayed for the events family, pinned like the core.
+def expected_orchestrator_closure:
+  [
+    {path:"orchestrator/v1/scan-state.sh",
+     sha256:"556a365b92a76c7a46c56b25c61a291f5ab3dcad8168fb77f15c15b3f3477ca5"},
+    {path:"orchestrator/v1/state-scanner-driver.sh",
+     sha256:"5972a0a6ab7858815963717995d3d09561e76e2b7412ad1887252d83ad0db19b"},
+    {path:"orchestrator/v1/state-scanner-launcher.sh",
+     sha256:"9bff3ce5669477ff6c3043115fd6ea01da486facd5f5f4f7ec2066efb70001cb"},
+    {path:"orchestrator/v1/state-scanner.jq",
+     sha256:"722afbf8a20ecf6f1d61b045186dc97b22fea1457f167ec87ac5b31b317e34ae"}
+  ];
+
 def ref_shape($content_id; $media_type):
   schema::content_ref_ok and
   .content_id == $content_id and .media_type == $media_type;
@@ -72,6 +85,21 @@ def stage_statuses:
 def core_error_tokens:
   ["E_CANONICAL","E_LIMIT","E_PARSE","E_REF","E_RELATION","E_RUNTIME","E_SHAPE","E_USAGE"];
 def request_roles: ["producer","reviewer","verifier"];
+def active_seed_sources: ["core.stage-run.v2","orchestrator.state-scanner.v1"];
+def scanner_error_tokens:
+  ["E_CANONICAL","E_LIMIT","E_PARSE","E_RELATION","E_RUNTIME","E_SHAPE","E_STALE","E_USAGE"];
+def scanner_classes: ["blocked","pending","retryable","stale","stranded","terminal"];
+def scanner_actions:
+  ["dispatch-stage","none","operator-reconcile","recover-stranded-attempt",
+   "refresh-stage-inputs","resolve-stage-blocker","retry-stage","wait-for-attempt"];
+def scanner_reason_ids:
+  ["scanner.attempt-deadline-reached","scanner.attempt-in-flight","scanner.no-attempt",
+   "scanner.retry-limit-reached","scanner.stage-blocked","scanner.stage-cancelled",
+   "scanner.stage-completed","scanner.stage-failed","scanner.stage-skipped",
+   "scanner.stage-stale","scanner.target-revision-moved"];
+def tool_content_id($source):
+  if $source == "core.stage-run.v2" then "core-contract-front-door.v2"
+  else "orchestrator-state-scanner-bootstrap.v1" end;
 
 def trial_policy_shape:
   (schema::exact_fields(["kind"];[]) and .kind == "single") or
@@ -115,8 +143,9 @@ def evaluator_shape:
   (.body |
    schema::exact_fields(
      ["bootstrap_ref","catalog_ref","core_closure","core_contract","driver_ref",
-      "launcher_ref","program_ref","runtime"];[]) and
+      "launcher_ref","orchestrator_closure","program_ref","runtime"];[]) and
    .core_contract == expected_core and .core_closure == expected_core_closure and
+   .orchestrator_closure == expected_orchestrator_closure and
    (.bootstrap_ref | ref_shape("evals-framework-bootstrap.v1";"text/x-shellscript")) and
    (.launcher_ref | ref_shape("evals-framework-launcher.v1";"text/x-shellscript")) and
    # Shipped artifacts are pinned to the digests the launcher and driver verified,
@@ -147,7 +176,7 @@ def evaluator_shape:
       .jq_ref.sha256 ==
         "5c0a0a3ea600f302ee458b30317425dd9632d1ad8882259fcaf4e9b868b2b1ef"))));
 
-def expectation_shape:
+def stage_run_expectation_shape:
   (schema::exact_fields(["disposition","status"];[]) and
    .disposition == "accepted" and
    (.status as $status | stage_statuses | index($status) != null)) or
@@ -155,13 +184,48 @@ def expectation_shape:
    .disposition == "rejected" and
    (.error_token as $token | core_error_tokens | index($token) != null));
 
-def seed_case_shape:
+def classification_shape:
+  schema::exact_fields(["action","class","reason_id"];[]) and
+  (.class as $c | scanner_classes | index($c) != null) and
+  (.action as $a | scanner_actions | index($a) != null) and
+  (.reason_id as $r | scanner_reason_ids | index($r) != null);
+
+def scanner_expectation_shape:
+  (schema::exact_fields(["action","class","disposition","reason_id"];[]) and
+   .disposition == "observed" and (del(.disposition) | classification_shape)) or
+  (schema::exact_fields(["disposition","error_token"];[]) and
+   .disposition == "rejected" and
+   (.error_token as $token | scanner_error_tokens | index($token) != null));
+
+def expectation_shape($source):
+  if $source == "core.stage-run.v2" then stage_run_expectation_shape
+  else scanner_expectation_shape end;
+
+def stage_run_case_shape:
   schema::exact_fields(["case_id","family_id","expectation","request_role","result"];[]) and
   (.case_id | schema::id_ok) and
   (.request_role as $role | request_roles | index($role) != null) and
   (.family_id as $id | family_ids | index($id) != null) and
-  (.expectation | expectation_shape) and
+  (.expectation | stage_run_expectation_shape) and
   (.result | pair_shape("stage_result"));
+
+# Snapshots are schema_version 1 orchestrator documents, not core-v2 envelopes.
+def snapshot_pair_shape:
+  schema::exact_fields(["content","sha256"];[]) and
+  (.content |
+   schema::exact_fields(["body","id","kind","schema_version"];[]) and
+   .schema_version == 1 and .kind == "orchestrator_state_snapshot" and
+   (.id | schema::id_ok) and (.body | type == "object")) and
+  (.sha256 | schema::sha256_ok);
+
+def scanner_case_shape:
+  schema::exact_fields(
+    ["case_id","expected_revision","expectation","family_id","snapshot"];[]) and
+  (.case_id | schema::id_ok) and
+  (.family_id as $id | family_ids | index($id) != null) and
+  (.expected_revision | schema::git_revision_ref_ok) and
+  (.expectation | scanner_expectation_shape) and
+  (.snapshot | snapshot_pair_shape);
 
 # The run id is "evals.run." + seed id, so a seed id must leave room for the
 # prefix inside the shared 128-character id limit.
@@ -174,19 +238,25 @@ def seed_set_shape:
   (.body |
    schema::exact_fields(["cases","core_contract","seed_source","shared"];[]) and
    .core_contract == expected_core and
-   .seed_source == "core.stage-run.v2" and
-   (.shared |
-    schema::exact_fields(["requests","resolved_profile"];[]) and
-    (.requests | type == "object" and length >= 1 and
-     all(keys[]; . as $role | request_roles | index($role) != null) and
-     all(.[]; pair_shape("stage_request"))) and
-    (.resolved_profile | pair_shape("resolved_profile"))) and
-   (.cases | schema::bounded_set(1;64;seed_case_shape;.case_id)) and
-   # Every case names a request the shared set actually carries.
-   (.shared.requests | keys) as $roles |
-   all(.cases[]; .request_role as $role | $roles | index($role) != null));
+   (.seed_source as $source | active_seed_sources | index($source) != null) and
+   (if .seed_source == "core.stage-run.v2" then
+      (.shared |
+       schema::exact_fields(["requests","resolved_profile"];[]) and
+       (.requests | type == "object" and length >= 1 and
+        all(keys[]; . as $role | request_roles | index($role) != null) and
+        all(.[]; pair_shape("stage_request"))) and
+       (.resolved_profile | pair_shape("resolved_profile"))) and
+      (.cases | schema::bounded_set(1;64;stage_run_case_shape;.case_id)) and
+      # Every case names a request the shared set actually carries.
+      (.shared.requests | keys) as $roles |
+      all(.cases[]; .request_role as $role | $roles | index($role) != null)
+    else
+      # Scanner cases are self-contained: each carries its own snapshot.
+      .shared == {} and
+      (.cases | schema::bounded_set(1;64;scanner_case_shape;.case_id))
+    end));
 
-def observation_shape:
+def stage_run_observation_shape:
   schema::exact_fields(["case_id","disposition","error_token","status"];[]) and
   (.case_id | schema::id_ok) and
   ((.disposition == "accepted" and
@@ -195,9 +265,23 @@ def observation_shape:
    (.disposition == "rejected" and .status == {state:"absent"} and
     (.error_token | present_shape(. as $t | core_error_tokens | index($t) != null))));
 
-def observation_set_shape:
+def scanner_observation_shape:
+  schema::exact_fields(["case_id","classification","disposition","error_token"];[]) and
+  (.case_id | schema::id_ok) and
+  ((.disposition == "observed" and
+    (.classification | present_shape(classification_shape)) and
+    .classification.state == "present" and .error_token == {state:"absent"}) or
+   (.disposition == "rejected" and .classification == {state:"absent"} and
+    (.error_token | present_shape(. as $t | scanner_error_tokens | index($t) != null)) and
+    .error_token.state == "present"));
+
+def observation_shape($source):
+  if $source == "core.stage-run.v2" then stage_run_observation_shape
+  else scanner_observation_shape end;
+
+def observation_set_shape($source):
   type == "array" and length >= 1 and length <= 64 and
-  all(.[]; observation_shape) and
+  all(.[]; observation_shape($source)) and
   (map(.case_id) as $ids | ($ids | length) == ($ids | unique | length));
 
 # Deterministic grading. A family without a deterministic grader cannot be
@@ -213,6 +297,11 @@ def grade($family; $expectation; $observation):
     if $observation.status == {state:"present",value:$expectation.status} then
       {verdict:"passed",reason_id:"evals.expectation-met"}
     else {verdict:"failed",reason_id:"evals.status-mismatch"} end
+  elif $expectation.disposition == "observed" then
+    if $observation.classification ==
+       {state:"present",value:($expectation | del(.disposition))} then
+      {verdict:"passed",reason_id:"evals.expectation-met"}
+    else {verdict:"failed",reason_id:"evals.classification-mismatch"} end
   else
     if $observation.error_token == {state:"present",value:$expectation.error_token} then
       {verdict:"passed",reason_id:"evals.expectation-met"}
@@ -264,8 +353,14 @@ def build_run_result(
                     else {state:"present",value:$observation} end),
        verdict:$graded.verdict,
        reason_id:$graded.reason_id,
-       result_ref:{schema_version:2,kind:"stage_result",
-                   id:$case.result.content.id,sha256:$case.result.sha256}
+       subject_ref:
+         (if $seed_set.body.seed_source == "core.stage-run.v2" then
+            {schema_version:2,kind:"stage_result",
+             id:$case.result.content.id,sha256:$case.result.sha256}
+          else
+            {schema_version:1,kind:"orchestrator_state_snapshot",
+             id:$case.snapshot.content.id,sha256:$case.snapshot.sha256}
+          end)
      })) as $cases |
   {
     schema_version:1,
@@ -279,6 +374,7 @@ def build_run_result(
       catalog_ref:document_ref($catalog;$catalog_sha),
       evaluator:{content:$evaluator,sha256:$evaluator_sha},
       seed_set_ref:document_ref($seed_set;$seed_set_sha),
+      seed_source:$seed_set.body.seed_source,
       observed_at:$observed_at,
       summary:{
         total:($cases | length),
@@ -292,29 +388,37 @@ def build_run_result(
     }
   };
 
-def case_result_shape:
+def subject_ref_shape($source):
+  if $source == "core.stage-run.v2" then schema::document_ref_kind_ok("stage_result")
+  else
+    schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
+    .schema_version == 1 and .kind == "orchestrator_state_snapshot" and
+    (.id | schema::id_ok) and (.sha256 | schema::sha256_ok)
+  end;
+
+def case_result_shape($source):
   schema::exact_fields(
     ["case_id","expectation","family_id","grader_kind","observation",
-     "reason_id","result_ref","verdict"];[]) and
+     "reason_id","subject_ref","verdict"];[]) and
   (.case_id | schema::id_ok) and
   (.family_id as $id | family_ids | index($id) != null) and
   (.grader_kind == "deterministic" or .grader_kind == "none") and
-  (.expectation | expectation_shape) and
-  (.observation | present_shape(observation_shape)) and
+  (.expectation | expectation_shape($source)) and
+  (.observation | present_shape(observation_shape($source))) and
   (.verdict as $v | verdicts | index($v) != null) and
   (.reason_id | schema::id_ok) and
-  (.result_ref | schema::document_ref_kind_ok("stage_result")) and
+  (.subject_ref | subject_ref_shape($source)) and
   (if .grader_kind == "none" then .verdict == "inconclusive" else true end) and
   (if .observation.state == "absent" then .verdict == "inconclusive" else true end);
 
-def trace_event_shape:
+def trace_event_shape($source):
   schema::exact_fields(
     ["adapter","case_id","cost","event_kind","family_id","gate","grader_kind",
      "identity","latency","tool_ref"];[]) and
   .event_kind == "eval-case" and (.case_id | schema::id_ok) and
   (.family_id as $id | family_ids | index($id) != null) and
   (.grader_kind == "deterministic" or .grader_kind == "none") and
-  (.tool_ref | ref_shape("core-contract-front-door.v2";"text/x-shellscript")) and
+  (.tool_ref | ref_shape(tool_content_id($source);"text/x-shellscript")) and
   .adapter == {state:"absent"} and .gate == {state:"absent"} and
   .latency == {state:"absent"} and .cost == {state:"absent"} and
   (.identity |
@@ -330,9 +434,12 @@ def run_result_shape($catalog_sha; $evaluator_sha; $seed_set; $seed_set_sha):
   (.body |
    schema::exact_fields(
      ["activation_state","authority_effect","cases","catalog_ref","core_contract",
-      "evaluator","mode","observed_at","seed_set_ref","summary","trace"];[]) and
+      "evaluator","mode","observed_at","seed_set_ref","seed_source","summary",
+      "trace"];[]) and
    .activation_state == "inactive" and .authority_effect == "none" and
    .mode == "deterministic-offline" and .core_contract == expected_core and
+   .seed_source == $seed_set.body.seed_source and
+   .seed_source as $source |
    (.catalog_ref |
     schema::exact_fields(["id","kind","schema_version","sha256"];[]) and
     .schema_version == 1 and .kind == "eval_catalog" and .id == "evals.catalog.v1" and
@@ -346,8 +453,8 @@ def run_result_shape($catalog_sha; $evaluator_sha; $seed_set; $seed_set_sha):
     (.content | evaluator_shape) and .sha256 == $evaluator_sha) and
    $result.id == (run_id_prefix + $seed_set.id) and
    (.observed_at | schema::time_ok) and
-   (.cases | schema::bounded_set(1;64;case_result_shape;.case_id)) and
-   (.trace | schema::bounded_set(1;64;trace_event_shape;.case_id)) and
+   (.cases | schema::bounded_set(1;64;case_result_shape($source);.case_id)) and
+   (.trace | schema::bounded_set(1;64;trace_event_shape($source);.case_id)) and
    ((.cases | map(.case_id)) == (.trace | map(.case_id))) and
    # A trace event never claims a grader the case result did not have.
    ((.cases | map([.case_id, .grader_kind, .family_id])) ==
@@ -362,6 +469,12 @@ def run_result_shape($catalog_sha; $evaluator_sha; $seed_set; $seed_set_sha):
       ($result.body.cases | map(select(.verdict == "inconclusive")) | length)) and
    all(.trace[]; .identity.evaluator_ref.sha256 == $result.body.evaluator.sha256));
 
+# The tool each case was replayed through: the core front door for stage runs,
+# the scanner bootstrap for orchestrator snapshots. Digests come from the caller.
+def tool_ref($source):
+  {content_id:tool_content_id($source),media_type:"text/x-shellscript",
+   sha256:(if $source == "core.stage-run.v2" then $tool_sha256 else $scanner_sha256 end)};
+
 # Driver entry points, selected with --arg evals_operation.
 if $evals_operation == "validate-catalog" then
   $catalog_docs[0] | catalog_shape
@@ -370,22 +483,20 @@ elif $evals_operation == "validate-seed-set" then
 elif $evals_operation == "build-run-result" then
   ($catalog_docs[0] | catalog_shape) and
   ($seed_set_docs[0] | seed_set_shape) and
-  ($observation_docs[0] | observation_set_shape) and
+  ($observation_docs[0] | observation_set_shape($seed_set_docs[0].body.seed_source)) and
   ($evaluator_docs[0] | evaluator_shape) |
   if . then
     build_run_result(
       $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
       $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];
-      {content_id:"core-contract-front-door.v2",media_type:"text/x-shellscript",
-       sha256:$tool_sha256};
-      $observed_at)
+      tool_ref($seed_set_docs[0].body.seed_source);$observed_at)
   else error("E_SHAPE") end
 elif $evals_operation == "validate-run-result" then
   # A candidate passes only if it is exactly the result this program derives
   # from the same catalog, evaluator, seed set, and recorded observations.
   ($catalog_docs[0] | catalog_shape) and
   ($seed_set_docs[0] | seed_set_shape) and
-  ($observation_docs[0] | observation_set_shape) and
+  ($observation_docs[0] | observation_set_shape($seed_set_docs[0].body.seed_source)) and
   ($evaluator_docs[0] | evaluator_shape) and
   ($candidate_docs[0] |
    run_result_shape($catalog_sha256; $evaluator_sha256; $seed_set_docs[0]; $seed_set_sha256)) and
@@ -393,7 +504,5 @@ elif $evals_operation == "validate-run-result" then
     build_run_result(
       $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
       $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];
-      {content_id:"core-contract-front-door.v2",media_type:"text/x-shellscript",
-       sha256:$tool_sha256};
-      $observed_at)
+      tool_ref($seed_set_docs[0].body.seed_source);$observed_at)
 else error("E_RUNTIME") end
