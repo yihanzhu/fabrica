@@ -31,11 +31,7 @@ jq_bin="${TMPDIR:-/tmp}/ystack-portable-core-jq16/$asset"
 
 runtime="$tmp/runtime"
 /bin/mkdir -m 700 "$runtime" "$tmp/home"
-if [ "$platform" = Darwin:arm64 ]; then
-  printf '%s\n' '#!/bin/sh' "exec /usr/bin/arch -x86_64 '$jq_bin' \"\$@\"" > "$runtime/jq"
-else
-  /bin/cp "$jq_bin" "$runtime/jq"
-fi
+/bin/cp "$jq_bin" "$runtime/jq"
 /bin/chmod 0555 "$runtime/jq"
 jq_bin="$runtime/jq"
 PATH="$runtime:/usr/bin:/bin"
@@ -108,6 +104,20 @@ run_replay() {
     --state-dir "$state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
     --verify-path source.txt --expected-sha256 "$expected"
 }
+
+printf '%s\n' '#!/bin/sh' "exec '$jq_bin' \"\$@\"" >"$tmp/jq-launcher"
+/bin/chmod 0555 "$tmp/jq-launcher"
+/bin/mkdir -m 700 "$tmp/launcher-state" "$tmp/launcher-candidate" "$tmp/launcher-scratch"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target \
+  --source-git-dir "$tmp/source.git" --candidate-root "$tmp/launcher-candidate" --scratch-root "$tmp/launcher-scratch" \
+  --state-dir "$tmp/launcher-state" --closure-helper "$runtime/object-closure" --jq-bin "$tmp/jq-launcher" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/launcher.out" 2>&1; then
+  fail dependency-launcher
+fi
+grep -Fq 'delivery replay: dependency is not a native executable' "$tmp/launcher.out" ||
+  fail dependency-launcher-error
+[ ! -e "$tmp/launcher-state/run.json" ] || fail dependency-launcher-journal
+pass 'dependency launchers are rejected before replay state is created'
 
 run_replay changed "$base_input" "$expected_changed" >"$tmp/changed.out"
 jq -e '.state.phase=="review-wait" and .authority=="none" and .offline_simulation==true' "$tmp/changed.out" >/dev/null ||
@@ -212,6 +222,63 @@ jq -e '.state.phase=="failed" and (.state.reason|contains("does not match frozen
   fail reconcile-mismatch-state
 pass 'a mismatched interrupted candidate is rejected without cleanup'
 
+group_interrupt_wrapper="$tmp/materialization-group-interrupt.py"
+printf '%s\n' \
+  'import importlib.util, os, signal, sys' \
+  'path, point, signal_name, arguments = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]' \
+  'os.setsid()' \
+  'spec = importlib.util.spec_from_file_location("replay", path)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'spec.loader.exec_module(module)' \
+  'original = module.run_materializer' \
+  'def interrupt_materialization(*args, **kwargs):' \
+  '    if point == "before":' \
+  '        os.killpg(os.getpgrp(), getattr(signal, signal_name))' \
+  '        raise module.ReplayError("materialization did not complete")' \
+  '    original(*args, **kwargs)' \
+  '    os.killpg(os.getpgrp(), getattr(signal, signal_name))' \
+  '    raise module.ReplayError("materialization did not complete")' \
+  'def interrupt_verification(*_args, **_kwargs):' \
+  '    os.killpg(os.getpgrp(), getattr(signal, signal_name))' \
+  '    raise module.ReplayError("fixed verifier could not read the candidate blob")' \
+  'if point == "verify":' \
+  '    module.verify_candidate = interrupt_verification' \
+  'else:' \
+  '    module.run_materializer = interrupt_materialization' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$group_interrupt_wrapper"
+for interrupt_case in before after verify; do
+  if [ "$interrupt_case" = after ]; then interrupt_signal=SIGTERM; else interrupt_signal=SIGINT; fi
+  mkdir -m 700 "$tmp/group-$interrupt_case-state" "$tmp/group-$interrupt_case-candidate" \
+    "$tmp/group-$interrupt_case-scratch"
+  if python3 "$group_interrupt_wrapper" "$replay" "$interrupt_case" "$interrupt_signal" \
+    --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/group-$interrupt_case-candidate" --scratch-root "$tmp/group-$interrupt_case-scratch" \
+    --state-dir "$tmp/group-$interrupt_case-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+    --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/group-$interrupt_case.out"; then
+    fail "group-$interrupt_case-status"
+  else
+    interrupt_status=$?
+  fi
+  [ "$interrupt_status" -eq 75 ] || fail "group-$interrupt_case-code"
+  if [ "$interrupt_case" = before ]; then
+    expected_interrupt_phase=materializing
+    [ ! -e "$tmp/group-$interrupt_case-candidate/repository.git" ] || fail group-before-effect
+  else
+    if [ "$interrupt_case" = after ]; then expected_interrupt_phase=materializing; else expected_interrupt_phase=verifying; fi
+    [ -d "$tmp/group-$interrupt_case-candidate/repository.git" ] || fail group-after-candidate
+  fi
+  jq -e --arg phase "$expected_interrupt_phase" '.phase==$phase' \
+    "$tmp/group-$interrupt_case-state/run.json" >/dev/null || fail "group-$interrupt_case-state"
+  python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/group-$interrupt_case-candidate" --scratch-root "$tmp/group-$interrupt_case-scratch" \
+    --state-dir "$tmp/group-$interrupt_case-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+    --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/group-$interrupt_case-resume.out"
+  jq -e '.state.phase=="review-wait"' "$tmp/group-$interrupt_case-resume.out" >/dev/null ||
+    fail "group-$interrupt_case-resume"
+done
+pass 'process-group cancellation during materialization or verification resumes the same attempt'
+
 for tree_case in numeric list null; do
   case "$tree_case" in
     numeric) tree_value=123 ;;
@@ -234,6 +301,35 @@ for tree_case in numeric list null; do
   fi
 done
 pass 'non-string source tree identities fail without a traceback'
+
+for identity_field in commit_id hash_algorithm; do
+  case "$identity_field" in
+    commit_id) identity_error='materialization input commit identity is invalid' ;;
+    hash_algorithm) identity_error='materialization input hash algorithm is invalid' ;;
+  esac
+  for identity_case in numeric list null; do
+    case "$identity_case" in
+      numeric) identity_value=1111111111111111111111111111111111111111 ;;
+      list) identity_value='[]' ;;
+      null) identity_value=null ;;
+    esac
+    "$jq_bin" -S -c ".stage_request.content.body.target_revision.value.$identity_field = $identity_value" \
+      "$base_input" >"$tmp/$identity_field-$identity_case.json"
+    mkdir -m 700 "$tmp/$identity_field-$identity_case-state" "$tmp/$identity_field-$identity_case-candidate" \
+      "$tmp/$identity_field-$identity_case-scratch"
+    if python3 "$replay" --input "$tmp/$identity_field-$identity_case.json" --source-repository-id fixture.target \
+      --source-git-dir "$tmp/source.git" --candidate-root "$tmp/$identity_field-$identity_case-candidate" \
+      --scratch-root "$tmp/$identity_field-$identity_case-scratch" --state-dir "$tmp/$identity_field-$identity_case-state" \
+      --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+      --expected-sha256 "$expected_changed" >"$tmp/$identity_field-$identity_case.out" 2>&1; then
+      fail "$identity_field-$identity_case"
+    fi
+    [ ! -e "$tmp/$identity_field-$identity_case-state/run.json" ] || fail "$identity_field-$identity_case-journal"
+    grep -Fq "delivery replay: $identity_error" \
+      "$tmp/$identity_field-$identity_case.out" || fail "$identity_field-$identity_case-error"
+  done
+done
+pass 'non-string commit and hash-algorithm identities are rejected before journaling'
 
 mkdir -m 700 "$tmp/caller-execution-root" "$tmp/caller-execution-state" \
   "$tmp/caller-execution-candidate" "$tmp/caller-execution-scratch"

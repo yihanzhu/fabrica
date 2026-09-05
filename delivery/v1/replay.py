@@ -148,6 +148,13 @@ def snapshot_file(source, destination, mode):
     return data
 
 
+def snapshot_native_executable(source, destination):
+    data = snapshot_file(source, destination, 0o500)
+    if not data.startswith((b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+                            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")):
+        raise ReplayError("dependency is not a native executable")
+
+
 def create_execution_snapshot(repository, arguments, state_dir):
     root = Path(tempfile.mkdtemp(prefix="execution-", dir=state_dir))
     try:
@@ -164,8 +171,8 @@ def create_execution_snapshot(repository, arguments, state_dir):
                 continue
             mode = 0o500 if relative.endswith(".sh") else 0o400
             snapshot_file(repository / relative, root / relative, mode)
-        snapshot_file(arguments.closure_helper, root / ".dependencies/object-closure", 0o500)
-        snapshot_file(arguments.jq_bin, root / ".dependencies/jq", 0o500)
+        snapshot_native_executable(arguments.closure_helper, root / ".dependencies/object-closure")
+        snapshot_native_executable(arguments.jq_bin, root / ".dependencies/jq")
         return root
     except (OSError, ReplayError):
         shutil.rmtree(root, ignore_errors=True)
@@ -218,8 +225,12 @@ def input_identity(input_value, input_sha, arguments, execution):
         raise ReplayError("materialization input request identity is invalid")
     if not isinstance(source_tree_id, str) or not OID.fullmatch(source_tree_id):
         raise ReplayError("materialization input tree identity is invalid")
-    if not isinstance(source, dict) or not OID.fullmatch(str(source.get("commit_id", ""))):
+    if not isinstance(source, dict) or not isinstance(source.get("commit_id"), str) or \
+       not OID.fullmatch(source["commit_id"]):
         raise ReplayError("materialization input commit identity is invalid")
+    if not isinstance(source.get("hash_algorithm"), str) or \
+       source["hash_algorithm"] not in {"sha1", "sha256"}:
+        raise ReplayError("materialization input hash algorithm is invalid")
     expected = arguments.expected_sha256
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ReplayError("expected verifier digest is invalid")
@@ -548,6 +559,8 @@ def replay_locked(arguments, execution, state_dir):
                         arguments, execution, input_snapshot_path, identity
                     )
                 except ReplayError as error:
+                    if stop_if_interrupted(state, interrupted):
+                        return 75
                     state.update({"phase": "failed", "recoverable": True, "reason": str(error)})
                     atomic_json(state_path, state)
                     result(state)
@@ -566,6 +579,8 @@ def replay_locked(arguments, execution, state_dir):
                                              "sha256": verify_candidate(arguments.candidate_root, state["identity"]["candidate_tree_id"],
                                                                         identity["verifier"]["path"], identity["verifier"]["expected_sha256"])}
                 except ReplayError as error:
+                    if stop_if_interrupted(state, interrupted):
+                        return 75
                     state.update({"phase": "failed", "recoverable": False, "reason": str(error)})
                     atomic_json(state_path, state)
                     result(state)
