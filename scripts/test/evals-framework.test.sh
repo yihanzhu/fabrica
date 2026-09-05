@@ -163,9 +163,11 @@ run_framework "$tmp/stochastic.out" "$tmp/stochastic.err" "$stochastic" || fail 
   .body.summary == {total:8,passed:7,failed:0,inconclusive:1} and
   (.body.cases[] | select(.case_id == "stale.completed-baseline") |
     .verdict == "inconclusive" and .grader_kind == "none" and
-    .reason_id == "evals.no-deterministic-grader")
+    .reason_id == "evals.no-deterministic-grader") and
+  (.body.trace[] | select(.case_id == "stale.completed-baseline") | .grader_kind == "none") and
+  ([.body.trace[] | select(.grader_kind == "deterministic")] | length) == 7
 ' "$tmp/stochastic.out" > /dev/null || fail 'model-only family was decided deterministically'
-pass 'a family without a deterministic grader stays inconclusive'
+pass 'a family without a deterministic grader stays inconclusive, in the case and in its trace'
 
 # --- fail closed on bad or moved input ----------------------------------------
 expect_error() {

@@ -209,12 +209,16 @@ def grade($family; $expectation; $observation):
     else {verdict:"failed",reason_id:"evals.error-token-mismatch"} end
   end;
 
+def grader_kind_for($family):
+  if ($family.grader_kinds | index("deterministic")) != null
+  then "deterministic" else "none" end;
+
 def trace_event($case; $family; $tool_ref; $evaluator_ref):
   {
     event_kind:"eval-case",
     case_id:$case.case_id,
     family_id:$family.family_id,
-    grader_kind:"deterministic",
+    grader_kind:grader_kind_for($family),
     tool_ref:$tool_ref,
     adapter:{state:"absent"},
     gate:{state:"absent"},
@@ -244,8 +248,7 @@ def build_run_result(
      {
        case_id:$case.case_id,
        family_id:$case.family_id,
-       grader_kind:(if ($family.grader_kinds | index("deterministic")) != null
-                    then "deterministic" else "none" end),
+       grader_kind:grader_kind_for($family),
        expectation:$case.expectation,
        observation:(if $observation == null then {state:"absent"}
                     else {state:"present",value:$observation} end),
@@ -300,7 +303,7 @@ def trace_event_shape:
      "identity","latency","tool_ref"];[]) and
   .event_kind == "eval-case" and (.case_id | schema::id_ok) and
   (.family_id as $id | family_ids | index($id) != null) and
-  .grader_kind == "deterministic" and
+  (.grader_kind == "deterministic" or .grader_kind == "none") and
   (.tool_ref | ref_shape("core-contract-front-door.v2";"text/x-shellscript")) and
   .adapter == {state:"absent"} and .gate == {state:"absent"} and
   .latency == {state:"absent"} and .cost == {state:"absent"} and
@@ -335,6 +338,9 @@ def run_result_shape:
    (.cases | schema::bounded_set(1;64;case_result_shape;.case_id)) and
    (.trace | schema::bounded_set(1;64;trace_event_shape;.case_id)) and
    ((.cases | map(.case_id)) == (.trace | map(.case_id))) and
+   # A trace event never claims a grader the case result did not have.
+   ((.cases | map([.case_id, .grader_kind, .family_id])) ==
+    (.trace | map([.case_id, .grader_kind, .family_id]))) and
    (.summary |
     schema::exact_fields(["failed","inconclusive","passed","total"];[]) and
     all(.[]; schema::int_ok) and

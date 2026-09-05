@@ -117,9 +117,9 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=a4209d205e40bf1340c4728ebbb700b8b73c7316e99f1242284b97bd15c08658
+program_sha=c05015e9f32b7e4df3ee187d477c9d79387f1fe5c5822622e4b9d5f5d1e89003
 catalog_sha=8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc
-driver_sha=7a68830a7ff3d5fafea17a1fe0cb1a7903d00e9a1d653baaf37977d258e37017
+driver_sha=3d8499e5e5c5b9882363b8bbcbbe50b377efa0b912babfcf9b6a8d1ec2613507
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
