@@ -387,6 +387,40 @@ add its manifest and inactive default-set binding only after the payload has a
 durable commit on main. A runnable verifier still requires a separately qualified
 sandbox launcher and fixed verification implementation.
 
+## Inactive eval and trace framework
+
+`evals/v1/run-evals.sh` runs one offline eval pass over a caller-supplied seed set
+and returns one canonical run result:
+
+```text
+evals/v1/run-evals.sh run SEED-SET.json OBSERVED_AT
+```
+
+`evals/v1/eval-catalog.json` names the nine regression families the roadmap
+requires before any autonomous write (stale and moved artifacts; repeated,
+cancelled, and missed events; approval invalidation; actor and re-run identity;
+malicious instructions; protected-path, credential, network, and publisher
+boundaries; empty, fake, timed-out, and degraded reviews; reviewer severity; and
+adapter contract compliance). Each family declares which grader kinds may judge
+it, its trial policy, and the core evidence kinds it produces. Two families are
+seeded in this unit; the other seven are declared and wait for their own seeds.
+
+The seeded cases in `evals/v1/seed-set.json` replay canonical core-v2 stage runs
+through the real portable core (`scripts/core-contract.sh validate-stage-run`).
+The core is the only judge: the framework records whether the core accepted or
+rejected each run and with which token, then grades that observation against the
+case's expectation. A wrong expectation is graded `failed`. A family that only a
+model or a human can grade is graded `inconclusive`, never guessed.
+
+Every run result carries the exact catalog, seed set, program, driver, launcher,
+and core-closure digests, plus one trace event per case in the shape the
+Observability interface names (tool, adapter, gate, identity, latency, cost).
+Latency and cost are recorded as absent in this unit; the framework performs no
+model call, so there is nothing honest to charge. The framework is inactive and
+observation only: it does not run a candidate or adapter, invoke a model, use a
+credential or network, write outside its scratch, grant qualification, or
+activate a profile.
+
 ## The current default team
 
 You talk **only** to yshifu, in a Claude Code session. yshifu orchestrates the other roles
@@ -657,6 +691,7 @@ scripts/manager-review.sh  Codex manager-reviewer harness: debate a proposed iss
 scripts/merge-pr.sh        Safe merge harness for the OPERATOR's own use (yshifu never runs it): SHA-pin to reviewed head + repo-scope + required-checks gate + review-required refuse, then merge (repo-permitted method)
 scripts/setup-target-repo.sh  Bootstrap a target repo's loop labels (idempotent)
 scripts/core-contract.sh    Manual public front door for the portable v2 contracts
+evals/v1/                  Inactive eval/trace framework: catalog of the nine required regression families, seeded core replays, canonical run results
 scripts/lib/north-star.sh  Resolver: returns the active target repo's committed .ystack/north-star.md (or root NORTH_STAR.md when ystack itself is the target)
 scripts/doctor.sh          Read-only restore + readiness self-check (install, auth, restore-critical files, north star, model config, ...)
 config/models.conf         Shipped model-tiering defaults (coder/hands ceilings, gate models/effort) — see "Model policy" below
