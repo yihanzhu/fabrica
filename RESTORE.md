@@ -64,11 +64,11 @@ Restore the nine paths listed under “Inactive default profile assembly” in
 bash scripts/test/default-profile-assembly.test.sh
 ```
 
-The proof validates the profile and seven manifests, their exact main package
-objects, the accepted Roadmap decision record, role separation, and empty tool
-grants. Restoring these records does not select, resolve, qualify, install, or
-activate the profile and performs no model, credential, provider, publish, or
-target operation.
+The proof validates the profile and six manifests, their exact main package
+objects, the producer config contract, the accepted Roadmap decision record, role
+separation, and empty tool requests. Restoring these records does not select,
+resolve, qualify, install, or activate the profile; it grants no authority and
+performs no model, credential, provider, publish, or target operation.
 
 ---
 

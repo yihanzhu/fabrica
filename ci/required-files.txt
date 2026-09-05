@@ -276,11 +276,11 @@ scripts/test/default-deterministic-verifier-adapter.test.sh
 
 # Inactive default profile assembly
 profiles/default/v1/profile.json
+profiles/default/v1/producer-config.json
 profiles/default/v1/manifests/claude-code-producer.json
 profiles/default/v1/manifests/codex-native-reviewer.json
 profiles/default/v1/manifests/deterministic-verifier.json
 profiles/default/v1/manifests/dormant-publisher.json
 profiles/default/v1/manifests/github-actions-ci.json
-profiles/default/v1/manifests/github-forge.json
 profiles/default/v1/manifests/local-git-materializer.json
 scripts/test/default-profile-assembly.test.sh

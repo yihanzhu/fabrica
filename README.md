@@ -37,15 +37,21 @@ runtime has an equivalent accepted descriptor-relative no-follow API.
 
 ## Inactive default profile assembly
 
-`profiles/default/v1/` binds the seven default adapter packages to exact Git
+`profiles/default/v1/` binds six default adapter packages to exact Git
 objects from one durable main commit. Protected roles keep distinct principals,
 execution boundaries, and authority scopes; their decision records cite the exact
-accepted `ROADMAP.md` content. The profile requests no adapter tools, and the CI,
-identity, and dormant-publisher roles request no capability or permission.
+accepted `ROADMAP.md` content. The producer manifest and binding also pin the
+profile's immutable producer config. Requested capabilities and permissions are
+inactive contract data, not grants. The profile requests no adapter tools, and
+the CI and dormant-publisher roles request no capability or permission.
+The current normalizer payloads only validate supplied records and return
+observations; they do not execute a model, verifier, forge, or other adapter.
+The GitHub forge normalizer remains a separate observation payload. Transport and
+runtime wiring are not part of this inactive assembly.
 
 This is source data only. It is not selected, resolved, qualified, installed, or
-activated, and it cannot invoke a model, use a credential, contact a provider,
-publish, or touch a target. Run
+activated, has no authority or qualification, and cannot invoke a model, use a
+credential, contact a provider, publish, or touch a target. Run
 `bash scripts/test/default-profile-assembly.test.sh` for the focused proof.
 
 ## Inactive portable core v2 fake-forge contract
