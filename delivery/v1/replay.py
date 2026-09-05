@@ -20,6 +20,21 @@ MAX_OBSERVATION_BYTES = 64 * 1024
 MAX_VERIFIED_BLOB_BYTES = 1024 * 1024
 OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}\Z")
 ACTOR = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z")
+PACKAGE_FILES = (
+    "adapters/local-git-materializer/v1/materialize.sh",
+    "adapters/local-git-materializer/v1/protocol.jq",
+    "scripts/core-contract.sh",
+    "core/v2/generation-registry.json",
+)
+GENERATION_FILES = (
+    "core-ingress.sh",
+    "contracts.jq",
+    "modules/schema.jq",
+    "modules/profile_graph.jq",
+    "modules/stage_request.jq",
+    "modules/result_facts.jq",
+    "modules/result_truth.jq",
+)
 
 
 class ReplayError(Exception):
@@ -58,11 +73,6 @@ def parse_json(data):
         return json.loads(data)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ReplayError("input is not JSON") from error
-
-
-def read_json(path, limit):
-    data = read_bytes(path, limit)
-    return parse_json(data), digest_bytes(data)
 
 
 def private_directory(path):
@@ -124,7 +134,30 @@ def safe_path(value):
     return value
 
 
-def input_identity(input_value, input_sha, arguments, materializer):
+def package_paths(generation):
+    root = f"core/v2/generations/{generation}"
+    return PACKAGE_FILES + tuple(f"{root}/{name}" for name in GENERATION_FILES)
+
+
+def materializer_package_identity(repository):
+    core_path = trusted_file(repository / "scripts/core-contract.sh")
+    core_bytes = core_path.read_bytes()
+    match = re.search(
+        rb"^PORTABLE_CORE_GENERATION='(g-[0-9a-f]{64})'$", core_bytes, re.MULTILINE
+    )
+    if match is None:
+        raise ReplayError("materializer package generation is unavailable")
+    generation = match.group(1).decode()
+    files = {
+        relative: digest_bytes(trusted_file(repository / relative).read_bytes())
+        for relative in package_paths(generation)
+    }
+    package = {"generation_id": generation, "files": files}
+    package["sha256"] = digest_bytes(canonical(package))
+    return package
+
+
+def input_identity(input_value, input_sha, arguments, repository):
     try:
         request = input_value["stage_request"]
         request_sha = request["sha256"]
@@ -148,7 +181,7 @@ def input_identity(input_value, input_sha, arguments, materializer):
         raise ReplayError("expected verifier digest is invalid")
     closure = trusted_file(arguments.closure_helper)
     jq_bin = trusted_file(arguments.jq_bin)
-    materializer_sha = digest_bytes(materializer.read_bytes())
+    package = materializer_package_identity(repository)
     identity = {
         "input_sha256": input_sha,
         "request_sha256": request_sha,
@@ -160,7 +193,9 @@ def input_identity(input_value, input_sha, arguments, materializer):
             "path": safe_path(arguments.verify_path),
             "expected_sha256": expected,
         },
-        "materializer_sha256": materializer_sha,
+        "driver_sha256": digest_bytes(trusted_file(Path(__file__).resolve()).read_bytes()),
+        "materializer_sha256": package["files"][PACKAGE_FILES[0]],
+        "materializer_package": package,
         "closure_helper_sha256": digest_bytes(closure.read_bytes()),
         "jq_sha256": digest_bytes(jq_bin.read_bytes()),
         "source_repository_id": arguments.source_repository_id,
@@ -285,10 +320,12 @@ def verify_candidate(candidate_root, candidate_tree, path, expected):
 def observation(path, kind, identity, field):
     if path is None:
         return None
-    value, source_sha = read_json(path, MAX_OBSERVATION_BYTES)
+    source = read_bytes(path, MAX_OBSERVATION_BYTES)
+    value = parse_json(source)
+    source_sha = digest_bytes(source)
     if not isinstance(value, dict) or value.get("schema_version") != 1 or value.get("kind") != kind:
         raise ReplayError("offline observation is malformed")
-    if not ACTOR.fullmatch(str(value.get("actor_id", ""))):
+    if not isinstance(value.get("actor_id"), str) or not ACTOR.fullmatch(value["actor_id"]):
         raise ReplayError("offline observation actor is invalid")
     if value.get("request_sha256") != identity["request_sha256"] or value.get("candidate_tree_id") != identity["candidate_tree_id"]:
         raise ReplayError("offline observation does not match this candidate")
@@ -303,7 +340,8 @@ def validate_state(state, identity):
     saved = state.get("identity")
     if not isinstance(saved, dict) or any(
         not isinstance(saved.get(name), str) or not re.fullmatch(r"[0-9a-f]{64}", saved[name])
-        for name in ("input_sha256", "request_sha256", "materializer_sha256", "closure_helper_sha256", "jq_sha256", "run_key")
+        for name in ("input_sha256", "request_sha256", "driver_sha256", "materializer_sha256",
+                     "closure_helper_sha256", "jq_sha256", "run_key")
     ) or not isinstance(saved.get("source_repository_id"), str) or \
        saved.get("source_hash_algorithm") not in {"sha1", "sha256"} or \
        any(not isinstance(saved.get(name), str) or not OID.fullmatch(saved[name])
@@ -313,13 +351,27 @@ def validate_state(state, identity):
        not isinstance(saved["verifier"].get("path"), str) or \
        not re.fullmatch(r"[0-9a-f]{64}", str(saved["verifier"].get("expected_sha256", ""))):
         raise ReplayError("state journal identity is malformed")
-    for name in ("candidate_commit_id", "candidate_tree_id"):
-        if name in saved and (not isinstance(saved[name], str) or not OID.fullmatch(saved[name])):
-            raise ReplayError("state journal candidate identity is malformed")
+    package = saved.get("materializer_package")
+    if not isinstance(package, dict) or not isinstance(package.get("generation_id"), str) or \
+       not re.fullmatch(r"g-[0-9a-f]{64}", package["generation_id"]) or \
+       not isinstance(package.get("files"), dict) or \
+       set(package["files"]) != set(package_paths(package["generation_id"])) or any(
+           not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+           for value in package["files"].values()
+       ) or not isinstance(package.get("sha256"), str) or \
+       package["sha256"] != digest_bytes(canonical({
+           "generation_id": package["generation_id"], "files": package["files"]
+       })) or saved["materializer_sha256"] != package["files"][PACKAGE_FILES[0]]:
+        raise ReplayError("state journal materializer package is malformed")
     phase = state.get("phase")
     if phase not in {"materializing", "verifying", "review-wait", "publish-wait", "completed-offline", "failed"}:
         raise ReplayError("state journal phase is malformed")
     needs_materialization = phase in {"verifying", "review-wait", "publish-wait", "completed-offline"}
+    for name in ("candidate_commit_id", "candidate_tree_id"):
+        if (needs_materialization and name not in saved) or (
+            name in saved and (not isinstance(saved[name], str) or not OID.fullmatch(saved[name]))
+        ):
+            raise ReplayError("state journal candidate identity is malformed")
     materialization = state.get("materialization")
     if needs_materialization and (not isinstance(materialization, dict) or any(
         not isinstance(materialization.get(name), str) or not OID.fullmatch(materialization[name])
@@ -329,6 +381,11 @@ def validate_state(state, identity):
         for name in ("response_sha256", "receipt_sha256")
     )):
         raise ReplayError("state journal materialization is malformed")
+    if needs_materialization and any(
+        saved[name] != materialization[name]
+        for name in ("candidate_commit_id", "candidate_tree_id")
+    ):
+        raise ReplayError("state journal candidate identity does not match materialization")
     if phase in {"review-wait", "publish-wait", "completed-offline"}:
         verification = state.get("verification")
         if not isinstance(verification, dict) or not isinstance(verification.get("id"), str) or \
@@ -337,12 +394,14 @@ def validate_state(state, identity):
             raise ReplayError("state journal verification is malformed")
     if phase in {"publish-wait", "completed-offline"}:
         review = state.get("review")
-        if not isinstance(review, dict) or not ACTOR.fullmatch(str(review.get("actor_id", ""))) or \
+        if not isinstance(review, dict) or not isinstance(review.get("actor_id"), str) or \
+           not ACTOR.fullmatch(review["actor_id"]) or \
            review.get("verdict") != "clean" or not re.fullmatch(r"[0-9a-f]{64}", str(review.get("sha256", ""))):
             raise ReplayError("state journal review is malformed")
     if phase == "completed-offline":
         publisher = state.get("publisher")
-        if not isinstance(publisher, dict) or not ACTOR.fullmatch(str(publisher.get("actor_id", ""))) or \
+        if not isinstance(publisher, dict) or not isinstance(publisher.get("actor_id"), str) or \
+           not ACTOR.fullmatch(publisher["actor_id"]) or \
            publisher.get("disposition") != "offline-simulated" or \
            not re.fullmatch(r"[0-9a-f]{64}", str(publisher.get("sha256", ""))):
             raise ReplayError("state journal publisher is malformed")
@@ -367,7 +426,7 @@ def replay(arguments):
     input_bytes = read_bytes(arguments.input, MAX_INPUT_BYTES)
     input_value = parse_json(input_bytes)
     input_sha = digest_bytes(input_bytes)
-    identity = input_identity(input_value, input_sha, arguments, materializer)
+    identity = input_identity(input_value, input_sha, arguments, repository)
     interrupted = {"value": False}
     previous_term = signal.getsignal(signal.SIGTERM)
     previous_int = signal.getsignal(signal.SIGINT)
@@ -379,7 +438,7 @@ def replay(arguments):
             fcntl.flock(lock, fcntl.LOCK_EX)
             state = None
             if state_path.exists():
-                state, _ = read_json(state_path, MAX_OBSERVATION_BYTES)
+                state = parse_json(read_bytes(state_path, MAX_OBSERVATION_BYTES))
                 validate_state(state, identity)
             if state is not None and any(state["identity"].get(name) != value for name, value in identity.items()):
                 result({"phase": "stale", "reason": "run identity changed"})

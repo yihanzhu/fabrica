@@ -37,6 +37,9 @@ else
 fi
 /bin/chmod 0555 "$runtime/jq"
 jq_bin="$runtime/jq"
+PATH="$runtime:/usr/bin:/bin"
+export PATH
+[ "$(command -v jq)" = "$runtime/jq" ] || fail 'private jq is not first on PATH'
 /usr/bin/cc -std=c11 -Wall -Wextra -Werror -O2 "$closure_source" -o "$runtime/object-closure"
 /bin/chmod 0555 "$runtime/object-closure"
 
@@ -221,11 +224,24 @@ pass 'invalid UTF-8 input, review, and journal records fail without a traceback'
 
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/review.json"
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":"test.publisher","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/publisher.json"
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/numeric-review.json"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --review-observation "$tmp/numeric-review.json" >"$tmp/numeric-review.out" 2>&1; then fail numeric-review-actor; fi
+grep -Fq 'offline observation actor is invalid' "$tmp/numeric-review.out" || fail numeric-review-actor-error
+pass 'offline observations require a string actor identity'
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
   --review-observation "$tmp/review.json" >"$tmp/publish-wait.out"
 jq -e '.state.phase=="publish-wait"' "$tmp/publish-wait.out" >/dev/null || fail missing-publisher-waits
+printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/numeric-publisher.json"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  --publisher-observation "$tmp/numeric-publisher.json" >"$tmp/numeric-publisher.out" 2>&1; then fail numeric-publisher-actor; fi
+grep -Fq 'offline observation actor is invalid' "$tmp/numeric-publisher.out" || fail numeric-publisher-actor-error
 expect_malformed_state() {
   local name=$1 filter=$2
   local state_root="$tmp/malformed-$name-state"
@@ -248,6 +264,19 @@ expect_malformed_state missing-materialization '(.phase="verifying") | del(.mate
 expect_malformed_state missing-verification '(.phase="review-wait") | del(.verification)'
 expect_malformed_state missing-review '(.phase="publish-wait") | del(.review)'
 expect_malformed_state missing-publisher '(.phase="completed-offline") | del(.publisher)'
+for candidate_phase in verifying review-wait publish-wait completed-offline; do
+  expect_malformed_state "missing-candidate-commit-$candidate_phase" \
+    "(.phase=\"$candidate_phase\") | del(.identity.candidate_commit_id)"
+  expect_malformed_state "missing-candidate-tree-$candidate_phase" \
+    "(.phase=\"$candidate_phase\") | del(.identity.candidate_tree_id)"
+done
+expect_malformed_state mismatched-candidate-commit \
+  '(.phase="verifying") | .identity.candidate_commit_id="0000000000000000000000000000000000000000"'
+expect_malformed_state mismatched-candidate-tree \
+  '(.phase="completed-offline") | .identity.candidate_tree_id="0000000000000000000000000000000000000000"'
+expect_malformed_state numeric-review-actor '.review.actor_id=123'
+expect_malformed_state numeric-publisher-actor \
+  '(.phase="completed-offline") | .publisher={"actor_id":123,"disposition":"offline-simulated","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}'
 pass 'malformed state phases and nested records fail without a traceback'
 jq -S -c '.note="changed after review wait"' "$tmp/review.json" >"$tmp/changed-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
@@ -367,5 +396,39 @@ if python3 "$replay" --input "$changed_input" --source-repository-id fixture.tar
   >"$tmp/changed-input-stale.out"; then fail changed-materialization-input-stale; fi
 jq -e '.state.phase=="stale"' "$tmp/changed-input-stale.out" >/dev/null || fail changed-materialization-input-stale-state
 pass 'changed materialization input cannot reuse the prior run'
+
+package_root="$tmp/replay-package"
+generation=$(/usr/bin/sed -n \
+  "s/^PORTABLE_CORE_GENERATION='\(g-[0-9a-f]\{64\}\)'$/\1/p" "$root/scripts/core-contract.sh")
+/bin/mkdir -p "$package_root/delivery/v1" "$package_root/adapters/local-git-materializer/v1" \
+  "$package_root/scripts" "$package_root/core/v2/generations"
+/bin/cp "$replay" "$package_root/delivery/v1/replay.py"
+/bin/cp "$root/adapters/local-git-materializer/v1/materialize.sh" \
+  "$root/adapters/local-git-materializer/v1/protocol.jq" \
+  "$package_root/adapters/local-git-materializer/v1/"
+/bin/cp "$root/scripts/core-contract.sh" "$package_root/scripts/core-contract.sh"
+/bin/cp "$root/core/v2/generation-registry.json" "$package_root/core/v2/generation-registry.json"
+/bin/cp -R "$root/core/v2/generations/$generation" "$package_root/core/v2/generations/"
+package_replay="$package_root/delivery/v1/replay.py"
+/bin/mkdir -m 700 "$tmp/package-state" "$tmp/package-candidate" "$tmp/package-scratch"
+python3 "$package_replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/package-candidate" --scratch-root "$tmp/package-scratch" --state-dir "$tmp/package-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/package-first.out"
+printf '\n' >>"$package_root/adapters/local-git-materializer/v1/protocol.jq"
+if python3 "$package_replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/package-candidate" --scratch-root "$tmp/package-scratch" --state-dir "$tmp/package-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/package-dependency-stale.out"; then fail changed-package-dependency; fi
+jq -e '.state.phase=="stale"' "$tmp/package-dependency-stale.out" >/dev/null || fail changed-package-dependency-state
+/bin/cp "$root/adapters/local-git-materializer/v1/protocol.jq" \
+  "$package_root/adapters/local-git-materializer/v1/protocol.jq"
+printf '\n' >>"$package_replay"
+if python3 "$package_replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/package-candidate" --scratch-root "$tmp/package-scratch" --state-dir "$tmp/package-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
+  >"$tmp/package-driver-stale.out"; then fail changed-replay-driver; fi
+jq -e '.state.phase=="stale"' "$tmp/package-driver-stale.out" >/dev/null || fail changed-replay-driver-state
+pass 'changed executable package or replay driver cannot reuse a prior run'
 
 printf 'delivery replay: %s focused checks passed\n' "$passed"
