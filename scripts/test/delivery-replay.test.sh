@@ -124,6 +124,20 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target \
 jq -e '.state.phase=="review-wait"' "$tmp/launcher-retry.out" >/dev/null || fail dependency-launcher-retry
 pass 'a corrected native dependency can reuse state after launcher rejection'
 
+/bin/cp "$jq_bin" "$tmp/jq-noexec"
+/bin/chmod 0444 "$tmp/jq-noexec"
+/bin/mkdir -m 700 "$tmp/noexec-state" "$tmp/noexec-candidate" "$tmp/noexec-scratch"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target \
+  --source-git-dir "$tmp/source.git" --candidate-root "$tmp/noexec-candidate" --scratch-root "$tmp/noexec-scratch" \
+  --state-dir "$tmp/noexec-state" --closure-helper "$runtime/object-closure" --jq-bin "$tmp/jq-noexec" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/noexec.out" 2>&1; then
+  fail dependency-noexec
+fi
+grep -Fq 'delivery replay: dependency is not executable' "$tmp/noexec.out" || fail dependency-noexec-error
+[ ! -e "$tmp/noexec-state/run.json" ] && [ ! -e "$tmp/noexec-state/execution" ] || fail dependency-noexec-state
+pass 'a non-executable native dependency is rejected before any snapshot grants it execute permission'
+
+
 snapshot_interrupt_wrapper="$tmp/snapshot-interrupt.py"
 printf '%s\n' \
   'import importlib.util, pathlib, sys' \
