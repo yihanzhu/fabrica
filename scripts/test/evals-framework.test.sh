@@ -202,7 +202,10 @@ pass 'a seed id too long to prefix is refused before any case runs'
 
 # validate-run-result binds every ref to the exact catalog, evaluator, and seed
 # set it was handed, not merely to well-formed digests.
-modules="$root/core/v2/generations/g-c83c940afd16550a4f8a4dbee2b9a6f37e429063d277962ba81c141ba5303b43/modules"
+generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/bin/cut -d= -f2)
+[ -n "$generation" ] || fail 'launcher names one core generation'
+modules="$root/core/v2/generations/$generation/modules"
+[ -d "$modules" ] || fail "core generation modules missing: $generation"
 "$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/evaluator.json"
 validate_result() {
   "$jq_bin" -S -c -n -L "$modules" \
