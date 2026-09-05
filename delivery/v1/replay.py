@@ -15,6 +15,7 @@ import sys
 import tempfile
 
 
+LOADED_DRIVER_CODE = sys._getframe().f_code
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_OBSERVATION_BYTES = 64 * 1024
 MAX_VERIFIED_BLOB_BYTES = 1024 * 1024
@@ -150,8 +151,6 @@ def snapshot_file(source, destination, mode):
 def create_execution_snapshot(repository, arguments, state_dir):
     root = Path(tempfile.mkdtemp(prefix="execution-", dir=state_dir))
     try:
-        driver = root / "delivery/v1/replay.py"
-        snapshot_file(Path(__file__).resolve(), driver, 0o500)
         core_relative = "scripts/core-contract.sh"
         core = snapshot_file(repository / core_relative, root / core_relative, 0o500)
         match = re.search(
@@ -171,6 +170,17 @@ def create_execution_snapshot(repository, arguments, state_dir):
     except (OSError, ReplayError):
         shutil.rmtree(root, ignore_errors=True)
         raise
+
+
+def driver_identity():
+    source = read_bytes(trusted_file(Path(__file__).resolve()), MAX_INPUT_BYTES)
+    try:
+        current = compile(source, LOADED_DRIVER_CODE.co_filename, "exec")
+    except (SyntaxError, TypeError, ValueError) as error:
+        raise ReplayError("loaded replay driver identity is unavailable") from error
+    if current != LOADED_DRIVER_CODE:
+        raise ReplayError("loaded replay driver changed during startup")
+    return digest_bytes(source)
 
 
 def materializer_package_identity(repository):
@@ -225,7 +235,7 @@ def input_identity(input_value, input_sha, arguments, execution):
             "path": safe_path(arguments.verify_path),
             "expected_sha256": expected,
         },
-        "driver_sha256": digest_bytes(read_bytes(trusted_file(Path(__file__).resolve()), MAX_INPUT_BYTES)),
+        "driver_sha256": driver_identity(),
         "materializer_sha256": package["files"][PACKAGE_FILES[0]],
         "materializer_package": package,
         "closure_helper_sha256": digest_bytes(read_bytes(
@@ -353,6 +363,18 @@ def verify_candidate(candidate_root, candidate_tree, path, expected):
     return actual
 
 
+def revalidate_candidate(arguments, state):
+    expected = {
+        name: state["materialization"][name]
+        for name in ("candidate_commit_id", "candidate_tree_id", "candidate_parent_commit_id")
+    }
+    if candidate_identity(arguments.candidate_root, state["identity"]["source_commit_id"]) != expected:
+        raise ReplayError("candidate repository no longer matches saved materialization")
+    verify_candidate(arguments.candidate_root, expected["candidate_tree_id"],
+                     state["identity"]["verifier"]["path"],
+                     state["identity"]["verifier"]["expected_sha256"])
+
+
 def observation(path, kind, identity, field):
     if path is None:
         return None
@@ -453,12 +475,15 @@ def result(state):
                       "state": state}, sort_keys=True, separators=(",", ":")))
 
 
-def replay(arguments):
-    execution = Path(arguments.execution_root).resolve()
-    if Path(__file__).resolve() != execution / "delivery/v1/replay.py":
-        raise ReplayError("execution snapshot is invalid")
-    state_dir = private_directory(arguments.state_dir)
-    disjoint(state_dir, arguments.source_git_dir, arguments.candidate_root, arguments.scratch_root)
+def stop_if_interrupted(state, interrupted):
+    if not interrupted["value"]:
+        return False
+    if state is not None:
+        result(state)
+    return True
+
+
+def replay_locked(arguments, execution, state_dir):
     state_path = state_dir / "run.json"
     input_snapshot_path = state_dir / "materialization-input.json"
     lock_path = state_dir / "replay.lock"
@@ -482,6 +507,8 @@ def replay(arguments):
             if state is not None and any(state["identity"].get(name) != value for name, value in identity.items()):
                 result({"phase": "stale", "reason": "run identity changed"})
                 return 2
+            if stop_if_interrupted(state, interrupted):
+                return 75
             if state is None:
                 state = {"schema_version": 1, "kind": "delivery_replay_state", "identity": identity,
                          "phase": "materializing", "authority": "none", "qualification": "unavailable"}
@@ -498,14 +525,19 @@ def replay(arguments):
                 result(state)
                 return 1
             if state["phase"] == "completed-offline":
-                verify_candidate(arguments.candidate_root, state["identity"]["candidate_tree_id"],
-                                 identity["verifier"]["path"], identity["verifier"]["expected_sha256"])
+                revalidate_candidate(arguments, state)
+                if stop_if_interrupted(state, interrupted):
+                    return 75
                 for supplied, kind, field, recorded in (
                     (arguments.review_observation, "delivery_replay_review_observation", "verdict", state.get("review")),
                     (arguments.publisher_observation, "delivery_replay_publisher_observation", "disposition", state.get("publisher")),
                 ):
-                    if supplied is not None and observation(supplied, kind, state["identity"], field) != recorded:
-                        raise ReplayError("supplied offline observation changed after completion")
+                    if supplied is not None:
+                        supplied_observation = observation(supplied, kind, state["identity"], field)
+                        if stop_if_interrupted(state, interrupted):
+                            return 75
+                        if supplied_observation != recorded:
+                            raise ReplayError("supplied offline observation changed after completion")
                 result(state)
                 return 0
             if state["phase"] == "materializing":
@@ -526,8 +558,7 @@ def replay(arguments):
                 })
                 state["phase"] = "verifying"
                 atomic_json(state_path, state)
-                if interrupted["value"]:
-                    result(state)
+                if stop_if_interrupted(state, interrupted):
                     return 75
             if state["phase"] == "verifying":
                 try:
@@ -541,13 +572,15 @@ def replay(arguments):
                     return 1
                 state["phase"] = "review-wait"
                 atomic_json(state_path, state)
-                if interrupted["value"]:
-                    result(state)
+                if stop_if_interrupted(state, interrupted):
                     return 75
             if state["phase"] == "review-wait":
-                verify_candidate(arguments.candidate_root, state["identity"]["candidate_tree_id"],
-                                 identity["verifier"]["path"], identity["verifier"]["expected_sha256"])
+                revalidate_candidate(arguments, state)
+                if stop_if_interrupted(state, interrupted):
+                    return 75
                 review = observation(arguments.review_observation, "delivery_replay_review_observation", state["identity"], "verdict")
+                if stop_if_interrupted(state, interrupted):
+                    return 75
                 if review is None:
                     result(state)
                     return 0
@@ -560,14 +593,20 @@ def replay(arguments):
                 state["phase"] = "publish-wait"
                 atomic_json(state_path, state)
             if state["phase"] == "publish-wait":
-                verify_candidate(arguments.candidate_root, state["identity"]["candidate_tree_id"],
-                                 identity["verifier"]["path"], identity["verifier"]["expected_sha256"])
-                if arguments.review_observation is not None and (
-                    observation(arguments.review_observation, "delivery_replay_review_observation",
-                                state["identity"], "verdict") != state.get("review")
-                ):
-                    raise ReplayError("supplied offline review changed after review wait")
+                revalidate_candidate(arguments, state)
+                if stop_if_interrupted(state, interrupted):
+                    return 75
+                if arguments.review_observation is not None:
+                    supplied_review = observation(arguments.review_observation,
+                                                  "delivery_replay_review_observation",
+                                                  state["identity"], "verdict")
+                    if stop_if_interrupted(state, interrupted):
+                        return 75
+                    if supplied_review != state.get("review"):
+                        raise ReplayError("supplied offline review changed after review wait")
                 publisher = observation(arguments.publisher_observation, "delivery_replay_publisher_observation", state["identity"], "disposition")
+                if stop_if_interrupted(state, interrupted):
+                    return 75
                 if publisher is None:
                     result(state)
                     return 0
@@ -588,6 +627,17 @@ def replay(arguments):
         signal.signal(signal.SIGINT, previous_int)
 
 
+def replay(arguments):
+    repository = Path(__file__).resolve().parents[2]
+    state_dir = private_directory(arguments.state_dir)
+    disjoint(state_dir, arguments.source_git_dir, arguments.candidate_root, arguments.scratch_root)
+    execution = create_execution_snapshot(repository, arguments, state_dir)
+    try:
+        return replay_locked(arguments, execution, state_dir)
+    finally:
+        shutil.rmtree(execution, ignore_errors=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
@@ -602,36 +652,8 @@ def main():
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--review-observation")
     parser.add_argument("--publisher-observation")
-    parser.add_argument("--execution-root", help=argparse.SUPPRESS)
-    arguments = parser.parse_args()
     try:
-        if arguments.execution_root is None:
-            state_dir = private_directory(arguments.state_dir)
-            execution = create_execution_snapshot(Path(__file__).resolve().parents[2], arguments, state_dir)
-            child = None
-            pending_signal = {"value": None}
-
-            def forward_signal(number, _frame):
-                if child is None:
-                    pending_signal["value"] = number
-                else:
-                    child.send_signal(number)
-
-            previous_term = signal.signal(signal.SIGTERM, forward_signal)
-            previous_int = signal.signal(signal.SIGINT, forward_signal)
-            try:
-                child = subprocess.Popen([
-                    sys.executable, str(execution / "delivery/v1/replay.py"),
-                    *sys.argv[1:], "--execution-root", str(execution),
-                ])
-                if pending_signal["value"] is not None:
-                    child.send_signal(pending_signal["value"])
-                return child.wait()
-            finally:
-                signal.signal(signal.SIGTERM, previous_term)
-                signal.signal(signal.SIGINT, previous_int)
-                shutil.rmtree(execution, ignore_errors=True)
-        return replay(arguments)
+        return replay(parser.parse_args())
     except (OSError, ReplayError) as error:
         print(f"delivery replay: {error}", file=sys.stderr)
         return 1

@@ -114,6 +114,26 @@ jq -e '.state.phase=="review-wait" and .authority=="none" and .offline_simulatio
   fail missing-review-waits
 request_sha=$(jq -r '.identity.request_sha256' "$tmp/changed-state/run.json")
 candidate_tree=$(jq -r '.identity.candidate_tree_id' "$tmp/changed-state/run.json")
+candidate_commit=$(jq -r '.identity.candidate_commit_id' "$tmp/changed-state/run.json")
+moved_candidate=$(printf '%s\n' moved | /usr/bin/env -i HOME="$tmp/home" PATH=/usr/bin:/bin LC_ALL=C \
+  GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid GIT_COMMITTER_NAME=fixture \
+  GIT_COMMITTER_EMAIL=fixture@example.invalid /usr/bin/git --git-dir="$tmp/changed-candidate/repository.git" \
+  commit-tree "$candidate_tree" -p "$candidate_commit")
+expect_candidate_move_rejected() {
+  local phase=$1
+  shift
+  /usr/bin/git --git-dir="$tmp/changed-candidate/repository.git" update-ref refs/heads/candidate "$moved_candidate"
+  if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
+    --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+    --expected-sha256 "$expected_changed" "$@" >"$tmp/candidate-moved-$phase.out" 2>&1; then
+    /usr/bin/git --git-dir="$tmp/changed-candidate/repository.git" update-ref refs/heads/candidate "$candidate_commit"
+    fail "candidate-moved-$phase"
+  fi
+  /usr/bin/git --git-dir="$tmp/changed-candidate/repository.git" update-ref refs/heads/candidate "$candidate_commit"
+  grep -Fq 'candidate repository no longer matches saved materialization' "$tmp/candidate-moved-$phase.out" ||
+    fail "candidate-moved-$phase-error"
+}
 pass 'changed materialization and fixed read-only verification wait for review'
 
 cp "$base_input" "$tmp/mutable-input.json"
@@ -147,26 +167,19 @@ pass 'replacement of the original input after snapshot cannot change materializa
 
 kill_wrapper="$tmp/kill-after-materialize.py"
 printf '%s\n' \
-  'import importlib.util, os, pathlib, signal, sys, types' \
+  'import importlib.util, os, signal, sys' \
   'path, arguments = sys.argv[1], sys.argv[2:]' \
   'spec = importlib.util.spec_from_file_location("replay", path)' \
   'module = importlib.util.module_from_spec(spec)' \
   'spec.loader.exec_module(module)' \
-  'argument = lambda name: arguments[arguments.index(name) + 1]' \
-  'values = types.SimpleNamespace(closure_helper=argument("--closure-helper"), jq_bin=argument("--jq-bin"))' \
-  'snapshot = module.create_execution_snapshot(pathlib.Path(path).resolve().parents[2], values, pathlib.Path(argument("--state-dir")))' \
-  'snapshot_path = snapshot / "delivery/v1/replay.py"' \
-  'snapshot_spec = importlib.util.spec_from_file_location("snapshot_replay", snapshot_path)' \
-  'snapshot_module = importlib.util.module_from_spec(snapshot_spec)' \
-  'snapshot_spec.loader.exec_module(snapshot_module)' \
-  'original = snapshot_module.run_materializer' \
+  'original = module.run_materializer' \
   'def stop_after_materialization(*args, **kwargs):' \
   '    result = original(*args, **kwargs)' \
   '    os.kill(os.getpid(), signal.SIGKILL)' \
   '    return result' \
-  'snapshot_module.run_materializer = stop_after_materialization' \
-  'sys.argv = [str(snapshot_path), *arguments, "--execution-root", str(snapshot)]' \
-  'raise SystemExit(snapshot_module.main())' >"$kill_wrapper"
+  'module.run_materializer = stop_after_materialization' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$kill_wrapper"
 mkdir -m 700 "$tmp/reconcile-state" "$tmp/reconcile-candidate" "$tmp/reconcile-scratch"
 if python3 "$kill_wrapper" "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/reconcile-candidate" --scratch-root "$tmp/reconcile-scratch" --state-dir "$tmp/reconcile-state" \
@@ -233,9 +246,9 @@ if python3 "$replay" --input "$base_input" --source-repository-id fixture.target
   fail caller-execution-root
 fi
 [ "$(cat "$tmp/caller-execution-root/sentinel")" = keep ] || fail caller-execution-root-deleted
-grep -Fq 'delivery replay: execution snapshot is invalid' "$tmp/caller-execution.out" ||
+grep -Fq 'unrecognized arguments: --execution-root' "$tmp/caller-execution.out" ||
   fail caller-execution-root-error
-pass 'a caller-supplied execution root is rejected without deleting it'
+pass 'the replay CLI has no caller-selected execution-root path'
 
 huge_integer=$(printf '1%.0s' {1..5000})
 printf '{"huge":%s}\n' "$huge_integer" >"$tmp/huge-input.json"
@@ -302,6 +315,78 @@ pass 'invalid UTF-8 input, review, and journal records fail without a traceback'
 
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":"test.reviewer","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/review.json"
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":"test.publisher","request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/publisher.json"
+expect_candidate_move_rejected review-wait --review-observation "$tmp/review.json"
+lock_holder="$tmp/lock-holder.py"
+printf '%s\n' \
+  'import fcntl, pathlib, sys, time' \
+  'lock_path, ready, release = map(pathlib.Path, sys.argv[1:])' \
+  'with lock_path.open("a+b") as lock:' \
+  '    fcntl.flock(lock, fcntl.LOCK_EX)' \
+  '    ready.write_text("ready")' \
+  '    while not release.exists(): time.sleep(0.01)' >"$lock_holder"
+lock_wrapper="$tmp/lock-replay.py"
+printf '%s\n' \
+  'import importlib.util, pathlib, sys' \
+  'path, marker, arguments = sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3:]' \
+  'spec = importlib.util.spec_from_file_location("replay", path)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'spec.loader.exec_module(module)' \
+  'original = module.fcntl.flock' \
+  'def marked_flock(*args, **kwargs):' \
+  '    marker.write_text("waiting")' \
+  '    return original(*args, **kwargs)' \
+  'module.fcntl.flock = marked_flock' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$lock_wrapper"
+mkdir -m 700 "$tmp/lock-state"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/lock-state/"
+python3 "$lock_holder" "$tmp/lock-state/replay.lock" "$tmp/lock-ready" "$tmp/lock-release" &
+lock_holder_pid=$!
+while [ ! -f "$tmp/lock-ready" ]; do sleep 0.01; done
+python3 "$lock_wrapper" "$replay" "$tmp/lock-waiting" \
+  --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/lock-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --review-observation "$tmp/review.json" >"$tmp/lock-cancel.out" &
+lock_replay_pid=$!
+while [ ! -f "$tmp/lock-waiting" ]; do sleep 0.01; done
+kill -TERM "$lock_replay_pid"
+touch "$tmp/lock-release"
+wait "$lock_holder_pid"
+if wait "$lock_replay_pid"; then fail lock-cancel-status; else lock_status=$?; fi
+[ "$lock_status" -eq 75 ] || fail lock-cancel-code
+jq -e '(.phase=="review-wait") and (has("review")|not)' "$tmp/lock-state/run.json" >/dev/null ||
+  fail lock-cancel-state
+
+observation_wrapper="$tmp/observation-interrupt.py"
+printf '%s\n' \
+  'import importlib.util, os, signal, sys' \
+  'path, signal_name, arguments = sys.argv[1], sys.argv[2], sys.argv[3:]' \
+  'spec = importlib.util.spec_from_file_location("replay", path)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'spec.loader.exec_module(module)' \
+  'original = module.observation' \
+  'def interrupt_after_observation(*args, **kwargs):' \
+  '    result = original(*args, **kwargs)' \
+  '    os.kill(os.getpid(), getattr(signal, signal_name))' \
+  '    return result' \
+  'module.observation = interrupt_after_observation' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$observation_wrapper"
+mkdir -m 700 "$tmp/review-cancel-state"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/review-cancel-state/"
+if python3 "$observation_wrapper" "$replay" SIGINT \
+  --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/review-cancel-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --review-observation "$tmp/review.json" >"$tmp/review-cancel.out"; then
+  fail review-cancel-status
+else
+  review_cancel_status=$?
+fi
+[ "$review_cancel_status" -eq 75 ] || fail review-cancel-code
+jq -e '(.phase=="review-wait") and (has("review")|not)' "$tmp/review-cancel-state/run.json" >/dev/null ||
+  fail review-cancel-state
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_review_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","verdict":"clean"}' >"$tmp/numeric-review.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
@@ -314,6 +399,22 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt --expected-sha256 "$expected_changed" \
   --review-observation "$tmp/review.json" >"$tmp/publish-wait.out"
 jq -e '.state.phase=="publish-wait"' "$tmp/publish-wait.out" >/dev/null || fail missing-publisher-waits
+expect_candidate_move_rejected publish-wait --publisher-observation "$tmp/publisher.json"
+mkdir -m 700 "$tmp/publish-cancel-state"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/publish-cancel-state/"
+if python3 "$observation_wrapper" "$replay" SIGTERM \
+  --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/publish-cancel-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/publish-cancel.out"; then
+  fail publish-cancel-status
+else
+  publish_cancel_status=$?
+fi
+[ "$publish_cancel_status" -eq 75 ] || fail publish-cancel-code
+jq -e '(.phase=="publish-wait") and (has("publisher")|not)' "$tmp/publish-cancel-state/run.json" >/dev/null ||
+  fail publish-cancel-state
+pass 'SIGTERM at the lock and SIGINT or SIGTERM after wait observations do not advance state'
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/numeric-publisher.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
@@ -377,6 +478,8 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --review-observation "$tmp/review.json" --publisher-observation "$tmp/publisher.json" >"$tmp/completed.out"
 jq -e '.state.phase=="completed-offline" and .state.publisher.disposition=="offline-simulated"' "$tmp/completed.out" >/dev/null ||
   fail completed-offline
+expect_candidate_move_rejected completed-offline
+pass 'review, publish, and completed waits reject a moved same-tree candidate ref'
 cp "$tmp/completed.out" "$tmp/completed-first.out"
 python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \
@@ -520,33 +623,65 @@ pass 'changed executable package or replay driver cannot reuse a prior run'
 /bin/cp "$replay" "$package_replay"
 /bin/cp "$root/adapters/local-git-materializer/v1/protocol.jq" \
   "$package_root/adapters/local-git-materializer/v1/protocol.jq"
+printf '%s\n' keep >"$package_root/sentinel"
+if python3 "$package_replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/package-candidate" --scratch-root "$tmp/package-scratch" --state-dir "$tmp/package-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --execution-root "$package_root" >"$tmp/copied-root-bypass.out" 2>&1; then
+  fail copied-root-bypass
+fi
+grep -Fq 'unrecognized arguments: --execution-root' "$tmp/copied-root-bypass.out" || fail copied-root-bypass-error
+[ "$(cat "$package_root/sentinel")" = keep ] || fail copied-root-bypass-deleted
+pass 'a copied expected layout cannot select or delete an execution root'
+
+driver_wrapper="$tmp/driver-identity.py"
+printf '%s\n' \
+  'import hashlib, importlib.util, pathlib, sys' \
+  'driver = pathlib.Path(sys.argv[1])' \
+  'spec = importlib.util.spec_from_file_location("replay", driver)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'spec.loader.exec_module(module)' \
+  'saved = driver.read_bytes()' \
+  'assert module.driver_identity() == hashlib.sha256(saved).hexdigest()' \
+  'for changed, expected in ((saved + b"\nCHANGED_EXECUTABLE_STATEMENT = True\n", "changed during startup"), (saved + b"\nif\n", "identity is unavailable"), (saved + b"\n\\xff\n", "identity is unavailable")):' \
+  '    driver.write_bytes(changed)' \
+  '    try:' \
+  '        module.driver_identity()' \
+  '    except module.ReplayError as error:' \
+  '        assert expected in str(error)' \
+  '    else:' \
+  '        raise AssertionError("changed driver was accepted")' \
+  'driver.write_bytes(saved)' >"$driver_wrapper"
+python3 "$driver_wrapper" "$package_replay" || fail driver-loaded-identity
+pass 'driver identity binds normal loaded code and rejects changed, invalid, or undecodable source'
+
 /bin/cp "$runtime/object-closure" "$tmp/race-object-closure"
 /bin/cp "$jq_bin" "$tmp/race-jq"
 /bin/chmod 0555 "$tmp/race-object-closure" "$tmp/race-jq"
 race_wrapper="$tmp/snapshot-race.py"
 printf '%s\n' \
-  'import argparse, importlib.util, os, pathlib, stat, subprocess, sys' \
+  'import argparse, importlib.util, pathlib, shutil, stat, sys' \
   'driver, repository, state_dir, helper, jq_bin, *arguments = sys.argv[1:]' \
   'spec = importlib.util.spec_from_file_location("replay", driver)' \
   'module = importlib.util.module_from_spec(spec)' \
   'spec.loader.exec_module(module)' \
-  'values = argparse.Namespace(closure_helper=helper, jq_bin=jq_bin)' \
+  'value = lambda name: arguments[arguments.index(name) + 1]' \
+  'values = argparse.Namespace(input=value("--input"), source_repository_id=value("--source-repository-id"), source_git_dir=value("--source-git-dir"), candidate_root=value("--candidate-root"), scratch_root=value("--scratch-root"), state_dir=value("--state-dir"), closure_helper=helper, jq_bin=jq_bin, verify_path=value("--verify-path"), expected_sha256=value("--expected-sha256"), review_observation=None, publisher_observation=None)' \
   'snapshot = module.create_execution_snapshot(pathlib.Path(repository), values, pathlib.Path(state_dir))' \
-  'targets = [pathlib.Path(driver), pathlib.Path(repository) / "adapters/local-git-materializer/v1/protocol.jq", pathlib.Path(helper), pathlib.Path(jq_bin)]' \
+  'targets = [pathlib.Path(repository) / "adapters/local-git-materializer/v1/protocol.jq", pathlib.Path(helper), pathlib.Path(jq_bin)]' \
   'saved = [target.read_bytes() for target in targets]' \
   'modes = [stat.S_IMODE(target.stat().st_mode) for target in targets]' \
   'try:' \
   '    for target in targets:' \
   '        target.chmod(0o700)' \
   '        target.write_bytes(b"replaced after execution snapshot\n")' \
-  '    result = subprocess.run([sys.executable, str(snapshot / "delivery/v1/replay.py"), *arguments, "--execution-root", str(snapshot)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)' \
+  '    status = module.replay_locked(values, snapshot, pathlib.Path(state_dir))' \
   'finally:' \
   '    for target, data, mode in zip(targets, saved, modes):' \
   '        target.write_bytes(data)' \
   '        target.chmod(mode)' \
-  'sys.stdout.buffer.write(result.stdout)' \
-  'sys.stderr.buffer.write(result.stderr)' \
-  'raise SystemExit(result.returncode)' >"$race_wrapper"
+  '    shutil.rmtree(snapshot, ignore_errors=True)' \
+  'raise SystemExit(status)' >"$race_wrapper"
 /bin/mkdir -m 700 "$tmp/race-state" "$tmp/race-candidate" "$tmp/race-scratch"
 driver_sha=$(sha_file "$package_replay")
 package_sha=$(sha_file "$package_root/adapters/local-git-materializer/v1/protocol.jq")
