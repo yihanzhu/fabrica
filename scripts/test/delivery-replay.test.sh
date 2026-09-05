@@ -117,7 +117,81 @@ fi
 grep -Fq 'delivery replay: dependency is not a native executable' "$tmp/launcher.out" ||
   fail dependency-launcher-error
 [ ! -e "$tmp/launcher-state/run.json" ] || fail dependency-launcher-journal
-pass 'dependency launchers are rejected before replay state is created'
+python3 "$replay" --input "$base_input" --source-repository-id fixture.target \
+  --source-git-dir "$tmp/source.git" --candidate-root "$tmp/launcher-candidate" --scratch-root "$tmp/launcher-scratch" \
+  --state-dir "$tmp/launcher-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/launcher-retry.out"
+jq -e '.state.phase=="review-wait"' "$tmp/launcher-retry.out" >/dev/null || fail dependency-launcher-retry
+pass 'a corrected native dependency can reuse state after launcher rejection'
+
+snapshot_interrupt_wrapper="$tmp/snapshot-interrupt.py"
+printf '%s\n' \
+  'import importlib.util, pathlib, sys' \
+  'path, point, arguments = sys.argv[1], sys.argv[2], sys.argv[3:]' \
+  'spec = importlib.util.spec_from_file_location("replay", path)' \
+  'module = importlib.util.module_from_spec(spec)' \
+  'module._REPLAY_DRIVER_BYTES = pathlib.Path(path).read_bytes()' \
+  'exec(compile(module._REPLAY_DRIVER_BYTES, path, "exec"), module.__dict__)' \
+  'if point == "directory":' \
+  '    original_mkdir = module.os.mkdir' \
+  '    def interrupted_mkdir(target, *args, **kwargs):' \
+  '        result = original_mkdir(target, *args, **kwargs)' \
+  '        if pathlib.Path(target).name == ".execution-building": raise module.ReplayError("snapshot interrupted after directory creation")' \
+  '        return result' \
+  '    module.os.mkdir = interrupted_mkdir' \
+  'else:' \
+  '    original_atomic = module.atomic_bytes' \
+  '    writes = {"count": 0}' \
+  '    def interrupted_atomic(target, data):' \
+  '        original_atomic(target, data)' \
+  '        if ".execution-building" in pathlib.Path(target).parts:' \
+  '            writes["count"] += 1' \
+  '            if writes["count"] == 2: raise module.ReplayError("snapshot interrupted during copy")' \
+  '    module.atomic_bytes = interrupted_atomic' \
+  'sys.argv = [path] + arguments' \
+  'raise SystemExit(module.main())' >"$snapshot_interrupt_wrapper"
+for snapshot_point in directory copy; do
+  mkdir -m 700 "$tmp/snapshot-$snapshot_point-state" "$tmp/snapshot-$snapshot_point-candidate" \
+    "$tmp/snapshot-$snapshot_point-scratch"
+  if python3 "$snapshot_interrupt_wrapper" "$replay" "$snapshot_point" \
+    --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/snapshot-$snapshot_point-candidate" --scratch-root "$tmp/snapshot-$snapshot_point-scratch" \
+    --state-dir "$tmp/snapshot-$snapshot_point-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+    --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/snapshot-$snapshot_point.out" 2>&1; then
+    fail "snapshot-$snapshot_point-interrupt"
+  fi
+  [ ! -e "$tmp/snapshot-$snapshot_point-state/run.json" ] || fail "snapshot-$snapshot_point-journal"
+  [ -d "$tmp/snapshot-$snapshot_point-state/.execution-building" ] || fail "snapshot-$snapshot_point-staging"
+  python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+    --candidate-root "$tmp/snapshot-$snapshot_point-candidate" --scratch-root "$tmp/snapshot-$snapshot_point-scratch" \
+    --state-dir "$tmp/snapshot-$snapshot_point-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+    --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/snapshot-$snapshot_point-retry.out"
+  jq -e '.state.phase=="review-wait"' "$tmp/snapshot-$snapshot_point-retry.out" >/dev/null ||
+    fail "snapshot-$snapshot_point-retry"
+done
+
+mkdir -m 700 "$tmp/foreign-staging-state" "$tmp/foreign-staging-state/.execution-building" \
+  "$tmp/foreign-staging-candidate" "$tmp/foreign-staging-scratch"
+printf '%s\n' preserve >"$tmp/foreign-staging-state/.execution-building/sentinel"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/foreign-staging-candidate" --scratch-root "$tmp/foreign-staging-scratch" \
+  --state-dir "$tmp/foreign-staging-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/foreign-staging.out" 2>&1; then
+  fail foreign-staging
+fi
+[ "$(cat "$tmp/foreign-staging-state/.execution-building/sentinel")" = preserve ] || fail foreign-staging-preserved
+mkdir -m 700 "$tmp/foreign-link-state" "$tmp/foreign-link-target" "$tmp/foreign-link-candidate" "$tmp/foreign-link-scratch"
+printf '%s\n' preserve >"$tmp/foreign-link-target/sentinel"
+ln -s "$tmp/foreign-link-target" "$tmp/foreign-link-state/.execution-building"
+if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/foreign-link-candidate" --scratch-root "$tmp/foreign-link-scratch" \
+  --state-dir "$tmp/foreign-link-state" --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" \
+  --verify-path source.txt --expected-sha256 "$expected_changed" >"$tmp/foreign-link.out" 2>&1; then
+  fail foreign-staging-link
+fi
+[ -L "$tmp/foreign-link-state/.execution-building" ] && \
+  [ "$(cat "$tmp/foreign-link-target/sentinel")" = preserve ] || fail foreign-staging-link-preserved
+pass 'transactional bundle recovery preserves foreign staging data and links'
 
 run_replay changed "$base_input" "$expected_changed" >"$tmp/changed.out"
 jq -e '.state.phase=="review-wait" and .authority=="none" and .offline_simulation==true' "$tmp/changed.out" >/dev/null ||
@@ -605,6 +679,25 @@ python3 "$replay" --input "$base_input" --source-repository-id fixture.target --
   --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/atomic-kill-resume.out"
 jq -e '.state.phase=="completed-offline"' "$tmp/atomic-kill-resume.out" >/dev/null || fail atomic-kill-resume
 pass 'candidate ref guard blocks publisher-time moves and releases after SIGKILL'
+
+mkdir -m 700 "$tmp/git-env-state" "$tmp/git-env-hooks" "$tmp/git-env-work-tree"
+cp "$tmp/changed-state/materialization-input.json" "$tmp/changed-state/run.json" "$tmp/git-env-state/"
+printf '%s\n' '#!/bin/sh' "printf hook >'$tmp/git-env-hook-ran'" >"$tmp/git-env-hooks/reference-transaction"
+/bin/chmod 0555 "$tmp/git-env-hooks/reference-transaction"
+printf '%s\n' '[core]' "hooksPath = $tmp/git-env-hooks" >"$tmp/git-env-global"
+git_clean init -q --bare "$tmp/git-env-other.git"
+/usr/bin/env GIT_NAMESPACE=poison GIT_COMMON_DIR="$tmp/git-env-other.git" GIT_DIR="$tmp/git-env-other.git" \
+  GIT_WORK_TREE="$tmp/git-env-work-tree" GIT_CONFIG_NOSYSTEM=0 GIT_CONFIG_GLOBAL="$tmp/git-env-global" \
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$tmp/git-env-hooks" \
+  python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
+  --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/git-env-state" \
+  --closure-helper "$runtime/object-closure" --jq-bin "$jq_bin" --verify-path source.txt \
+  --expected-sha256 "$expected_changed" --publisher-observation "$tmp/publisher.json" >"$tmp/git-env.out"
+jq -e '.state.phase=="completed-offline"' "$tmp/git-env.out" >/dev/null || fail git-env-completion
+[ ! -e "$tmp/git-env-hook-ran" ] || fail git-env-hook
+[ "$(git_clean --git-dir="$tmp/changed-candidate/repository.git" rev-parse refs/heads/candidate)" = "$candidate_commit" ] ||
+  fail git-env-candidate
+pass 'all candidate Git operations ignore ambient repository, namespace, config, work-tree, and hook settings'
 printf '%s\n' '{"schema_version":1,"kind":"delivery_replay_publisher_observation","actor_id":123,"request_sha256":"'"$request_sha"'","candidate_tree_id":"'"$candidate_tree"'","disposition":"offline-simulated"}' >"$tmp/numeric-publisher.json"
 if python3 "$replay" --input "$base_input" --source-repository-id fixture.target --source-git-dir "$tmp/source.git" \
   --candidate-root "$tmp/changed-candidate" --scratch-root "$tmp/changed-scratch" --state-dir "$tmp/changed-state" \

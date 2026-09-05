@@ -38,6 +38,15 @@ MAX_OBSERVATION_BYTES = 64 * 1024
 MAX_VERIFIED_BLOB_BYTES = 1024 * 1024
 OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}\Z")
 ACTOR = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z")
+GIT_ENVIRONMENT = {
+    "PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
+    "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0",
+}
+NATIVE_EXECUTABLE_MAGICS = (
+    b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",
+)
 PACKAGE_FILES = (
     "adapters/local-git-materializer/v1/materialize.sh",
     "adapters/local-git-materializer/v1/protocol.jq",
@@ -157,66 +166,97 @@ def package_paths(generation):
     return PACKAGE_FILES + tuple(f"{root}/{name}" for name in GENERATION_FILES)
 
 
-def snapshot_file(source, destination, mode):
-    data = read_bytes(trusted_file(source), MAX_INPUT_BYTES)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    atomic_bytes(destination, data)
-    os.chmod(destination, mode)
-    return data
-
-
-def snapshot_native_executable(source, destination):
-    data = read_bytes(trusted_file(source), MAX_INPUT_BYTES)
-    if not data.startswith((b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
-                            b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")):
+def execution_source_bytes(repository, arguments):
+    core_relative = "scripts/core-contract.sh"
+    core = read_bytes(trusted_file(repository / core_relative), MAX_INPUT_BYTES)
+    match = re.search(
+        rb"^PORTABLE_CORE_GENERATION='(g-[0-9a-f]{64})'$", core, re.MULTILINE
+    )
+    if match is None:
+        raise ReplayError("materializer package generation is unavailable")
+    generation = match.group(1).decode()
+    package = {
+        relative: core if relative == core_relative else
+        read_bytes(trusted_file(repository / relative), MAX_INPUT_BYTES)
+        for relative in package_paths(generation)
+    }
+    dependencies = {
+        ".dependencies/object-closure": read_bytes(
+            trusted_file(arguments.closure_helper), MAX_INPUT_BYTES
+        ),
+        ".dependencies/jq": read_bytes(trusted_file(arguments.jq_bin), MAX_INPUT_BYTES),
+    }
+    if any(not data.startswith(NATIVE_EXECUTABLE_MAGICS) for data in dependencies.values()):
         raise ReplayError("dependency is not a native executable")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    atomic_bytes(destination, data)
-    os.chmod(destination, 0o500)
+    return package | dependencies
+
+
+def owned_staging_token(owner_path):
+    if not owner_path.exists() or owner_path.is_symlink() or not owner_path.is_file():
+        return None
+    value = read_bytes(owner_path, 128)
+    match = re.fullmatch(rb"ystack-delivery-execution-v1:([0-9a-f]{64})\n", value)
+    return match.group(1) if match is not None else None
 
 
 def create_execution_snapshot(repository, arguments, state_dir):
     root = state_dir / "execution"
-    if root.exists():
+    staging = state_dir / ".execution-building"
+    owner_path = state_dir / ".execution-building.owner"
+    if root.is_symlink() or root.exists():
         if root.is_symlink() or not root.is_dir():
             raise ReplayError("execution bundle is unavailable")
+        # An existing bundle is judged by execution_sources_match, so changed or
+        # invalid dependencies read as a mismatch there, not as a build failure here.
         return root
-    os.mkdir(root, 0o700)
+    source_bytes = execution_source_bytes(repository, arguments)
+    token = owned_staging_token(owner_path)
+    if staging.is_symlink() or staging.exists():
+        if staging.is_symlink() or not staging.is_dir() or token is None:
+            raise ReplayError("execution bundle staging is not program-owned")
+        marker = staging / ".owner"
+        entries = list(staging.iterdir())
+        if entries and (
+            marker not in entries or marker.is_symlink() or not marker.is_file() or
+            read_bytes(marker, 128) != token + b"\n"
+        ):
+            raise ReplayError("execution bundle staging is not program-owned")
+        shutil.rmtree(staging)
+    if token is None:
+        if owner_path.exists():
+            raise ReplayError("execution bundle staging owner is invalid")
+        token = os.urandom(32).hex().encode()
+        descriptor = os.open(owner_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(descriptor, "wb") as owner:
+            owner.write(b"ystack-delivery-execution-v1:" + token + b"\n")
+            owner.flush()
+            os.fsync(owner.fileno())
+    os.mkdir(staging, 0o700)
+    atomic_bytes(staging / ".owner", token + b"\n")
+    os.chmod(staging / ".owner", 0o400)
+    for relative, data in source_bytes.items():
+        destination = staging / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        atomic_bytes(destination, data)
+        mode = 0o500 if relative.endswith(".sh") or relative.startswith(".dependencies/") else 0o400
+        os.chmod(destination, mode)
+    os.replace(staging, root)
+    directory = os.open(state_dir, os.O_DIRECTORY)
     try:
-        core_relative = "scripts/core-contract.sh"
-        core = snapshot_file(repository / core_relative, root / core_relative, 0o500)
-        match = re.search(
-            rb"^PORTABLE_CORE_GENERATION='(g-[0-9a-f]{64})'$", core, re.MULTILINE
-        )
-        if match is None:
-            raise ReplayError("materializer package generation is unavailable")
-        generation = match.group(1).decode()
-        for relative in package_paths(generation):
-            if relative == core_relative:
-                continue
-            mode = 0o500 if relative.endswith(".sh") else 0o400
-            snapshot_file(repository / relative, root / relative, mode)
-        snapshot_native_executable(arguments.closure_helper, root / ".dependencies/object-closure")
-        snapshot_native_executable(arguments.jq_bin, root / ".dependencies/jq")
-        return root
-    except (OSError, ReplayError):
-        raise
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    os.unlink(owner_path)
+    return root
 
 
 def execution_sources_match(repository, arguments, execution):
     try:
-        if materializer_package_identity(repository) != materializer_package_identity(execution):
-            return False
-        for source, saved in (
-            (arguments.closure_helper, execution / ".dependencies/object-closure"),
-            (arguments.jq_bin, execution / ".dependencies/jq"),
-        ):
-            current = read_bytes(trusted_file(source), MAX_INPUT_BYTES)
-            if not current.startswith((b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
-                                       b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")) or \
-               digest_bytes(current) != digest_bytes(read_bytes(trusted_file(saved), MAX_INPUT_BYTES)):
-                return False
-        return True
+        return all(
+            digest_bytes(data) == digest_bytes(read_bytes(trusted_file(execution / relative), MAX_INPUT_BYTES))
+            for relative, data in execution_source_bytes(repository, arguments).items()
+        )
     except (OSError, ReplayError):
         return False
 
@@ -345,13 +385,10 @@ def candidate_identity(candidate_root, source_commit):
     repository = Path(candidate_root).resolve() / "repository.git"
     if not repository.is_dir() or repository.is_symlink():
         return None
-    environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
-                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
-                   "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
     values = []
     for revision in ("refs/heads/candidate", "refs/heads/candidate^{tree}"):
         result = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "rev-parse", revision],
-                                env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+                                env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
         value = result.stdout.decode().strip()
         if result.returncode != 0 or not OID.fullmatch(value):
             return None
@@ -360,7 +397,7 @@ def candidate_identity(candidate_root, source_commit):
         return {"candidate_commit_id": values[0], "candidate_tree_id": values[1],
                 "candidate_parent_commit_id": source_commit}
     result = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "rev-parse", "refs/heads/candidate^"],
-                            env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+                            env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
     parent = result.stdout.decode().strip()
     if result.returncode != 0 or not OID.fullmatch(parent):
         return None
@@ -374,8 +411,8 @@ def hold_candidate_ref(candidate_root, expected_commit):
     lock_path = repository / "refs/heads/candidate.lock"
     command = ["/usr/bin/git", f"--git-dir={repository}", "-c", "core.hooksPath=/dev/null",
                "update-ref", "--stdin"]
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.PIPE)
+    process = subprocess.Popen(command, env=GIT_ENVIRONMENT, stdin=subprocess.PIPE,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         process.stdin.write(
             f"option no-deref\nstart\nverify refs/heads/candidate {expected_commit}\nprepare\n".encode()
@@ -391,7 +428,7 @@ def hold_candidate_ref(candidate_root, expected_commit):
             raise ReplayError("candidate repository identity guard timed out")
         symbolic = subprocess.run(
             ["/usr/bin/git", f"--git-dir={repository}", "symbolic-ref", "-q", "refs/heads/candidate"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
+            env=GIT_ENVIRONMENT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
         )
         if symbolic.returncode != 1:
             raise ReplayError("candidate repository identity guard failed")
@@ -437,16 +474,13 @@ def verify_candidate(candidate_root, candidate_tree, path, expected):
     repository = Path(candidate_root).resolve() / "repository.git"
     if not repository.is_dir() or repository.is_symlink() or not OID.fullmatch(candidate_tree):
         raise ReplayError("candidate repository identity is unavailable")
-    environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
-                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_NO_REPLACE_OBJECTS": "1",
-                   "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
     object_name = f"{candidate_tree}:{path}"
     size = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "cat-file", "-s", object_name],
-                          env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+                          env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
     if size.returncode != 0 or not size.stdout.strip().isdigit() or int(size.stdout) > MAX_VERIFIED_BLOB_BYTES:
         raise ReplayError("fixed verifier cannot read the candidate blob")
     blob = subprocess.run(["/usr/bin/git", f"--git-dir={repository}", "cat-file", "blob", object_name],
-                          env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+                          env=GIT_ENVIRONMENT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
     if blob.returncode != 0 or len(blob.stdout) != int(size.stdout):
         raise ReplayError("fixed verifier could not read the candidate blob")
     actual = digest_bytes(blob.stdout)
