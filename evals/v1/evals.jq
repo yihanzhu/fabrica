@@ -376,7 +376,19 @@ elif $evals_operation == "build-run-result" then
       $observed_at)
   else error("E_SHAPE") end
 elif $evals_operation == "validate-run-result" then
+  # A candidate passes only if it is exactly the result this program derives
+  # from the same catalog, evaluator, seed set, and recorded observations.
+  ($catalog_docs[0] | catalog_shape) and
   ($seed_set_docs[0] | seed_set_shape) and
+  ($observation_docs[0] | observation_set_shape) and
+  ($evaluator_docs[0] | evaluator_shape) and
   ($candidate_docs[0] |
-   run_result_shape($catalog_sha256; $evaluator_sha256; $seed_set_docs[0]; $seed_set_sha256))
+   run_result_shape($catalog_sha256; $evaluator_sha256; $seed_set_docs[0]; $seed_set_sha256)) and
+  $candidate_docs[0] ==
+    build_run_result(
+      $catalog_docs[0];$catalog_sha256;$evaluator_docs[0];$evaluator_sha256;
+      $seed_set_docs[0];$seed_set_sha256;$observation_docs[0];
+      {content_id:"core-contract-front-door.v2",media_type:"text/x-shellscript",
+       sha256:$tool_sha256};
+      $observed_at)
 else error("E_RUNTIME") end

@@ -54,7 +54,7 @@ jq_bin="$runtime/bin/jq"
 work="$runtime_parent/work"
 
 verify_runtime() {
-  verify_hash c57901266d9c60b7b77d9c09342cc621347499394cd31b1aa70e1907bfe557a7 "$program" &&
+  verify_hash 37aec3957a5d3f322f63591414bdb10678172a5c74c47d575e777022c38f5006 "$program" &&
   verify_hash 8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc "$catalog" &&
   verify_hash 3950ce43c3073b97759db23fb7e4ce533cbc1d8a8fe4917db6ee1ee0a8e78f94 \
     "$runtime/core/v2/generation-registry.json" &&

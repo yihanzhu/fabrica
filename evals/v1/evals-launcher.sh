@@ -117,9 +117,9 @@ generation_runtime="$runtime/core/v2/generations/$generation"
 /bin/mkdir -m 0700 "$generation_runtime" "$generation_runtime/modules" ||
   emit_error E_RUNTIME
 
-program_sha=c57901266d9c60b7b77d9c09342cc621347499394cd31b1aa70e1907bfe557a7
+program_sha=37aec3957a5d3f322f63591414bdb10678172a5c74c47d575e777022c38f5006
 catalog_sha=8bc732fdc31f380b387acbc574b4675aad051ae4a174de74cf1d6e16b09451cc
-driver_sha=a64fc0d5ad8318d83aa1045edd0225b90cca08346cd7dfa2a8aea0d01193fea7
+driver_sha=0981349b15c4e7979cd94ad2532a617bf68ff2a9e30533916147cbf512abf2c2
 snapshot_file "$source_dir/run-evals.sh" "$runtime/bootstrap.sh" 1048576 0400 ||
   emit_error E_RUNTIME
 bootstrap_sha=$(sha256_path "$runtime/bootstrap.sh") || emit_error E_RUNTIME
@@ -237,7 +237,7 @@ fi
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$runtime/catalog.json" \
     --slurpfile seed_set_docs "$scratch/input.json" \
-    --argjson observation_docs '[[]]' \
+    --slurpfile observation_docs "$scratch/work/observations.json" \
     --slurpfile evaluator_docs "$runtime/evaluator.json" \
     --slurpfile candidate_docs "$output" \
     -f "$runtime/program.jq" 2>/dev/null)" = true ] || emit_error E_RUNTIME

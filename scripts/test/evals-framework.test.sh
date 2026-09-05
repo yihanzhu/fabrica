@@ -207,6 +207,7 @@ generation=$(/usr/bin/grep -oE '^generation=g-[0-9a-f]{64}$' "$launcher" | /usr/
 modules="$root/core/v2/generations/$generation/modules"
 [ -d "$modules" ] || fail "core generation modules missing: $generation"
 "$jq_bin" -S -c '.body.evaluator.content' "$first" > "$tmp/evaluator.json"
+"$jq_bin" -S -c '[.body.cases[].observation.value]' "$first" > "$tmp/observations.json"
 validate_result() {
   "$jq_bin" -S -c -n -L "$modules" \
     --arg evals_operation validate-run-result \
@@ -216,19 +217,24 @@ validate_result() {
     --arg tool_sha256 b081c7de1707a21bd948b998491caa7171084b15d9d95bceaae550cc7893fec9 \
     --arg observed_at "$observed_at" \
     --slurpfile catalog_docs "$catalog" --slurpfile seed_set_docs "$seed_set" \
-    --argjson observation_docs '[[]]' --slurpfile evaluator_docs "$tmp/evaluator.json" \
+    --slurpfile observation_docs "$tmp/observations.json" \
+    --slurpfile evaluator_docs "$tmp/evaluator.json" \
     --slurpfile candidate_docs "$1" -f "$program" 2>/dev/null
 }
 [ "$(validate_result "$first")" = true ] || fail 'shipped run result does not validate'
 for mutation in '.body.catalog_ref.sha256 = ("a" * 64)' \
   '.body.seed_set_ref.sha256 = ("a" * 64)' \
   '.body.evaluator.sha256 = ("a" * 64)' \
-  '.body.seed_set_ref.id = "other.seed" | .id = "evals.run.other.seed"'; do
+  '.body.seed_set_ref.id = "other.seed" | .id = "evals.run.other.seed"' \
+  '.body.cases[0].verdict = "failed" | .body.cases[0].reason_id = "evals.status-mismatch" |
+   .body.summary.passed -= 1 | .body.summary.failed += 1' \
+  '.body.trace |= (.[0:1] + .[2:] + .[1:2])' \
+  '.body.cases[0].observation.value.status.value = "skipped"'; do
   "$jq_bin" -S -c "$mutation" "$first" > "$tmp/rebound.json"
   [ "$(validate_result "$tmp/rebound.json")" = false ] ||
-    fail "run result with moved ref accepted: $mutation"
+    fail "run result with moved ref or altered derivation accepted: $mutation"
 done
-pass 'a run result is bound to the exact catalog, evaluator, and seed set digests'
+pass 'a run result must be exactly what the program derives from its bound inputs'
 
 if "$framework" run "$seed_set" "not-a-time" >"$tmp/badtime.out" 2>"$tmp/badtime.err"; then
   fail 'observed_at is not validated'
